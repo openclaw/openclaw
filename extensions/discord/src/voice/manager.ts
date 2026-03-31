@@ -21,8 +21,9 @@ import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatMention } from "../mentions.js";
-import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
+import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
+import { authorizeDiscordVoiceIngress } from "./access.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
 const require = createRequire(import.meta.url);
@@ -55,6 +56,7 @@ type VoiceOperationResult = {
 type VoiceSessionEntry = {
   guildId: string;
   channelId: string;
+  channelName?: string;
   sessionChannelId: string;
   route: ReturnType<typeof resolveAgentRoute>;
   connection: import("@discordjs/voice").VoiceConnection;
@@ -426,6 +428,10 @@ export class DiscordVoiceManager {
     const entry: VoiceSessionEntry = {
       guildId,
       channelId,
+      channelName:
+        channelInfo && "name" in channelInfo && typeof channelInfo.name === "string"
+          ? channelInfo.name
+          : undefined,
       sessionChannelId,
       route,
       connection,
@@ -596,6 +602,28 @@ export class DiscordVoiceManager {
     logVoiceVerbose(
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
+    const speakerIdentity = await this.resolveSpeakerIdentity(entry.guildId, userId);
+    const access = await authorizeDiscordVoiceIngress({
+      cfg: this.params.cfg,
+      discordConfig: this.params.discordConfig,
+      guildId: entry.guildId,
+      channelId: entry.channelId,
+      channelName: entry.channelName,
+      channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
+      channelLabel: formatMention({ channelId: entry.channelId }),
+      memberRoleIds: speakerIdentity.memberRoleIds,
+      sender: {
+        id: speakerIdentity.id,
+        name: speakerIdentity.name,
+        tag: speakerIdentity.tag,
+      },
+    });
+    if (!access.ok) {
+      logVoiceVerbose(
+        `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${access.message}`,
+      );
+      return;
+    }
     const transcript = await transcribeAudio({
       cfg: this.params.cfg,
       agentId: entry.route.agentId,
@@ -611,6 +639,14 @@ export class DiscordVoiceManager {
       `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
+    this.setCachedSpeakerContext(entry.guildId, userId, {
+      label: speakerIdentity.label,
+      senderIsOwner: this.resolveSpeakerIsOwner({
+        id: speakerIdentity.id,
+        name: speakerIdentity.name,
+        tag: speakerIdentity.tag,
+      }),
+    });
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
@@ -834,6 +870,7 @@ export class DiscordVoiceManager {
     label: string;
     name?: string;
     tag?: string;
+    memberRoleIds: string[];
   }> {
     try {
       const member = await this.params.client.fetchMember(guildId, userId);
@@ -843,6 +880,13 @@ export class DiscordVoiceManager {
         label: member.nickname ?? member.user?.globalName ?? username ?? userId,
         name: username,
         tag: member.user ? formatDiscordUserTag(member.user) : undefined,
+        memberRoleIds: Array.isArray(member.roles)
+          ? member.roles
+              .map((role) =>
+                typeof role === "string" ? role : typeof role?.id === "string" ? role.id : "",
+              )
+              .filter(Boolean)
+          : [],
       };
     } catch {
       try {
@@ -853,9 +897,10 @@ export class DiscordVoiceManager {
           label: user.globalName ?? username ?? userId,
           name: username,
           tag: formatDiscordUserTag(user),
+          memberRoleIds: [],
         };
       } catch {
-        return { id: userId, label: userId };
+        return { id: userId, label: userId, memberRoleIds: [] };
       }
     }
   }
