@@ -34,6 +34,65 @@ export function stripMinimaxToolCallXml(text: string): string {
 }
 
 /**
+ * GLM models (4.7, 5) sometimes emit tool calls as XML in text content
+ * instead of proper structured tool_calls. This pattern looks like:
+ *   <tool_call>tool_name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>
+ *
+ * This function strips the XML from text. For actual tool call extraction,
+ * see `parseGlmToolCallXml()`.
+ */
+const GLM_TOOL_CALL_RE = /<tool_call>[\s\S]*?<\/tool_call>/gi;
+const GLM_ORPHAN_TOOL_TAGS_RE = /<\/?(?:tool_call|arg_key|arg_value|function_call)>/gi;
+
+export function stripGlmToolCallXml(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!/<tool_call/i.test(text) && !/<arg_key/i.test(text)) {
+    return text;
+  }
+  let cleaned = text.replace(GLM_TOOL_CALL_RE, "");
+  cleaned = cleaned.replace(GLM_ORPHAN_TOOL_TAGS_RE, "");
+  return cleaned.trim();
+}
+
+export interface ParsedGlmToolCall {
+  name: string;
+  arguments: Record<string, string>;
+}
+
+/**
+ * Parse GLM-style XML tool calls from text content.
+ * Returns an array of parsed tool calls, or empty if none found.
+ */
+export function parseGlmToolCallXml(text: string): ParsedGlmToolCall[] {
+  if (!text || !/<tool_call/i.test(text)) {
+    return [];
+  }
+  const results: ParsedGlmToolCall[] = [];
+  const blockRe = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  let blockMatch;
+  while ((blockMatch = blockRe.exec(text)) !== null) {
+    const inner = blockMatch[1];
+    // Extract tool name (text before first <arg_key>)
+    const nameMatch = inner.match(/^([^<\s]+)/);
+    if (!nameMatch) {
+      continue;
+    }
+    const name = nameMatch[1].trim();
+    // Extract key-value pairs
+    const args: Record<string, string> = {};
+    const pairRe = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi;
+    let pairMatch;
+    while ((pairMatch = pairRe.exec(inner)) !== null) {
+      args[pairMatch[1].trim()] = pairMatch[2].trim();
+    }
+    results.push({ name, arguments: args });
+  }
+  return results;
+}
+
+/**
  * Strip model control tokens leaked into assistant text output.
  *
  * Models like GLM-5 and DeepSeek sometimes emit internal delimiter tokens
@@ -238,7 +297,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          stripDowngradedToolCallText(
+            stripModelSpecialTokens(stripGlmToolCallXml(stripMinimaxToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),

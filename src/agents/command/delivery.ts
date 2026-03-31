@@ -267,6 +267,49 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
+    // If the agent completed tool actions but produced no text reply,
+    // synthesize a minimal acknowledgment so the originating channel
+    // still receives feedback instead of silence.
+    const hadToolActions =
+      result.didSendViaMessagingTool ||
+      (result.successfulCronAdds && result.successfulCronAdds > 0);
+    if (
+      hadToolActions &&
+      deliver &&
+      deliveryChannel &&
+      !isInternalMessageChannel(deliveryChannel)
+    ) {
+      runtime.log("Agent completed actions but produced no reply text — sending acknowledgment.");
+      const ackPayloads = normalizeOutboundPayloads(
+        normalizeAgentCommandReplyPayloads({
+          cfg,
+          opts,
+          outboundSession,
+          payloads: [{ text: "✓ Done." }],
+          result,
+          deliveryChannel,
+          accountId: resolvedAccountId,
+          applyChannelTransforms: deliver,
+        }),
+      );
+      if (deliveryTarget) {
+        await deliverOutboundPayloads({
+          cfg,
+          channel: deliveryChannel,
+          to: deliveryTarget,
+          accountId: resolvedAccountId,
+          payloads: ackPayloads,
+          session: outboundSession,
+          replyToId: resolvedReplyToId ?? null,
+          threadId: resolvedThreadTarget ?? null,
+          bestEffort: bestEffortDeliver,
+          onError: (err) => logDeliveryError(err),
+          onPayload: () => {},
+          deps: createOutboundSendDeps(deps),
+        });
+      }
+      return { payloads: [{ text: "✓ Done." }], meta: result.meta };
+    }
     runtime.log("No reply from agent.");
     return { payloads: [], meta: result.meta };
   }

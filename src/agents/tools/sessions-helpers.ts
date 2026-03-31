@@ -33,6 +33,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
+  stripGlmToolCallXml,
   stripMinimaxToolCallXml,
   stripModelSpecialTokens,
   stripThinkingTagsFromText,
@@ -181,7 +182,9 @@ export function sanitizeTextContent(text: string): string {
     return text;
   }
   return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+    stripDowngradedToolCallText(
+      stripModelSpecialTokens(stripGlmToolCallXml(stripMinimaxToolCallXml(text))),
+    ),
   );
 }
 

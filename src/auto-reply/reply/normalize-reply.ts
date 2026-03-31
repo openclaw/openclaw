@@ -43,14 +43,20 @@ const LET_ME_THINK_RE =
 const TOOL_CALL_LEAK_RE =
   /<(?:arg_key|arg_value|tool_call|function_call|tool_use|parameters|arguments)>[\s\S]*?<\/(?:arg_key|arg_value|tool_call|function_call|tool_use|parameters|arguments)>/gi;
 
+// Catches orphaned/standalone opening or closing tool-call tags that slip through
+// the paired regex above (e.g. a bare "</tool_call>" with no matching opener).
+const ORPHAN_TOOL_TAG_RE =
+  /<\/?(?:arg_key|arg_value|tool_call|function_call|tool_use|parameters|arguments)>/gi;
+
 export function stripThinkingTextLeaks(text: string): string {
   if (!text) {
     return text;
   }
   // Strip XML-wrapped thinking blocks
   let cleaned = text.replace(THINKING_BLOCK_RE, "").trim();
-  // Strip leaked tool-call XML fragments
+  // Strip leaked tool-call XML fragments (paired blocks, then orphaned tags)
   cleaned = cleaned.replace(TOOL_CALL_LEAK_RE, "").trim();
+  cleaned = cleaned.replace(ORPHAN_TOOL_TAG_RE, "").trim();
   // Strip leading meta-commentary about the user's intent
   cleaned = cleaned.replace(THINKING_PREFIX_RE, "").trim();
   // Strip "Let me think about this..." preambles (up to first double newline)

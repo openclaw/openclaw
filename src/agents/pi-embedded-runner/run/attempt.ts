@@ -177,6 +177,7 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
+import { shouldParseGlmToolCalls, wrapStreamFnParseGlmToolCalls } from "./glm-tool-call-repair.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -1058,6 +1059,12 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
           activeSession.agent.streamFn,
         );
+      }
+
+      // GLM models (4.7, 5) sometimes emit tool calls as XML in text content
+      // instead of structured tool_calls. Parse and promote them.
+      if (shouldParseGlmToolCalls(params.provider, params.model.id)) {
+        activeSession.agent.streamFn = wrapStreamFnParseGlmToolCalls(activeSession.agent.streamFn);
       }
 
       if (anthropicPayloadLogger) {

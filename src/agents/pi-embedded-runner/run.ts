@@ -1387,7 +1387,7 @@ export async function runEmbeddedPiAgent(
             });
           }
           return {
-            payloads: payloads.length ? payloads : undefined,
+            payloads: payloads.length ? payloads : [],
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
