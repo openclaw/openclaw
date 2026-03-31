@@ -113,6 +113,10 @@ openclaw config set --batch-json '[
 openclaw config set --batch-file ./config-set.batch.json --dry-run
 ```
 
+Policy note:
+
+- SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for example `hooks.token`, `commands.ownerDisplaySecret`, Discord thread-binding webhook tokens, and WhatsApp creds JSON). See [SecretRef Credential Surface](/reference/secretref-credential-surface).
+
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth.
 `--strict-json` / `--json` do not change batch parsing behavior.
 
@@ -204,6 +208,8 @@ Dry-run behavior:
 
 - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
 - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
+- Policy validation also runs for known unsupported SecretRef target surfaces.
+- Policy checks evaluate the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
 - Exec SecretRef checks are skipped by default during dry-run to avoid command side effects.
 - Use `--allow-exec` with `--dry-run` to opt in to exec SecretRef checks (this may execute provider commands).
 - `--allow-exec` is dry-run only and errors if used without `--dry-run`.
@@ -289,6 +295,7 @@ Failure example:
 If dry-run fails:
 
 - `config schema validation failed`: your post-change config shape is invalid; fix path/value or provider/ref object shape.
+- `Config policy validation failed: unsupported SecretRef usage`: move that credential back to plaintext/string input and keep SecretRefs on supported surfaces only.
 - `SecretRef assignment(s) could not be resolved`: referenced provider/ref currently cannot resolve (missing env var, invalid file pointer, exec provider failure, or provider/source mismatch).
 - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: dry-run skipped exec refs; rerun with `--allow-exec` if you need exec resolvability validation.
 - For batch mode, fix failing entries and rerun `--dry-run` before writing.
