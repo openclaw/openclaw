@@ -52,13 +52,13 @@ vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage: hoisted.sendMessageMock,
 }));
 
-vi.mock("../../../src/acp/control-plane/manager.js", () => ({
+vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
   }),
 }));
 
-vi.mock("../../../src/agents/subagent-control.js", () => ({
+vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
@@ -67,12 +67,12 @@ async function loadFreshTaskRegistryModulesForControlTest() {
   vi.doMock("./task-registry-delivery-runtime.js", () => ({
     sendMessage: hoisted.sendMessageMock,
   }));
-  vi.doMock("../../../src/acp/control-plane/manager.js", () => ({
+  vi.doMock("../acp/control-plane/manager.js", () => ({
     getAcpSessionManager: () => ({
       cancelSession: hoisted.cancelSessionMock,
     }),
   }));
-  vi.doMock("../../../src/agents/subagent-control.js", () => ({
+  vi.doMock("../agents/subagent-control.js", () => ({
     killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
   }));
   return await import("./task-registry.js");
