@@ -229,8 +229,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var manualTls by rememberSaveable { mutableStateOf(false) }
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
-  val canFinishOnboarding =
-    isConnected || (gatewayInputMode == GatewayInputMode.SetupCode && isNodeConnected)
+  val canFinishOnboarding = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
 
   val lifecycleOwner = LocalLifecycleOwner.current
   val qrScannerOptions =
@@ -910,6 +909,10 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       }
     }
   }
+}
+
+internal fun canFinishOnboarding(isConnected: Boolean, isNodeConnected: Boolean): Boolean {
+  return isConnected && isNodeConnected
 }
 
 @Composable
