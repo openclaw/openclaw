@@ -5,6 +5,7 @@ import {
   addSession,
   appendOutput,
   drainSession,
+  getFinishedSession,
   listFinishedSessions,
   markBackgrounded,
   markExited,
@@ -113,6 +114,23 @@ describe("bash process registry", () => {
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(1);
+  });
+
+  it("refreshes finished session output when late chunks arrive after exit", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "before\n");
+    markExited(session, 0, null, "completed");
+
+    appendOutput(session, "stdout", "after\n");
+
+    expect(getFinishedSession(session.id)?.aggregated).toBe("before\nafter\n");
+    expect(getFinishedSession(session.id)?.tail).toBe("before\nafter\n");
   });
 });
 

@@ -131,6 +131,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
+  syncFinishedSessionSnapshot(session);
 }
 
 export function drainSession(session: ProcessSession) {
@@ -212,6 +213,20 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
   });
+}
+
+function syncFinishedSessionSnapshot(session: ProcessSession) {
+  if (!session.backgrounded) {
+    return;
+  }
+  const finished = finishedSessions.get(session.id);
+  if (!finished) {
+    return;
+  }
+  finished.aggregated = session.aggregated;
+  finished.tail = session.tail;
+  finished.truncated = session.truncated;
+  finished.totalOutputChars = session.totalOutputChars;
 }
 
 export function tail(text: string, max = 2000) {
