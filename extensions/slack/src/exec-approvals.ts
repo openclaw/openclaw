@@ -3,11 +3,17 @@ import {
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveSlackAccount } from "./accounts.js";
 
-function normalizeSlackApproverId(value: string | number): string | undefined {
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+
+export function normalizeSlackApproverId(value: string | number): string | undefined {
   const trimmed = String(value).trim();
   if (!trimmed) {
     return undefined;
@@ -21,6 +27,47 @@ function normalizeSlackApproverId(value: string | number): string | undefined {
     return mention[1];
   }
   return /^[UW][A-Z0-9]+$/i.test(trimmed) ? trimmed : undefined;
+}
+
+function matchesSlackApprovalSessionFilter(sessionKey: string, patterns: string[]): boolean {
+  const boundedSessionKey = sessionKey.slice(0, 2048);
+  return patterns.some((pattern) => {
+    if (boundedSessionKey.includes(pattern)) {
+      return true;
+    }
+    try {
+      return new RegExp(pattern).test(boundedSessionKey);
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function shouldHandleSlackExecApprovalRequest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ApprovalRequest;
+}): boolean {
+  const config = resolveSlackAccount(params).config.execApprovals;
+  if (!config?.enabled) {
+    return false;
+  }
+  if (getSlackExecApprovalApprovers(params).length === 0) {
+    return false;
+  }
+  if (config.agentFilter?.length) {
+    const agentId = params.request.request.agentId?.trim();
+    if (!agentId || !config.agentFilter.includes(agentId)) {
+      return false;
+    }
+  }
+  if (config.sessionFilter?.length) {
+    const sessionKey = params.request.request.sessionKey?.trim();
+    if (!sessionKey || !matchesSlackApprovalSessionFilter(sessionKey, config.sessionFilter)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function getSlackExecApprovalApprovers(params: {

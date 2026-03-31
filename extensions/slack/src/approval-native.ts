@@ -16,6 +16,7 @@ import {
   isSlackExecApprovalAuthorizedSender,
   isSlackExecApprovalClientEnabled,
   resolveSlackExecApprovalTarget,
+  shouldHandleSlackExecApprovalRequest,
 } from "./exec-approvals.js";
 import { parseSlackTarget } from "./targets.js";
 
@@ -152,6 +153,9 @@ function resolveSlackOriginTarget(params: {
   accountId: string;
   request: ApprovalRequest;
 }) {
+  if (!shouldHandleSlackExecApprovalRequest(params)) {
+    return null;
+  }
   const turnSourceTarget = resolveTurnSourceSlackOriginTarget(params);
   const sessionTarget = resolveSessionSlackOriginTarget(params);
   if (turnSourceTarget && sessionTarget && !slackTargetsMatch(turnSourceTarget, sessionTarget)) {
@@ -164,7 +168,11 @@ function resolveSlackOriginTarget(params: {
 function resolveSlackApproverDmTargets(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  request: ApprovalRequest;
 }) {
+  if (!shouldHandleSlackExecApprovalRequest(params)) {
+    return [];
+  }
   return getSlackExecApprovalApprovers({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -190,7 +198,7 @@ export const slackNativeApprovalAdapter = createApproverRestrictedNativeApproval
     target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
   resolveOriginTarget: ({ cfg, accountId, request }) =>
     accountId ? resolveSlackOriginTarget({ cfg, accountId, request }) : null,
-  resolveApproverDmTargets: ({ cfg, accountId }) =>
-    resolveSlackApproverDmTargets({ cfg, accountId }),
+  resolveApproverDmTargets: ({ cfg, accountId, request }) =>
+    resolveSlackApproverDmTargets({ cfg, accountId, request }),
   notifyOriginWhenDmOnly: true,
 });

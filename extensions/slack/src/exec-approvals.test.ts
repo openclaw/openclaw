@@ -6,7 +6,9 @@ import {
   isSlackExecApprovalAuthorizedSender,
   isSlackExecApprovalClientEnabled,
   isSlackExecApprovalTargetRecipient,
+  normalizeSlackApproverId,
   resolveSlackExecApprovalTarget,
+  shouldHandleSlackExecApprovalRequest,
   shouldSuppressLocalSlackExecApprovalPrompt,
 } from "./exec-approvals.js";
 
@@ -128,6 +130,68 @@ describe("slack exec approvals", () => {
       shouldSuppressLocalSlackExecApprovalPrompt({
         cfg: buildConfig(),
         payload,
+      }),
+    ).toBe(false);
+  });
+
+  it("normalizes wrapped sender ids", () => {
+    expect(normalizeSlackApproverId("user:U123OWNER")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("<@U123OWNER>")).toBe("U123OWNER");
+  });
+
+  it("applies agent and session filters to request handling", () => {
+    const cfg = buildConfig({
+      enabled: true,
+      approvers: ["U123"],
+      agentFilter: ["ops-agent"],
+      sessionFilter: ["slack:direct:", "tail$"],
+    });
+
+    expect(
+      shouldHandleSlackExecApprovalRequest({
+        cfg,
+        request: {
+          id: "req-1",
+          request: {
+            command: "echo hi",
+            agentId: "ops-agent",
+            sessionKey: "agent:ops-agent:slack:direct:U123:tail",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldHandleSlackExecApprovalRequest({
+        cfg,
+        request: {
+          id: "req-2",
+          request: {
+            command: "echo hi",
+            agentId: "other-agent",
+            sessionKey: "agent:other-agent:slack:direct:U123:tail",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldHandleSlackExecApprovalRequest({
+        cfg,
+        request: {
+          id: "req-3",
+          request: {
+            command: "echo hi",
+            agentId: "ops-agent",
+            sessionKey: "agent:ops-agent:discord:channel:123",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
       }),
     ).toBe(false);
   });
