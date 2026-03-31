@@ -31,6 +31,8 @@ capabilities to the agent as a node.
   a local process.
   The app starts the local **node host service** so the remote Gateway can reach this Mac.
   The app does not spawn the Gateway as a child process.
+  Gateway discovery now prefers Tailscale MagicDNS names over raw tailnet IPs,
+  so the Mac app recovers more reliably when tailnet IPs change.
 
 ## Launchd control
 
