@@ -246,6 +246,19 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
+  it("preserves provider-advertised streaming usage support on DashScope-compatible endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "dashscope",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      compat: { supportsUsageInStreaming: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
   it("preserves explicit supportsUsageInStreaming false on non-native endpoints", () => {
     const model = {
       ...baseModel(),
