@@ -615,6 +615,23 @@ describe("browser tool local-browser-bridge adapter", () => {
     ).rejects.toThrow("read-only in v1");
     expect(browserActionsMocks.browserNavigate).not.toHaveBeenCalled();
   });
+  it("falls through to the normal browser path for unsupported bridge actions", async () => {
+    vi.stubEnv("OPENCLAW_LOCAL_BROWSER_BRIDGE_URL", "http://127.0.0.1:3000");
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      profile: "user",
+      request: { kind: "hover", targetId: "tab-1", ref: "btn-1" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ kind: "hover", targetId: "tab-1", ref: "btn-1" }),
+      expect.objectContaining({ profile: "user" }),
+    );
+  });
+
 });
 
 describe("browser tool act compatibility", () => {

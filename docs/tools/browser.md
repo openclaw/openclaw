@@ -195,10 +195,6 @@ Browser settings live in `~/.openclaw/openclaw.json`.
         attachOnly: true,
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
         color: "#FB542B",
-      "chrome-relay": {
-        driver: "extension",
-        cdpUrl: "http://127.0.0.1:18792",
-        color: "#00AA00",
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
