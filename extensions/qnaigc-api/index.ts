@@ -16,14 +16,6 @@ type QnaigcCatalogEntry = {
 
 const QNAIGC_MODELS = [
   {
-    id: "minimax/minimax-m2.5",
-    name: "MiniMax M2.5 (QNAIGC)",
-    reasoning: false,
-    input: ["text"] as const,
-    contextWindow: 204800,
-    maxTokens: 128000,
-  },
-  {
     id: "minimax/minimax-m2.1",
     name: "MiniMax M2.1 (QNAIGC)",
     reasoning: false,
@@ -32,8 +24,8 @@ const QNAIGC_MODELS = [
     maxTokens: 128000,
   },
   {
-    id: "minimax/minimax-m2.7",
-    name: "MiniMax M2.7 (QNAIGC)",
+    id: "minimax/minimax-m2.5",
+    name: "MiniMax M2.5 (QNAIGC)",
     reasoning: false,
     input: ["text"] as const,
     contextWindow: 204800,
@@ -42,6 +34,14 @@ const QNAIGC_MODELS = [
   {
     id: "minimax/minimax-m2.5-highspeed",
     name: "MiniMax M2.5 HighSpeed (QNAIGC)",
+    reasoning: false,
+    input: ["text"] as const,
+    contextWindow: 204800,
+    maxTokens: 128000,
+  },
+  {
+    id: "minimax/minimax-m2.7",
+    name: "MiniMax M2.7 (QNAIGC)",
     reasoning: false,
     input: ["text"] as const,
     contextWindow: 204800,
