@@ -19,6 +19,22 @@ export type PluginInstallRequestKind =
   | "plugin-file"
   | "plugin-npm";
 
+export type SkillInstallSpecMetadata = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
 }
@@ -67,4 +83,17 @@ export async function scanFileInstallSource(
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanFileInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
   return await scanFileInstallSourceRuntime(params);
+}
+
+export async function scanSkillInstallSource(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
+  installId: string;
+  installSpec?: SkillInstallSpecMetadata;
+  logger: InstallScanLogger;
+  origin: string;
+  skillName: string;
+  sourceDir: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const { scanSkillInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
+  return await scanSkillInstallSourceRuntime(params);
 }
