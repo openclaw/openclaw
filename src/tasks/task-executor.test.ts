@@ -67,7 +67,8 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       const created = createQueuedTaskRun({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-executor-queued",
         task: "Investigate issue",
@@ -103,7 +104,8 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({
         runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:codex:subagent:child",
         runId: "run-executor-fail",
         task: "Write summary",
@@ -143,7 +145,8 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -179,7 +182,8 @@ describe("task-executor", () => {
 
       const child = createRunningTaskRun({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-linear-cancel",
         task: "Inspect a PR",
@@ -217,7 +221,8 @@ describe("task-executor", () => {
 
       const child = createRunningTaskRun({
         runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:codex:subagent:child",
         runId: "run-subagent-cancel",
         task: "Inspect a PR",

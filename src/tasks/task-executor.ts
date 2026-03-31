@@ -7,13 +7,14 @@ import {
   markTaskTerminalByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
-} from "./task-registry.js";
+} from "./runtime-internal.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
   TaskRecord,
   TaskRuntime,
+  TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
@@ -21,7 +22,8 @@ import type {
 export function createQueuedTaskRun(params: {
   runtime: TaskRuntime;
   sourceId?: string;
-  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   childSessionKey?: string;
   parentTaskId?: string;
@@ -42,7 +44,8 @@ export function createQueuedTaskRun(params: {
 export function createRunningTaskRun(params: {
   runtime: TaskRuntime;
   sourceId?: string;
-  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   childSessionKey?: string;
   parentTaskId?: string;

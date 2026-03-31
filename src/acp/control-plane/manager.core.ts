@@ -1884,7 +1884,8 @@ export class AcpSessionManager {
       createRunningTaskRun({
         runtime: "acp",
         sourceId: context.runId,
-        requesterSessionKey: context.requesterSessionKey,
+        ownerKey: context.requesterSessionKey,
+        scopeKind: "session",
         requesterOrigin: context.requesterOrigin,
         childSessionKey: context.childSessionKey,
         runId: context.runId,

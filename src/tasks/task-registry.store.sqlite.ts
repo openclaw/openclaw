@@ -10,7 +10,8 @@ type TaskRegistryRow = {
   task_id: string;
   runtime: TaskRecord["runtime"];
   source_id: string | null;
-  requester_session_key: string;
+  owner_key: string;
+  scope_kind: TaskRecord["scopeKind"];
   child_session_key: string | null;
   parent_task_id: string | null;
   agent_id: string | null;
@@ -35,6 +36,10 @@ type TaskDeliveryStateRow = {
   task_id: string;
   requester_origin_json: string | null;
   last_notified_event_at: number | bigint | null;
+};
+
+type TableInfoRow = {
+  name: string;
 };
 
 type TaskRegistryStatements = {
@@ -90,7 +95,8 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     taskId: row.task_id,
     runtime: row.runtime,
     ...(row.source_id ? { sourceId: row.source_id } : {}),
-    requesterSessionKey: row.requester_session_key,
+    ownerKey: row.owner_key,
+    scopeKind: row.scope_kind,
     ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
@@ -127,7 +133,8 @@ function bindTaskRecord(record: TaskRecord) {
     task_id: record.taskId,
     runtime: record.runtime,
     source_id: record.sourceId ?? null,
-    requester_session_key: record.requesterSessionKey,
+    owner_key: record.ownerKey,
+    scope_kind: record.scopeKind,
     child_session_key: record.childSessionKey ?? null,
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
@@ -164,7 +171,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         task_id,
         runtime,
         source_id,
-        requester_session_key,
+        owner_key,
+        scope_kind,
         child_session_key,
         parent_task_id,
         agent_id,
@@ -199,7 +207,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         task_id,
         runtime,
         source_id,
-        requester_session_key,
+        owner_key,
+        scope_kind,
         child_session_key,
         parent_task_id,
         agent_id,
@@ -222,7 +231,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @task_id,
         @runtime,
         @source_id,
-        @requester_session_key,
+        @owner_key,
+        @scope_kind,
         @child_session_key,
         @parent_task_id,
         @agent_id,
@@ -245,7 +255,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       ON CONFLICT(task_id) DO UPDATE SET
         runtime = excluded.runtime,
         source_id = excluded.source_id,
-        requester_session_key = excluded.requester_session_key,
+        owner_key = excluded.owner_key,
+        scope_kind = excluded.scope_kind,
         child_session_key = excluded.child_session_key,
         parent_task_id = excluded.parent_task_id,
         agent_id = excluded.agent_id,
@@ -283,13 +294,50 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
   };
 }
 
+function hasTaskRunsColumn(db: DatabaseSync, columnName: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(task_runs)`).all() as TableInfoRow[];
+  return rows.some((row) => row.name === columnName);
+}
+
+function migrateLegacyOwnerColumns(db: DatabaseSync) {
+  if (!hasTaskRunsColumn(db, "owner_key")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN owner_key TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "scope_kind")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'session';`);
+  }
+  if (hasTaskRunsColumn(db, "requester_session_key")) {
+    db.exec(`
+      UPDATE task_runs
+      SET owner_key = requester_session_key
+      WHERE owner_key IS NULL
+    `);
+  }
+  db.exec(`
+    UPDATE task_runs
+    SET owner_key = CASE
+      WHEN trim(COALESCE(owner_key, '')) <> '' THEN trim(owner_key)
+      ELSE 'system:' || runtime || ':' || COALESCE(NULLIF(source_id, ''), task_id)
+    END
+  `);
+  db.exec(`
+    UPDATE task_runs
+    SET scope_kind = CASE
+      WHEN scope_kind = 'system' THEN 'system'
+      WHEN owner_key LIKE 'system:%' THEN 'system'
+      ELSE 'session'
+    END
+  `);
+}
+
 function ensureSchema(db: DatabaseSync) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_runs (
       task_id TEXT PRIMARY KEY,
       runtime TEXT NOT NULL,
       source_id TEXT,
-      requester_session_key TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      scope_kind TEXT NOT NULL,
       child_session_key TEXT,
       parent_task_id TEXT,
       agent_id TEXT,
@@ -310,6 +358,7 @@ function ensureSchema(db: DatabaseSync) {
       terminal_outcome TEXT
     );
   `);
+  migrateLegacyOwnerColumns(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state (
       task_id TEXT PRIMARY KEY,
@@ -322,6 +371,7 @@ function ensureSchema(db: DatabaseSync) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_status ON task_runs(runtime, status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_cleanup_after ON task_runs(cleanup_after);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);`);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);`,
   );

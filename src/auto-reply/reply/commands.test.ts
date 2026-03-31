@@ -2633,7 +2633,8 @@ describe("handleCommands subagents", () => {
     });
     createTaskRecord({
       runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       childSessionKey: "agent:main:subagent:abc",
       runId: "run-1",
       task: "do thing",

@@ -9,11 +9,12 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createTaskRecord,
-  findLatestTaskForSessionKey,
+  findLatestTaskForOwnerKey,
+  findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
   getTaskById,
   getTaskRegistrySummary,
-  listTasksForSessionKey,
+  listTasksForOwnerKey,
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
@@ -133,7 +134,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:acp:child",
         runId: "run-1",
         task: "Do the thing",
@@ -173,7 +175,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         runId: "run-summary-acp",
         task: "Investigate issue",
         status: "queued",
@@ -181,7 +184,8 @@ describe("task-registry", () => {
       });
       createTaskRecord({
         runtime: "cron",
-        requesterSessionKey: "",
+        ownerKey: "system:cron:run-summary-cron",
+        scopeKind: "system",
         runId: "run-summary-cron",
         task: "Daily digest",
         status: "running",
@@ -189,7 +193,8 @@ describe("task-registry", () => {
       });
       createTaskRecord({
         runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         runId: "run-summary-subagent",
         task: "Write patch",
         status: "timed_out",
@@ -232,7 +237,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -286,7 +292,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -332,7 +339,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -368,7 +376,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:acp:child",
         runId: "run-session-queued",
         task: "Investigate issue",
@@ -406,7 +415,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:acp:child",
         runId: "run-session-blocked",
         task: "Port the repo changes",
@@ -443,7 +453,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -494,7 +505,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -535,7 +547,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -569,7 +582,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "cli",
-        requesterSessionKey: "agent:codex:acp:child",
+        ownerKey: "agent:codex:acp:child",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-shared",
         task: "Child ACP execution",
@@ -579,7 +593,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child",
         runId: "run-shared",
         task: "Spawn ACP child",
@@ -607,7 +622,8 @@ describe("task-registry", () => {
 
       const directTask = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -620,7 +636,8 @@ describe("task-registry", () => {
       });
       const spawnedTask = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -655,7 +672,8 @@ describe("task-registry", () => {
 
       const directTask = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -669,7 +687,8 @@ describe("task-registry", () => {
 
       const spawnedTask = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -699,7 +718,8 @@ describe("task-registry", () => {
 
       const spawnedTask = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -713,7 +733,8 @@ describe("task-registry", () => {
 
       const directTask = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -744,7 +765,8 @@ describe("task-registry", () => {
 
       const task = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "telegram",
           to: "telegram:123",
@@ -784,7 +806,8 @@ describe("task-registry", () => {
 
       const task = createTaskRecord({
         runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:subagent:child",
         runId: "run-restore",
         task: "Restore me",
@@ -813,26 +836,30 @@ describe("task-registry", () => {
 
       const older = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:subagent:child-1",
         runId: "run-session-lookup-1",
         task: "Older task",
       });
       const latest = createTaskRecord({
         runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:subagent:child-2",
         runId: "run-session-lookup-2",
         task: "Latest task",
       });
       nowSpy.mockRestore();
 
-      expect(findLatestTaskForSessionKey("agent:main:main")?.taskId).toBe(latest.taskId);
-      expect(listTasksForSessionKey("agent:main:main").map((task) => task.taskId)).toEqual([
+      expect(findLatestTaskForOwnerKey("agent:main:main")?.taskId).toBe(latest.taskId);
+      expect(listTasksForOwnerKey("agent:main:main").map((task) => task.taskId)).toEqual([
         latest.taskId,
         older.taskId,
       ]);
-      expect(findLatestTaskForSessionKey("agent:main:subagent:child-1")?.taskId).toBe(older.taskId);
+      expect(findLatestTaskForRelatedSessionKey("agent:main:subagent:child-1")?.taskId).toBe(
+        older.taskId,
+      );
     });
   });
 
@@ -843,7 +870,8 @@ describe("task-registry", () => {
 
       const task = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:acp:missing",
         runId: "run-lost",
         task: "Missing child",
@@ -876,7 +904,8 @@ describe("task-registry", () => {
 
       const task = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:acp:missing",
         runId: "run-lost-maintenance",
         task: "Missing child",
@@ -908,7 +937,8 @@ describe("task-registry", () => {
 
       const task = createTaskRecord({
         runtime: "cli",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         childSessionKey: "agent:main:main",
         runId: "run-prune",
         task: "Old completed task",
@@ -945,7 +975,8 @@ describe("task-registry", () => {
                 {
                   taskId: "task-missing-cleanup",
                   runtime: "cron",
-                  requesterSessionKey: "",
+                  ownerKey: "system:cron:run-maintenance-cleanup",
+                  scopeKind: "system",
                   runId: "run-maintenance-cleanup",
                   task: "Finished cron",
                   status: "failed",
@@ -992,7 +1023,8 @@ describe("task-registry", () => {
                 {
                   taskId: "task-audit-summary",
                   runtime: "acp",
-                  requesterSessionKey: "agent:main:main",
+                  ownerKey: "agent:main:main",
+                  scopeKind: "session",
                   runId: "run-audit-summary",
                   task: "Hung task",
                   status: "running",
@@ -1038,7 +1070,8 @@ describe("task-registry", () => {
 
       const task = createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "discord",
           to: "discord:123",
@@ -1095,7 +1128,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "discord",
           to: "discord:123",
@@ -1167,7 +1201,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "discord",
           to: "discord:123",
@@ -1218,7 +1253,8 @@ describe("task-registry", () => {
 
       createTaskRecord({
         runtime: "acp",
-        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
         requesterOrigin: {
           channel: "discord",
           to: "discord:123",
@@ -1276,7 +1312,8 @@ describe("task-registry", () => {
 
         const task = registry.createTaskRecord({
           runtime: "acp",
-          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
           requesterOrigin: {
             channel: "telegram",
             to: "telegram:123",
@@ -1337,7 +1374,8 @@ describe("task-registry", () => {
 
         const task = registry.createTaskRecord({
           runtime: "subagent",
-          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
           requesterOrigin: {
             channel: "telegram",
             to: "telegram:123",
