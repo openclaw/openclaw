@@ -539,6 +539,75 @@ describe("runDiscordGatewayLifecycle", () => {
     );
   });
 
+  it("suppresses reconnect-exhausted fired during abort-driven disconnect", async () => {
+    const abortController = new AbortController();
+    const { emitter, gateway } = createGatewayHarness();
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
+    const reconnectExhaustedEvent = createGatewayEvent(
+      "reconnect-exhausted",
+      "Max reconnect attempts (0) reached after code 1005",
+    );
+    gateway.disconnect.mockImplementation(() => {
+      lifecycleHandler?.(reconnectExhaustedEvent);
+    });
+    waitForDiscordGatewayStopMock.mockImplementationOnce((params) => {
+      return new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finishResolve = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          try {
+            params.gateway?.disconnect?.();
+          } finally {
+            resolve();
+          }
+        };
+        const finishReject = (err: unknown) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(err);
+        };
+        const onAbort = () => finishResolve();
+
+        lifecycleHandler = (event) => {
+          if ((params.onGatewayEvent?.(event) ?? "stop") === "stop") {
+            finishReject(event.err);
+          }
+        };
+        params.gatewaySupervisor?.attachLifecycle(lifecycleHandler);
+        params.registerForceStop?.(finishReject);
+
+        if (params.abortSignal?.aborted) {
+          onAbort();
+          return;
+        }
+        params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+
+    const { lifecycleParams, runtimeLog, runtimeError } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+    await vi.waitFor(() => expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(1));
+    abortController.abort();
+
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
+    );
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("discord gateway reconnect-exhausted"),
+    );
+  });
+
   it("pushes disconnected status when Carbon schedules a reconnect", async () => {
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;

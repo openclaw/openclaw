@@ -424,6 +424,15 @@ export async function runDiscordGatewayLifecycle(params: {
       );
       return "stop";
     }
+    const isExpectedShutdownReconnectExhausted =
+      (lifecycleStopping || params.abortSignal?.aborted === true) &&
+      event.type === "reconnect-exhausted";
+    if (isExpectedShutdownReconnectExhausted) {
+      params.runtime.log?.(
+        `discord: ignoring expected reconnect-exhausted during shutdown: ${event.message}`,
+      );
+      return "stop";
+    }
     if (event.shouldStopLifecycle) {
       lifecycleStopping = true;
     }
@@ -438,11 +447,17 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   const drainPendingGatewayErrors = (): "continue" | "stop" =>
     params.gatewaySupervisor.drainPending((event) => {
+      const isExpectedShutdownReconnectExhausted =
+        event.type === "reconnect-exhausted" &&
+        (lifecycleStopping || params.abortSignal?.aborted === true);
       const decision = handleGatewayEvent(event);
       if (decision !== "stop") {
         return "continue";
       }
       if (event.type === "disallowed-intents") {
+        return "stop";
+      }
+      if (isExpectedShutdownReconnectExhausted) {
         return "stop";
       }
       throw new DiscordGatewayLifecycleError(event);
