@@ -17,6 +17,7 @@ const {
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
+  resolveEnforceFinalTag,
 } = await import("./agent-runner-utils.js");
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
@@ -212,6 +213,30 @@ describe("agent-runner-utils", () => {
     expect(context).toMatchObject({
       currentChannelId: "channel:123456789012345678",
       currentMessageId: "msg-9",
+    });
+  });
+
+  describe("resolveEnforceFinalTag", () => {
+    it("returns true when run.enforceFinalTag is true", () => {
+      const run = makeRun({ enforceFinalTag: true });
+      expect(resolveEnforceFinalTag(run, "openai")).toBe(true);
+    });
+
+    it("returns true for reasoning-tag providers even without config flag", () => {
+      const run = makeRun({ enforceFinalTag: false });
+      expect(resolveEnforceFinalTag(run, "google")).toBe(true);
+      expect(resolveEnforceFinalTag(run, "google-gemini-cli")).toBe(true);
+    });
+
+    it("returns false for non-tag providers without config flag", () => {
+      const run = makeRun({ enforceFinalTag: false });
+      expect(resolveEnforceFinalTag(run, "openai")).toBe(false);
+      expect(resolveEnforceFinalTag(run, "anthropic")).toBe(false);
+    });
+
+    it("returns false when enforceFinalTag is false and provider is not tag-based", () => {
+      const run = makeRun({ enforceFinalTag: false });
+      expect(resolveEnforceFinalTag(run, "openai")).toBe(false);
     });
   });
 });
