@@ -155,9 +155,12 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
-        manualHost = "",
-        manualPort = "",
-        manualTls = true,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = true,
         fallbackBootstrapToken = "",
         fallbackToken = "shared-token",
         fallbackPassword = "shared-password",
@@ -180,9 +183,12 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
-        manualHost = "",
-        manualPort = "",
-        manualTls = true,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = true,
         fallbackBootstrapToken = "",
         fallbackToken = "shared-token",
         fallbackPassword = "shared-password",
@@ -202,9 +208,12 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
-        manualHost = "192.168.31.100",
-        manualPort = "18789",
-        manualTls = false,
+        savedManualHost = "192.168.31.100",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.100",
+        manualPortInput = "18789",
+        manualTlsInput = false,
         fallbackBootstrapToken = "bootstrap-1",
         fallbackToken = "",
         fallbackPassword = "",
@@ -224,9 +233,12 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
-        manualHost = "192.168.31.100",
-        manualPort = "18789",
-        manualTls = false,
+        savedManualHost = "192.168.31.100",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.100",
+        manualPortInput = "18789",
+        manualTlsInput = false,
         fallbackBootstrapToken = "bootstrap-1",
         fallbackToken = "",
         fallbackPassword = "password-1",
@@ -235,6 +247,27 @@ class GatewayConfigResolverTest {
     assertEquals("", resolved?.bootstrapToken)
     assertEquals("", resolved?.token)
     assertEquals("password-1", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualDropsBootstrapTokenWhenEndpointChanges() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "192.168.31.100",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.101",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("192.168.31.101", resolved?.host)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {
