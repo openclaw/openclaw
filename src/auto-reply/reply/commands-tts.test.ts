@@ -65,6 +65,20 @@ describe("handleTtsCommands status fallback reporting", () => {
       provider: "microsoft",
       fallbackFrom: "elevenlabs",
       attemptedProviders: ["elevenlabs", "microsoft"],
+      attempts: [
+        {
+          provider: "elevenlabs",
+          outcome: "failed",
+          reasonCode: "provider_error",
+          latencyMs: 73,
+        },
+        {
+          provider: "microsoft",
+          outcome: "success",
+          reasonCode: "success",
+          latencyMs: 420,
+        },
+      ],
       latencyMs: 420,
     });
 
@@ -72,6 +86,9 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Fallback: elevenlabs -> microsoft");
     expect(result?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
+    expect(result?.reply?.text).toContain(
+      "Attempt details: elevenlabs:failed(provider_error) 73ms, microsoft:success(ok) 420ms",
+    );
   });
 
   it("shows attempted provider chain for failed attempts", async () => {
@@ -82,6 +99,14 @@ describe("handleTtsCommands status fallback reporting", () => {
       summarized: false,
       error: "TTS conversion failed",
       attemptedProviders: ["elevenlabs", "microsoft"],
+      attempts: [
+        {
+          provider: "elevenlabs",
+          outcome: "failed",
+          reasonCode: "timeout",
+          latencyMs: 999,
+        },
+      ],
       latencyMs: 420,
     });
 
@@ -89,6 +114,7 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Error: TTS conversion failed");
     expect(result?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
+    expect(result?.reply?.text).toContain("Attempt details: elevenlabs:failed(timeout) 999ms");
   });
 
   it("persists fallback metadata from /tts audio and renders it in /tts status", async () => {
@@ -103,6 +129,20 @@ describe("handleTtsCommands status fallback reporting", () => {
       provider: "microsoft",
       fallbackFrom: "elevenlabs",
       attemptedProviders: ["elevenlabs", "microsoft"],
+      attempts: [
+        {
+          provider: "elevenlabs",
+          outcome: "failed",
+          reasonCode: "provider_error",
+          latencyMs: 65,
+        },
+        {
+          provider: "microsoft",
+          outcome: "success",
+          reasonCode: "success",
+          latencyMs: 175,
+        },
+      ],
       latencyMs: 175,
       voiceCompatible: true,
     });
@@ -116,5 +156,8 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(statusResult?.reply?.text).toContain("Provider: microsoft");
     expect(statusResult?.reply?.text).toContain("Fallback: elevenlabs -> microsoft");
     expect(statusResult?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
+    expect(statusResult?.reply?.text).toContain(
+      "Attempt details: elevenlabs:failed(provider_error) 65ms, microsoft:success(ok) 175ms",
+    );
   });
 });

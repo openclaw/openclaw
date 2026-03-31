@@ -680,6 +680,182 @@ describe("tts", () => {
     });
   });
 
+  describe("fallback readiness errors", () => {
+    it("continues synthesize fallback when primary readiness checks throw", async () => {
+      const throwingPrimary: SpeechProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 10,
+        resolveConfig: () => ({}),
+        isConfigured: () => {
+          throw new Error("Authorization: Bearer sk-readiness-throw-token-1234567890\nboom");
+        },
+        synthesize: async () => {
+          throw new Error("unexpected synthesize call");
+        },
+      };
+      const fallback: SpeechProviderPlugin = {
+        id: "microsoft",
+        label: "Microsoft",
+        autoSelectOrder: 20,
+        resolveConfig: () => ({}),
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: createAudioBuffer(2),
+          outputFormat: "mp3",
+          fileExtension: ".mp3",
+          voiceCompatible: true,
+        }),
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.speechProviders = [
+        { pluginId: "openai", provider: throwingPrimary, source: "test" },
+        { pluginId: "microsoft", provider: fallback, source: "test" },
+      ];
+      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+      setActivePluginRegistry(registry, cacheKey);
+
+      const result = await tts.synthesizeSpeech({
+        text: "hello fallback",
+        cfg: {
+          messages: {
+            tts: {
+              provider: "openai",
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      if (!result.success) {
+        throw new Error("expected fallback synthesis success");
+      }
+      expect(result.provider).toBe("microsoft");
+      expect(result.fallbackFrom).toBe("openai");
+      expect(result.attemptedProviders).toEqual(["openai", "microsoft"]);
+      expect(result.attempts?.[0]).toMatchObject({
+        provider: "openai",
+        outcome: "failed",
+        reasonCode: "provider_error",
+      });
+      expect(result.attempts?.[1]).toMatchObject({
+        provider: "microsoft",
+        outcome: "success",
+        reasonCode: "success",
+      });
+    });
+
+    it("continues telephony fallback when primary readiness checks throw", async () => {
+      const throwingPrimary: SpeechProviderPlugin = {
+        id: "primary-throws",
+        label: "PrimaryThrows",
+        autoSelectOrder: 10,
+        resolveConfig: () => ({}),
+        isConfigured: () => {
+          throw new Error("Authorization: Bearer sk-telephony-throw-token-1234567890\tboom");
+        },
+        synthesize: async () => {
+          throw new Error("unexpected synthesize call");
+        },
+      };
+      const fallback: SpeechProviderPlugin = {
+        id: "microsoft",
+        label: "Microsoft",
+        autoSelectOrder: 20,
+        resolveConfig: () => ({}),
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: createAudioBuffer(2),
+          outputFormat: "mp3",
+          fileExtension: ".mp3",
+          voiceCompatible: true,
+        }),
+        synthesizeTelephony: async () => ({
+          audioBuffer: createAudioBuffer(2),
+          outputFormat: "mp3",
+          sampleRate: 24000,
+        }),
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.speechProviders = [
+        { pluginId: "primary-throws", provider: throwingPrimary, source: "test" },
+        { pluginId: "microsoft", provider: fallback, source: "test" },
+      ];
+      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+      setActivePluginRegistry(registry, cacheKey);
+
+      const result = await tts.textToSpeechTelephony({
+        text: "hello telephony fallback",
+        cfg: {
+          messages: {
+            tts: {
+              provider: "primary-throws",
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      if (!result.success) {
+        throw new Error("expected telephony fallback success");
+      }
+      expect(result.provider).toBe("microsoft");
+      expect(result.fallbackFrom).toBe("primary-throws");
+      expect(result.attemptedProviders).toEqual(["primary-throws", "microsoft"]);
+      expect(result.attempts?.[0]).toMatchObject({
+        provider: "primary-throws",
+        outcome: "failed",
+        reasonCode: "provider_error",
+      });
+      expect(result.attempts?.[1]).toMatchObject({
+        provider: "microsoft",
+        outcome: "success",
+        reasonCode: "success",
+      });
+    });
+
+    it("does not double-prefix textToSpeech failure messages", async () => {
+      const failingProvider: SpeechProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 10,
+        resolveConfig: () => ({}),
+        isConfigured: () => true,
+        synthesize: async () => {
+          throw new Error("provider failed");
+        },
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.speechProviders = [
+        { pluginId: "openai", provider: failingProvider, source: "test" },
+      ];
+      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+      setActivePluginRegistry(registry, cacheKey);
+
+      const result = await tts.textToSpeech({
+        text: "hello",
+        cfg: {
+          messages: {
+            tts: {
+              provider: "openai",
+            },
+          },
+        },
+        disableFallback: true,
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("expected synthesis failure");
+      }
+      expect(result.error).toBeDefined();
+      const errorMessage = result.error ?? "";
+      expect(errorMessage).toBe("TTS conversion failed: openai: provider failed");
+      expect(errorMessage).not.toContain("TTS conversion failed: TTS conversion failed:");
+      expect(errorMessage.match(/TTS conversion failed:/g)).toHaveLength(1);
+    });
+  });
+
   describe("resolveTtsConfig – openai.baseUrl", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },

@@ -395,6 +395,8 @@ Notes:
 - `/tts status` includes fallback visibility for the latest attempt:
   - success fallback: `Fallback: <primary> -> <used>` plus `Attempts: ...`
   - failure: `Error: ...` plus `Attempts: ...`
+  - detailed diagnostics: `Attempt details: provider:outcome(reasonCode) latency`
+- OpenAI and ElevenLabs API failures now include parsed provider error detail and request id (when returned by the provider), which is surfaced in TTS errors/logs.
 
 ## Agent tool
 
