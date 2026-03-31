@@ -604,6 +604,22 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    qmd: z
+      .object({
+        extraCollections: z
+          .array(
+            z
+              .object({
+                path: z.string(),
+                name: z.string().optional(),
+                pattern: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     multimodal: z
       .object({
         enabled: z.boolean().optional(),

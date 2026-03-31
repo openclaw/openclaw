@@ -368,9 +368,19 @@ export function resolveMemoryBackendConfig(params: {
   const searchExtraPaths = dedupedExtraPaths.map(
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
+  const mergedExtraCollections = [
+    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+  ].filter((value): value is MemoryQmdIndexPath =>
+    Boolean(value && typeof value === "object" && typeof value.path === "string"),
+  );
 
-  // Combine QMD-specific paths with memorySearch extraPaths
-  const allQmdPaths: MemoryQmdIndexPath[] = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
+  // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.
+  const allQmdPaths: MemoryQmdIndexPath[] = [
+    ...(qmdCfg?.paths ?? []),
+    ...searchExtraPaths,
+    ...mergedExtraCollections,
+  ];
 
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),

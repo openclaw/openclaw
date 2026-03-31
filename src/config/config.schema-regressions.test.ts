@@ -51,6 +51,45 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
