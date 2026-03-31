@@ -1,7 +1,8 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { normalizeHostname } from "./hostname.js";
+import { hasEnvHttpProxyConfigured, hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -89,6 +90,18 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
+}
+
+function keepsTrustedHostOnDirectPath(hostname: string, policy?: SsrFPolicy): boolean {
+  const normalizedHostname = normalizeHostname(hostname);
+  return (
+    policy?.allowPrivateNetwork === true ||
+    policy?.dangerouslyAllowPrivateNetwork === true ||
+    (normalizedHostname !== "" &&
+      (policy?.allowedHostnames ?? []).some(
+        (allowedHostname) => normalizeHostname(allowedHostname) === normalizedHostname,
+      ))
+  );
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -183,7 +196,15 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        const protocol = parsedUrl.protocol === "http:" ? "http" : "https";
+        const useEnvProxy =
+          hasEnvHttpProxyConfigured(protocol) &&
+          !params.dispatcherPolicy?.mode &&
+          !keepsTrustedHostOnDirectPath(parsedUrl.hostname, params.policy);
+        const dispatcherPolicy: PinnedDispatcherPolicy | undefined = useEnvProxy
+          ? Object.assign({}, params.dispatcherPolicy, { mode: "env-proxy" as const })
+          : params.dispatcherPolicy;
+        dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, params.policy);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
