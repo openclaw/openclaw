@@ -302,6 +302,33 @@ describe("resolveToolDeliveryPayload", () => {
     });
   });
 
+  it("preserves audioAsVoice from directive media tokens", () => {
+    expect(
+      resolveToolDeliveryPayload({
+        text: "MEDIA:`/tmp/out.mp3`\n[[audio_as_voice]]",
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: ["/tmp/out.mp3"],
+      mediaUrl: "/tmp/out.mp3",
+      audioAsVoice: true,
+    });
+  });
+
+  it("does not override explicit audioAsVoice false with directive hint", () => {
+    expect(
+      resolveToolDeliveryPayload({
+        text: "MEDIA:`/tmp/out.mp3`\n[[audio_as_voice]]",
+        audioAsVoice: false,
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: ["/tmp/out.mp3"],
+      mediaUrl: "/tmp/out.mp3",
+      audioAsVoice: false,
+    });
+  });
+
   it("trims and deduplicates media URLs from payload fields", () => {
     expect(
       resolveToolDeliveryPayload({

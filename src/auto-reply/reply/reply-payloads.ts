@@ -13,7 +13,10 @@ export {
 import type { ReplyPayload } from "../types.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 
-function extractToolDeliveryMediaUrls(payload: ReplyPayload): string[] {
+function extractToolDeliveryMediaUrls(payload: ReplyPayload): {
+  audioAsVoice?: boolean;
+  mediaUrls: string[];
+} {
   const mediaUrls = payload.mediaUrls ?? [];
   const mediaUrl = payload.mediaUrl ? [payload.mediaUrl] : [];
   const parsed = payload.text ? parseReplyDirectives(payload.text) : undefined;
@@ -26,7 +29,10 @@ function extractToolDeliveryMediaUrls(payload: ReplyPayload): string[] {
     }
     seen.add(url);
   }
-  return [...seen];
+  return {
+    audioAsVoice: payload.audioAsVoice ?? parsed?.audioAsVoice,
+    mediaUrls: [...seen],
+  };
 }
 
 export function resolveToolDeliveryPayload(
@@ -52,7 +58,8 @@ export function resolveToolDeliveryPayload(
   ) {
     return payload;
   }
-  const mediaUrls = extractToolDeliveryMediaUrls(payload);
+  const extracted = extractToolDeliveryMediaUrls(payload);
+  const mediaUrls = extracted.mediaUrls;
   const hasMedia = mediaUrls.length > 0;
   if (!hasMedia) {
     return null;
@@ -62,5 +69,6 @@ export function resolveToolDeliveryPayload(
     text: undefined,
     mediaUrls,
     mediaUrl: mediaUrls[0],
+    ...(extracted.audioAsVoice !== undefined ? { audioAsVoice: extracted.audioAsVoice } : {}),
   };
 }

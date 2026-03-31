@@ -232,6 +232,33 @@ describe("resolveToolDeliveryPayload", () => {
     });
   });
 
+  it("preserves audioAsVoice from MEDIA directive", () => {
+    expect(
+      resolveToolDeliveryPayload({
+        text: "MEDIA:`https://example.com/tts.opus`\n[[audio_as_voice]]",
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: ["https://example.com/tts.opus"],
+      mediaUrl: "https://example.com/tts.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it("does not override explicit audioAsVoice false with MEDIA directive hint", () => {
+    expect(
+      resolveToolDeliveryPayload({
+        text: "MEDIA:`https://example.com/tts.opus`\n[[audio_as_voice]]",
+        audioAsVoice: false,
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrl: "https://example.com/tts.opus",
+      mediaUrls: ["https://example.com/tts.opus"],
+      audioAsVoice: false,
+    });
+  });
+
   it("returns null for text-only payloads when text is not allowed", () => {
     const payload = resolveToolDeliveryPayload({ text: "No media here" });
     expect(payload).toBeNull();
