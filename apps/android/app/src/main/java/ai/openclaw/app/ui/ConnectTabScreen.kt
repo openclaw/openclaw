@@ -53,7 +53,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
@@ -72,7 +71,6 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
-  val gatewayBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
@@ -242,13 +240,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             resolveGatewayConnectConfig(
               useSetupCode = inputMode == ConnectInputMode.SetupCode,
               setupCode = setupCode,
-              savedManualHost = manualHost,
-              savedManualPort = manualPort.toString(),
-              savedManualTls = manualTls,
-              manualHostInput = manualHostInput,
-              manualPortInput = manualPortInput,
-              manualTlsInput = manualTlsInput,
-              fallbackBootstrapToken = gatewayBootstrapToken,
+              manualHost = manualHostInput,
+              manualPort = manualPortInput,
+              manualTls = manualTlsInput,
               fallbackToken = gatewayToken,
               fallbackPassword = passwordInput,
             )
@@ -275,12 +269,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             viewModel.setGatewayToken("")
           }
           viewModel.setGatewayPassword(config.password)
-          viewModel.connect(
-            GatewayEndpoint.manual(host = config.host, port = config.port),
-            token = config.token.ifEmpty { null },
-            bootstrapToken = config.bootstrapToken.ifEmpty { null },
-            password = config.password.ifEmpty { null },
-          )
+          viewModel.connectManual()
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),

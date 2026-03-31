@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeSandboxBrowserConfigHash, computeSandboxConfigHash } from "./config-hash.js";
 import type { SandboxDockerConfig } from "./types.js";
-import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDockerConfig {
   return {
@@ -60,7 +59,6 @@ describe("computeSandboxConfigHash", () => {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     };
     const left = computeSandboxConfigHash({
       ...shared,
@@ -90,7 +88,6 @@ describe("computeSandboxConfigHash", () => {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     };
     const left = computeSandboxConfigHash({
       ...shared,
@@ -123,7 +120,6 @@ describe("computeSandboxBrowserConfigHash", () => {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     };
     const left = computeSandboxBrowserConfigHash({
       ...shared,
@@ -154,7 +150,6 @@ describe("computeSandboxBrowserConfigHash", () => {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     };
     const left = computeSandboxBrowserConfigHash({
       ...shared,
@@ -181,7 +176,6 @@ describe("computeSandboxBrowserConfigHash", () => {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     };
     const left = computeSandboxBrowserConfigHash({
       ...shared,
@@ -190,33 +184,6 @@ describe("computeSandboxBrowserConfigHash", () => {
     const right = computeSandboxBrowserConfigHash({
       ...shared,
       browser: { ...shared.browser, cdpSourceRange: "172.22.0.1/32" },
-    });
-    expect(left).not.toBe(right);
-  });
-
-  it("changes when mount format version changes", () => {
-    const shared = {
-      docker: createDockerConfig(),
-      browser: {
-        cdpPort: 9222,
-        cdpSourceRange: undefined,
-        vncPort: 5900,
-        noVncPort: 6080,
-        headless: false,
-        enableNoVnc: true,
-      },
-      securityEpoch: "epoch-v1",
-      workspaceAccess: "rw" as const,
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-    };
-    const left = computeSandboxBrowserConfigHash({
-      ...shared,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
-    });
-    const right = computeSandboxBrowserConfigHash({
-      ...shared,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION - 1,
     });
     expect(left).not.toBe(right);
   });

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing, ensurePluginRegistryLoaded } from "./plugin-registry.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
@@ -38,8 +37,8 @@ vi.mock("../plugins/runtime.js", () => ({
 
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
-    __testing.resetPluginRegistryLoadedForTests();
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [],
@@ -73,6 +72,8 @@ describe("ensurePluginRegistryLoaded", () => {
       plugins: [{ id: "demo-chat", channels: ["demo-chat"] }],
       diagnostics: [],
     });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 
@@ -126,6 +127,8 @@ describe("ensurePluginRegistryLoaded", () => {
         tools: [],
       });
 
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
     ensurePluginRegistryLoaded({ scope: "channels" });
 
@@ -157,6 +160,8 @@ describe("ensurePluginRegistryLoaded", () => {
       tools: [],
     });
 
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
     ensurePluginRegistryLoaded({ scope: "all" });
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
@@ -182,6 +187,8 @@ describe("ensurePluginRegistryLoaded", () => {
       channels: [],
       tools: [{ pluginId: "demo-tool" }],
     });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 

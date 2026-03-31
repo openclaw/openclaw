@@ -9,7 +9,7 @@ import {
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk/lib/matrix.js";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { writeJsonFileAtomically } from "../../runtime-api.js";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
 

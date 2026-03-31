@@ -1,44 +1,20 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as execApprovals from "../infra/exec-approvals.js";
-import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const mocks = vi.hoisted(() => {
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn(),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return {
-    callGatewayFromCli: vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-      if (method.endsWith(".get")) {
-        return {
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          hash: "hash-1",
-          file: { version: 1, agents: {} },
-        };
-      }
-      return { method, params };
-    }),
-    defaultRuntime,
-    runtimeErrors,
-  };
+const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
+  if (method.endsWith(".get")) {
+    return {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "hash-1",
+      file: { version: 1, agents: {} },
+    };
+  }
+  return { method, params };
 });
 
-const { callGatewayFromCli, defaultRuntime, runtimeErrors } = mocks;
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const localSnapshot = {
   path: "/tmp/local-exec-approvals.json",
@@ -54,7 +30,7 @@ function resetLocalSnapshot() {
 
 vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
-    mocks.callGatewayFromCli(method, opts, params),
+    callGatewayFromCli(method, opts, params),
 }));
 
 vi.mock("./nodes-cli/rpc.js", async () => {
@@ -66,7 +42,7 @@ vi.mock("./nodes-cli/rpc.js", async () => {
 });
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.defaultRuntime,
+  defaultRuntime,
 }));
 
 vi.mock("../infra/exec-approvals.js", async () => {
@@ -79,6 +55,9 @@ vi.mock("../infra/exec-approvals.js", async () => {
     saveExecApprovals: vi.fn(),
   };
 });
+
+const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+const execApprovals = await import("../infra/exec-approvals.js");
 
 describe("exec approvals CLI", () => {
   const createProgram = () => {
@@ -95,13 +74,8 @@ describe("exec approvals CLI", () => {
 
   beforeEach(() => {
     resetLocalSnapshot();
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGatewayFromCli.mockClear();
-    defaultRuntime.log.mockClear();
-    defaultRuntime.error.mockClear();
-    defaultRuntime.writeStdout.mockClear();
-    defaultRuntime.writeJson.mockClear();
-    defaultRuntime.exit.mockClear();
   });
 
   it("routes get command to local, gateway, and node modes", async () => {

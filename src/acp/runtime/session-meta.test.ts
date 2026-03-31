@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
@@ -20,12 +20,10 @@ vi.mock("../../config/sessions.js", () => ({
 let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 
 describe("listAcpSessionEntries", () => {
-  beforeAll(async () => {
-    ({ listAcpSessionEntries } = await import("./session-meta.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ listAcpSessionEntries } = await import("./session-meta.js"));
   });
 
   it("reads ACP sessions from resolved configured store targets", async () => {

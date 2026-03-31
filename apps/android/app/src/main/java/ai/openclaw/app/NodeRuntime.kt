@@ -45,12 +45,6 @@ class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
 ) {
-  data class GatewayConnectAuth(
-    val token: String?,
-    val bootstrapToken: String?,
-    val password: String?,
-  )
-
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
@@ -781,51 +775,28 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
-  }
-
-  private fun connectWithAuth(
-    endpoint: GatewayEndpoint,
-    auth: GatewayConnectAuth,
-    reconnect: Boolean = false,
-  ) {
+    val token = prefs.loadGatewayToken()
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()
+    val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
-    val connectOperator =
-      shouldConnectOperatorSession(
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
-        loadStoredRoleDeviceToken("operator"),
-      )
-    if (!connectOperator) {
-      operatorConnected = false
-      operatorStatusText = "Offline"
-      operatorSession.disconnect()
-      updateStatus()
-    } else {
-      operatorSession.connect(
-        endpoint,
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
-        connectionManager.buildOperatorConnectOptions(),
-        tls,
-      )
-    }
+    operatorSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildOperatorConnectOptions(),
+      tls,
+    )
     nodeSession.connect(
       endpoint,
-      auth.token,
-      auth.bootstrapToken,
-      auth.password,
+      token,
+      bootstrapToken,
+      password,
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    if (reconnect && connectOperator) {
-      operatorSession.reconnect()
-    }
-    if (reconnect) {
-      nodeSession.reconnect()
-    }
+    operatorSession.reconnect()
+    nodeSession.reconnect()
   }
 
   fun connect(endpoint: GatewayEndpoint) {
@@ -847,27 +818,25 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth())
-  }
-
-  fun connect(
-    endpoint: GatewayEndpoint,
-    auth: GatewayConnectAuth,
-  ) {
-    connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
-    updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
-  }
-
-  internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth {
-    return explicitAuth
-      ?: GatewayConnectAuth(
-        token = prefs.loadGatewayToken(),
-        bootstrapToken = prefs.loadGatewayBootstrapToken(),
-        password = prefs.loadGatewayPassword(),
-      )
+    val token = prefs.loadGatewayToken()
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()
+    val password = prefs.loadGatewayPassword()
+    operatorSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildOperatorConnectOptions(),
+      tls,
+    )
+    nodeSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildNodeConnectOptions(),
+      tls,
+    )
   }
 
   fun acceptGatewayTrustPrompt() {
@@ -897,11 +866,6 @@ class NodeRuntime(
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
-  }
-
-  private fun loadStoredRoleDeviceToken(role: String): String? {
-    val deviceId = identityStore.loadOrCreate().deviceId
-    return deviceAuthStore.loadToken(deviceId, role)
   }
 
   fun disconnect() {
@@ -1231,20 +1195,6 @@ class NodeRuntime(
     }
   }
 
-}
-
-internal fun shouldConnectOperatorSession(
-  token: String?,
-  bootstrapToken: String?,
-  password: String?,
-  storedOperatorToken: String?,
-): Boolean {
-  return (
-    !token.isNullOrBlank() ||
-      !bootstrapToken.isNullOrBlank() ||
-      !password.isNullOrBlank() ||
-      !storedOperatorToken.isNullOrBlank()
-    )
 }
 
 private enum class HomeCanvasGatewayState {

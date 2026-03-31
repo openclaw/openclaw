@@ -5,8 +5,6 @@
  * a notification and can approve or deny the request.
  */
 
-// Extensions cannot import core internals directly, so use node:crypto here.
-import { randomBytes } from "node:crypto";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
@@ -34,7 +32,7 @@ export type CreateApprovalParams = {
  */
 export function generateApprovalId(type: ApprovalType): string {
   const timestamp = Date.now();
-  const randomPart = randomBytes(3).toString("hex");
+  const randomPart = Math.random().toString(36).substring(2, 6);
   return `${type}-${timestamp}-${randomPart}`;
 }
 

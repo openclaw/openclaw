@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -26,7 +26,8 @@ let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSoc
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({
     addAllowlistEntry,
     ensureExecApprovals,
@@ -38,9 +39,6 @@ beforeAll(async () => {
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
   } = await import("./exec-approvals.js"));
-});
-
-beforeEach(() => {
   requestJsonlSocketMock.mockReset();
 });
 

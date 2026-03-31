@@ -1,5 +1,9 @@
+import {
+  formatLocationText,
+  toLocationContext,
+  type NormalizedLocation,
+} from "../../runtime-api.js";
 import type { LocationMessageEventContent } from "../sdk.js";
-import { formatLocationText, toLocationContext, type NormalizedLocation } from "./runtime-api.js";
 import { EventType } from "./types.js";
 
 export type MatrixLocationPayload = {

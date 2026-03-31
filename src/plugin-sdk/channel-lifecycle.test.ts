@@ -1,11 +1,11 @@
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAccountStatusSink,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
-} from "./channel-lifecycle.core.js";
+} from "./channel-lifecycle.js";
 
 type FakeServer = EventEmitter & {
   close: (callback?: () => void) => void;
@@ -23,24 +23,14 @@ function createFakeServer(): FakeServer {
 }
 
 async function expectTaskPending(task: Promise<unknown>) {
-  let settled = false;
-  void task.finally(() => {
-    settled = true;
-  });
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(settled).toBe(false);
+  const early = await Promise.race([
+    task.then(() => "resolved"),
+    new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
+  ]);
+  expect(early).toBe("pending");
 }
 
 describe("plugin-sdk channel lifecycle helpers", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("binds account id onto status patches", () => {
     const setStatus = vi.fn();
     const statusSink = createAccountStatusSink({

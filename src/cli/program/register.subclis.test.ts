@@ -1,10 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadValidatedConfigForPluginRegistration,
-  registerSubCliByName,
-  registerSubCliCommands,
-} from "./register.subclis.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { acpAction, registerAcpCli } = vi.hoisted(() => {
   const action = vi.fn();
@@ -31,6 +26,18 @@ const configModule = vi.hoisted(() => ({
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../../config/config.js", () => configModule);
+
+const mockedModuleIds = ["../acp-cli.js", "../nodes-cli.js", "../../config/config.js"];
+
+const { loadValidatedConfigForPluginRegistration, registerSubCliByName, registerSubCliCommands } =
+  await import("./register.subclis.js");
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
+});
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;

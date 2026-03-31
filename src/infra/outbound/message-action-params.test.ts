@@ -31,9 +31,7 @@ describe("message action media helpers", () => {
       }),
     ).toEqual({
       mode: "host",
-      mediaAccess: {
-        localRoots: ["/tmp/a"],
-      },
+      localRoots: ["/tmp/a"],
     });
   });
 

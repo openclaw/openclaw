@@ -5,12 +5,7 @@ import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.j
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
-import type {
-  DiffArtifactContext,
-  DiffRenderOptions,
-  DiffRenderTarget,
-  DiffToolDefaults,
-} from "./types.js";
+import type { DiffArtifactContext, DiffRenderOptions, DiffToolDefaults } from "./types.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,
@@ -169,21 +164,16 @@ export function createDiffsTool(params: {
         fileScale: toolParams.fileScale ?? toolParams.imageScale,
         fileMaxWidth: toolParams.fileMaxWidth ?? toolParams.imageMaxWidth,
       });
-      const renderTarget = resolveRenderTarget(mode);
 
-      const rendered = await renderDiffDocument(
-        input,
-        {
-          presentation: {
-            ...params.defaults,
-            layout,
-            theme,
-          },
-          image,
-          expandUnchanged,
+      const rendered = await renderDiffDocument(input, {
+        presentation: {
+          ...params.defaults,
+          layout,
+          theme,
         },
-        renderTarget,
-      );
+        image,
+        expandUnchanged,
+      });
 
       const screenshotter =
         params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
@@ -192,7 +182,7 @@ export function createDiffsTool(params: {
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
-          html: requireRenderedHtml(rendered.imageHtml, "image"),
+          html: rendered.imageHtml,
           theme,
           image,
           ttlMs,
@@ -226,7 +216,7 @@ export function createDiffsTool(params: {
       }
 
       const artifact = await params.store.createArtifact({
-        html: requireRenderedHtml(rendered.html, "viewer"),
+        html: rendered.html,
         title: rendered.title,
         inputKind: rendered.inputKind,
         fileCount: rendered.fileCount,
@@ -269,7 +259,7 @@ export function createDiffsTool(params: {
           screenshotter,
           store: params.store,
           artifactId: artifact.id,
-          html: requireRenderedHtml(rendered.imageHtml, "image"),
+          html: rendered.imageHtml,
           theme,
           image,
         });
@@ -328,23 +318,6 @@ function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutput
 
 function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
   return mode === "image" || mode === "file";
-}
-
-function resolveRenderTarget(mode: DiffMode): DiffRenderTarget {
-  if (mode === "view") {
-    return "viewer";
-  }
-  if (isArtifactOnlyMode(mode)) {
-    return "image";
-  }
-  return "both";
-}
-
-function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget): string {
-  if (html !== undefined) {
-    return html;
-  }
-  throw new Error(`Missing ${target} render output.`);
 }
 
 function buildArtifactDetails(params: {

@@ -138,8 +138,7 @@ function tryCreateCronTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      ownerKey: `system:cron:${params.job.id}`,
-      scopeKind: "system",
+      requesterSessionKey: "",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,

@@ -13,8 +13,6 @@ export type TelephonyTtsRuntime = {
     audioBuffer?: Buffer;
     sampleRate?: number;
     provider?: string;
-    fallbackFrom?: string;
-    attemptedProviders?: string[];
     error?: string;
   }>;
 };
@@ -27,11 +25,8 @@ export function createTelephonyTtsProvider(params: {
   coreConfig: CoreConfig;
   ttsOverride?: VoiceCallTtsConfig;
   runtime: TelephonyTtsRuntime;
-  logger?: {
-    warn?: (message: string) => void;
-  };
 }): TelephonyTtsProvider {
-  const { coreConfig, ttsOverride, runtime, logger } = params;
+  const { coreConfig, ttsOverride, runtime } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
 
   return {
@@ -43,16 +38,6 @@ export function createTelephonyTtsProvider(params: {
 
       if (!result.success || !result.audioBuffer || !result.sampleRate) {
         throw new Error(result.error ?? "TTS conversion failed");
-      }
-
-      if (result.fallbackFrom && result.provider && result.fallbackFrom !== result.provider) {
-        const attemptedChain =
-          result.attemptedProviders && result.attemptedProviders.length > 0
-            ? result.attemptedProviders.join(" -> ")
-            : `${result.fallbackFrom} -> ${result.provider}`;
-        logger?.warn?.(
-          `[voice-call] Telephony TTS fallback used from=${result.fallbackFrom} to=${result.provider} attempts=${attemptedChain}`,
-        );
       }
 
       return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);

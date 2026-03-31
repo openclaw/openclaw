@@ -10,6 +10,7 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   getCommandPathWithRootOptions,
@@ -92,7 +93,7 @@ export function resolveMissingBrowserCommandMessage(config?: OpenClawConfig): st
     Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
       ? config.plugins.allow
           .filter((entry): entry is string => typeof entry === "string")
-          .map((entry) => entry.trim().toLowerCase())
+          .map((entry) => normalizePluginId(entry))
       : [];
   if (allow.length > 0 && !allow.includes("browser")) {
     return (

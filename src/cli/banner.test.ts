@@ -1,11 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatCliBannerLine } from "./banner.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const readCliBannerTaglineModeMock = vi.hoisted(() => vi.fn());
+const readCliBannerTaglineModeMock = vi.fn();
 
 vi.mock("./banner-config-lite.js", () => ({
   readCliBannerTaglineMode: readCliBannerTaglineModeMock,
 }));
+
+let formatCliBannerLine: typeof import("./banner.js").formatCliBannerLine;
+
+beforeAll(async () => {
+  ({ formatCliBannerLine } = await import("./banner.js"));
+});
 
 beforeEach(() => {
   readCliBannerTaglineModeMock.mockReset();

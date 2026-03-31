@@ -33,7 +33,6 @@ import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  resolveGroupDmAllow,
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
@@ -147,7 +146,6 @@ export function resolveAgentComponentRoute(params: {
   rawGuildId: string | undefined;
   memberRoleIds: string[];
   isDirectMessage: boolean;
-  isGroupDm: boolean;
   userId: string;
   channelId: string;
   parentId: string | undefined;
@@ -159,7 +157,7 @@ export function resolveAgentComponentRoute(params: {
     guildId: params.rawGuildId,
     memberRoleIds: params.memberRoleIds,
     peer: {
-      kind: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
+      kind: params.isDirectMessage ? "direct" : "channel",
       id: params.isDirectMessage ? params.userId : params.channelId,
     },
     parentPeer: params.parentId ? { kind: "channel", id: params.parentId } : undefined,
@@ -240,10 +238,7 @@ export async function resolveComponentInteractionContext(params: {
   const username = formatUsername(user);
   const userId = user.id;
   const rawGuildId = interaction.rawData.guild_id;
-  const channelType = resolveDiscordChannelContext(interaction).channelType;
-  const isGroupDm = channelType === ChannelType.GroupDM;
-  const isDirectMessage =
-    channelType === ChannelType.DM || (!rawGuildId && !isGroupDm && channelType == null);
+  const isDirectMessage = !rawGuildId;
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
@@ -256,7 +251,6 @@ export async function resolveComponentInteractionContext(params: {
     replyOpts,
     rawGuildId,
     isDirectMessage,
-    isGroupDm,
     memberRoleIds,
   };
 }
@@ -569,47 +563,6 @@ async function ensureDmComponentAuthorized(params: {
   return false;
 }
 
-async function ensureGroupDmComponentAuthorized(params: {
-  ctx: AgentComponentContext;
-  interaction: AgentComponentInteraction;
-  channelId: string;
-  componentLabel: string;
-  replyOpts: { ephemeral?: boolean };
-}) {
-  const { ctx, interaction, channelId, componentLabel, replyOpts } = params;
-  const groupDmEnabled = ctx.discordConfig?.dm?.groupEnabled ?? false;
-  if (!groupDmEnabled) {
-    logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (group DMs disabled)`);
-    try {
-      await interaction.reply({
-        content: "Group DM interactions are disabled.",
-        ...replyOpts,
-      });
-    } catch {}
-    return false;
-  }
-
-  const channelCtx = resolveDiscordChannelContext(interaction);
-  const allowed = resolveGroupDmAllow({
-    channels: ctx.discordConfig?.dm?.groupChannels,
-    channelId,
-    channelName: channelCtx.channelName,
-    channelSlug: channelCtx.channelSlug,
-  });
-  if (allowed) {
-    return true;
-  }
-
-  logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (not allowlisted)`);
-  try {
-    await interaction.reply({
-      content: `You are not authorized to use this ${componentLabel}.`,
-      ...replyOpts,
-    });
-  } catch {}
-  return false;
-}
-
 export async function resolveInteractionContextWithDmAuth(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -630,18 +583,6 @@ export async function resolveInteractionContextWithDmAuth(params: {
       ctx: params.ctx,
       interaction: params.interaction,
       user: interactionCtx.user,
-      componentLabel: params.componentLabel,
-      replyOpts: interactionCtx.replyOpts,
-    });
-    if (!authorized) {
-      return null;
-    }
-  }
-  if (interactionCtx.isGroupDm) {
-    const authorized = await ensureGroupDmComponentAuthorized({
-      ctx: params.ctx,
-      interaction: params.interaction,
-      channelId: interactionCtx.channelId,
       componentLabel: params.componentLabel,
       replyOpts: interactionCtx.replyOpts,
     });

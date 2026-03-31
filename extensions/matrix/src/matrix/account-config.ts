@@ -1,10 +1,9 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   listConfiguredAccountIds,
   resolveNormalizedAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { DEFAULT_ACCOUNT_ID, hasConfiguredSecretInput } from "../runtime-api.js";
 import type { CoreConfig, MatrixAccountConfig, MatrixConfig } from "../types.js";
 
 export function resolveMatrixBaseConfig(cfg: CoreConfig): MatrixConfig {

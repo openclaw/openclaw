@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
@@ -166,11 +166,9 @@ async function expectSubagentSpawningError(params?: {
 }
 
 describe("discord subagent hook handlers", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ registerDiscordSubagentHooks } = await import("./subagent-hooks.js"));
-  });
-
-  beforeEach(() => {
     hookMocks.resolveDiscordAccount.mockClear();
     hookMocks.resolveDiscordAccount.mockImplementation((params?: { accountId?: string }) => ({
       accountId: params?.accountId?.trim() || "default",

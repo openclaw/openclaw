@@ -22,7 +22,6 @@ export type TaskDeliveryStatus =
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
 export type TaskTerminalOutcome = "succeeded" | "blocked";
-export type TaskScopeKind = "session" | "system";
 
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
@@ -54,8 +53,7 @@ export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
   sourceId?: string;
-  ownerKey: string;
-  scopeKind: TaskScopeKind;
+  requesterSessionKey: string;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;

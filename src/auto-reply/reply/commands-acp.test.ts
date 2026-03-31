@@ -3,10 +3,7 @@ import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
@@ -126,9 +123,7 @@ function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   return (topicMatch?.[1] ?? trimmed).trim() || undefined;
 }
 
-function parseDiscordConversationIdForTest(
-  targets: Array<string | undefined | null>,
-): string | undefined {
+function parseDiscordConversationIdForTest(targets: Array<string | undefined | null>): string | undefined {
   for (const rawTarget of targets) {
     const target = rawTarget?.trim();
     if (!target) {
@@ -1464,8 +1459,7 @@ describe("/acp command", () => {
     });
     createTaskRecord({
       runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      requesterSessionKey: "agent:main:main",
       childSessionKey: defaultAcpSessionKey,
       runId: "acp-run-1",
       task: "Inspect ACP backlog",

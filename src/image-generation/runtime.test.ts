@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -24,18 +24,20 @@ function setCompatibleActiveImageGenerationRegistry(
 }
 
 describe("image-generation runtime helpers", () => {
-  beforeAll(async () => {
-    ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
-  });
-
   afterEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
     resetPluginRuntimeStateForTest();
+    vi.doUnmock("../plugins/loader.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     resetPluginRuntimeStateForTest();
+    vi.doMock("../plugins/loader.js", () => ({
+      resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+    }));
+    ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
   });
 
   it("generates images through the active image-generation registry", async () => {

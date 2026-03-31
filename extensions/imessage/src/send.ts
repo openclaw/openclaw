@@ -17,7 +17,6 @@ export type IMessageSendOpts = {
   replyToId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -27,10 +26,7 @@ export type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
-    options?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    },
+    options?: { localRoots?: readonly string[] },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
@@ -127,7 +123,6 @@ export async function sendMessageIMessage(
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
-      readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
     message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);

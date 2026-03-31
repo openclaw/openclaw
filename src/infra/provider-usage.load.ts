@@ -121,6 +121,7 @@ type UsageSummaryOptions = {
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  preferredProfileIds?: Partial<Record<UsageProviderId, string | undefined>>;
   workspaceDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -179,6 +180,7 @@ export async function loadProviderUsageSummary(
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
+    preferredProfileIds: opts.preferredProfileIds,
     config,
     env,
   });

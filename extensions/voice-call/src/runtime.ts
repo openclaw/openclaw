@@ -221,7 +221,6 @@ export async function createVoiceCallRuntime(params: {
             coreConfig,
             ttsOverride: config.tts,
             runtime: ttsRuntime,
-            logger: log,
           });
           twilioProvider.setTTSProvider(ttsProvider);
           log.info("[voice-call] Telephony TTS provider configured");

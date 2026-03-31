@@ -1,26 +1,36 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerConfigureCommand } from "./register.configure.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  configureCommandFromSectionsArgMock: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
-}));
-
-const { configureCommandFromSectionsArgMock, runtime } = mocks;
+const configureCommandFromSectionsArgMock = vi.fn();
+const runtime = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+};
 
 vi.mock("../../commands/configure.js", () => ({
   CONFIGURE_WIZARD_SECTIONS: ["auth", "channels", "gateway", "agent"],
-  configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
+  configureCommandFromSectionsArg: configureCommandFromSectionsArgMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
+  defaultRuntime: runtime,
 }));
+
+const mockedModuleIds = ["../../commands/configure.js", "../../runtime.js"];
+
+let registerConfigureCommand: typeof import("./register.configure.js").registerConfigureCommand;
+
+beforeAll(async () => {
+  ({ registerConfigureCommand } = await import("./register.configure.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
+});
 
 describe("registerConfigureCommand", () => {
   async function runCli(args: string[]) {

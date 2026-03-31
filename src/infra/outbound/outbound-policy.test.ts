@@ -1,5 +1,5 @@
 import { Container, Separator, TextDisplay } from "@buape/carbon";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -53,19 +53,6 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./channel-adapters.js", () => ({
-  getChannelMessageAdapter: mocks.getChannelMessageAdapter,
-}));
-
-vi.mock("./target-normalization.js", () => ({
-  normalizeTargetForProvider: mocks.normalizeTargetForProvider,
-}));
-
-vi.mock("./target-resolver.js", () => ({
-  formatTargetDisplay: mocks.formatTargetDisplay,
-  lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
-}));
-
 const slackConfig = {
   channels: {
     slack: {
@@ -109,17 +96,25 @@ function expectCrossContextPolicyResult(params: {
 }
 
 describe("outbound policy helpers", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.doMock("./channel-adapters.js", () => ({
+      getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+    }));
+    vi.doMock("./target-normalization.js", () => ({
+      normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+    }));
+    vi.doMock("./target-resolver.js", () => ({
+      formatTargetDisplay: mocks.formatTargetDisplay,
+      lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+    }));
     ({
       applyCrossContextDecoration,
       buildCrossContextDecoration,
       enforceCrossContextPolicy,
       shouldApplyCrossContextMarker,
     } = await import("./outbound-policy.js"));
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
   });
 
   it.each([

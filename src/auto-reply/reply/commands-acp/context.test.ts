@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
@@ -6,11 +8,6 @@ import {
   registerSessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
   resolveAcpCommandBindingContext,
@@ -31,9 +28,7 @@ function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   return (topicMatch?.[1] ?? trimmed).trim() || undefined;
 }
 
-function parseDiscordConversationIdForTest(
-  targets: Array<string | undefined | null>,
-): string | undefined {
+function parseDiscordConversationIdForTest(targets: Array<string | undefined | null>): string | undefined {
   for (const rawTarget of targets) {
     const target = rawTarget?.trim();
     if (!target) {
@@ -268,7 +263,8 @@ function setMinimalAcpContextRegistryForTests(): void {
                 });
                 return {
                   conversationId:
-                    senderScopedConversationId ?? `${parentConversationId}:topic:${threadId}`,
+                    senderScopedConversationId ??
+                    `${parentConversationId}:topic:${threadId}`,
                   parentConversationId,
                 };
               }

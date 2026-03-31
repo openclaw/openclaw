@@ -76,7 +76,6 @@ export {
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
 } from "./discord-surface.js";
-export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { inspectDiscordAccount } from "./discord-surface.js";
 export {
   looksLikeDiscordTargetId,

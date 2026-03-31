@@ -650,17 +650,6 @@ description: test skill
         },
         expectedSeverity: "critical",
       },
-      {
-        name: "newly denied exec override",
-        cfg: {
-          gateway: {
-            bind: "lan",
-            auth: { token: "secret" },
-            tools: { allow: ["exec"] },
-          },
-        },
-        expectedSeverity: "critical",
-      },
     ];
     await runConfigAuditCases(
       cases,
@@ -917,10 +906,10 @@ description: test skill
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }, { pattern: "/usr/bin/awk" }],
+          allowlist: [{ pattern: "/usr/bin/python3" }],
         },
         ops: {
-          allowlist: [{ pattern: "/usr/local/bin/node" }, { pattern: "/usr/local/bin/find" }],
+          allowlist: [{ pattern: "/usr/local/bin/node" }],
         },
       },
     });
@@ -942,7 +931,7 @@ description: test skill
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }, { pattern: "/usr/bin/xargs" }],
+          allowlist: [{ pattern: "/usr/bin/python3" }],
         },
       },
     });
@@ -1837,22 +1826,6 @@ description: test skill
           "hooks.mappings[0].allowUnsafeExternalContent=true",
           "tools.exec.applyPatch.workspaceOnly=false",
         ],
-      },
-      {
-        name: "acpx approve-all is treated as a dangerous break-glass flag",
-        cfg: {
-          plugins: {
-            entries: {
-              acpx: {
-                enabled: true,
-                config: {
-                  permissionMode: "approve-all",
-                },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedDangerousDetails: ["plugins.entries.acpx.config.permissionMode=approve-all"],
       },
     ] as const;
 

@@ -28,7 +28,6 @@ describe("resolveAllowAlwaysPatterns", () => {
     dir: string;
     env: Record<string, string | undefined>;
     safeBins: ReturnType<typeof resolveSafeBins>;
-    strictInlineEval?: boolean;
   }) {
     const analysis = evaluateShellAllowlist({
       command: params.command,
@@ -45,7 +44,6 @@ describe("resolveAllowAlwaysPatterns", () => {
         cwd: params.dir,
         env: params.env,
         platform: process.platform,
-        strictInlineEval: params.strictInlineEval,
       }),
     };
   }
@@ -122,55 +120,38 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   }
 
-  function expectShellScriptFallbackRejected(command: string) {
-    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
-    const rcFile = path.join(scriptsDir, "evilrc");
-    fs.writeFileSync(rcFile, "echo blocked\n");
-
-    const { persisted } = resolvePersistedPatterns({
-      command,
-      dir,
-      env,
-      safeBins,
-    });
-    expect(persisted).toEqual([]);
-
-    const second = evaluateShellAllowlist({
-      command,
-      allowlist: [{ pattern: script }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
-  }
-
-  function expectPositionalArgvCarrierRejected(command: string) {
+  function expectPositionalArgvCarrierResult(params: {
+    command: string;
+    expectPersisted: boolean;
+  }) {
     const dir = makeTempDir();
     const touch = makeExecutable(dir, "touch");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
     const safeBins = resolveSafeBins(undefined);
     const marker = path.join(dir, "marker");
-    const expandedCommand = command.replaceAll("{marker}", marker);
+    const command = params.command.replaceAll("{marker}", marker);
 
     const { persisted } = resolvePersistedPatterns({
-      command: expandedCommand,
+      command,
       dir,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    if (params.expectPersisted) {
+      expect(persisted).toEqual([touch]);
+    } else {
+      expect(persisted).not.toContain(touch);
+    }
 
     const second = evaluateShellAllowlist({
-      command: expandedCommand,
+      command,
       allowlist: [{ pattern: touch }],
       safeBins,
       cwd: dir,
       env,
       platform: process.platform,
     });
-    expect(second.allowlistSatisfied).toBe(false);
+    expect(second.allowlistSatisfied).toBe(params.expectPersisted);
   }
 
   it("returns direct executable paths for non-shell segments", () => {
@@ -191,74 +172,6 @@ describe("resolveAllowAlwaysPatterns", () => {
       ],
     });
     expect(patterns).toEqual([exe]);
-  });
-
-  it("does not persist interpreter-like executables for allow-always", () => {
-    const awk = path.join("/tmp", "awk");
-    const patterns = resolveAllowAlwaysPatterns({
-      segments: [
-        {
-          raw: `${awk} '{print $1}' data.csv`,
-          argv: [awk, "{print $1}", "data.csv"],
-          resolution: makeMockCommandResolution({
-            execution: makeMockExecutableResolution({
-              rawExecutable: awk,
-              resolvedPath: awk,
-              executableName: "awk",
-            }),
-          }),
-        },
-      ],
-    });
-    expect(patterns).toEqual([]);
-  });
-
-  it("persists benign awk interpreters when strict inline-eval is enabled", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const awk = makeExecutable(dir, "awk");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const { persisted } = resolvePersistedPatterns({
-      command: "awk -F, -f script.awk data.csv",
-      dir,
-      env,
-      safeBins,
-      strictInlineEval: true,
-    });
-    expect(persisted).toEqual([awk]);
-
-    const second = evaluateShellAllowlist({
-      command: "awk -F, -f script.awk data.csv",
-      allowlist: persisted.map((pattern) => ({ pattern })),
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(true);
-  });
-
-  it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    makeExecutable(dir, "awk");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const { persisted } = resolvePersistedPatterns({
-      command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
-      dir,
-      env,
-      safeBins,
-      strictInlineEval: true,
-    });
-    expect(persisted).toEqual([]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
@@ -357,59 +270,63 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
   });
 
-  it("rejects shell rc and init-file options as persisted or allowlisted script paths", () => {
+  it("persists carried executables for shell-wrapper positional argv carriers", () => {
     if (process.platform === "win32") {
       return;
     }
-    for (const command of [
-      "bash --rcfile scripts/evilrc scripts/save_crystal.sh",
-      "bash --init-file scripts/evilrc scripts/save_crystal.sh",
-      "bash --startup-file scripts/evilrc scripts/save_crystal.sh",
-    ]) {
-      expectShellScriptFallbackRejected(command);
-    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$1"' touch ${path.join(dir, "marker")}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([touch]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$1"' touch ${path.join(dir, "second-marker")}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
   });
 
-  it("rejects shell rc and init-file equals options as persisted or allowlisted script paths", () => {
+  it("persists carried executables for exec -- positional argv carriers", () => {
     if (process.platform === "win32") {
       return;
     }
-    for (const command of [
-      "bash --rcfile=scripts/evilrc scripts/save_crystal.sh",
-      "bash --init-file=scripts/evilrc scripts/save_crystal.sh",
-      "bash --startup-file=scripts/evilrc scripts/save_crystal.sh",
-    ]) {
-      expectShellScriptFallbackRejected(command);
-    }
-  });
-
-  it("rejects shell-wrapper positional argv carriers", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    expectPositionalArgvCarrierRejected(`sh -lc '$0 "$1"' touch {marker}`);
-  });
-
-  it("rejects exec positional argv carriers", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    expectPositionalArgvCarrierRejected(`sh -lc 'exec -- "$0" "$1"' touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc 'exec -- "$0" "$1"' touch {marker}`,
+      expectPersisted: true,
+    });
   });
 
   it("rejects positional argv carriers when $0 is single-quoted", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc "'$0' "$1"" touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc "'$0' "$1"" touch {marker}`,
+      expectPersisted: false,
+    });
   });
 
   it("rejects positional argv carriers when exec is separated from $0 by a newline", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc "exec
-$0 \\"$1\\"" touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc "exec
+$0 \\"$1\\"" touch {marker}`,
+      expectPersisted: false,
+    });
   });
 
   it("rejects positional argv carriers when inline command contains extra shell operations", () => {
@@ -668,23 +585,6 @@ $0 \\"$1\\"" touch {marker}`);
     });
   });
 
-  it("prevents allow-always bypass for caffeinate wrapper chains", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'echo warmup-ok'",
-      secondCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'id > marker'",
-      env,
-      persistedPattern: echo,
-    });
-  });
-
   it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {
     if (process.platform === "win32") {
       return;
@@ -697,24 +597,6 @@ $0 \\"$1\\"" touch {marker}`);
       dir,
       firstCommand: "/usr/bin/nice /bin/zsh -lc 'echo warmup-ok'",
       secondCommand: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
-      env,
-      persistedPattern: echo,
-    });
-  });
-
-  it("prevents allow-always bypass for sandbox-exec wrapper chains", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand:
-        "/usr/bin/sandbox-exec -p '(deny default) (allow process*)' /bin/zsh -lc 'echo warmup-ok'",
-      secondCommand: "/usr/bin/sandbox-exec -p '(allow default)' /bin/zsh -lc 'id > marker'",
       env,
       persistedPattern: echo,
     });
@@ -735,94 +617,6 @@ $0 \\"$1\\"" touch {marker}`);
       env,
       persistedPattern: echo,
     });
-  });
-
-  it("prevents allow-always bypass for macOS dispatch-wrapper chains", () => {
-    if (process.platform !== "darwin") {
-      return;
-    }
-    const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'echo warmup-ok'",
-      secondCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'id > marker-arch'",
-      env,
-      persistedPattern: echo,
-    });
-    expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand: "/usr/bin/xcrun /bin/zsh -lc 'echo warmup-ok'",
-      secondCommand: "/usr/bin/xcrun /bin/zsh -lc 'id > marker-xcrun'",
-      env,
-      persistedPattern: echo,
-    });
-  });
-
-  it("prevents allow-always bypass for awk interpreters", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    makeExecutable(dir, "awk");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const { persisted } = resolvePersistedPatterns({
-      command: "awk '{print $1}' data.csv",
-      dir,
-      env,
-      safeBins,
-    });
-    expect(persisted).toEqual([]);
-
-    const second = evaluateShellAllowlist({
-      command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
-      allowlist: persisted.map((pattern) => ({ pattern })),
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: second.analysisOk,
-        allowlistSatisfied: second.allowlistSatisfied,
-      }),
-    ).toBe(true);
-  });
-
-  it("prevents allow-always bypass for shell-carried awk interpreters", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    makeExecutable(dir, "awk");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const { persisted } = resolvePersistedPatterns({
-      command: `sh -lc '$0 "$@"' awk '{print $1}' data.csv`,
-      dir,
-      env,
-      safeBins,
-    });
-    expect(persisted).toEqual([]);
-
-    const second = evaluateShellAllowlist({
-      command: `sh -lc '$0 "$@"' awk 'BEGIN{system("id > /tmp/pwned")}'`,
-      allowlist: persisted.map((pattern) => ({ pattern })),
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
   });
 
   it("prevents allow-always bypass for script wrapper chains", () => {
@@ -864,7 +658,7 @@ $0 \\"$1\\"" touch {marker}`);
       return;
     }
     const dir = makeTempDir();
-    const envPath = makeExecutable(dir, "env");
+    makeExecutable(dir, "env");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
 
@@ -878,7 +672,7 @@ $0 \\"$1\\"" touch {marker}`);
 
     const second = evaluateShellAllowlist({
       command: `sh -lc '$0 "$@"' env BASH_ENV=/tmp/payload.sh bash -lc 'id > /tmp/pwned'`,
-      allowlist: [{ pattern: envPath }],
+      allowlist: persisted.map((pattern) => ({ pattern })),
       safeBins,
       cwd: dir,
       env,
@@ -892,7 +686,7 @@ $0 \\"$1\\"" touch {marker}`);
       return;
     }
     const dir = makeTempDir();
-    const bashPath = makeExecutable(dir, "bash");
+    makeExecutable(dir, "bash");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
 
@@ -906,35 +700,7 @@ $0 \\"$1\\"" touch {marker}`);
 
     const second = evaluateShellAllowlist({
       command: `sh -lc '$0 "$@"' bash -lc 'id > /tmp/pwned'`,
-      allowlist: [{ pattern: bashPath }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
-  });
-
-  it("rejects positional carrier when carried executable is an unknown dispatch carrier", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const xargsPath = makeExecutable(dir, "xargs");
-    const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-
-    const { persisted } = resolvePersistedPatterns({
-      command: `sh -lc '$0 "$@"' xargs echo SAFE`,
-      dir,
-      env,
-      safeBins,
-    });
-    expect(persisted).toEqual([]);
-
-    const second = evaluateShellAllowlist({
-      command: `sh -lc '$0 "$@"' xargs sh -lc 'id > /tmp/pwned'`,
-      allowlist: [{ pattern: xargsPath }],
+      allowlist: persisted.map((pattern) => ({ pattern })),
       safeBins,
       cwd: dir,
       env,

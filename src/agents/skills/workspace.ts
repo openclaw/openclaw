@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
+import {
+  formatSkillsForPrompt,
+  loadSkillsFromDir,
+  type Skill,
+} from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -11,8 +15,11 @@ import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
+import {
+  parseFrontmatter,
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import type {
@@ -337,11 +344,7 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDirSafe({
-        dir: baseDir,
-        source: params.source,
-        maxBytes: limits.maxSkillFileBytes,
-      });
+      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
       return filterLoadedSkillsInsideRoot({
         skills: unwrapLoadedSkills(loaded),
         source: params.source,
@@ -415,11 +418,7 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDirSafe({
-        dir: skillDir,
-        source: params.source,
-        maxBytes: limits.maxSkillFileBytes,
-      });
+      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
       loadedSkills.push(
         ...filterLoadedSkillsInsideRoot({
           skills: unwrapLoadedSkills(loaded),
@@ -511,12 +510,13 @@ function loadSkillEntries(
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
-    const frontmatter =
-      readSkillFrontmatterSafe({
-        rootDir: skill.baseDir,
-        filePath: skill.filePath,
-        maxBytes: limits.maxSkillFileBytes,
-      }) ?? ({} as ParsedSkillFrontmatter);
+    let frontmatter: ParsedSkillFrontmatter = {};
+    try {
+      const raw = fs.readFileSync(skill.filePath, "utf-8");
+      frontmatter = parseFrontmatter(raw);
+    } catch {
+      // ignore malformed skills
+    }
     return {
       skill,
       frontmatter,

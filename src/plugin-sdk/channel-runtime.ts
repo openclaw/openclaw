@@ -25,4 +25,4 @@ export {
   createAccountStatusSink,
   keepHttpServerTaskAlive,
   waitUntilAbort,
-} from "./channel-lifecycle.core.js";
+} from "./channel-lifecycle.js";

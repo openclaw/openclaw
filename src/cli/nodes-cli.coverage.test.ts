@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerNodesCli } from "./nodes-cli.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type NodeInvokeCall = {
   method?: string;
@@ -46,31 +46,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const mocks = vi.hoisted(() => {
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn(),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return {
-    runtimeErrors,
-    defaultRuntime,
-  };
-});
-
-const { runtimeErrors, defaultRuntime } = mocks;
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
@@ -79,11 +55,12 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime: mocks.defaultRuntime,
+  defaultRuntime,
 }));
 
 describe("nodes-cli coverage", () => {
-  let sharedProgram: Command = new Command();
+  let registerNodesCli: (program: Command) => void;
+  let sharedProgram: Command;
 
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
@@ -98,20 +75,17 @@ describe("nodes-cli coverage", () => {
     return getNodeInvokeCall();
   };
 
-  if (sharedProgram.commands.length === 0) {
+  beforeAll(async () => {
+    ({ registerNodesCli } = await import("./nodes-cli.js"));
+    sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerNodesCli(sharedProgram);
-  }
+  });
 
   beforeEach(() => {
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
-    defaultRuntime.log.mockClear();
-    defaultRuntime.error.mockClear();
-    defaultRuntime.writeStdout.mockClear();
-    defaultRuntime.writeJson.mockClear();
-    defaultRuntime.exit.mockClear();
     lastNodeInvokeCall = null;
   });
 

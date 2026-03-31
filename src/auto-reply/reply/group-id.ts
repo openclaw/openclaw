@@ -5,8 +5,7 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
   }
   const parts = trimmed.split(":").filter(Boolean);
   if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    const joined = parts.slice(2).join(":");
-    return joined.replace(/:topic:.*$/, "") || undefined;
+    return parts.slice(2).join(":") || undefined;
   }
   if (
     parts.length >= 2 &&
@@ -16,8 +15,7 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
     return parts.slice(1).join(":") || undefined;
   }
   if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
-    const joined = parts.slice(1).join(":");
-    return joined.replace(/:topic:.*$/, "") || undefined;
+    return parts.slice(1).join(":") || undefined;
   }
   return undefined;
 }

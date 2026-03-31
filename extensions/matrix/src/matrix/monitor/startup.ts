@@ -1,7 +1,12 @@
 import type { RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
+import { updateMatrixAccountConfig } from "../config-update.js";
+import { summarizeMatrixDeviceHealth } from "../device-health.js";
+import { syncMatrixOwnProfile } from "../profile.js";
 import type { MatrixClient } from "../sdk.js";
+import { maybeRestoreLegacyMatrixBackup } from "./legacy-crypto-restore.js";
+import { ensureMatrixStartupVerification } from "./startup-verification.js";
 
 type MatrixStartupClient = Pick<
   MatrixClient,
@@ -15,63 +20,24 @@ type MatrixStartupClient = Pick<
   | "uploadContent"
 >;
 
-export type MatrixStartupMaintenanceDeps = {
-  updateMatrixAccountConfig: typeof import("../config-update.js").updateMatrixAccountConfig;
-  summarizeMatrixDeviceHealth: typeof import("../device-health.js").summarizeMatrixDeviceHealth;
-  syncMatrixOwnProfile: typeof import("../profile.js").syncMatrixOwnProfile;
-  maybeRestoreLegacyMatrixBackup: typeof import("./legacy-crypto-restore.js").maybeRestoreLegacyMatrixBackup;
-  ensureMatrixStartupVerification: typeof import("./startup-verification.js").ensureMatrixStartupVerification;
-};
-
-let matrixStartupMaintenanceDepsPromise: Promise<MatrixStartupMaintenanceDeps> | undefined;
-
-async function loadMatrixStartupMaintenanceDeps(): Promise<MatrixStartupMaintenanceDeps> {
-  matrixStartupMaintenanceDepsPromise ??= Promise.all([
-    import("../config-update.js"),
-    import("../device-health.js"),
-    import("../profile.js"),
-    import("./legacy-crypto-restore.js"),
-    import("./startup-verification.js"),
-  ]).then(
-    ([
-      configUpdateModule,
-      deviceHealthModule,
-      profileModule,
-      legacyCryptoRestoreModule,
-      startupVerificationModule,
-    ]) => ({
-      updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
-      summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
-      syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
-      maybeRestoreLegacyMatrixBackup: legacyCryptoRestoreModule.maybeRestoreLegacyMatrixBackup,
-      ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
-    }),
-  );
-  return await matrixStartupMaintenanceDepsPromise;
-}
-
-export async function runMatrixStartupMaintenance(
-  params: {
-    client: MatrixStartupClient;
-    auth: MatrixAuth;
-    accountId: string;
-    effectiveAccountId: string;
-    accountConfig: MatrixConfig;
-    logger: RuntimeLogger;
-    logVerboseMessage: (message: string) => void;
-    loadConfig: () => CoreConfig;
-    writeConfigFile: (cfg: never) => Promise<void>;
-    loadWebMedia: (
-      url: string,
-      maxBytes: number,
-    ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
-    env?: NodeJS.ProcessEnv;
-  },
-  deps?: MatrixStartupMaintenanceDeps,
-): Promise<void> {
-  const runtimeDeps = deps ?? (await loadMatrixStartupMaintenanceDeps());
+export async function runMatrixStartupMaintenance(params: {
+  client: MatrixStartupClient;
+  auth: MatrixAuth;
+  accountId: string;
+  effectiveAccountId: string;
+  accountConfig: MatrixConfig;
+  logger: RuntimeLogger;
+  logVerboseMessage: (message: string) => void;
+  loadConfig: () => CoreConfig;
+  writeConfigFile: (cfg: never) => Promise<void>;
+  loadWebMedia: (
+    url: string,
+    maxBytes: number,
+  ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
   try {
-    const profileSync = await runtimeDeps.syncMatrixOwnProfile({
+    const profileSync = await syncMatrixOwnProfile({
       client: params.client,
       userId: params.auth.userId,
       displayName: params.accountConfig.name,
@@ -90,7 +56,7 @@ export async function runMatrixStartupMaintenance(
       params.accountConfig.avatarUrl !== profileSync.resolvedAvatarUrl
     ) {
       const latestCfg = params.loadConfig();
-      const updatedCfg = runtimeDeps.updateMatrixAccountConfig(latestCfg, params.accountId, {
+      const updatedCfg = updateMatrixAccountConfig(latestCfg, params.accountId, {
         avatarUrl: profileSync.resolvedAvatarUrl,
       });
       await params.writeConfigFile(updatedCfg as never);
@@ -107,9 +73,7 @@ export async function runMatrixStartupMaintenance(
   }
 
   try {
-    const deviceHealth = runtimeDeps.summarizeMatrixDeviceHealth(
-      await params.client.listOwnDevices(),
-    );
+    const deviceHealth = summarizeMatrixDeviceHealth(await params.client.listOwnDevices());
     if (deviceHealth.staleOpenClawDevices.length > 0) {
       params.logger.warn(
         `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${deviceHealth.staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
@@ -122,7 +86,7 @@ export async function runMatrixStartupMaintenance(
   }
 
   try {
-    const startupVerification = await runtimeDeps.ensureMatrixStartupVerification({
+    const startupVerification = await ensureMatrixStartupVerification({
       client: params.client,
       auth: params.auth,
       accountConfig: params.accountConfig,
@@ -164,7 +128,7 @@ export async function runMatrixStartupMaintenance(
   }
 
   try {
-    const legacyCryptoRestore = await runtimeDeps.maybeRestoreLegacyMatrixBackup({
+    const legacyCryptoRestore = await maybeRestoreLegacyMatrixBackup({
       client: params.client,
       auth: params.auth,
       env: params.env,

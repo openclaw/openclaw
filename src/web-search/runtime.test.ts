@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -64,17 +64,15 @@ describe("web search runtime", () => {
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
 
-  beforeAll(async () => {
-    ({ runWebSearch } = await import("./runtime.js"));
-    ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
-      await import("../secrets/runtime.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
     resolveBundledPluginWebSearchProvidersMock.mockReturnValue([]);
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([]);
+    ({ runWebSearch } = await import("./runtime.js"));
+    ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
+      await import("../secrets/runtime.js"));
   });
 
   afterEach(() => {

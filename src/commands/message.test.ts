@@ -56,6 +56,7 @@ let envSnapshot: ReturnType<typeof captureEnv>;
 const EMPTY_TEST_REGISTRY = createTestRegistry([]);
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ messageCommand } = await import("./message.js"));
 });
 

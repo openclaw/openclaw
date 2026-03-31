@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -214,19 +214,8 @@ function expectBundleInspectState(
 }
 
 describe("buildPluginStatusReport", () => {
-  beforeAll(async () => {
-    ({
-      buildAllPluginInspectReports,
-      buildPluginCompatibilityNotices,
-      buildPluginCompatibilityWarnings,
-      buildPluginInspectReport,
-      buildPluginStatusReport,
-      formatPluginCompatibilityNotice,
-      summarizePluginCompatibility,
-    } = await import("./status.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -246,6 +235,15 @@ describe("buildPluginStatusReport", () => {
       (params: { config: unknown }) => params.config,
     );
     setPluginLoadResult({ plugins: [] });
+    ({
+      buildAllPluginInspectReports,
+      buildPluginCompatibilityNotices,
+      buildPluginCompatibilityWarnings,
+      buildPluginInspectReport,
+      buildPluginStatusReport,
+      formatPluginCompatibilityNotice,
+      summarizePluginCompatibility,
+    } = await import("./status.js"));
   });
 
   it("forwards an explicit env to plugin loading", () => {

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
@@ -11,7 +11,7 @@ let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").forma
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
 describe("detectCursorKeyMode", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
   });
 
@@ -43,7 +43,7 @@ describe("detectCursorKeyMode", () => {
 });
 
 describe("resolveExecTarget", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
   });
 

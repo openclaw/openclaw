@@ -88,12 +88,7 @@ export type MatrixSendOpts = {
   client?: import("../sdk.js").MatrixClient;
   cfg?: CoreConfig;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number | null;

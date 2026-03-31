@@ -47,7 +47,6 @@ const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
-let sessionWriteLockAcquirerForTests: typeof acquireSessionWriteLock | null = null;
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
@@ -165,16 +164,6 @@ export function clearSessionStoreCacheForTest(): void {
     }
   }
   LOCK_QUEUES.clear();
-}
-
-export function setSessionWriteLockAcquirerForTests(
-  acquirer: typeof acquireSessionWriteLock | null,
-): void {
-  sessionWriteLockAcquirerForTests = acquirer;
-}
-
-export function resetSessionStoreLockRuntimeForTests(): void {
-  sessionWriteLockAcquirerForTests = null;
 }
 
 export async function drainSessionStoreLockQueuesForTest(): Promise<void> {
@@ -775,7 +764,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
         let failed: unknown;
         let hasFailure = false;
         try {
-          lock = await (sessionWriteLockAcquirerForTests ?? acquireSessionWriteLock)({
+          lock = await acquireSessionWriteLock({
             sessionFile: storePath,
             timeoutMs: remainingTimeoutMs,
             staleMs: task.staleMs,

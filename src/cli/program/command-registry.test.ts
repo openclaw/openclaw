@@ -27,6 +27,13 @@ vi.mock("./register.maintenance.js", () => ({
   },
 }));
 
+const {
+  getCoreCliCommandNames,
+  getCoreCliCommandsWithSubcommands,
+  registerCoreCliByName,
+  registerCoreCliCommands,
+} = await import("./command-registry.js");
+
 vi.mock("./register.status-health-sessions.js", () => ({
   registerStatusHealthSessionsCommands: (program: Command) => {
     program.command("status");
@@ -36,13 +43,6 @@ vi.mock("./register.status-health-sessions.js", () => ({
     tasks.command("show");
   },
 }));
-
-import {
-  getCoreCliCommandNames,
-  getCoreCliCommandsWithSubcommands,
-  registerCoreCliByName,
-  registerCoreCliCommands,
-} from "./command-registry.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",

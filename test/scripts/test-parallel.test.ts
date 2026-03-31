@@ -67,11 +67,6 @@ const targetedUnitProxyFiles = [
 ];
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
-const HIGH_MEMORY_LOCAL_PLANNER_ENV = {
-  RUNNER_OS: "macOS",
-  OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-  OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-} as const;
 
 function createPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -89,13 +84,6 @@ function createLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
   });
 }
 
-function createHighMemoryLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return createLocalPlannerEnv({
-    ...HIGH_MEMORY_LOCAL_PLANNER_ENV,
-    ...overrides,
-  });
-}
-
 function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): string {
   return execFileSync("node", ["scripts/test-parallel.mjs", ...args], {
     cwd: REPO_ROOT,
@@ -108,7 +96,11 @@ function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): s
 function runHighMemoryLocalMultiSurfacePlan(): string {
   return runPlannerPlan(
     ["--plan", "--surface", "unit", "--surface", "extensions", "--surface", "channels"],
-    createHighMemoryLocalPlannerEnv(),
+    createLocalPlannerEnv({
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+    }),
   );
 }
 
@@ -117,18 +109,6 @@ function getPlanLines(output: string, prefix: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith(prefix));
-}
-
-function getTargetedChannelPlanLines(output: string): string[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(
-      (line) =>
-        line.startsWith("channels-") &&
-        line.includes("filters=") &&
-        line.includes("surface=channels"),
-    );
 }
 
 function parseNumericPlanField(line: string, key: string): number {
@@ -297,14 +277,18 @@ describe("scripts/test-parallel lane planning", () => {
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
-    expect(output).toMatch(/unit-fast(?:-batch-\d+)? filters=\d+ maxWorkers=/);
-    expect(output).toMatch(/extensions(?:-batch-\d+)? filters=\d+ maxWorkers=/);
+    expect(output).toContain("unit-fast filters=all maxWorkers=");
+    expect(output).toMatch(/extensions(?:-batch-1)? filters=all maxWorkers=/);
   });
 
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
     const highMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
-      createHighMemoryLocalPlannerEnv(),
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
     const midMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
@@ -320,8 +304,8 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(midSharedBatches.length).toBeGreaterThan(0);
     expect(highSharedBatches.length).toBeGreaterThan(0);
-    expect(midSharedBatches.every((line) => /filters=\d+ maxWorkers=3/.test(line))).toBe(true);
-    expect(highSharedBatches.every((line) => /filters=\d+ maxWorkers=5/.test(line))).toBe(true);
+    expect(midSharedBatches.every((line) => line.includes("filters=all maxWorkers=3"))).toBe(true);
+    expect(highSharedBatches.every((line) => line.includes("filters=all maxWorkers=5"))).toBe(true);
     expect(highSharedBatches.length).toBeLessThanOrEqual(midSharedBatches.length);
   });
 
@@ -336,7 +320,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(firstChannelIsolated).toBeGreaterThanOrEqual(0);
     expect(firstExtensionBatch).toBeGreaterThan(firstChannelIsolated);
     expect(firstChannelBatch).toBeGreaterThan(firstExtensionBatch);
-    expect(output).toMatch(/channels-batch-1 filters=\d+ maxWorkers=5/);
+    expect(output).toContain("channels-batch-1 filters=all maxWorkers=5");
   });
 
   it("uses coarser unit-fast batching for high-memory local multi-surface runs", () => {
@@ -354,24 +338,24 @@ describe("scripts/test-parallel lane planning", () => {
         "channels",
         ...targetedChannelProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createHighMemoryLocalPlannerEnv(),
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
 
     const channelBatchLines = getPlanLines(output, "channels-batch-");
     const channelBatchFilterCounts = channelBatchLines.map((line) =>
       parseNumericPlanField(line, "filters"),
     );
-    const targetedChannelPlanLines = getTargetedChannelPlanLines(output);
 
     expect(channelBatchLines.length).toBeGreaterThanOrEqual(4);
     expect(channelBatchLines.every((line) => line.includes("maxWorkers=5"))).toBe(true);
     expect(Math.max(...channelBatchFilterCounts)).toBeLessThan(30);
-    expect(
-      targetedChannelPlanLines.reduce(
-        (sum, line) => sum + parseNumericPlanField(line, "filters"),
-        0,
-      ),
-    ).toBe(targetedChannelProxyFiles.length);
+    expect(channelBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      sharedTargetedChannelProxyFiles.length,
+    );
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
@@ -382,7 +366,11 @@ describe("scripts/test-parallel lane planning", () => {
         "unit",
         ...targetedUnitProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createHighMemoryLocalPlannerEnv(),
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
 
     const unitBatchLines = getPlanLines(output, "unit-batch-");

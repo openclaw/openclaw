@@ -35,6 +35,7 @@ describe("mcp-proxy", () => {
 const { createInterface } = require("node:readline");
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => process.stdout.write(line + "\n"));
+rl.on("close", () => process.exit(0));
 `,
     );
 

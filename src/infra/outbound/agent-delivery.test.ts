@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+1999" })),
@@ -73,11 +73,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 let resolveAgentDeliveryPlan: typeof import("./agent-delivery.js").resolveAgentDeliveryPlan;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ resolveAgentDeliveryPlan, resolveAgentOutboundTarget } = await import("./agent-delivery.js"));
-});
-
-beforeEach(() => {
   mocks.resolveOutboundTarget.mockClear();
   mocks.resolveSessionDeliveryTarget.mockClear();
 });

@@ -6,14 +6,8 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 
-type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
-
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
-const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
-  vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
-);
+const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
@@ -42,14 +36,6 @@ const buildModelsProviderData = vi.hoisted(() =>
   })),
 );
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
-const createChannelReplyPipeline = vi.hoisted(() =>
-  vi.fn(() => ({
-    responsePrefix: undefined,
-    enableSlackInteractiveReplies: undefined,
-    responsePrefixContextProvider: () => ({ identityName: undefined }),
-    onModelSelected: () => undefined,
-  })),
-);
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
@@ -123,8 +109,6 @@ const telegramDepsForTest: TelegramBotDeps = {
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
-  createChannelReplyPipeline:
-    createChannelReplyPipeline as TelegramBotDeps["createChannelReplyPipeline"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
@@ -160,7 +144,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     enqueueSystemEvent.mockClear();
     buildModelsProviderData.mockClear();
     listSkillCommandsForAgents.mockClear();
-    createChannelReplyPipeline.mockClear();
     wasSentByBot.mockClear();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
@@ -2130,7 +2113,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onSkip?.({ text: "" }, { reason: "empty", kind: "final" });
+      dispatcherOptions.onSkip?.({ text: "" }, { reason: "no_reply", kind: "final" });
       return { queuedFinal: false };
     });
     deliverReplies.mockResolvedValueOnce({ delivered: true });
@@ -2156,7 +2139,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        dispatcherOptions.onError(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2184,7 +2167,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        dispatcherOptions.onError(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2248,7 +2231,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        dispatcherOptions.onError(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });

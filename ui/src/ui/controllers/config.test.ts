@@ -110,21 +110,6 @@ describe("applyConfigSnapshot", () => {
     expect(state.configRawOriginal).toBe('{ "original": true }');
     expect(state.configFormOriginal).toEqual({ original: true });
   });
-
-  it("forces form mode when the snapshot does not include raw text", () => {
-    const state = createState();
-    state.configFormMode = "raw";
-
-    applyConfigSnapshot(state, {
-      config: { gateway: { mode: "local" } },
-      valid: true,
-      issues: [],
-      raw: null,
-    });
-
-    expect(state.configFormMode).toBe("form");
-    expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
-  });
 });
 
 describe("updateConfigFormValue", () => {
@@ -257,7 +242,6 @@ describe("applyConfig", () => {
     state.configRaw = '{\n  agent: { workspace: "~/openclaw" }\n}\n';
     state.configSnapshot = {
       hash: "hash-123",
-      raw: "{\n}\n",
     };
 
     await applyConfig(state);

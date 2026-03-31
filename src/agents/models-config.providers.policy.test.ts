@@ -1,15 +1,9 @@
-import { beforeAll, describe, expect, it } from "vitest";
-
-let normalizeProviderSpecificConfig: typeof import("./models-config.providers.policy.js").normalizeProviderSpecificConfig;
-let resolveProviderConfigApiKeyResolver: typeof import("./models-config.providers.policy.js").resolveProviderConfigApiKeyResolver;
-
-beforeAll(async () => {
-  ({ normalizeProviderSpecificConfig, resolveProviderConfigApiKeyResolver } =
-    await import("./models-config.providers.policy.js"));
-});
+import { describe, expect, it } from "vitest";
 
 describe("models-config.providers.policy", () => {
   it("resolves config apiKey markers through provider plugin hooks", async () => {
+    const { resolveProviderConfigApiKeyResolver } =
+      await import("./models-config.providers.policy.js");
     const env = {
       AWS_PROFILE: "default",
     } as NodeJS.ProcessEnv;
@@ -20,6 +14,8 @@ describe("models-config.providers.policy", () => {
   });
 
   it("resolves anthropic-vertex ADC markers through provider plugin hooks", async () => {
+    const { resolveProviderConfigApiKeyResolver } =
+      await import("./models-config.providers.policy.js");
     const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
 
     expect(resolver).toBeTypeOf("function");
@@ -31,6 +27,8 @@ describe("models-config.providers.policy", () => {
   });
 
   it("normalizes Google provider config through provider plugin hooks", async () => {
+    const { normalizeProviderSpecificConfig } = await import("./models-config.providers.policy.js");
+
     expect(
       normalizeProviderSpecificConfig("google", {
         api: "google-generative-ai",

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { channelsResolveCommand } from "./channels/resolve.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -42,6 +41,8 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
 }));
+
+const { channelsResolveCommand } = await import("./channels/resolve.js");
 
 describe("channelsResolveCommand", () => {
   const runtime = {

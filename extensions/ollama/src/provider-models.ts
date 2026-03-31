@@ -1,5 +1,4 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -29,25 +28,6 @@ export type OllamaModelWithContext = OllamaTagModel & {
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 
-export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return {
-      allowedHostnames: [parsed.hostname],
-      hostnameAllowlist: [parsed.hostname],
-    };
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   if (!configuredBaseUrl) {
     return OLLAMA_DEFAULT_BASE_URL;
@@ -61,41 +41,28 @@ export async function queryOllamaContextWindow(
   modelName: string,
 ): Promise<number | undefined> {
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/show`,
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: modelName }),
-        signal: AbortSignal.timeout(3000),
-      },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-provider-models.show",
+    const response = await fetch(`${apiBase}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: modelName }),
+      signal: AbortSignal.timeout(3000),
     });
-    try {
-      if (!response.ok) {
-        return undefined;
-      }
-      const data = (await response.json()) as { model_info?: Record<string, unknown> };
-      if (!data.model_info) {
-        return undefined;
-      }
-      for (const [key, value] of Object.entries(data.model_info)) {
-        if (
-          key.endsWith(".context_length") &&
-          typeof value === "number" &&
-          Number.isFinite(value)
-        ) {
-          const contextWindow = Math.floor(value);
-          if (contextWindow > 0) {
-            return contextWindow;
-          }
+    if (!response.ok) {
+      return undefined;
+    }
+    const data = (await response.json()) as { model_info?: Record<string, unknown> };
+    if (!data.model_info) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(data.model_info)) {
+      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
+        const contextWindow = Math.floor(value);
+        if (contextWindow > 0) {
+          return contextWindow;
         }
       }
-      return undefined;
-    } finally {
-      await release();
     }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -145,24 +112,15 @@ export async function fetchOllamaModels(
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/tags`,
-      init: {
-        signal: AbortSignal.timeout(5000),
-      },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-provider-models.tags",
+    const response = await fetch(`${apiBase}/api/tags`, {
+      signal: AbortSignal.timeout(5000),
     });
-    try {
-      if (!response.ok) {
-        return { reachable: true, models: [] };
-      }
-      const data = (await response.json()) as OllamaTagsResponse;
-      const models = (data.models ?? []).filter((m) => m.name);
-      return { reachable: true, models };
-    } finally {
-      await release();
+    if (!response.ok) {
+      return { reachable: true, models: [] };
     }
+    const data = (await response.json()) as OllamaTagsResponse;
+    const models = (data.models ?? []).filter((m) => m.name);
+    return { reachable: true, models };
   } catch {
     return { reachable: false, models: [] };
   }

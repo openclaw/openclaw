@@ -14,8 +14,7 @@ function createTask(partial: Partial<TaskRecord>): TaskRecord {
   return {
     taskId: partial.taskId ?? "task-1",
     runtime: partial.runtime ?? "acp",
-    ownerKey: partial.ownerKey ?? "agent:main:main",
-    scopeKind: "session",
+    requesterSessionKey: partial.requesterSessionKey ?? "agent:main:main",
     task: partial.task ?? "Investigate issue",
     status: partial.status ?? "running",
     deliveryStatus: partial.deliveryStatus ?? "pending",

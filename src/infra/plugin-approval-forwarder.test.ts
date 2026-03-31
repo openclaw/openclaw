@@ -61,11 +61,6 @@ function makePluginRequest(overrides?: Partial<PluginApprovalRequest>): PluginAp
   };
 }
 
-async function flushPendingDelivery(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("plugin approval forwarding", () => {
   beforeEach(() => {
     setActivePluginRegistry(emptyRegistry);
@@ -83,8 +78,10 @@ describe("plugin approval forwarding", () => {
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
       const result = await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       expect(result).toBe(true);
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      // Allow delivery to be async
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       const deliveryArgs = deliver.mock.calls[0]?.[0] as
         | { payloads?: Array<{ text?: string; interactive?: unknown }> }
         | undefined;
@@ -126,8 +123,9 @@ describe("plugin approval forwarding", () => {
       const request = makePluginRequest();
       request.request.severity = "critical";
       await forwarder.handlePluginApprovalRequested!(request);
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       const text =
         (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
           ?.text ?? "";
@@ -161,8 +159,9 @@ describe("plugin approval forwarding", () => {
       const { forwarder } = createForwarder({ cfg, deliver });
       const result = await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       expect(result).toBe(true);
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
     });
 
     it("returns false when no approvals config at all", async () => {
@@ -197,8 +196,9 @@ describe("plugin approval forwarding", () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       const deliveryArgs = deliver.mock.calls[0]?.[0] as
         | { payloads?: Array<{ text?: string }> }
         | undefined;
@@ -225,8 +225,9 @@ describe("plugin approval forwarding", () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       expect(beforeDeliverPayload).toHaveBeenCalled();
     });
 
@@ -255,8 +256,9 @@ describe("plugin approval forwarding", () => {
 
       // First register request so targets are tracked
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       deliver.mockClear();
 
       const resolved: PluginApprovalResolved = {
@@ -266,7 +268,6 @@ describe("plugin approval forwarding", () => {
         ts: 2000,
       };
       await forwarder.handlePluginApprovalResolved!(resolved);
-      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
       const deliveryArgs = deliver.mock.calls[0]?.[0] as
         | { payloads?: Array<{ text?: string }> }
@@ -282,8 +283,9 @@ describe("plugin approval forwarding", () => {
 
       // First register request so targets are tracked
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       deliver.mockClear();
 
       const resolved: PluginApprovalResolved = {
@@ -335,8 +337,10 @@ describe("plugin approval forwarding", () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
+      // Wait for the async delivery to flush before stopping
+      await vi.waitFor(() => {
+        expect(deliver).toHaveBeenCalled();
+      });
       forwarder.stop();
       deliver.mockClear();
       // After stop, resolved should not deliver

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
@@ -20,11 +20,8 @@ import type { PinnedHostname } from "./ssrf.js";
 
 let createPinnedDispatcher: typeof import("./ssrf.js").createPinnedDispatcher;
 
-beforeAll(async () => {
-  ({ createPinnedDispatcher } = await import("./ssrf.js"));
-});
-
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   agentCtor.mockClear();
   envHttpProxyAgentCtor.mockClear();
   proxyAgentCtor.mockClear();
@@ -33,6 +30,7 @@ beforeEach(() => {
     EnvHttpProxyAgent: envHttpProxyAgentCtor,
     ProxyAgent: proxyAgentCtor,
   };
+  ({ createPinnedDispatcher } = await import("./ssrf.js"));
 });
 
 afterEach(() => {

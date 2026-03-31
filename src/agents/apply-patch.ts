@@ -4,11 +4,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
-import {
-  mkdirPathWithinRoot,
-  removePathWithinRoot,
-  writeFileWithinRoot,
-} from "../infra/fs-safe.js";
+import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
@@ -275,27 +271,26 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       });
     },
     remove: async (filePath) => {
-      if (!workspaceOnly) {
-        await fs.rm(filePath);
-        return;
+      if (workspaceOnly) {
+        await assertSandboxPath({
+          filePath,
+          cwd: options.cwd,
+          root: options.cwd,
+          allowFinalSymlinkForUnlink: true,
+          allowFinalHardlinkForUnlink: true,
+        });
       }
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await removePathWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-      });
+      await fs.rm(filePath);
     },
     mkdirp: async (dir) => {
-      if (!workspaceOnly) {
-        await fs.mkdir(dir, { recursive: true });
-        return;
+      if (workspaceOnly) {
+        await assertSandboxPath({
+          filePath: dir,
+          cwd: options.cwd,
+          root: options.cwd,
+        });
       }
-      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
-      await mkdirPathWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-        allowRoot: true,
-      });
+      await fs.mkdir(dir, { recursive: true });
     },
   };
 }

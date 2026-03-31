@@ -60,22 +60,19 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
-    const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
-    if (
-      relativePath === "" ||
-      relativePath === "." ||
-      relativePath.startsWith("..") ||
-      path.posix.isAbsolute(relativePath)
-    ) {
-      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
-    }
-    const result = await this.runMutation({
-      args: [
-        "read",
-        target.mountRootPath,
-        path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
-        path.posix.basename(relativePath),
-      ],
+    const canonical = await this.resolveCanonicalPath({
+      containerPath: target.containerPath,
+      action: "read files",
+      signal: params.signal,
+    });
+    await this.assertNoHardlinkedFile({
+      containerPath: canonical,
+      action: "read files",
+      signal: params.signal,
+    });
+    const result = await this.runRemoteScript({
+      script: 'set -eu\ncat -- "$1"',
+      args: [canonical],
       signal: params.signal,
     });
     return result.stdout;
@@ -474,8 +471,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     stdin?: Buffer | string;
     signal?: AbortSignal;
     allowFailure?: boolean;
-  }): Promise<SandboxBackendCommandResult> {
-    return await this.runRemoteScript({
+  }) {
+    await this.runRemoteScript({
       script: [
         "set -eu",
         "python3 /dev/fd/3 \"$@\" 3<<'PY'",

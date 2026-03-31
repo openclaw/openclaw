@@ -11,9 +11,7 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn>;
 type LoadConfigFn = typeof import("openclaw/plugin-sdk/config-runtime").loadConfig;
-type LoadSessionStoreFn = typeof import("openclaw/plugin-sdk/config-runtime").loadSessionStore;
 type ResolveStorePathFn = typeof import("openclaw/plugin-sdk/config-runtime").resolveStorePath;
-type SessionStore = ReturnType<LoadSessionStoreFn>;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
 >;
@@ -49,42 +47,26 @@ vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
   loadWebMedia,
 }));
 
-const { loadConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } = vi.hoisted(
+const { loadConfig, resolveStorePathMock } = vi.hoisted(
   (): {
     loadConfig: MockFn<LoadConfigFn>;
-    loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
     resolveStorePathMock: MockFn<ResolveStorePathFn>;
-    sessionStoreEntries: { value: SessionStore };
   } => ({
     loadConfig: vi.fn<LoadConfigFn>(() => ({})),
-    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-      (_storePath, _opts) => sessionStoreEntries.value,
-    ),
     resolveStorePathMock: vi.fn<ResolveStorePathFn>(
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
-    sessionStoreEntries: { value: {} as SessionStore },
   }),
 );
 
 export function getLoadConfigMock(): AnyMock {
   return loadConfig;
 }
-
-export function getLoadSessionStoreMock(): AnyMock {
-  return loadSessionStoreMock;
-}
-
-export function setSessionStoreEntriesForTest(entries: SessionStore) {
-  sessionStoreEntries.value = JSON.parse(JSON.stringify(entries)) as SessionStore;
-}
-
 vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig,
-    loadSessionStore: loadSessionStoreMock,
     resolveStorePath: resolveStorePathMock,
   };
 });
@@ -291,10 +273,6 @@ const systemEventsHoisted = vi.hoisted(() => ({
 }));
 export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
-const execApprovalHoisted = vi.hoisted(() => ({
-  resolveExecApprovalSpy: vi.fn(async () => undefined),
-}));
-export const resolveExecApprovalSpy = execApprovalHoisted.resolveExecApprovalSpy;
 
 vi.doMock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
@@ -425,7 +403,6 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
   loadConfig,
-  loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
@@ -438,9 +415,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
-  resolveExecApproval: resolveExecApprovalSpy as NonNullable<
-    TelegramBotDeps["resolveExecApproval"]
-  >,
 };
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
@@ -518,9 +492,6 @@ beforeEach(() => {
   resetInboundDedupe();
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
-  sessionStoreEntries.value = {};
-  loadSessionStoreMock.mockReset();
-  loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockImplementation((storePath?: string) => storePath ?? sessionStorePath);
   loadWebMedia.mockReset();
@@ -537,8 +508,6 @@ beforeEach(() => {
     await opts?.onReplyStart?.();
     return undefined;
   });
-  resolveExecApprovalSpy.mockReset();
-  resolveExecApprovalSpy.mockResolvedValue(undefined);
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
     async (params: DispatchReplyHarnessParams) =>

@@ -23,15 +23,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         ((to, text) => sendMessageMSTeams({ cfg, to, text }));
       return await send(to, text);
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, mediaReadFile, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
       type SendFn = (
         to: string,
         text: string,
-        opts?: {
-          mediaUrl?: string;
-          mediaLocalRoots?: readonly string[];
-          mediaReadFile?: (filePath: string) => Promise<Buffer>;
-        },
+        opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
       ) => Promise<{ messageId: string; conversationId: string }>;
       const send =
         resolveOutboundSendDep<SendFn>(deps, "msteams") ??
@@ -42,9 +38,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
             text,
             mediaUrl: opts?.mediaUrl,
             mediaLocalRoots: opts?.mediaLocalRoots,
-            mediaReadFile: opts?.mediaReadFile,
           }));
-      return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
+      return await send(to, text, { mediaUrl, mediaLocalRoots });
     },
     sendPoll: async ({ cfg, to, poll }) => {
       const maxSelections = poll.maxSelections ?? 1;

@@ -193,44 +193,12 @@ function resolveLastSeenAt(entry: PairingRequest): number {
   return parseTimestamp(entry.lastSeenAt) ?? parseTimestamp(entry.createdAt) ?? 0;
 }
 
-function resolvePairingRequestAccountId(entry: PairingRequest): string {
-  return normalizePairingAccountId(String(entry.meta?.accountId ?? "")) || DEFAULT_ACCOUNT_ID;
-}
-
-function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number) {
+function pruneExcessRequests(reqs: PairingRequest[], maxPending: number) {
   if (maxPending <= 0 || reqs.length <= maxPending) {
     return { requests: reqs, removed: false };
   }
-  const grouped = new Map<string, number[]>();
-  for (const [index, entry] of reqs.entries()) {
-    const accountId = resolvePairingRequestAccountId(entry);
-    const current = grouped.get(accountId);
-    if (current) {
-      current.push(index);
-      continue;
-    }
-    grouped.set(accountId, [index]);
-  }
-
-  const droppedIndexes = new Set<number>();
-  for (const indexes of grouped.values()) {
-    if (indexes.length <= maxPending) {
-      continue;
-    }
-    const sortedIndexes = indexes
-      .slice()
-      .toSorted((left, right) => resolveLastSeenAt(reqs[left]) - resolveLastSeenAt(reqs[right]));
-    for (const index of sortedIndexes.slice(0, sortedIndexes.length - maxPending)) {
-      droppedIndexes.add(index);
-    }
-  }
-  if (droppedIndexes.size === 0) {
-    return { requests: reqs, removed: false };
-  }
-  return {
-    requests: reqs.filter((_, index) => !droppedIndexes.has(index)),
-    removed: true,
-  };
+  const sorted = reqs.slice().toSorted((a, b) => resolveLastSeenAt(a) - resolveLastSeenAt(b));
+  return { requests: sorted.slice(-maxPending), removed: true };
 }
 
 function randomCode(): string {
@@ -261,7 +229,11 @@ function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: str
   if (!normalizedAccountId) {
     return true;
   }
-  return resolvePairingRequestAccountId(entry) === normalizedAccountId;
+  return (
+    String(entry.meta?.accountId ?? "")
+      .trim()
+      .toLowerCase() === normalizedAccountId
+  );
 }
 
 function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string): boolean {
@@ -694,7 +666,7 @@ export async function listChannelPairingRequests(
     async () => {
       const { requests: prunedExpired, removed: expiredRemoved } =
         await readPrunedPairingRequests(filePath);
-      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequestsByAccount(
+      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequests(
         prunedExpired,
         PAIRING_PENDING_MAX,
       );
@@ -785,7 +757,7 @@ export async function upsertChannelPairingRequest(params: {
           meta: meta ?? existing?.meta,
         };
         reqs[existingIdx] = next;
-        const { requests: capped } = pruneExcessRequestsByAccount(reqs, PAIRING_PENDING_MAX);
+        const { requests: capped } = pruneExcessRequests(reqs, PAIRING_PENDING_MAX);
         await writeJsonFile(filePath, {
           version: 1,
           requests: capped,
@@ -793,15 +765,12 @@ export async function upsertChannelPairingRequest(params: {
         return { code, created: false };
       }
 
-      const { requests: capped, removed: cappedRemoved } = pruneExcessRequestsByAccount(
+      const { requests: capped, removed: cappedRemoved } = pruneExcessRequests(
         reqs,
         PAIRING_PENDING_MAX,
       );
       reqs = capped;
-      const accountRequestCount = reqs.filter((r) =>
-        requestMatchesAccountId(r, normalizedMatchingAccountId),
-      ).length;
-      if (PAIRING_PENDING_MAX > 0 && accountRequestCount >= PAIRING_PENDING_MAX) {
+      if (PAIRING_PENDING_MAX > 0 && reqs.length >= PAIRING_PENDING_MAX) {
         if (expiredRemoved || cappedRemoved) {
           await writeJsonFile(filePath, {
             version: 1,

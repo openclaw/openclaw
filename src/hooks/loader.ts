@@ -65,8 +65,8 @@ export async function loadInternalHooks(
     bundledHooksDir?: string;
   },
 ): Promise<number> {
-  // Hooks are on by default; only skip when explicitly disabled.
-  if (cfg.hooks?.internal?.enabled === false) {
+  // Check if hooks are enabled
+  if (!cfg.hooks?.internal?.enabled) {
     return 0;
   }
 
@@ -136,7 +136,7 @@ export async function loadInternalHooks(
           registerInternalHook(event, handler);
         }
 
-        log.debug(
+        log.info(
           `Registered hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
         );
         loadedCount++;
@@ -153,7 +153,7 @@ export async function loadInternalHooks(
   }
 
   // 2. Load legacy config handlers (backwards compatibility)
-  const handlers = cfg.hooks?.internal?.handlers ?? [];
+  const handlers = cfg.hooks.internal.handlers ?? [];
   for (const handlerConfig of handlers) {
     try {
       // Legacy handler paths: keep them workspace-relative.
@@ -225,7 +225,7 @@ export async function loadInternalHooks(
       }
 
       registerInternalHook(handlerConfig.event, handler);
-      log.debug(
+      log.info(
         `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
       );
       loadedCount++;

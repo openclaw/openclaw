@@ -46,6 +46,7 @@ describe("media server outside-workspace mapping", () => {
   beforeAll(async () => {
     vi.useRealTimers();
     vi.doUnmock("undici");
+    vi.resetModules();
     const require = createRequire(import.meta.url);
     ({ SafeOpenError } = await import("../infra/fs-safe.js"));
     ({ startMediaServer } = await import("./server.js"));

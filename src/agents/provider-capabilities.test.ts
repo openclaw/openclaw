@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
@@ -65,22 +65,24 @@ let shouldSanitizeGeminiThoughtSignaturesForModel: typeof import("./provider-cap
 let supportsOpenAiCompatTurnValidation: typeof import("./provider-capabilities.js").supportsOpenAiCompatTurnValidation;
 let usesMoonshotThinkingPayloadCompat: typeof import("./provider-capabilities.js").usesMoonshotThinkingPayloadCompat;
 
-describe("resolveProviderCapabilities", () => {
-  beforeAll(async () => {
-    ({
-      isAnthropicProviderFamily,
-      isOpenAiProviderFamily,
-      requiresOpenAiCompatibleAnthropicToolPayload,
-      resolveProviderCapabilities,
-      resolveTranscriptToolCallIdMode,
-      shouldDropThinkingBlocksForModel,
-      shouldSanitizeGeminiThoughtSignaturesForModel,
-      supportsOpenAiCompatTurnValidation,
-      usesMoonshotThinkingPayloadCompat,
-    } = await import("./provider-capabilities.js"));
-  });
+async function loadFreshProviderCapabilitiesModuleForTest() {
+  vi.resetModules();
+  ({
+    isAnthropicProviderFamily,
+    isOpenAiProviderFamily,
+    requiresOpenAiCompatibleAnthropicToolPayload,
+    resolveProviderCapabilities,
+    resolveTranscriptToolCallIdMode,
+    shouldDropThinkingBlocksForModel,
+    shouldSanitizeGeminiThoughtSignaturesForModel,
+    supportsOpenAiCompatTurnValidation,
+    usesMoonshotThinkingPayloadCompat,
+  } = await import("./provider-capabilities.js"));
+}
 
-  beforeEach(() => {
+describe("resolveProviderCapabilities", () => {
+  beforeEach(async () => {
+    await loadFreshProviderCapabilitiesModuleForTest();
     resolveProviderCapabilitiesWithPluginMock.mockClear();
   });
 

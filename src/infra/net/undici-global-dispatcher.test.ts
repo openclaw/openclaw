@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   Agent,
@@ -75,16 +75,14 @@ let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = await import("./undici-global-dispatcher.js"));
-  });
-
-  beforeEach(() => {
     vi.clearAllMocks();
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
@@ -240,4 +238,5 @@ afterAll(() => {
   for (const id of mockedModuleIds) {
     vi.doUnmock(id);
   }
+  vi.resetModules();
 });

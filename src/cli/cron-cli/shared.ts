@@ -13,13 +13,8 @@ import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
-export const getCronChannelOptions = () => {
-  // Keep help truthful even before the plugin registry is bootstrapped.
-  const pluginIds = listChannelPlugins()
-    .map((plugin) => plugin.id)
-    .filter(Boolean);
-  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
-};
+export const getCronChannelOptions = () =>
+  ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
 
 export function printCronJson(value: unknown) {
   defaultRuntime.writeJson(value);

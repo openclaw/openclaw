@@ -8,7 +8,6 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 const log = createSubsystemLogger("hooks");
@@ -65,7 +64,7 @@ export function resolvePluginHookDirs(params: {
     if (!memoryDecision.enabled) {
       continue;
     }
-    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
+    if (memoryDecision.selected && record.kind === "memory") {
       selectedMemoryPluginId = record.id;
     }
 

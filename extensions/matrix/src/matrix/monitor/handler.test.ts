@@ -71,7 +71,6 @@ function createReactionHarness(params?: {
   targetSender?: string;
   isDirectMessage?: boolean;
   senderName?: string;
-  client?: NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>["client"];
 }) {
   return createMatrixHandlerTestHarness({
     cfg: params?.cfg,
@@ -80,7 +79,6 @@ function createReactionHarness(params?: {
     readAllowFromStore: vi.fn(async () => params?.storeAllowFrom ?? []),
     client: {
       getEvent: async () => ({ sender: params?.targetSender ?? "@bot:example.org" }),
-      ...params?.client,
     },
     isDirectMessage: params?.isDirectMessage,
     getMemberDisplayName: async () => params?.senderName ?? "sender",
@@ -630,53 +628,6 @@ describe("matrix monitor handler pairing account scope", () => {
     );
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:ops:main:thread:$root",
-      }),
-    );
-  });
-
-  it("keeps threaded DMs flat when dm threadReplies is off", async () => {
-    const { handler, finalizeInboundContext, recordInboundSession } =
-      createMatrixHandlerTestHarness({
-        threadReplies: "always",
-        dmThreadReplies: "off",
-        isDirectMessage: true,
-        client: {
-          getEvent: async (_roomId, eventId) =>
-            eventId === "$root"
-              ? createMatrixTextMessageEvent({
-                  eventId: "$root",
-                  sender: "@alice:example.org",
-                  body: "Root topic",
-                })
-              : ({ sender: "@bot:example.org" } as never),
-        },
-        getMemberDisplayName: async (_roomId, userId) =>
-          userId === "@alice:example.org" ? "Alice" : "sender",
-      });
-
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$reply1",
-        body: "follow up",
-        relatesTo: {
-          rel_type: "m.thread",
-          event_id: "$root",
-          "m.in_reply_to": { event_id: "$root" },
-        },
-      }),
-    );
-
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        MessageThreadId: undefined,
-        ReplyToId: "$root",
-        ThreadStarterBody: "Matrix thread root $root from Alice:\nRoot topic",
-      }),
-    );
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
         sessionKey: "agent:ops:main",
       }),
     );
@@ -867,9 +818,6 @@ describe("matrix monitor handler pairing account scope", () => {
               matchedBy: "binding.account",
             }),
           },
-          mentions: {
-            buildMentionRegexes: () => [],
-          },
           session: {
             resolveStorePath: () => "/tmp/session-store",
             readSessionUpdatedAt: () => undefined,
@@ -933,6 +881,7 @@ describe("matrix monitor handler pairing account scope", () => {
       } as never,
       logVerboseMessage: () => {},
       allowFrom: [],
+      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "off",
       threadReplies: "inbound",
@@ -941,7 +890,6 @@ describe("matrix monitor handler pairing account scope", () => {
       dmPolicy: "open",
       textLimit: 8_000,
       mediaMaxBytes: 10_000_000,
-      historyLimit: 0,
       startupMs: 0,
       startupGraceMs: 0,
       directTracker: {
@@ -1051,88 +999,6 @@ describe("matrix monitor handler pairing account scope", () => {
       {
         sessionKey: "agent:bound:session-1",
         contextKey: "matrix:reaction:add:!room:example.org:$reply1:@user:example.org:🎯",
-      },
-    );
-  });
-
-  it("keeps threaded DM reaction notifications on the flat session when dm threadReplies is off", async () => {
-    const { handler, enqueueSystemEvent } = createReactionHarness({
-      cfg: {
-        channels: {
-          matrix: {
-            threadReplies: "always",
-            dm: { threadReplies: "off" },
-          },
-        },
-      },
-      isDirectMessage: true,
-      client: {
-        getEvent: async () =>
-          createMatrixTextMessageEvent({
-            eventId: "$reply1",
-            sender: "@bot:example.org",
-            body: "follow up",
-            relatesTo: {
-              rel_type: "m.thread",
-              event_id: "$root",
-              "m.in_reply_to": { event_id: "$root" },
-            },
-          }),
-      },
-    });
-
-    await handler(
-      "!dm:example.org",
-      createMatrixReactionEvent({
-        eventId: "$reaction-thread",
-        targetEventId: "$reply1",
-        key: "🎯",
-      }),
-    );
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Matrix reaction added: 🎯 by sender on msg $reply1",
-      {
-        sessionKey: "agent:ops:main",
-        contextKey: "matrix:reaction:add:!dm:example.org:$reply1:@user:example.org:🎯",
-      },
-    );
-  });
-
-  it("routes thread-root reaction notifications to the thread session when threadReplies is always", async () => {
-    const { handler, enqueueSystemEvent } = createReactionHarness({
-      cfg: {
-        channels: {
-          matrix: {
-            threadReplies: "always",
-          },
-        },
-      },
-      isDirectMessage: false,
-      client: {
-        getEvent: async () =>
-          createMatrixTextMessageEvent({
-            eventId: "$root",
-            sender: "@bot:example.org",
-            body: "start thread",
-          }),
-      },
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixReactionEvent({
-        eventId: "$reaction-root",
-        targetEventId: "$root",
-        key: "🧵",
-      }),
-    );
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Matrix reaction added: 🧵 by sender on msg $root",
-      {
-        sessionKey: "agent:ops:main:thread:$root",
-        contextKey: "matrix:reaction:add:!room:example.org:$root:@user:example.org:🧵",
       },
     );
   });

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readLoggingConfig } from "./config.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
@@ -24,6 +23,8 @@ describe("readLoggingConfig", () => {
     loadConfigMock.mockImplementation(() => {
       throw new Error("loadConfig should not be called");
     });
+
+    const { readLoggingConfig } = await import("./config.js");
 
     expect(readLoggingConfig()).toBeUndefined();
     expect(loadConfigMock).not.toHaveBeenCalled();

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createProgramContext } from "./context.js";
 
-const resolveCliChannelOptionsMock = vi.hoisted(() => vi.fn(() => ["telegram", "whatsapp"]));
+const resolveCliChannelOptionsMock = vi.fn(() => ["telegram", "whatsapp"]);
 
 vi.mock("../../version.js", () => ({
   VERSION: "9.9.9-test",
@@ -10,6 +9,8 @@ vi.mock("../../version.js", () => ({
 vi.mock("../channel-options.js", () => ({
   resolveCliChannelOptions: resolveCliChannelOptionsMock,
 }));
+
+const { createProgramContext } = await import("./context.js");
 
 describe("createProgramContext", () => {
   it("builds program context from version and resolved channel options", () => {

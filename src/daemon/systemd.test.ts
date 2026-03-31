@@ -12,7 +12,6 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isNonFatalSystemdInstallProbeError,
-  isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
@@ -72,6 +71,7 @@ function assertMachineUserSystemctlArgs(args: string[], user: string, ...command
 }
 
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
+  const { isSystemdServiceEnabled } = await import("./systemd.js");
   vi.spyOn(fs, "access").mockResolvedValue(undefined);
   return isSystemdServiceEnabled({ env });
 }
@@ -180,6 +180,7 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false without calling systemctl when the managed unit file is missing", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
     const err = new Error("missing unit") as NodeJS.ErrnoException;
     err.code = "ENOENT";
     vi.spyOn(fs, "access").mockRejectedValueOnce(err);
@@ -285,6 +286,7 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -307,6 +309,7 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
       // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with

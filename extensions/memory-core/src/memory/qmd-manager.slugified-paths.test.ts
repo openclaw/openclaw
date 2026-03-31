@@ -110,7 +110,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     if (!manager) {
       throw new Error("manager missing");
     }
-    return { manager, resolved };
+    return { manager };
   }
 
   function installIndexedPathStub(params: {
@@ -259,11 +259,6 @@ describe("QmdMemoryManager slugified path resolution", () => {
     await fs.mkdir(path.dirname(actualFile), { recursive: true });
     await fs.writeFile(actualFile, "vault memory", "utf-8");
 
-    const { manager, resolved } = await createManager({ cfg });
-    const collectionName =
-      resolved.qmd?.collections.find((collection) => collection.path === extraRoot)?.name ??
-      "vault";
-
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
@@ -272,7 +267,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
           "stdout",
           JSON.stringify([
             {
-              file: `qmd://${collectionName}/topics/sub-category/topic-name.md`,
+              file: "qmd://vault-main/topics/sub-category/topic-name.md",
               score: 0.81,
               snippet: "@@ -1,1\nvault memory",
             },
@@ -282,9 +277,11 @@ describe("QmdMemoryManager slugified path resolution", () => {
       }
       return createMockChild();
     });
+
+    const { manager } = await createManager({ cfg });
     installIndexedPathStub({
       manager,
-      collection: collectionName,
+      collection: "vault-main",
       normalizedPath: "topics/sub-category/topic-name.md",
       actualPath: actualRelative,
     });
@@ -294,7 +291,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     });
     expect(results).toEqual([
       {
-        path: `qmd/${collectionName}/${actualRelative}`,
+        path: `qmd/vault-main/${actualRelative}`,
         startLine: 1,
         endLine: 1,
         score: 0.81,
@@ -304,7 +301,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     ]);
 
     await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
-      path: `qmd/${collectionName}/${actualRelative}`,
+      path: `qmd/vault-main/${actualRelative}`,
       text: "vault memory",
     });
   });

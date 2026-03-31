@@ -1,54 +1,50 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const transportReadyMocks = vi.hoisted(() => ({
-  injectedSleepError: null as Error | null,
-}));
-
+let injectedSleepError: Error | null = null;
 type TransportReadyModule = typeof import("./transport-ready.js");
 let waitForTransportReady: TransportReadyModule["waitForTransportReady"];
-
-vi.mock("./backoff.js", () => ({
-  sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
-    if (transportReadyMocks.injectedSleepError) {
-      throw transportReadyMocks.injectedSleepError;
-    }
-    if (signal?.aborted) {
-      throw new Error("aborted");
-    }
-    if (ms <= 0) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-        reject(new Error("aborted"));
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  },
-}));
 
 function createRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
 describe("waitForTransportReady", () => {
-  beforeAll(async () => {
-    ({ waitForTransportReady } = await import("./transport-ready.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
+    vi.resetModules();
+    // Perf: `sleepWithAbort` uses `node:timers/promises` which isn't controlled by fake timers.
+    // Route sleeps through global `setTimeout` so tests can advance time deterministically.
+    vi.doMock("./backoff.js", () => ({
+      sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
+        if (injectedSleepError) {
+          throw injectedSleepError;
+        }
+        if (signal?.aborted) {
+          throw new Error("aborted");
+        }
+        if (ms <= 0) {
+          return;
+        }
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+          }, ms);
+          const onAbort = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener("abort", onAbort);
+            reject(new Error("aborted"));
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      },
+    }));
+    ({ waitForTransportReady } = await import("./transport-ready.js"));
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    transportReadyMocks.injectedSleepError = null;
+    injectedSleepError = null;
   });
 
   it("returns when the check succeeds and logs after the delay", async () => {
@@ -158,7 +154,7 @@ describe("waitForTransportReady", () => {
 
   it("rethrows non-abort sleep failures", async () => {
     const runtime = createRuntime();
-    transportReadyMocks.injectedSleepError = new Error("sleep exploded");
+    injectedSleepError = new Error("sleep exploded");
 
     await expect(
       waitForTransportReady({

@@ -1,4 +1,3 @@
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
@@ -21,10 +20,15 @@ export type SessionFreshness = {
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
+const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
 export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  return Boolean(parseThreadSessionSuffix(sessionKey).threadId);
+  const normalized = (sessionKey ?? "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return THREAD_SESSION_MARKERS.some((marker) => normalized.includes(marker));
 }
 
 export function resolveSessionResetType(params: {

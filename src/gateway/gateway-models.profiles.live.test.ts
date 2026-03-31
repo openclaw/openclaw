@@ -326,30 +326,6 @@ function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
   return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
-function shouldSkipEmptyResponseForLiveModel(params: {
-  provider: string;
-  allowNotFoundSkip: boolean;
-}): boolean {
-  if (isGoogleishProvider(params.provider)) {
-    return true;
-  }
-  if (params.provider === "openrouter" || params.provider === "opencode") {
-    return true;
-  }
-  if (params.provider === "opencode-go") {
-    return true;
-  }
-  if (!params.allowNotFoundSkip) {
-    return false;
-  }
-  return (
-    params.provider === "google-antigravity" ||
-    params.provider === "minimax" ||
-    params.provider === "openai-codex" ||
-    params.provider === "zai"
-  );
-}
-
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
   it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
     expect(
@@ -528,26 +504,6 @@ describe("shouldSkipToolNonceProbeMiss", () => {
   ])("returns $expected for $provider", ({ provider, expected }) => {
     expect(shouldSkipToolNonceProbeMiss(provider)).toBe(expected);
   });
-});
-
-describe("shouldSkipEmptyResponseForLiveModel", () => {
-  it.each([
-    { provider: "google", allowNotFoundSkip: false, expected: true },
-    { provider: "google-antigravity", allowNotFoundSkip: false, expected: true },
-    { provider: "openrouter", allowNotFoundSkip: false, expected: true },
-    { provider: "opencode", allowNotFoundSkip: false, expected: true },
-    { provider: "opencode-go", allowNotFoundSkip: false, expected: true },
-    { provider: "minimax", allowNotFoundSkip: false, expected: false },
-    { provider: "minimax", allowNotFoundSkip: true, expected: true },
-    { provider: "zai", allowNotFoundSkip: true, expected: true },
-    { provider: "openai-codex", allowNotFoundSkip: true, expected: true },
-    { provider: "xai", allowNotFoundSkip: true, expected: false },
-  ])(
-    "returns $expected for $provider (allowNotFoundSkip=$allowNotFoundSkip)",
-    ({ provider, allowNotFoundSkip, expected }) => {
-      expect(shouldSkipEmptyResponseForLiveModel({ provider, allowNotFoundSkip })).toBe(expected);
-    },
-  );
 });
 
 describe("isPromptProbeMiss", () => {
@@ -1189,22 +1145,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               context: `${progressLabel}: prompt-retry`,
             });
           }
-          if (
-            !text &&
-            shouldSkipEmptyResponseForLiveModel({
-              provider: model.provider,
-              allowNotFoundSkip: params.allowNotFoundSkip,
-            })
-          ) {
-            logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+          if (!text && isGoogleishProvider(model.provider)) {
+            logProgress(`${progressLabel}: skip (google empty response)`);
             break;
           }
           if (
             isEmptyStreamText(text) &&
-            shouldSkipEmptyResponseForLiveModel({
-              provider: model.provider,
-              allowNotFoundSkip: params.allowNotFoundSkip,
-            })
+            (model.provider === "minimax" || model.provider === "openai-codex")
           ) {
             logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
             break;
@@ -1264,10 +1211,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             });
             if (
               isEmptyStreamText(toolText) &&
-              shouldSkipEmptyResponseForLiveModel({
-                provider: model.provider,
-                allowNotFoundSkip: params.allowNotFoundSkip,
-              })
+              (model.provider === "minimax" || model.provider === "openai-codex")
             ) {
               logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
               break;
@@ -1335,10 +1279,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               });
               if (
                 isEmptyStreamText(execReadText) &&
-                shouldSkipEmptyResponseForLiveModel({
-                  provider: model.provider,
-                  allowNotFoundSkip: params.allowNotFoundSkip,
-                })
+                (model.provider === "minimax" || model.provider === "openai-codex")
               ) {
                 logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
                 break;
@@ -1405,10 +1346,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             // (We still keep prompt + tool probes as hard checks.)
             if (
               isEmptyStreamText(imageText) &&
-              shouldSkipEmptyResponseForLiveModel({
-                provider: model.provider,
-                allowNotFoundSkip: params.allowNotFoundSkip,
-              })
+              (model.provider === "minimax" || model.provider === "openai-codex")
             ) {
               logProgress(`${progressLabel}: image skip (${model.provider} empty response)`);
             } else {
@@ -1525,17 +1463,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (model.provider === "anthropic" && isEmptyStreamText(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
-            break;
-          }
-          if (
-            isEmptyStreamText(message) &&
-            shouldSkipEmptyResponseForLiveModel({
-              provider: model.provider,
-              allowNotFoundSkip: params.allowNotFoundSkip,
-            })
-          ) {
-            skippedCount += 1;
-            logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
             break;
           }
           if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
@@ -1818,7 +1745,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
+    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-5") as Model<Api> | null;
     const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
 
     if (!anthropic || !zai) {
@@ -1882,7 +1809,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await withGatewayLiveProbeTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
-          model: "anthropic/claude-opus-4-6",
+          model: "anthropic/claude-opus-4-5",
         }),
         "zai-fallback: sessions-patch-anthropic",
       );
@@ -1897,7 +1824,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-tool`,
-        modelKey: "anthropic/claude-opus-4-6",
+        modelKey: "anthropic/claude-opus-4-5",
         message:
           `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
           `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
@@ -1906,7 +1833,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       });
       assertNoReasoningTags({
         text: toolText,
-        model: "anthropic/claude-opus-4-6",
+        model: "anthropic/claude-opus-4-5",
         phase: "zai-fallback-tool",
         label: "zai-fallback",
       });

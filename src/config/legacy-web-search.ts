@@ -4,7 +4,13 @@ import { mergeMissing } from "./legacy.shared.js";
 
 type JsonRecord = Record<string, unknown>;
 
-const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
+const GENERIC_WEB_SEARCH_KEYS = new Set([
+  "enabled",
+  "provider",
+  "maxResults",
+  "timeoutSeconds",
+  "cacheTtlMinutes",
+]);
 
 // Tavily only ever used the plugin-owned config path, so there is no legacy
 // `tools.web.search.tavily.*` shape to migrate.
@@ -207,7 +213,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (LEGACY_WEB_SEARCH_PROVIDER_ID_SET.has(key) && isRecord(value)) {
       continue;
     }
-    if (MODERN_SCOPED_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
+    if (GENERIC_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
       nextSearch[key] = value;
     }
   }

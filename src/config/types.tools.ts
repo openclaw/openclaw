@@ -1,7 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
-import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -327,11 +326,6 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
-  /** Optional QMD-specific extra collections for cross-agent search. */
-  qmd?: {
-    /** Additional QMD collections appended for this agent's search scope. */
-    extraCollections?: MemoryQmdIndexPath[];
-  };
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
     /** Enable image/audio embeddings from extraPaths. */
@@ -497,7 +491,7 @@ export type ToolsConfig = {
   byProvider?: Record<string, ToolPolicyConfig>;
   web?: {
     search?: {
-      /** Enable managed web_search and optional Codex-native web search. */
+      /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
@@ -509,24 +503,6 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** Optional native Codex web search for Codex-capable models. */
-      openaiCodex?: {
-        /** Enable native Codex web search for eligible models. */
-        enabled?: boolean;
-        /** Use cached or live external web access. Default: "cached". */
-        mode?: "cached" | "live";
-        /** Optional allowlist of domains passed to the native Codex tool. */
-        allowedDomains?: string[];
-        /** Optional Codex native search context size hint. */
-        contextSize?: "low" | "medium" | "high";
-        /** Optional approximate user location passed to the native Codex tool. */
-        userLocation?: {
-          country?: string;
-          region?: string;
-          city?: string;
-          timezone?: string;
-        };
-      };
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */

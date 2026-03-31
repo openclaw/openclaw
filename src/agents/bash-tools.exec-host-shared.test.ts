@@ -1,17 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  sendExecApprovalFollowup: vi.fn(),
-  logWarn: vi.fn(),
-}));
-
-vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  sendExecApprovalFollowup: mocks.sendExecApprovalFollowup,
-}));
-
-vi.mock("../logger.js", () => ({
-  logWarn: mocks.logWarn,
-}));
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
 let maxExecApprovalFollowupFailureLogKeys: typeof import("./bash-tools.exec-host-shared.js").MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS;
@@ -19,16 +6,20 @@ let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup
 let logWarn: typeof import("../logger.js").logWarn;
 
 describe("sendExecApprovalFollowupResult", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("./bash-tools.exec-approval-followup.js", () => ({
+      sendExecApprovalFollowup: vi.fn(),
+    }));
+    vi.doMock("../logger.js", () => ({
+      logWarn: vi.fn(),
+    }));
     ({
       sendExecApprovalFollowupResult,
       MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
     } = await import("./bash-tools.exec-host-shared.js"));
     ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
     ({ logWarn } = await import("../logger.js"));
-  });
-
-  beforeEach(() => {
     vi.mocked(sendExecApprovalFollowup).mockReset();
     vi.mocked(logWarn).mockReset();
   });

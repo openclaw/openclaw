@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const watchMock = vi.fn(() => ({
   on: vi.fn(),
@@ -9,17 +9,18 @@ const watchMock = vi.fn(() => ({
 
 let refreshModule: typeof import("./refresh.js");
 
-vi.mock("chokidar", () => ({
-  default: { watch: watchMock },
-}));
+async function loadFreshRefreshModuleForTest() {
+  vi.resetModules();
+  vi.doMock("chokidar", () => ({
+    default: { watch: watchMock },
+  }));
+  refreshModule = await import("./refresh.js");
+}
 
 describe("ensureSkillsWatcher", () => {
-  beforeAll(async () => {
-    refreshModule = await import("./refresh.js");
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     watchMock.mockClear();
+    await loadFreshRefreshModuleForTest();
   });
 
   afterEach(async () => {

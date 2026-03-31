@@ -15,9 +15,10 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  getAgentScopedMediaLocalRootsForSources,
+} from "../../media/local-roots.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
@@ -271,7 +272,7 @@ type ResolvedActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
   channel: ChannelId;
-  mediaAccess: OutboundMediaAccess;
+  mediaLocalRoots: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
@@ -517,7 +518,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       agentId,
-      mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,
@@ -641,7 +641,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     cfg,
     params,
     channel,
-    mediaAccess,
+    mediaLocalRoots,
     accountId,
     dryRun,
     gateway,
@@ -672,9 +672,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     action,
     cfg,
     params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
+    mediaLocalRoots,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     sessionKey: input.sessionKey,
@@ -746,14 +744,14 @@ export async function runMessageAction(
     mediaPolicy: normalizationPolicy,
   });
 
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
     cfg,
     agentId: resolvedAgentId,
     mediaSources: collectActionMediaSourceHints(params),
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
-    mediaAccess,
+    mediaLocalRoots,
   });
 
   await hydrateAttachmentParamsForAction({
@@ -793,7 +791,7 @@ export async function runMessageAction(
       cfg,
       params,
       channel,
-      mediaAccess,
+      mediaLocalRoots,
       accountId,
       dryRun,
       gateway,
@@ -809,7 +807,7 @@ export async function runMessageAction(
       cfg,
       params,
       channel,
-      mediaAccess,
+      mediaLocalRoots,
       accountId,
       dryRun,
       gateway,
@@ -822,7 +820,7 @@ export async function runMessageAction(
     cfg,
     params,
     channel,
-    mediaAccess,
+    mediaLocalRoots,
     accountId,
     dryRun,
     gateway,

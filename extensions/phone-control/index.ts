@@ -29,7 +29,6 @@ type ArmStateFile = ArmStateFileV1 | ArmStateFileV2;
 
 const STATE_VERSION = 2;
 const STATE_REL_PATH = ["plugins", "phone-control", "armed.json"] as const;
-const PHONE_ADMIN_SCOPE = "operator.admin";
 
 const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   camera: ["camera.snap", "camera.clip"],
@@ -269,16 +268,6 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   return null;
 }
 
-function requiresAdminToMutatePhoneControl(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
-  if (Array.isArray(gatewayClientScopes)) {
-    return !gatewayClientScopes.includes(PHONE_ADMIN_SCOPE);
-  }
-  return channel === "webchat";
-}
-
 function formatStatus(state: ArmStateFile | null): string {
   if (!state) {
     return "Phone control: disarmed.";
@@ -369,7 +358,10 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            (ctx.channel === "webchat" || Array.isArray(ctx.gatewayClientScopes)) &&
+            !ctx.gatewayClientScopes?.includes("operator.admin")
+          ) {
             return {
               text: "⚠️ /phone disarm requires operator.admin.",
             };
@@ -391,7 +383,10 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            (ctx.channel === "webchat" || Array.isArray(ctx.gatewayClientScopes)) &&
+            !ctx.gatewayClientScopes?.includes("operator.admin")
+          ) {
             return {
               text: "⚠️ /phone arm requires operator.admin.",
             };

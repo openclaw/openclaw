@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -8,7 +8,6 @@ import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./channel-setup/plugin-install.js";
-import { channelsAddCommand } from "./channels.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import {
   createMSTeamsCatalogEntry,
@@ -48,6 +47,7 @@ vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
 });
 
 const runtime = createTestRuntime();
+let channelsAddCommand: typeof import("./channels.js").channelsAddCommand;
 
 function listConfiguredAccountIds(
   channelConfig: { accounts?: Record<string, unknown>; botToken?: string } | undefined,
@@ -219,6 +219,10 @@ async function runSignalAddCommand(afterAccountConfigWritten: SignalAfterAccount
 }
 
 describe("channelsAddCommand", () => {
+  beforeAll(async () => {
+    ({ channelsAddCommand } = await import("./channels.js"));
+  });
+
   beforeEach(async () => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();

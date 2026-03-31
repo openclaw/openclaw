@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import { onboardCommand, setupWizardCommand } from "./onboard.js";
 
 const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
@@ -26,6 +25,8 @@ vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   handleReset: mocks.handleReset,
 }));
+
+const { onboardCommand, setupWizardCommand } = await import("./onboard.js");
 
 function makeRuntime(): RuntimeEnv {
   return {

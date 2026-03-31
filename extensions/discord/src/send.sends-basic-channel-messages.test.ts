@@ -1,8 +1,11 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
+import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
+vi.mock("openclaw/plugin-sdk/web-media", async () => {
+  const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
+  return discordWebMediaMockFactory();
+});
 
 let deleteMessageDiscord: typeof import("./send.js").deleteMessageDiscord;
 let editMessageDiscord: typeof import("./send.js").editMessageDiscord;
@@ -21,6 +24,7 @@ let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js")._
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({
     deleteMessageDiscord,
     editMessageDiscord,

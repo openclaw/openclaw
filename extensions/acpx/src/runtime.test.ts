@@ -241,23 +241,12 @@ describe("AcpxRuntime", () => {
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
   });
 
-  it("retains dead named sessions when status only reports queue owner unavailable", async () => {
+  it("replaces dead named sessions returned by sessions ensure", async () => {
     await expectSessionEnsureFallback({
       sessionKey: "agent:codex:acp:dead-session",
       env: {
         MOCK_ACPX_STATUS_STATUS: "dead",
         MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-      },
-      expectNewAfterStatus: false,
-    });
-  });
-
-  it("replaces dead named sessions when status indicates an unrecoverable failure", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session-unrecoverable",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "agent process exited",
       },
       expectNewAfterStatus: true,
     });
@@ -275,26 +264,13 @@ describe("AcpxRuntime", () => {
     });
   });
 
-  it("retains the named session after ensure failure when status only reports queue owner unavailable", async () => {
+  it("creates a fresh named session when sessions ensure exits and status is dead", async () => {
     await expectSessionEnsureFallback({
       sessionKey: "agent:codex:acp:ensure-fallback-dead",
       env: {
         MOCK_ACPX_ENSURE_EXIT_1: "1",
         MOCK_ACPX_STATUS_STATUS: "dead",
         MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-      },
-      expectNewAfterStatus: false,
-      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-dead",
-    });
-  });
-
-  it("creates a fresh named session after ensure failure when status indicates an unrecoverable failure", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-dead-unrecoverable",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "agent process exited",
       },
       expectNewAfterStatus: true,
     });

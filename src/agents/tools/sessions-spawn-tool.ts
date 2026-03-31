@@ -218,7 +218,6 @@ export function createSessionsSpawnTool(
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
-            agentGroupId: opts?.agentGroupId ?? undefined,
             sandboxed: opts?.sandboxed,
           },
         );

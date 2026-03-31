@@ -8,7 +8,6 @@ import {
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
-import type { OutboundMediaAccess } from "../../../media/load-options.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
@@ -17,9 +16,7 @@ type DirectSendOptions = {
   accountId?: string | null;
   replyToId?: string | null;
   mediaUrl?: string;
-  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
 };
 
@@ -82,7 +79,7 @@ export function createDirectTextMediaOutbound<
     deps?: OutboundSendDeps;
     replyToId?: string | null;
     mediaUrl?: string;
-    mediaAccess?: OutboundMediaAccess;
+    mediaLocalRoots?: readonly string[];
     buildOptions: (params: DirectSendOptions) => TOpts;
   }) => {
     const send = params.resolveSender(sendParams.deps);
@@ -96,9 +93,7 @@ export function createDirectTextMediaOutbound<
       sendParams.buildOptions({
         cfg: sendParams.cfg,
         mediaUrl: sendParams.mediaUrl,
-        mediaAccess: sendParams.mediaAccess,
-        mediaLocalRoots: sendParams.mediaAccess?.localRoots,
-        mediaReadFile: sendParams.mediaAccess?.readFile,
+        mediaLocalRoots: sendParams.mediaLocalRoots,
         accountId: sendParams.accountId,
         replyToId: sendParams.replyToId,
         maxBytes,
@@ -125,31 +120,13 @@ export function createDirectTextMediaOutbound<
         buildOptions: params.buildTextOptions,
       });
     },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      deps,
-      replyToId,
-    }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
       return await sendDirect({
         cfg,
         to,
         text,
         mediaUrl,
-        mediaAccess:
-          mediaAccess ??
-          (mediaLocalRoots || mediaReadFile
-            ? {
-                ...(mediaLocalRoots?.length ? { localRoots: mediaLocalRoots } : {}),
-                ...(mediaReadFile ? { readFile: mediaReadFile } : {}),
-              }
-            : undefined),
+        mediaLocalRoots,
         accountId,
         deps,
         replyToId,

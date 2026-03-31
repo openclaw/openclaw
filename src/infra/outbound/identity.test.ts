@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveAgentIdentityMock = vi.hoisted(() => vi.fn());
 const resolveAgentAvatarMock = vi.hoisted(() => vi.fn());
@@ -16,13 +16,9 @@ type IdentityModule = typeof import("./identity.js");
 let normalizeOutboundIdentity: IdentityModule["normalizeOutboundIdentity"];
 let resolveAgentOutboundIdentity: IdentityModule["resolveAgentOutboundIdentity"];
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ normalizeOutboundIdentity, resolveAgentOutboundIdentity } = await import("./identity.js"));
-});
-
-beforeEach(() => {
-  resolveAgentIdentityMock.mockReset();
-  resolveAgentAvatarMock.mockReset();
 });
 
 describe("normalizeOutboundIdentity", () => {

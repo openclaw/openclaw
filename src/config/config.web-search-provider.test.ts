@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 
 vi.mock("../runtime.js", () => ({
@@ -77,7 +77,8 @@ vi.mock("../plugins/web-search-providers.js", () => {
 let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ validateConfigObjectWithPlugins } = await import("./config.js"));
   ({
     __testing: { resolveSearchProvider },

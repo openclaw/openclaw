@@ -29,10 +29,6 @@ import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
 
-export function resetMatrixCliStateForTests(): void {
-  matrixCliExitScheduled = false;
-}
-
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
     return;

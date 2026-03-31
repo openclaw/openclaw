@@ -1,9 +1,5 @@
 import fsSync from "node:fs";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -62,7 +58,6 @@ export async function noteMemorySearchHealth(
     const qmdCheck = await checkQmdBinaryAvailability({
       command: backendConfig.qmd?.command ?? "qmd",
       env: process.env,
-      cwd: resolveAgentWorkspaceDir(cfg, agentId),
     });
     if (!qmdCheck.available) {
       note(

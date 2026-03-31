@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
@@ -177,16 +177,14 @@ describe("line setup wizard", () => {
 });
 
 describe("probeLineBot", () => {
-  beforeAll(async () => {
-    ({ probeLineBot } = await import("./probe.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
     });
+    ({ probeLineBot } = await import("./probe.js"));
   });
 
   afterEach(() => {
@@ -235,6 +233,10 @@ describe("linePlugin status.probeAccount", () => {
       pictureUrl: "https://example.com/bot.png",
     });
 
+    const { linePlugin: freshLinePlugin } = await import("./channel.js");
+    const { clearLineRuntime: clearFreshLineRuntime } = await import("./runtime.js");
+    const { probeLineBot: directProbeLineBot } = await import("./probe.js");
+    clearFreshLineRuntime();
     const params = {
       cfg: {} as OpenClawConfig,
       account: {
@@ -247,10 +249,8 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    clearLineRuntime();
-
-    await expect(linePlugin.status!.probeAccount!(params)).resolves.toEqual(
-      await probeLineBot("token", 50),
+    await expect(freshLinePlugin.status!.probeAccount!(params)).resolves.toEqual(
+      await directProbeLineBot("token", 50),
     );
   });
 });

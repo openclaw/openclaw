@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionKeyForRequest } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
@@ -23,6 +22,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
 }));
 
+let resolveSessionKeyForRequest: typeof import("./session.js").resolveSessionKeyForRequest;
+
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
   const MYBOT_STORE_PATH = "/tmp/mybot-store.json";
@@ -44,6 +45,11 @@ describe("resolveSessionKeyForRequest", () => {
   const mockStoresByPath = (stores: Partial<Record<string, SessionStoreMap>>) => {
     mocks.loadSessionStore.mockImplementation((storePath: string) => stores[storePath] ?? {});
   };
+
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveSessionKeyForRequest } = await import("./session.js"));
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

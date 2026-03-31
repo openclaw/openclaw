@@ -1,22 +1,21 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-const resolveGatewayLogPathsMock = vi.fn(() => ({
-  stdoutPath: "C:\\tmp\\openclaw-state\\logs\\gateway.log",
-  stderrPath: "C:\\tmp\\openclaw-state\\logs\\gateway.err.log",
-}));
-
-vi.mock("./launchd.js", () => ({
-  resolveGatewayLogPaths: resolveGatewayLogPathsMock,
-}));
-
-let buildPlatformRuntimeLogHints: typeof import("./runtime-hints.js").buildPlatformRuntimeLogHints;
+afterEach(() => {
+  vi.resetModules();
+  vi.doUnmock("./launchd.js");
+});
 
 describe("buildPlatformRuntimeLogHints", () => {
-  beforeAll(async () => {
-    ({ buildPlatformRuntimeLogHints } = await import("./runtime-hints.js"));
-  });
+  it("strips windows drive prefixes from darwin display paths", async () => {
+    vi.doMock("./launchd.js", () => ({
+      resolveGatewayLogPaths: () => ({
+        stdoutPath: "C:\\tmp\\openclaw-state\\logs\\gateway.log",
+        stderrPath: "C:\\tmp\\openclaw-state\\logs\\gateway.err.log",
+      }),
+    }));
 
-  it("strips windows drive prefixes from darwin display paths", () => {
+    const { buildPlatformRuntimeLogHints } = await import("./runtime-hints.js");
+
     expect(
       buildPlatformRuntimeLogHints({
         platform: "darwin",

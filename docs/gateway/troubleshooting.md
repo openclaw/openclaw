@@ -145,8 +145,7 @@ If logs show nonce/signature errors, update the connecting client and verify it:
 Related:
 
 - [/web/control-ui](/web/control-ui)
-- [/gateway/configuration](/gateway/configuration) (gateway auth modes)
-- [/gateway/trusted-proxy-auth](/gateway/trusted-proxy-auth)
+- [/gateway/authentication](/gateway/authentication)
 - [/gateway/remote](/gateway/remote)
 - [/cli/devices](/cli/devices)
 

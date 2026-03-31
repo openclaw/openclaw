@@ -816,9 +816,3 @@ How it maps:
   - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
 
 This keeps the agent deterministic and avoids brittle selectors.
-
-## Related
-
-- [Tools Overview](/tools) — all available agent tools
-- [Sandboxing](/gateway/sandboxing) — browser control in sandboxed environments
-- [Security](/gateway/security) — browser control risks and hardening

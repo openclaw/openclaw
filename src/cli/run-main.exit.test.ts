@@ -1,6 +1,5 @@
 import process from "node:process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
@@ -67,6 +66,8 @@ vi.mock("./program/root-help.js", () => ({
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
+
+const { runCli } = await import("./run-main.js");
 
 describe("runCli exit behavior", () => {
   beforeEach(() => {

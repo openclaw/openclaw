@@ -194,61 +194,47 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
   return latestSourceMtime != null && latestSourceMtime > stampMtime;
 };
 
-export const resolveBuildRequirement = (deps) => {
+const shouldBuild = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
-    return { shouldBuild: true, reason: "force_build" };
+    return true;
   }
   const stamp = readBuildStamp(deps);
   if (stamp.mtime == null) {
-    return { shouldBuild: true, reason: "missing_build_stamp" };
+    return true;
   }
   if (statMtime(deps.distEntry, deps.fs) == null) {
-    return { shouldBuild: true, reason: "missing_dist_entry" };
+    return true;
   }
 
   for (const filePath of deps.configFiles) {
     const mtime = statMtime(filePath, deps.fs);
     if (mtime != null && mtime > stamp.mtime) {
-      return { shouldBuild: true, reason: "config_newer" };
+      return true;
     }
   }
 
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
-    return { shouldBuild: true, reason: "build_stamp_missing_head" };
+    return true;
   }
   if (currentHead && stamp.head && currentHead !== stamp.head) {
-    return { shouldBuild: true, reason: "git_head_changed" };
+    return true;
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
     if (dirty === true) {
-      return { shouldBuild: true, reason: "dirty_watched_tree" };
+      return true;
     }
     if (dirty === false) {
-      return { shouldBuild: false, reason: "clean" };
+      return false;
     }
   }
 
   if (hasSourceMtimeChanged(stamp.mtime, deps)) {
-    return { shouldBuild: true, reason: "source_mtime_newer" };
+    return true;
   }
-  return { shouldBuild: false, reason: "clean" };
+  return false;
 };
-
-const BUILD_REASON_LABELS = {
-  force_build: "forced by OPENCLAW_FORCE_BUILD",
-  missing_build_stamp: "build stamp missing",
-  missing_dist_entry: "dist entry missing",
-  config_newer: "config newer than build stamp",
-  build_stamp_missing_head: "build stamp missing git head",
-  git_head_changed: "git head changed",
-  dirty_watched_tree: "dirty watched source tree",
-  source_mtime_newer: "source mtime newer than build stamp",
-  clean: "clean",
-};
-
-const formatBuildReason = (reason) => BUILD_REASON_LABELS[reason] ?? reason;
 
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
@@ -321,18 +307,14 @@ export async function runNodeMain(params = {}) {
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
 
-  const buildRequirement = resolveBuildRequirement(deps);
-  if (!buildRequirement.shouldBuild) {
+  if (!shouldBuild(deps)) {
     if (!syncRuntimeArtifacts(deps)) {
       return 1;
     }
     return await runOpenClaw(deps);
   }
 
-  logRunner(
-    `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
-    deps,
-  );
+  logRunner("Building TypeScript (dist is stale).", deps);
   const buildCmd = deps.execPath;
   const buildArgs = compilerArgs;
   const build = deps.spawn(buildCmd, buildArgs, {

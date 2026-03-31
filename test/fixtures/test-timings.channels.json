@@ -1,6 +1,6 @@
 {
   "config": "vitest.channels.config.ts",
-  "generatedAt": "2026-03-31T10:45:00Z",
+  "generatedAt": "2026-03-24T04:15:05Z",
   "defaultDurationMs": 3000,
   "files": {
     "extensions/telegram/src/bot.create-telegram-bot.test.ts": {
@@ -8,9 +8,6 @@
     },
     "extensions/telegram/src/bot-message-dispatch.test.ts": {
       "durationMs": 12600
-    },
-    "extensions/discord/src/monitor/acp-bind-here.integration.test.ts": {
-      "durationMs": 15200
     },
     "extensions/discord/src/monitor/exec-approvals.test.ts": {
       "durationMs": 11300
@@ -67,16 +64,13 @@
       "durationMs": 3200
     },
     "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
-      "durationMs": 15830
+      "durationMs": 3000
     },
     "extensions/telegram/src/webhook.test.ts": {
       "durationMs": 2900
     },
     "extensions/slack/src/monitor/slash.test.ts": {
-      "durationMs": 12500
-    },
-    "extensions/slack/src/outbound-adapter.test.ts": {
-      "durationMs": 4630
+      "durationMs": 2800
     },
     "extensions/whatsapp/src/send.test.ts": {
       "durationMs": 2700
@@ -88,7 +82,7 @@
       "durationMs": 2300
     },
     "extensions/whatsapp/src/auto-reply/deliver-reply.test.ts": {
-      "durationMs": 10260
+      "durationMs": 2200
     },
     "extensions/slack/src/monitor/events/reactions.test.ts": {
       "durationMs": 2200
@@ -97,7 +91,7 @@
       "durationMs": 2100
     },
     "extensions/telegram/src/bot-native-commands.session-meta.test.ts": {
-      "durationMs": 18000
+      "durationMs": 2100
     },
     "extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts": {
       "durationMs": 2000
@@ -106,7 +100,7 @@
       "durationMs": 1900
     },
     "extensions/telegram/src/bot-native-commands.test.ts": {
-      "durationMs": 17590
+      "durationMs": 1700
     },
     "extensions/whatsapp/src/auto-reply/heartbeat-runner.test.ts": {
       "durationMs": 1700
@@ -121,7 +115,7 @@
       "durationMs": 1600
     },
     "extensions/telegram/src/bot-message-context.dm-threads.test.ts": {
-      "durationMs": 23020
+      "durationMs": 1600
     },
     "extensions/whatsapp/src/inbound/access-control.test.ts": {
       "durationMs": 1600
@@ -136,7 +130,7 @@
       "durationMs": 1500
     },
     "extensions/telegram/src/bot.create-telegram-bot.channel-post-media.test.ts": {
-      "durationMs": 13000
+      "durationMs": 1500
     },
     "extensions/whatsapp/src/setup-surface.test.ts": {
       "durationMs": 1400
@@ -151,7 +145,7 @@
       "durationMs": 1300
     },
     "extensions/telegram/src/bot-message-context.named-account-dm.test.ts": {
-      "durationMs": 24070
+      "durationMs": 1200
     },
     "extensions/slack/src/monitor/events/pins.test.ts": {
       "durationMs": 1200
@@ -169,7 +163,7 @@
       "durationMs": 1000
     },
     "extensions/telegram/src/bot-message-context.audio-transcript.test.ts": {
-      "durationMs": 20350
+      "durationMs": 1000
     },
     "extensions/whatsapp/src/monitor-inbox.append-upsert.test.ts": {
       "durationMs": 999
@@ -181,7 +175,7 @@
       "durationMs": 981
     },
     "extensions/telegram/src/bot-message-context.acp-bindings.test.ts": {
-      "durationMs": 18290
+      "durationMs": 980
     },
     "extensions/slack/src/monitor/message-handler.test.ts": {
       "durationMs": 967
@@ -193,7 +187,7 @@
       "durationMs": 950
     },
     "extensions/slack/src/send.upload.test.ts": {
-      "durationMs": 10010
+      "durationMs": 923
     },
     "extensions/telegram/src/bot-native-commands.registry.test.ts": {
       "durationMs": 842
@@ -226,7 +220,7 @@
       "durationMs": 701
     },
     "extensions/telegram/src/bot-message-context.thread-binding.test.ts": {
-      "durationMs": 19150
+      "durationMs": 695
     },
     "src/browser/pw-tools-core.waits-next-download-saves-it.test.ts": {
       "durationMs": 677
@@ -241,13 +235,13 @@
       "durationMs": 610
     },
     "extensions/telegram/src/bot-message-context.dm-topic-threadid.test.ts": {
-      "durationMs": 31390
+      "durationMs": 581
     },
     "extensions/slack/src/monitor.threading.missing-thread-ts.test.ts": {
       "durationMs": 570
     },
     "extensions/telegram/src/bot-native-commands.plugin-auth.test.ts": {
-      "durationMs": 19500
+      "durationMs": 563
     },
     "extensions/discord/src/monitor/agent-components.wildcard.test.ts": {
       "durationMs": 547
@@ -295,13 +289,13 @@
       "durationMs": 324
     },
     "extensions/whatsapp/src/outbound-adapter.poll.test.ts": {
-      "durationMs": 17860
+      "durationMs": 284
     },
     "src/browser/server.agent-contract-form-layout-act-commands.test.ts": {
       "durationMs": 282
     },
     "extensions/discord/src/send.webhook-activity.test.ts": {
-      "durationMs": 19380
+      "durationMs": 246
     },
     "src/browser/routes/basic.existing-session.test.ts": {
       "durationMs": 221
@@ -403,7 +397,7 @@
       "durationMs": 42
     },
     "extensions/discord/src/monitor/monitor.test.ts": {
-      "durationMs": 19800
+      "durationMs": 40
     },
     "extensions/discord/src/monitor/provider.lifecycle.test.ts": {
       "durationMs": 39
@@ -436,13 +430,13 @@
       "durationMs": 20
     },
     "extensions/telegram/src/bot-message-context.implicit-mention.test.ts": {
-      "durationMs": 21640
+      "durationMs": 20
     },
     "extensions/telegram/src/action-runtime.test.ts": {
       "durationMs": 19
     },
     "extensions/telegram/src/bot-message-context.topic-agentid.test.ts": {
-      "durationMs": 26500
+      "durationMs": 19
     },
     "src/browser/routes/agent.existing-session.test.ts": {
       "durationMs": 19
@@ -523,7 +517,7 @@
       "durationMs": 11
     },
     "extensions/telegram/src/bot-message-context.sender-prefix.test.ts": {
-      "durationMs": 20090
+      "durationMs": 11
     },
     "extensions/whatsapp/src/active-listener.test.ts": {
       "durationMs": 11
@@ -742,7 +736,7 @@
       "durationMs": 5
     },
     "extensions/slack/src/targets.test.ts": {
-      "durationMs": 100
+      "durationMs": 5
     },
     "extensions/imessage/src/monitor/loop-rate-limiter.test.ts": {
       "durationMs": 5

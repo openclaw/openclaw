@@ -96,7 +96,6 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ResolvedExecApprovals;
   security: ExecSecurity;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
-  strictInlineEval: boolean;
   inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
@@ -440,7 +439,6 @@ async function evaluateSystemRunPolicyPhase(
     approvals,
     security,
     policy,
-    strictInlineEval,
     inlineEvalHit,
     allowlistMatches,
     analysisOk,
@@ -557,7 +555,6 @@ async function executeSystemRunPhase(
         cwd: phase.cwd,
         env: phase.env,
         platform: process.platform,
-        strictInlineEval: phase.strictInlineEval,
       });
       for (const pattern of patterns) {
         if (pattern) {

@@ -51,6 +51,7 @@ let createSignalEventHandler: typeof import("./event-handler.js").createSignalEv
 describe("signal createSignalEventHandler inbound context", () => {
   beforeAll(async () => {
     vi.useRealTimers();
+    vi.resetModules();
     ({ expectChannelInboundContextContract: expectInboundContextContract } =
       await import("openclaw/plugin-sdk/testing"));
     ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =

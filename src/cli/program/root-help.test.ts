@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderRootHelpText } from "./root-help.js";
 
 vi.mock("./core-command-descriptors.js", () => ({
   getCoreCliCommandDescriptors: () => [
@@ -32,6 +31,8 @@ vi.mock("../../plugins/cli.js", () => ({
     },
   ],
 }));
+
+const { renderRootHelpText } = await import("./root-help.js");
 
 describe("root help", () => {
   it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {

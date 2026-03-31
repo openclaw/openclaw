@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
@@ -132,11 +132,8 @@ function expectCompatChainApplied(params: {
 }
 
 describe("resolvePluginCapabilityProviders", () => {
-  beforeAll(async () => {
-    ({ resolvePluginCapabilityProviders } = await import("./capability-provider-runtime.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadPluginManifestRegistry.mockReset();
@@ -147,6 +144,7 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
     mocks.withBundledPluginVitestCompat.mockReset();
     mocks.withBundledPluginVitestCompat.mockImplementation(({ config }) => config);
+    ({ resolvePluginCapabilityProviders } = await import("./capability-provider-runtime.js"));
   });
 
   it("uses the active registry when capability providers are already loaded", () => {

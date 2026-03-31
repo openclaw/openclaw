@@ -5,7 +5,6 @@ import type {
   FileDiffOptions,
   SupportedLanguages,
 } from "@pierre/diffs";
-import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
@@ -250,12 +249,7 @@ function syncAllControllers(): void {
 }
 
 async function hydrateViewer(): Promise<void> {
-  const cards = await Promise.all(
-    getCards().map(async ({ host, payload }) => ({
-      host,
-      payload: await normalizeDiffViewerPayloadLanguages(payload),
-    })),
-  );
+  const cards = getCards();
   const langs = new Set<SupportedLanguages>();
   const firstPayload = cards[0]?.payload;
 
@@ -274,7 +268,7 @@ async function hydrateViewer(): Promise<void> {
 
   await preloadHighlighter({
     themes: ["pierre-light", "pierre-dark"],
-    langs: [...langs],
+    langs: langs.size > 0 ? [...langs] : ["text"],
   });
 
   syncDocumentTheme();
@@ -303,12 +297,10 @@ async function main(): Promise<void> {
   }
 }
 
-if (typeof document !== "undefined") {
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
-      void main();
-    });
-  } else {
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
     void main();
-  }
+  });
+} else {
+  void main();
 }

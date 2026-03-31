@@ -125,7 +125,6 @@ describe("media understanding attachments SSRF", () => {
       const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
       await fs.mkdir(allowedRoot, { recursive: true });
       await fs.writeFile(attachmentPath, "ok");
-      const canonicalAttachmentPath = await fs.realpath(attachmentPath).catch(() => attachmentPath);
 
       const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
         localPathRoots: [allowedRoot],
@@ -135,8 +134,7 @@ describe("media understanding attachments SSRF", () => {
 
       openSpy.mockImplementation(async (filePath, flags) => {
         const handle = await originalOpen(filePath, flags);
-        const candidatePath = await fs.realpath(String(filePath)).catch(() => String(filePath));
-        if (candidatePath !== canonicalAttachmentPath) {
+        if (filePath !== attachmentPath) {
           return handle;
         }
         const mockedHandle = handle as typeof handle & {
@@ -161,7 +159,6 @@ describe("media understanding attachments SSRF", () => {
       const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
       await fs.mkdir(allowedRoot, { recursive: true });
       await fs.writeFile(attachmentPath, "ok");
-      const canonicalAttachmentPath = await fs.realpath(attachmentPath).catch(() => attachmentPath);
 
       const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
         localPathRoots: [allowedRoot],
@@ -170,12 +167,10 @@ describe("media understanding attachments SSRF", () => {
 
       await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
-      expect(openSpy).toHaveBeenCalled();
-      const [openedPath, openedFlags] = openSpy.mock.calls[0] ?? [];
-      expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
-        canonicalAttachmentPath,
+      expect(openSpy).toHaveBeenCalledWith(
+        attachmentPath,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
       );
-      expect(openedFlags).toBe(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     });
   });
 });

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { installGatewayDaemonNonInteractive } from "./daemon-install.js";
 
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
@@ -36,6 +35,8 @@ vi.mock("../../daemon-runtime.js", () => ({
 vi.mock("../../systemd-linger.js", () => ({
   ensureSystemdUserLingerNonInteractive,
 }));
+
+const { installGatewayDaemonNonInteractive } = await import("./daemon-install.js");
 
 describe("installGatewayDaemonNonInteractive", () => {
   beforeEach(() => {

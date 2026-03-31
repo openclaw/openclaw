@@ -75,7 +75,6 @@ type TelegramSendOpts = {
   verbose?: boolean;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gatewayClientScopes?: readonly string[];
   maxBytes?: number;
   api?: TelegramApiOverride;
@@ -839,7 +838,6 @@ export async function sendMessageTelegram(
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
-        mediaReadFile: opts.mediaReadFile,
         optimizeImages: opts.forceDocument ? false : undefined,
       }),
     );

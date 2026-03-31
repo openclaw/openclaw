@@ -1,7 +1,6 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { parseDiscordTarget } from "./targets.js";
@@ -25,11 +24,10 @@ function normalizeDiscordApproverId(value: string): string | undefined {
 export function getDiscordExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  configOverride?: DiscordExecApprovalConfig | null;
 }): string[] {
   const account = resolveDiscordAccount(params).config;
   return resolveApprovalApprovers({
-    explicit: params.configOverride?.approvers ?? account.execApprovals?.approvers,
+    explicit: account.execApprovals?.approvers,
     allowFrom: account.allowFrom,
     extraAllowFrom: account.dm?.allowFrom,
     defaultTo: account.defaultTo,
@@ -48,34 +46,21 @@ export function getDiscordExecApprovalApprovers(params: {
 export function isDiscordExecApprovalClientEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  configOverride?: DiscordExecApprovalConfig | null;
 }): boolean {
-  const config = params.configOverride ?? resolveDiscordAccount(params).config.execApprovals;
-  return Boolean(
-    config?.enabled &&
-    getDiscordExecApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      configOverride: params.configOverride,
-    }).length > 0,
-  );
+  const config = resolveDiscordAccount(params).config.execApprovals;
+  return Boolean(config?.enabled && getDiscordExecApprovalApprovers(params).length > 0);
 }
 
 export function isDiscordExecApprovalApprover(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   senderId?: string | null;
-  configOverride?: DiscordExecApprovalConfig | null;
 }): boolean {
   const senderId = params.senderId?.trim();
   if (!senderId) {
     return false;
   }
-  return getDiscordExecApprovalApprovers({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    configOverride: params.configOverride,
-  }).includes(senderId);
+  return getDiscordExecApprovalApprovers(params).includes(senderId);
 }
 
 export function shouldSuppressLocalDiscordExecApprovalPrompt(params: {

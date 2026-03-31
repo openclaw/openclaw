@@ -2,38 +2,32 @@ import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSlackAccount } from "./accounts.js";
-import { normalizeSlackApproverId } from "./exec-approvals.js";
+import { parseSlackTarget } from "./targets.js";
 
-export function getSlackApprovalApprovers(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  const account = resolveSlackAccount(params).config;
-  return resolveApprovalApprovers({
-    allowFrom: account.allowFrom,
-    extraAllowFrom: account.dm?.allowFrom,
-    defaultTo: account.defaultTo,
-    normalizeApprover: normalizeSlackApproverId,
-    normalizeDefaultTo: normalizeSlackApproverId,
-  });
-}
-
-export function isSlackApprovalAuthorizedSender(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  senderId?: string | null;
-}): boolean {
-  const senderId = params.senderId ? normalizeSlackApproverId(params.senderId) : undefined;
-  if (!senderId) {
-    return false;
+function normalizeSlackApproverId(value: string | number): string | undefined {
+  const trimmed = String(value).trim();
+  if (!trimmed) {
+    return undefined;
   }
-  return getSlackApprovalApprovers(params).includes(senderId);
+  try {
+    const target = parseSlackTarget(trimmed, { defaultKind: "user" });
+    return target?.kind === "user" ? target.id : undefined;
+  } catch {
+    return /^[A-Z0-9]+$/i.test(trimmed) ? trimmed : undefined;
+  }
 }
 
 export const slackApprovalAuth = createResolvedApproverActionAuthAdapter({
   channelLabel: "Slack",
-  resolveApprovers: ({ cfg, accountId }) => getSlackApprovalApprovers({ cfg, accountId }),
+  resolveApprovers: ({ cfg, accountId }) => {
+    const account = resolveSlackAccount({ cfg, accountId }).config;
+    return resolveApprovalApprovers({
+      allowFrom: account.allowFrom,
+      extraAllowFrom: account.dm?.allowFrom,
+      defaultTo: account.defaultTo,
+      normalizeApprover: normalizeSlackApproverId,
+    });
+  },
   normalizeSenderId: (value) => normalizeSlackApproverId(value),
 });

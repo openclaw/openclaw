@@ -331,6 +331,9 @@ export function resolveGatewayStartupPluginIds(params: {
       if (!enabled) {
         return false;
       }
+      if (plugin.origin !== "bundled") {
+        return true;
+      }
       return (
         pluginsConfig.allow.includes(plugin.id) ||
         pluginsConfig.entries[plugin.id]?.enabled === true ||

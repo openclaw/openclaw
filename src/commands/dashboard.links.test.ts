@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { dashboardCommand } from "./dashboard.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -29,6 +28,8 @@ vi.mock("../infra/clipboard.js", () => ({
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
+
+let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 const runtime = {
   log: vi.fn(),
@@ -62,7 +63,9 @@ function mockSnapshot(token: unknown = "abc") {
 }
 
 describe("dashboardCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ dashboardCommand } = await import("./dashboard.js"));
     resetRuntime();
     readConfigFileSnapshotMock.mockClear();
     resolveGatewayPortMock.mockClear();

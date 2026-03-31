@@ -261,7 +261,6 @@ export async function processGatewayAllowlist(
             cwd: params.workdir,
             env: params.env,
             platform: process.platform,
-            strictInlineEval: params.strictInlineEval === true,
           });
           for (const pattern of patterns) {
             if (pattern) {

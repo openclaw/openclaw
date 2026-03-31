@@ -120,6 +120,7 @@ The provider id becomes the left side of your model ref:
           modelArg: "--model",
           modelAliases: {
             "claude-opus-4-6": "opus",
+            "claude-opus-4-6": "opus",
             "claude-sonnet-4-6": "sonnet",
           },
           sessionArg: "--session",

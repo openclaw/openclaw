@@ -133,21 +133,8 @@ const createAbortTask = (
 const makeAbortRunner = (abort: AbortController, beforeAbort?: () => void): RunnerStub =>
   makeRunnerStub({ task: createAbortTask(abort, beforeAbort) });
 
-function createSignal() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
 function mockRunOnceAndAbort(abort: AbortController) {
-  const started = createSignal();
-  runSpy.mockImplementationOnce(() => {
-    started.resolve();
-    return makeAbortRunner(abort);
-  });
-  return { waitForRunStart: () => started.promise };
+  runSpy.mockImplementationOnce(() => makeAbortRunner(abort));
 }
 
 async function expectOffsetConfirmationSkipped(offset: number | null) {
@@ -192,16 +179,11 @@ async function runMonitorAndCaptureStartupOrder(params?: { persistedOffset?: num
 
 function mockRunOnceWithStalledPollingRunner(): {
   stop: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
-  waitForRunStart: () => Promise<void>;
   waitForTaskStart: () => Promise<void>;
 } {
   let running = true;
   let releaseTask: (() => void) | undefined;
   let releaseBeforeTaskStart = false;
-  let signalRunStarted: (() => void) | undefined;
-  const runStarted = new Promise<void>((resolve) => {
-    signalRunStarted = resolve;
-  });
   let signalTaskStarted: (() => void) | undefined;
   const taskStarted = new Promise<void>((resolve) => {
     signalTaskStarted = resolve;
@@ -214,9 +196,8 @@ function mockRunOnceWithStalledPollingRunner(): {
     }
     releaseBeforeTaskStart = true;
   });
-  runSpy.mockImplementationOnce(() => {
-    signalRunStarted?.();
-    return makeRunnerStub({
+  runSpy.mockImplementationOnce(() =>
+    makeRunnerStub({
       task: () =>
         new Promise<void>((resolve) => {
           signalTaskStarted?.();
@@ -227,11 +208,10 @@ function mockRunOnceWithStalledPollingRunner(): {
         }),
       stop,
       isRunning: () => running,
-    });
-  });
+    }),
+  );
   return {
     stop,
-    waitForRunStart: () => runStarted,
     waitForTaskStart: () => taskStarted,
   };
 }
@@ -559,16 +539,16 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("force-restarts polling when unhandled network rejection stalls runner", async () => {
     const abort = new AbortController();
     const firstCycle = mockRunOnceWithStalledPollingRunner();
-    const secondCycle = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceWithStalledPollingRunner();
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
-    await firstCycle.waitForRunStart();
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
     expect(firstCycle.stop).toHaveBeenCalledTimes(1);
     // Unhandled polling rejections restart via TelegramPollingSession backoff,
     // so the second runner cycle is not immediate.
-    await secondCycle.waitForRunStart();
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2), { timeout: 4_000 });
     abort.abort();
     await monitor;
     expectRecoverableRetryState(2);
@@ -590,14 +570,13 @@ describe("monitorTelegramProvider (grammY)", () => {
         .mockReturnValueOnce(rebuiltTransport);
 
       const abort = new AbortController();
-      const firstCycle = mockRunOnceWithStalledPollingRunner();
-      const secondCycle = mockRunOnceAndAbort(abort);
+      mockRunOnceWithStalledPollingRunner();
+      mockRunOnceAndAbort(abort);
 
       const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
-      await firstCycle.waitForRunStart();
+      await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
 
       vi.advanceTimersByTime(120_000);
-      await secondCycle.waitForRunStart();
       await monitor;
 
       expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
@@ -623,14 +602,13 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramTransportSpy
       .mockReturnValueOnce(telegramTransport)
       .mockReturnValueOnce(rebuiltTransport);
-    const secondCycle = mockRunOnceAndAbort(abort);
+    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
-    await firstCycle.waitForRunStart();
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
     expect(firstCycle.stop).toHaveBeenCalledTimes(1);
-    await secondCycle.waitForRunStart();
     await monitor;
 
     expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
@@ -642,16 +620,16 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("aborts the active Telegram fetch when unhandled network rejection forces restart", async () => {
     const abort = new AbortController();
     const { stop, waitForTaskStart } = mockRunOnceWithStalledPollingRunner();
-    const secondCycle = mockRunOnceAndAbort(abort);
+    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
     await waitForTaskStart();
     const firstSignal = createTelegramBotCalls[0]?.fetchAbortSignal;
     expect(firstSignal).toBeInstanceOf(AbortSignal);
     expect((firstSignal as AbortSignal).aborted).toBe(false);
 
     emitUnhandledRejection(await makeTaggedPollingFetchError());
-    await secondCycle.waitForRunStart();
     await monitor;
 
     expect((firstSignal as AbortSignal).aborted).toBe(true);
@@ -660,11 +638,10 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("ignores unrelated process-level network errors while telegram polling is active", async () => {
     const abort = new AbortController();
-    const firstCycle = mockRunOnceWithStalledPollingRunner();
-    const { stop } = firstCycle;
+    const { stop } = mockRunOnceWithStalledPollingRunner();
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
-    await firstCycle.waitForRunStart();
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     const slackDnsError = Object.assign(
       new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
@@ -730,16 +707,14 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("force-restarts polling when getUpdates stalls (watchdog)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
-    const firstCycle = mockRunOnceWithStalledPollingRunner();
-    const { stop } = firstCycle;
-    const secondCycle = mockRunOnceAndAbort(abort);
+    const { stop } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
-    await firstCycle.waitForRunStart();
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     // Advance time past the stall threshold (90s) + watchdog interval (30s)
     vi.advanceTimersByTime(120_000);
-    await secondCycle.waitForRunStart();
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);

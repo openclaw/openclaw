@@ -1,7 +1,6 @@
 import { Command } from "commander";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
+import { formatZonedTimestamp } from "../runtime-api.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
 const getMatrixRoomKeyBackupStatusMock = vi.fn();
@@ -73,6 +72,8 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+let registerMatrixCli: typeof import("./cli.js").registerMatrixCli;
+
 function buildProgram(): Command {
   const program = new Command();
   registerMatrixCli({ program });
@@ -111,8 +112,9 @@ function mockMatrixVerificationStatus(params: {
 }
 
 describe("matrix CLI verification commands", () => {
-  beforeEach(() => {
-    resetMatrixCliStateForTests();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerMatrixCli } = await import("./cli.js"));
     vi.clearAllMocks();
     process.exitCode = undefined;
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));

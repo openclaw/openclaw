@@ -9,7 +9,6 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
@@ -138,9 +137,7 @@ export type ChannelOutboundContext = {
   text: string;
   mediaUrl?: string;
   audioAsVoice?: boolean;
-  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */
   forceDocument?: boolean;
@@ -517,48 +514,6 @@ export type ChannelApprovalDeliveryAdapter = {
   }) => boolean;
 };
 
-export type ChannelApprovalKind = "exec" | "plugin";
-
-export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
-
-export type ChannelApprovalNativeTarget = {
-  to: string;
-  threadId?: string | number | null;
-};
-
-export type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
-
-export type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
-
-export type ChannelApprovalNativeDeliveryCapabilities = {
-  enabled: boolean;
-  preferredSurface: ChannelApprovalNativeDeliveryPreference;
-  supportsOriginSurface: boolean;
-  supportsApproverDmSurface: boolean;
-  notifyOriginWhenDmOnly?: boolean;
-};
-
-export type ChannelApprovalNativeAdapter = {
-  describeDeliveryCapabilities: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeDeliveryCapabilities;
-  resolveOriginTarget?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget | null | Promise<ChannelApprovalNativeTarget | null>;
-  resolveApproverDmTargets?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget[] | Promise<ChannelApprovalNativeTarget[]>;
-};
-
 export type ChannelApprovalRenderAdapter = {
   exec?: {
     buildPendingPayload?: (params: {
@@ -591,7 +546,6 @@ export type ChannelApprovalRenderAdapter = {
 export type ChannelApprovalAdapter = {
   delivery?: ChannelApprovalDeliveryAdapter;
   render?: ChannelApprovalRenderAdapter;
-  native?: ChannelApprovalNativeAdapter;
 };
 
 export type ChannelAllowlistAdapter = {

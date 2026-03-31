@@ -5,47 +5,45 @@ import {
   createTypedHook,
 } from "../plugins/status.test-helpers.js";
 import * as noteModule from "../terminal/note.js";
-import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 
-const mocks = vi.hoisted(() => ({
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginStatusReport: vi.fn(),
-  buildPluginCompatibilityWarnings: vi.fn(),
-}));
+const resolveAgentWorkspaceDirMock = vi.fn();
+const resolveDefaultAgentIdMock = vi.fn();
+const buildWorkspaceSkillStatusMock = vi.fn();
+const buildPluginStatusReportMock = vi.fn();
+const buildPluginCompatibilityWarningsMock = vi.fn();
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
 }));
 
 vi.mock("../agents/skills-status.js", () => ({
-  buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
+  buildWorkspaceSkillStatus: (...args: unknown[]) => buildWorkspaceSkillStatusMock(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginStatusReport: (...args: unknown[]) => mocks.buildPluginStatusReport(...args),
+  buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReportMock(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
-    mocks.buildPluginCompatibilityWarnings(...args),
+    buildPluginCompatibilityWarningsMock(...args),
 }));
 
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
 ) {
-  mocks.resolveDefaultAgentId.mockReturnValue("default");
-  mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-  mocks.buildWorkspaceSkillStatus.mockReturnValue({
+  resolveDefaultAgentIdMock.mockReturnValue("default");
+  resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
+  buildWorkspaceSkillStatusMock.mockReturnValue({
     skills: [],
   });
-  mocks.buildPluginStatusReport.mockReturnValue({
+  buildPluginStatusReportMock.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
-  mocks.buildPluginCompatibilityWarnings.mockReturnValue(compatibilityWarnings);
+  buildPluginCompatibilityWarningsMock.mockReturnValue(compatibilityWarnings);
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+  const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
   noteWorkspaceStatus({});
   return noteSpy;
 }
@@ -67,7 +65,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginStatusReport).toHaveBeenCalledWith({
+      expect(buildPluginStatusReportMock).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });
@@ -140,7 +138,7 @@ describe("noteWorkspaceStatus", () => {
       "legacy-plugin still uses legacy before_agent_start",
     ]);
     try {
-      expect(mocks.buildPluginCompatibilityWarnings).toHaveBeenCalledWith({
+      expect(buildPluginCompatibilityWarningsMock).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
         report: {

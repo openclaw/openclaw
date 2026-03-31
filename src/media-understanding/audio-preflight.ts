@@ -26,7 +26,7 @@ export async function transcribeFirstAudio(params: {
 
   // Check if audio transcription is enabled in config
   const audioConfig = cfg.tools?.media?.audio;
-  if (audioConfig?.enabled === false) {
+  if (!audioConfig || audioConfig.enabled === false) {
     return undefined;
   }
 

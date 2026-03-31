@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderCapabilitiesWithPlugin: vi.fn(({ provider }: { provider?: string }) => {
@@ -29,13 +29,14 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 
-describe("resolveTranscriptPolicy", () => {
-  beforeAll(async () => {
-    ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
-  });
+async function loadFreshTranscriptPolicyModuleForTest() {
+  vi.resetModules();
+  ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
+}
 
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("resolveTranscriptPolicy", () => {
+  beforeEach(async () => {
+    await loadFreshTranscriptPolicyModuleForTest();
   });
 
   it("enables sanitizeToolCallIds for Anthropic provider", () => {

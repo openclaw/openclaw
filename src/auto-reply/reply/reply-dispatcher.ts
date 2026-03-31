@@ -1,6 +1,5 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
-import { generateSecureInt } from "../../infra/secure-random.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -38,7 +37,7 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   if (max <= min) {
     return min;
   }
-  return min + generateSecureInt(max - min + 1);
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 export type ReplyDispatcherOptions = {

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { maybeInstallDaemon } from "./configure.daemon.js";
 
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const withProgress = vi.hoisted(() =>
@@ -69,6 +68,8 @@ vi.mock("./onboard-helpers.js", () => ({
 vi.mock("./systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive,
 }));
+
+const { maybeInstallDaemon } = await import("./configure.daemon.js");
 
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {

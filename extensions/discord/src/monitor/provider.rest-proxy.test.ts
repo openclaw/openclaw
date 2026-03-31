@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
   undiciFetchMock: vi.fn(),
@@ -25,13 +25,9 @@ vi.mock("undici", () => {
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
 
 describe("resolveDiscordRestFetch", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ resolveDiscordRestFetch } = await import("./rest-fetch.js"));
-  });
-
-  beforeEach(() => {
-    undiciFetchMock.mockReset();
-    proxyAgentSpy.mockReset();
   });
 
   it("uses undici proxy fetch when a proxy URL is configured", async () => {

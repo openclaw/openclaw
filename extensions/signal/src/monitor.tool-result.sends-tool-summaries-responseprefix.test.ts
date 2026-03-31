@@ -15,6 +15,7 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
+vi.resetModules();
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const {

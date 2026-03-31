@@ -1,5 +1,5 @@
 import net from "node:net";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../terminal/ansi.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -15,13 +15,10 @@ let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ inspectPortUsage } = await import("./ports-inspect.js"));
   ({ ensurePortAvailable, handlePortError, PortInUseError } = await import("./ports.js"));
-});
-
-beforeEach(() => {
-  runCommandWithTimeoutMock.mockReset();
 });
 
 describe("ports helpers", () => {
@@ -69,6 +66,10 @@ describe("ports helpers", () => {
 });
 
 describeUnix("inspectPortUsage", () => {
+  beforeEach(() => {
+    runCommandWithTimeoutMock.mockClear();
+  });
+
   it("reports busy when lsof is missing but loopback listener exists", async () => {
     const server = net.createServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

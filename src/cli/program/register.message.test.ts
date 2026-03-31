@@ -1,83 +1,93 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
-import { registerMessageCommands } from "./register.message.js";
 
-const mocks = vi.hoisted(() => ({
-  createMessageCliHelpersMock: vi.fn(() => ({ helper: true })),
-  registerMessageSendCommandMock: vi.fn(),
-  registerMessageBroadcastCommandMock: vi.fn(),
-  registerMessagePollCommandMock: vi.fn(),
-  registerMessageReactionsCommandsMock: vi.fn(),
-  registerMessageReadEditDeleteCommandsMock: vi.fn(),
-  registerMessagePinCommandsMock: vi.fn(),
-  registerMessagePermissionsCommandMock: vi.fn(),
-  registerMessageSearchCommandMock: vi.fn(),
-  registerMessageThreadCommandsMock: vi.fn(),
-  registerMessageEmojiCommandsMock: vi.fn(),
-  registerMessageStickerCommandsMock: vi.fn(),
-  registerMessageDiscordAdminCommandsMock: vi.fn(),
-}));
-
-const createMessageCliHelpersMock = mocks.createMessageCliHelpersMock;
-const registerMessageSendCommandMock = mocks.registerMessageSendCommandMock;
-const registerMessageBroadcastCommandMock = mocks.registerMessageBroadcastCommandMock;
-const registerMessagePollCommandMock = mocks.registerMessagePollCommandMock;
-const registerMessageReactionsCommandsMock = mocks.registerMessageReactionsCommandsMock;
-const registerMessageReadEditDeleteCommandsMock = mocks.registerMessageReadEditDeleteCommandsMock;
-const registerMessagePinCommandsMock = mocks.registerMessagePinCommandsMock;
-const registerMessagePermissionsCommandMock = mocks.registerMessagePermissionsCommandMock;
-const registerMessageSearchCommandMock = mocks.registerMessageSearchCommandMock;
-const registerMessageThreadCommandsMock = mocks.registerMessageThreadCommandsMock;
-const registerMessageEmojiCommandsMock = mocks.registerMessageEmojiCommandsMock;
-const registerMessageStickerCommandsMock = mocks.registerMessageStickerCommandsMock;
-const registerMessageDiscordAdminCommandsMock = mocks.registerMessageDiscordAdminCommandsMock;
+const createMessageCliHelpersMock = vi.fn(() => ({ helper: true }));
+const registerMessageSendCommandMock = vi.fn();
+const registerMessageBroadcastCommandMock = vi.fn();
+const registerMessagePollCommandMock = vi.fn();
+const registerMessageReactionsCommandsMock = vi.fn();
+const registerMessageReadEditDeleteCommandsMock = vi.fn();
+const registerMessagePinCommandsMock = vi.fn();
+const registerMessagePermissionsCommandMock = vi.fn();
+const registerMessageSearchCommandMock = vi.fn();
+const registerMessageThreadCommandsMock = vi.fn();
+const registerMessageEmojiCommandsMock = vi.fn();
+const registerMessageStickerCommandsMock = vi.fn();
+const registerMessageDiscordAdminCommandsMock = vi.fn();
 
 vi.mock("./message/helpers.js", () => ({
-  createMessageCliHelpers: mocks.createMessageCliHelpersMock,
+  createMessageCliHelpers: createMessageCliHelpersMock,
 }));
 
 vi.mock("./message/register.send.js", () => ({
-  registerMessageSendCommand: mocks.registerMessageSendCommandMock,
+  registerMessageSendCommand: registerMessageSendCommandMock,
 }));
 
 vi.mock("./message/register.broadcast.js", () => ({
-  registerMessageBroadcastCommand: mocks.registerMessageBroadcastCommandMock,
+  registerMessageBroadcastCommand: registerMessageBroadcastCommandMock,
 }));
 
 vi.mock("./message/register.poll.js", () => ({
-  registerMessagePollCommand: mocks.registerMessagePollCommandMock,
+  registerMessagePollCommand: registerMessagePollCommandMock,
 }));
 
 vi.mock("./message/register.reactions.js", () => ({
-  registerMessageReactionsCommands: mocks.registerMessageReactionsCommandsMock,
+  registerMessageReactionsCommands: registerMessageReactionsCommandsMock,
 }));
 
 vi.mock("./message/register.read-edit-delete.js", () => ({
-  registerMessageReadEditDeleteCommands: mocks.registerMessageReadEditDeleteCommandsMock,
+  registerMessageReadEditDeleteCommands: registerMessageReadEditDeleteCommandsMock,
 }));
 
 vi.mock("./message/register.pins.js", () => ({
-  registerMessagePinCommands: mocks.registerMessagePinCommandsMock,
+  registerMessagePinCommands: registerMessagePinCommandsMock,
 }));
 
 vi.mock("./message/register.permissions-search.js", () => ({
-  registerMessagePermissionsCommand: mocks.registerMessagePermissionsCommandMock,
-  registerMessageSearchCommand: mocks.registerMessageSearchCommandMock,
+  registerMessagePermissionsCommand: registerMessagePermissionsCommandMock,
+  registerMessageSearchCommand: registerMessageSearchCommandMock,
 }));
 
 vi.mock("./message/register.thread.js", () => ({
-  registerMessageThreadCommands: mocks.registerMessageThreadCommandsMock,
+  registerMessageThreadCommands: registerMessageThreadCommandsMock,
 }));
 
 vi.mock("./message/register.emoji-sticker.js", () => ({
-  registerMessageEmojiCommands: mocks.registerMessageEmojiCommandsMock,
-  registerMessageStickerCommands: mocks.registerMessageStickerCommandsMock,
+  registerMessageEmojiCommands: registerMessageEmojiCommandsMock,
+  registerMessageStickerCommands: registerMessageStickerCommandsMock,
 }));
 
 vi.mock("./message/register.discord-admin.js", () => ({
-  registerMessageDiscordAdminCommands: mocks.registerMessageDiscordAdminCommandsMock,
+  registerMessageDiscordAdminCommands: registerMessageDiscordAdminCommandsMock,
 }));
+
+const mockedModuleIds = [
+  "./message/helpers.js",
+  "./message/register.send.js",
+  "./message/register.broadcast.js",
+  "./message/register.poll.js",
+  "./message/register.reactions.js",
+  "./message/register.read-edit-delete.js",
+  "./message/register.pins.js",
+  "./message/register.permissions-search.js",
+  "./message/register.thread.js",
+  "./message/register.emoji-sticker.js",
+  "./message/register.discord-admin.js",
+];
+
+let registerMessageCommands: typeof import("./register.message.js").registerMessageCommands;
+
+beforeAll(async () => {
+  ({ registerMessageCommands } = await import("./register.message.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
+});
 
 describe("registerMessageCommands", () => {
   const ctx: ProgramContext = {

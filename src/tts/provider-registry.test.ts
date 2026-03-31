@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
@@ -31,18 +31,16 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 }
 
 describe("speech provider registry", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    resolveRuntimePluginRegistryMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
     ({
       getSpeechProvider,
       listSpeechProviders,
       canonicalizeSpeechProviderId,
       normalizeSpeechProviderId,
     } = await import("./provider-registry.js"));
-  });
-
-  beforeEach(() => {
-    resolveRuntimePluginRegistryMock.mockReset();
-    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
   });
 
   afterEach(() => {});

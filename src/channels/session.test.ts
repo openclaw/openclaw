@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 
 const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
@@ -21,11 +21,9 @@ describe("recordInboundSession", () => {
     OriginatingTo: "demo-channel:1234",
   };
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ recordInboundSession } = await import("./session.js"));
-  });
-
-  beforeEach(() => {
     recordSessionMetaFromInboundMock.mockClear();
     updateLastRouteMock.mockClear();
   });

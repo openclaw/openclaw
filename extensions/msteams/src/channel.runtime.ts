@@ -2,7 +2,6 @@ import {
   listMSTeamsDirectoryGroupsLive as listMSTeamsDirectoryGroupsLiveImpl,
   listMSTeamsDirectoryPeersLive as listMSTeamsDirectoryPeersLiveImpl,
 } from "./directory-live.js";
-import { getMemberInfoMSTeams as getMemberInfoMSTeamsImpl } from "./graph-members.js";
 import {
   getMessageMSTeams as getMessageMSTeamsImpl,
   listPinsMSTeams as listPinsMSTeamsImpl,
@@ -24,7 +23,6 @@ import {
 export const msTeamsChannelRuntime = {
   deleteMessageMSTeams: deleteMessageMSTeamsImpl,
   editMessageMSTeams: editMessageMSTeamsImpl,
-  getMemberInfoMSTeams: getMemberInfoMSTeamsImpl,
   getMessageMSTeams: getMessageMSTeamsImpl,
   listPinsMSTeams: listPinsMSTeamsImpl,
   listReactionsMSTeams: listReactionsMSTeamsImpl,

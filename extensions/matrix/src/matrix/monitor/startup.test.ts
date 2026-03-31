@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "../../types.js";
-import type { MatrixAccountPatch } from "../config-update.js";
-import type { MatrixManagedDeviceInfo } from "../device-health.js";
 import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 import type { MatrixLegacyCryptoRestoreResult } from "./legacy-crypto-restore.js";
 import type { MatrixStartupVerificationOutcome } from "./startup-verification.js";
-import type { MatrixStartupMaintenanceDeps } from "./startup.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
 function createVerificationStatus(
@@ -71,32 +67,47 @@ function createLegacyCryptoRestoreResult(
   } as MatrixLegacyCryptoRestoreResult;
 }
 
-function createDeps(
-  overrides: Partial<MatrixStartupMaintenanceDeps> = {},
-): MatrixStartupMaintenanceDeps {
-  return {
-    maybeRestoreLegacyMatrixBackup: vi.fn(async () => createLegacyCryptoRestoreResult()),
-    summarizeMatrixDeviceHealth: vi.fn(() => ({
-      currentDeviceId: null,
-      staleOpenClawDevices: [] as MatrixManagedDeviceInfo[],
-      currentOpenClawDevices: [] as MatrixManagedDeviceInfo[],
-    })),
-    syncMatrixOwnProfile: vi.fn(async () => createProfileSyncResult()),
-    ensureMatrixStartupVerification: vi.fn(async () =>
-      createStartupVerificationOutcome("verified"),
-    ),
-    updateMatrixAccountConfig: vi.fn(
-      (cfg: CoreConfig, _accountId: string, _patch: MatrixAccountPatch) => cfg,
-    ),
-    ...overrides,
-  };
-}
+const hoisted = vi.hoisted(() => ({
+  maybeRestoreLegacyMatrixBackup: vi.fn(async () => createLegacyCryptoRestoreResult()),
+  summarizeMatrixDeviceHealth: vi.fn(() => ({
+    staleOpenClawDevices: [] as Array<{ deviceId: string }>,
+  })),
+  syncMatrixOwnProfile: vi.fn(async () => createProfileSyncResult()),
+  ensureMatrixStartupVerification: vi.fn(async () => createStartupVerificationOutcome("verified")),
+  updateMatrixAccountConfig: vi.fn((cfg: unknown) => cfg),
+}));
+
+vi.mock("../config-update.js", () => ({
+  updateMatrixAccountConfig: hoisted.updateMatrixAccountConfig,
+}));
+
+vi.mock("../device-health.js", () => ({
+  summarizeMatrixDeviceHealth: hoisted.summarizeMatrixDeviceHealth,
+}));
+
+vi.mock("../profile.js", () => ({
+  syncMatrixOwnProfile: hoisted.syncMatrixOwnProfile,
+}));
+
+vi.mock("./legacy-crypto-restore.js", () => ({
+  maybeRestoreLegacyMatrixBackup: hoisted.maybeRestoreLegacyMatrixBackup,
+}));
+
+vi.mock("./startup-verification.js", () => ({
+  ensureMatrixStartupVerification: hoisted.ensureMatrixStartupVerification,
+}));
 
 describe("runMatrixStartupMaintenance", () => {
-  let deps: MatrixStartupMaintenanceDeps;
-
   beforeEach(() => {
-    deps = createDeps();
+    hoisted.maybeRestoreLegacyMatrixBackup
+      .mockClear()
+      .mockResolvedValue(createLegacyCryptoRestoreResult());
+    hoisted.summarizeMatrixDeviceHealth.mockClear().mockReturnValue({ staleOpenClawDevices: [] });
+    hoisted.syncMatrixOwnProfile.mockClear().mockResolvedValue(createProfileSyncResult());
+    hoisted.ensureMatrixStartupVerification
+      .mockClear()
+      .mockResolvedValue(createStartupVerificationOutcome("verified"));
+    hoisted.updateMatrixAccountConfig.mockClear().mockImplementation((cfg: unknown) => cfg);
   });
 
   function createParams(): Parameters<typeof runMatrixStartupMaintenance>[0] {
@@ -140,7 +151,7 @@ describe("runMatrixStartupMaintenance", () => {
   it("persists converted avatar URLs after profile sync", async () => {
     const params = createParams();
     const updatedCfg = { channels: { matrix: { avatarUrl: "mxc://avatar" } } };
-    vi.mocked(deps.syncMatrixOwnProfile).mockResolvedValue(
+    hoisted.syncMatrixOwnProfile.mockResolvedValue(
       createProfileSyncResult({
         avatarUpdated: true,
         resolvedAvatarUrl: "mxc://avatar",
@@ -148,18 +159,18 @@ describe("runMatrixStartupMaintenance", () => {
         convertedAvatarFromHttp: true,
       }),
     );
-    vi.mocked(deps.updateMatrixAccountConfig).mockReturnValue(updatedCfg);
+    hoisted.updateMatrixAccountConfig.mockReturnValue(updatedCfg);
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
-    expect(deps.syncMatrixOwnProfile).toHaveBeenCalledWith(
+    expect(hoisted.syncMatrixOwnProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "@bot:example.org",
         displayName: "Ops Bot",
         avatarUrl: "https://example.org/avatar.png",
       }),
     );
-    expect(deps.updateMatrixAccountConfig).toHaveBeenCalledWith(
+    expect(hoisted.updateMatrixAccountConfig).toHaveBeenCalledWith(
       { channels: { matrix: {} } },
       "ops",
       { avatarUrl: "mxc://avatar" },
@@ -173,17 +184,13 @@ describe("runMatrixStartupMaintenance", () => {
   it("reports stale devices, pending verification, and restored legacy backups", async () => {
     const params = createParams();
     params.auth.encryption = true;
-    vi.mocked(deps.summarizeMatrixDeviceHealth).mockReturnValue({
-      currentDeviceId: null,
-      staleOpenClawDevices: [
-        { deviceId: "DEV123", displayName: "OpenClaw Device", current: false },
-      ],
-      currentOpenClawDevices: [],
+    hoisted.summarizeMatrixDeviceHealth.mockReturnValue({
+      staleOpenClawDevices: [{ deviceId: "DEV123" }],
     });
-    vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValue(
+    hoisted.ensureMatrixStartupVerification.mockResolvedValue(
       createStartupVerificationOutcome("pending"),
     );
-    vi.mocked(deps.maybeRestoreLegacyMatrixBackup).mockResolvedValue(
+    hoisted.maybeRestoreLegacyMatrixBackup.mockResolvedValue(
       createLegacyCryptoRestoreResult({
         kind: "restored",
         imported: 2,
@@ -192,7 +199,7 @@ describe("runMatrixStartupMaintenance", () => {
       }),
     );
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(params.logger.warn).toHaveBeenCalledWith(
       "matrix: stale OpenClaw devices detected for @bot:example.org: DEV123. Run 'openclaw matrix devices prune-stale --account ops' to keep encrypted-room trust healthy.",
@@ -214,21 +221,21 @@ describe("runMatrixStartupMaintenance", () => {
   it("logs cooldown and request-failure verification outcomes without throwing", async () => {
     const params = createParams();
     params.auth.encryption = true;
-    vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValueOnce(
+    hoisted.ensureMatrixStartupVerification.mockResolvedValueOnce(
       createStartupVerificationOutcome("cooldown", { retryAfterMs: 321 }),
     );
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(params.logVerboseMessage).toHaveBeenCalledWith(
       "matrix: skipped startup verification request due to cooldown (retryAfterMs=321)",
     );
 
-    vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValueOnce(
+    hoisted.ensureMatrixStartupVerification.mockResolvedValueOnce(
       createStartupVerificationOutcome("request-failed", { error: "boom" }),
     );
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(params.logger.debug).toHaveBeenCalledWith(
       "Matrix startup verification request failed (non-fatal)",

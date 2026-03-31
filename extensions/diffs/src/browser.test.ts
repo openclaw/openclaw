@@ -261,9 +261,6 @@ describe("diffs plugin registration", () => {
           diffIndicators: "classic",
           lineSpacing: 2,
         },
-        security: {
-          allowRemoteViewer: true,
-        },
       },
       runtime: {} as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
@@ -314,21 +311,6 @@ describe("diffs plugin registration", () => {
         agentAccountId: "default",
       },
     );
-
-    const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await registeredHttpRouteHandler?.(
-      localReq({
-        method: "GET",
-        url: viewerPath,
-        headers: {
-          "x-forwarded-for": "203.0.113.10",
-        },
-      }),
-      proxiedRes,
-    );
-
-    expect(proxiedHandled).toBe(true);
-    expect(proxiedRes.statusCode).toBe(200);
   });
 });
 

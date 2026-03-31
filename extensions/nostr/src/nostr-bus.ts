@@ -64,7 +64,7 @@ export interface NostrBusOptions {
     reply: (text: string) => Promise<void>,
     meta: { eventId: string; createdAt: number },
   ) => Promise<void>;
-  /** Called after signature verification and before decrypt to allow sender policy checks (optional) */
+  /** Called before expensive crypto to allow sender policy checks (optional) */
   authorizeSender?: (params: {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
@@ -553,44 +553,33 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
-      const rejectIfGlobalRateLimited = (): boolean => {
-        updateRateLimiterSizeMetric();
-        if (globalRateLimiter.isRateLimited("global")) {
-          metrics.emit("rate_limit.global");
-          metrics.emit("event.rejected.rate_limited");
-          updateRateLimiterSizeMetric();
-          return true;
-        }
-        updateRateLimiterSizeMetric();
-        return false;
-      };
-
-      const rejectIfVerifiedSenderRateLimited = (): boolean => {
-        updateRateLimiterSizeMetric();
-        if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
-          metrics.emit("rate_limit.per_sender");
-          metrics.emit("event.rejected.rate_limited");
-          updateRateLimiterSizeMetric();
-          return true;
-        }
-        updateRateLimiterSizeMetric();
-        return false;
-      };
-
-      const markSeen = () => {
-        seen.add(event.id);
-        metrics.emit("memory.seen_tracker_size", seen.size());
-      };
-
-      if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
-        if (rejectIfGlobalRateLimited()) {
+      if (authorizeSender) {
+        const decision = await authorizeSender({
+          senderPubkey: event.pubkey,
+          reply: replyTo,
+        });
+        if (decision !== "allow") {
           return;
         }
-        metrics.emit("event.rejected.oversized_ciphertext");
-        return;
       }
 
-      if (rejectIfGlobalRateLimited()) {
+      updateRateLimiterSizeMetric();
+      if (globalRateLimiter.isRateLimited("global")) {
+        metrics.emit("rate_limit.global");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+        metrics.emit("rate_limit.per_sender");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      updateRateLimiterSizeMetric();
+
+      if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
+        metrics.emit("event.rejected.oversized_ciphertext");
         return;
       }
 
@@ -601,23 +590,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      if (rejectIfVerifiedSenderRateLimited()) {
-        return;
-      }
-
-      if (authorizeSender) {
-        const decision = await authorizeSender({
-          senderPubkey: event.pubkey,
-          reply: replyTo,
-        });
-        if (decision !== "allow") {
-          markSeen();
-          return;
-        }
-      }
-
       // Mark seen AFTER verify (don't cache invalid IDs)
-      markSeen();
+      seen.add(event.id);
+      metrics.emit("memory.seen_tracker_size", seen.size());
 
       // Decrypt the message
       let plaintext: string;

@@ -29,8 +29,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
-import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -130,7 +129,7 @@ type ChannelHandlerParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
-  mediaAccess?: OutboundMediaAccess;
+  mediaLocalRoots?: readonly string[];
   gatewayClientScopes?: readonly string[];
 };
 
@@ -251,9 +250,7 @@ function createChannelOutboundContextBase(
     forceDocument: params.forceDocument,
     deps: params.deps,
     silent: params.silent,
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaAccess?.localRoots,
-    mediaReadFile: params.mediaAccess?.readFile,
+    mediaLocalRoots: params.mediaLocalRoots,
     gatewayClientScopes: params.gatewayClientScopes,
   };
 }
@@ -564,7 +561,7 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
     cfg,
     agentId: params.session?.agentId ?? params.mirror?.agentId,
     mediaSources: collectPayloadMediaSources(payloads),
@@ -582,7 +579,7 @@ async function deliverOutboundPayloadsCore(
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mediaAccess,
+    mediaLocalRoots,
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const configuredTextLimit = handler.chunker

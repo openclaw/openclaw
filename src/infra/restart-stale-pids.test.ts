@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // This entire file tests lsof-based Unix port polling. The feature is a deliberate
 // no-op on Windows (findGatewayPidsOnPortSync returns [] immediately). Running these
@@ -86,12 +86,13 @@ function installInitialBusyPoll(
 }
 
 describe.skipIf(isWindows)("restart-stale-pids", () => {
-  beforeAll(async () => {
-    ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
-      await import("./restart-stale-pids.js"));
+  beforeEach(() => {
+    vi.resetModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+      await import("./restart-stale-pids.js"));
     mockSpawnSync.mockReset();
     mockResolveGatewayPort.mockReset();
     mockRestartWarn.mockReset();

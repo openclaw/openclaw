@@ -22,7 +22,6 @@ beforeEach(async () => {
   vi.resetModules();
   ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
     await import("./env.js"));
-  loggerMocks.info.mockClear();
 });
 
 describe("normalizeZaiEnv", () => {

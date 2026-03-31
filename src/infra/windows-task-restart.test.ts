@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -53,14 +53,9 @@ afterEach(() => {
 });
 
 describe("relaunchGatewayScheduledTask", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ relaunchGatewayScheduledTask } = await import("./windows-task-restart.js"));
-  });
-
-  beforeEach(() => {
-    spawnMock.mockReset();
-    resolvePreferredOpenClawTmpDirMock.mockReset();
-    resolvePreferredOpenClawTmpDirMock.mockReturnValue(os.tmpdir());
   });
 
   it("writes a detached schtasks relaunch helper", () => {

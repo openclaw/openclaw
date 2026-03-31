@@ -323,8 +323,7 @@ export function createSubagentRunManager(params: {
       createRunningTaskRun({
         runtime: "subagent",
         sourceId: registerParams.runId,
-        ownerKey: registerParams.requesterSessionKey,
-        scopeKind: "session",
+        requesterSessionKey: registerParams.requesterSessionKey,
         requesterOrigin,
         childSessionKey: registerParams.childSessionKey,
         runId: registerParams.runId,
