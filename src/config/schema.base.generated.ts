@@ -8472,6 +8472,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           store: {
             type: "string",
           },
+          storeType: {
+            anyOf: [
+              {
+                type: "string",
+                const: "json",
+              },
+              {
+                type: "string",
+                const: "sqlite",
+              },
+            ],
+          },
           typingIntervalSeconds: {
             type: "integer",
             exclusiveMinimum: 0,
@@ -14114,6 +14126,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "session.store": {
       label: "Session Store Path",
       help: "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
+      tags: ["storage"],
+    },
+    "session.storeType": {
+      label: "Session Store Type",
+      help: "Selects the session storage backend: json (default) or sqlite. SQLite offers better performance for large session stores and requires Node.js 22.5+ with the built-in node:sqlite module.",
       tags: ["storage"],
     },
     "session.typingIntervalSeconds": {

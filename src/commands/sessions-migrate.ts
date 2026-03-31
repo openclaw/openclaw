@@ -14,9 +14,9 @@ import {
   sqliteStoreExists,
 } from "../config/sessions/store-sqlite.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { info, warning } from "../globals.js";
+import { info, warn } from "../globals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 
@@ -48,12 +48,12 @@ export async function sessionsMigrateCommand(
   // Check SQLite availability first
   if (!isSqliteAvailable()) {
     if (opts.json) {
-      runtime.writeJson({
+      writeRuntimeJson(runtime, {
         success: false,
         error: "SQLite is not available in this Node runtime (requires Node 22.5+)",
       });
     } else {
-      warning("SQLite is not available in this Node runtime.");
+      warn("SQLite is not available in this Node runtime.");
       info("SQLite support requires Node.js 22.5 or later with the built-in node:sqlite module.");
     }
     runtime.exit(1);
@@ -68,8 +68,11 @@ export async function sessionsMigrateCommand(
       allAgents: opts.allAgents ?? false,
     },
     runtime,
-    allowMulti: true,
   });
+
+  if (!targets) {
+    return;
+  }
 
   const results: MigrationResult[] = [];
 
@@ -130,7 +133,7 @@ export async function sessionsMigrateCommand(
 
   // Output results
   if (opts.json) {
-    runtime.writeJson({
+    writeRuntimeJson(runtime, {
       success: results.every((r) => r.status !== "failed"),
       results,
     });
@@ -199,7 +202,7 @@ export async function sessionsMigrateCommand(
     );
   }
   if (failed.length > 0) {
-    warning(`${failed.length} agent(s) failed to migrate.`);
+    warn(`${failed.length} agent(s) failed to migrate.`);
     runtime.exit(1);
     return;
   }
@@ -233,7 +236,7 @@ export async function sessionsStoreInfoCommand(
   const stats = getSessionStoreStats(jsonPath);
 
   if (opts.json) {
-    runtime.writeJson(stats);
+    writeRuntimeJson(runtime, stats);
     return;
   }
 

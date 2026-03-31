@@ -41,15 +41,15 @@ describe("store-sqlite", () => {
 
   describe("resolveSqlitePathFromJsonPath", () => {
     it("converts .json path to .sqlite", () => {
-      expect(resolveSqlitePathFromJsonPath("/path/to/sessions.json")).toBe(
-        "/path/to/sessions.sqlite"
-      );
+      const input = path.join(path.sep, "path", "to", "sessions.json");
+      const expected = path.join(path.sep, "path", "to", "sessions.sqlite");
+      expect(resolveSqlitePathFromJsonPath(input)).toBe(expected);
     });
 
     it("handles paths without .json extension", () => {
-      expect(resolveSqlitePathFromJsonPath("/path/to/store")).toBe(
-        "/path/to/store.sqlite"
-      );
+      const input = path.join(path.sep, "path", "to", "store");
+      const expected = path.join(path.sep, "path", "to", "store.sqlite");
+      expect(resolveSqlitePathFromJsonPath(input)).toBe(expected);
     });
   });
 
