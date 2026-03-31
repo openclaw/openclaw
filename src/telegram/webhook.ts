@@ -268,27 +268,35 @@ export async function startTelegramWebhook(opts: {
   runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
 
   let shutDown = false;
+  let shutdownDone: Promise<void> | undefined;
   const shutdown = () => {
     if (shutDown) {
       return;
     }
     shutDown = true;
-    void withTelegramApiErrorLogging({
-      operation: "deleteWebhook",
-      runtime,
-      fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
-    }).catch(() => {
-      // withTelegramApiErrorLogging has already emitted the failure.
-    });
-    server.close();
-    void bot.stop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
-    }
+    shutdownDone = (async () => {
+      // Best-effort webhook de-registration (don't block on it).
+      void withTelegramApiErrorLogging({
+        operation: "deleteWebhook",
+        runtime,
+        fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+      }).catch(() => {
+        // withTelegramApiErrorLogging has already emitted the failure.
+      });
+      // Wait for the HTTP server to fully release its port before returning,
+      // so a subsequent startChannel can bind the same port without EADDRINUSE.
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await Promise.resolve(bot.stop()).catch(() => {});
+      if (diagnosticsEnabled) {
+        stopDiagnosticHeartbeat();
+      }
+    })();
   };
   if (opts.abortSignal) {
     opts.abortSignal.addEventListener("abort", shutdown, { once: true });
   }
 
-  return { server, bot, stop: shutdown };
+  return { server, bot, stop: shutdown, shutdownComplete: () => shutdownDone ?? Promise.resolve() };
 }
