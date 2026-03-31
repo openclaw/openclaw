@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
   resolveMemorySearchConfig,
@@ -52,7 +54,15 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
+const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
+const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
+  factor: 1.2,
+  minTimeout: 250,
+  maxTimeout: 10_000,
+  randomize: true,
+} as const;
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -68,12 +78,20 @@ type McporterState = {
   daemonStart: Promise<void> | null;
 };
 
-let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+type QmdEmbedQueueState = {
+  tail: Promise<void>;
+};
 
 function getMcporterState(): McporterState {
   return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
     coldStartWarned: false,
     daemonStart: null,
+  }));
+}
+
+function getQmdEmbedQueueState(): QmdEmbedQueueState {
+  return resolveGlobalSingleton<QmdEmbedQueueState>(QMD_EMBED_QUEUE_KEY, () => ({
+    tail: Promise.resolve(),
   }));
 }
 
@@ -87,24 +105,31 @@ function normalizeHanBm25Query(query: string): string {
   return trimmed;
 }
 
+function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
+  if (params.windowMs <= 0) {
+    return 0;
+  }
+  const hash = crypto.createHash("sha256").update(params.seed).digest();
+  const bucket = hash.readUInt32BE(0);
+  return bucket % (Math.floor(params.windowMs) + 1);
+}
+
+function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
+  const expectedEmbedMs = Math.max(1, embedTimeoutMs);
+  const waitBudgetMs = Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 6);
+  return {
+    retries: {
+      retries: Math.max(60, Math.ceil(waitBudgetMs / QMD_EMBED_LOCK_RETRY_TEMPLATE.maxTimeout)),
+      ...QMD_EMBED_LOCK_RETRY_TEMPLATE,
+    },
+    stale: Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 2),
+  };
+}
+
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
-}
-
-async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-  const previous = qmdEmbedQueueTail;
-  let release: (() => void) | undefined;
-  qmdEmbedQueueTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    release?.();
-  }
 }
 
 type CollectionRoot = {
@@ -337,11 +362,33 @@ export class QmdMemoryManager implements MemorySearchManager {
       }, this.qmd.update.intervalMs);
     }
     if (this.shouldScheduleEmbedTimer()) {
-      this.embedTimer = setInterval(() => {
-        void this.runUpdate("embed-interval").catch((err) => {
-          log.warn(`qmd embed interval update failed (${String(err)})`);
-        });
-      }, this.qmd.update.embedIntervalMs);
+      const startPeriodicEmbedTimer = () => {
+        this.embedTimer = setInterval(() => {
+          void this.runUpdate("embed-interval").catch((err) => {
+            log.warn(`qmd embed interval update failed (${String(err)})`);
+          });
+        }, this.qmd.update.embedIntervalMs);
+      };
+      const initialDelayMs = this.resolveEmbedStartupJitterMs();
+      if (initialDelayMs > 0) {
+        this.embedTimer = setTimeout(() => {
+          this.embedTimer = null;
+          if (this.closed) {
+            return;
+          }
+          void this.runUpdate("embed-interval")
+            .catch((err) => {
+              log.warn(`qmd embed interval update failed (${String(err)})`);
+            })
+            .finally(() => {
+              if (!this.closed) {
+                startPeriodicEmbedTimer();
+              }
+            });
+        }, initialDelayMs);
+      } else {
+        startPeriodicEmbedTimer();
+      }
     }
   }
 
@@ -1085,7 +1132,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.updateTimer = null;
     }
     if (this.embedTimer) {
-      clearInterval(this.embedTimer);
+      clearTimeout(this.embedTimer);
       this.embedTimer = null;
     }
     if (this.watchTimer) {
@@ -1136,7 +1183,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.dirty = false;
       if (this.shouldRunEmbed(force)) {
         try {
-          await runWithQmdEmbedLock(async () => {
+          await this.withQmdEmbedLock(async () => {
             await this.runQmd(["embed"], {
               timeoutMs: this.qmd.update.embedTimeoutMs,
               discardOutput: true,
@@ -1301,6 +1348,49 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const updateIntervalMs = this.qmd.update.intervalMs;
     return updateIntervalMs <= 0 || updateIntervalMs > embedIntervalMs;
+  }
+
+  private resolveEmbedStartupJitterMs(): number {
+    const windowMs = this.qmd.update.embedIntervalMs;
+    if (windowMs <= 0) {
+      return 0;
+    }
+    const customCollections = this.qmd.collections
+      .filter((collection) => collection.kind === "custom")
+      .map((collection) => `${collection.path}\u0000${collection.pattern}`)
+      .toSorted()
+      .join("\u0001");
+    if (!customCollections) {
+      return 0;
+    }
+    return resolveStableJitterMs({
+      seed: `${this.agentId}:${customCollections}`,
+      windowMs,
+    });
+  }
+
+  private async withQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
+    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
+    const queue = getQmdEmbedQueueState();
+    const previous = queue.tail;
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    queue.tail = previous.then(
+      () => current,
+      () => current,
+    );
+    await previous.catch(() => undefined);
+    try {
+      return await withFileLock(
+        lockPath,
+        resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
+        task,
+      );
+    } finally {
+      releaseCurrent();
+    }
   }
 
   private noteEmbedFailure(reason: string, err: unknown): void {
