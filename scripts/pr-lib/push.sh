@@ -288,9 +288,10 @@ push_prep_head_to_pr_branch() {
     exit 1
   }
   git branch -D "pr-$pr-verify" 2>/dev/null || true
-  cat > "$result_env_path" <<EOF_ENV
-PUSH_PREP_HEAD_SHA=$prep_head_sha
-PUSHED_FROM_SHA=$pushed_from_sha
-PR_HEAD_SHA_AFTER_PUSH=$pr_head_sha_after
-EOF_ENV
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    PUSH_PREP_HEAD_SHA "$prep_head_sha" \
+    PUSHED_FROM_SHA "$pushed_from_sha" \
+    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
+    > "$result_env_path"
 }
