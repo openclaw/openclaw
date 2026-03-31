@@ -108,7 +108,7 @@ export const utopiaPlugin: ChannelPlugin<ResolvedUtopiaAccount> = {
       getUtopiaRuntime().channel.text.chunkMarkdownText(text, limit),
     sendText: async ({ cfg, to, text, accountId }) => {
       const core = getUtopiaRuntime();
-      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
+      const aid = accountId ?? resolveDefaultUtopiaAccountId(cfg);
       const bus = activeBuses.get(aid);
       if (!bus) {
         throw new Error(`Utopia bus not running for account ${aid}`);
