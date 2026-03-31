@@ -1,0 +1,112 @@
+{
+  "id": "cc-relay",
+  "name": "Claude Code Relay",
+  "description": "Dispatches agent tasks to a local Claude Code CLI process, relays progress and results back to the originating channel. Enables an 'OpenClaw shell + Claude Code brain' architecture where the main agent acts as a secretary that forwards all requests to Claude Code for execution.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["relay", "hybrid", "tool-only"],
+        "default": "hybrid"
+      },
+      "claudeBin": {
+        "type": "string",
+        "minLength": 1
+      },
+      "workdir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "runAsUser": {
+        "type": "string",
+        "minLength": 1
+      },
+      "permissionMode": {
+        "type": "string",
+        "enum": ["default", "plan", "bypassPermissions"]
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 60,
+        "maximum": 14400
+      },
+      "progressIntervalSeconds": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 600
+      },
+      "maxResultChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 50000
+      },
+      "maxAttachments": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 20
+      },
+      "maxAttachmentBytes": {
+        "type": "number",
+        "minimum": 0
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "How the agent uses Claude Code CLI. 'relay': agent forwards ALL requests to CC (secretary pattern). 'hybrid': agent decides when to use CC vs answer directly. 'tool-only': just registers the tool, no prompt modification. Default: hybrid."
+    },
+    "claudeBin": {
+      "label": "Claude CLI Path",
+      "help": "Path to the Claude Code CLI binary. Defaults to 'claude' on PATH."
+    },
+    "workdir": {
+      "label": "Working Directory",
+      "help": "Working directory for Claude Code sessions. Defaults to the agent workspace."
+    },
+    "runAsUser": {
+      "label": "Run As User",
+      "help": "Optional OS user to run Claude Code as (via runuser). Leave empty to use the current user.",
+      "advanced": true
+    },
+    "permissionMode": {
+      "label": "Permission Mode",
+      "help": "Claude Code permission mode for tool execution."
+    },
+    "model": {
+      "label": "Model",
+      "help": "Anthropic model to use for Claude Code sessions (e.g. claude-opus-4-6)."
+    },
+    "timeoutSeconds": {
+      "label": "Timeout (seconds)",
+      "help": "Maximum execution time per task. Default: 7200 (2 hours).",
+      "advanced": true
+    },
+    "progressIntervalSeconds": {
+      "label": "Progress Interval (seconds)",
+      "help": "How often to send progress updates to the channel. Set to 0 to disable. Default: 60.",
+      "advanced": true
+    },
+    "maxResultChars": {
+      "label": "Max Result Characters",
+      "help": "Maximum characters in the result message sent to the channel. Default: 4000.",
+      "advanced": true
+    },
+    "maxAttachments": {
+      "label": "Max Attachments",
+      "help": "Maximum number of new/modified files to send as attachments. Default: 10.",
+      "advanced": true
+    },
+    "maxAttachmentBytes": {
+      "label": "Max Attachment Size",
+      "help": "Maximum file size in bytes for attachments. Default: 10MB.",
+      "advanced": true
+    }
+  }
+}

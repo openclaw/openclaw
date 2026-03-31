@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "defaults": {
+    "security": "allowlist",
+    "ask": "off",
+    "askFallback": "deny"
+  },
+  "agents": {
+    "*": {
+      "security": "allowlist",
+      "ask": "off",
+      "askFallback": "deny",
+      "allowlist": [
+        { "pattern": "/usr/bin/bash" },
+        { "pattern": "/bin/bash" },
+        { "pattern": "/bin/sh" },
+        { "pattern": "/usr/bin/sh" },
+        { "pattern": "bash" },
+        { "pattern": "sh" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/cc-relay",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "Bridge OpenClaw agents to Claude Code CLI for task execution with real-time progress reporting",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
