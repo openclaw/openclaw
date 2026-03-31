@@ -1937,6 +1937,24 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("reasoning");
   });
 
+  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5-mini",
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      } as unknown as Model<"azure-openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
+  });
+
   it("injects configured OpenAI service_tier into Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
