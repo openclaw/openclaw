@@ -66,17 +66,50 @@ export async function captureScreenshot(opts: {
   return await withCdpSocket(opts.wsUrl, async (send) => {
     await send("Page.enable");
 
-    let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
+    // For full-page captures, temporarily expand the viewport to the content
+    // size so the entire page is within the viewport bounds.  We save the
+    // current viewport state and restore it after capture so pre-existing
+    // device emulation (mobile width, DPR, touch) is not lost.
+    let savedVp: { w: number; h: number; dpr: number; sw: number; sh: number } | undefined;
     if (opts.fullPage) {
       const metrics = (await send("Page.getLayoutMetrics")) as {
         cssContentSize?: { width?: number; height?: number };
         contentSize?: { width?: number; height?: number };
       };
       const size = metrics?.cssContentSize ?? metrics?.contentSize;
-      const width = Number(size?.width ?? 0);
-      const height = Number(size?.height ?? 0);
-      if (width > 0 && height > 0) {
-        clip = { x: 0, y: 0, width, height, scale: 1 };
+      const contentWidth = Number(size?.width ?? 0);
+      const contentHeight = Number(size?.height ?? 0);
+      if (contentWidth > 0 && contentHeight > 0) {
+        const vpResult = (await send("Runtime.evaluate", {
+          expression:
+            "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, sw: screen.width, sh: screen.height })",
+          returnByValue: true,
+        })) as {
+          result?: {
+            value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
+          };
+        };
+        const v = vpResult?.result?.value;
+        const currentW = Number(v?.w ?? 0);
+        const currentH = Number(v?.h ?? 0);
+        savedVp = {
+          w: currentW,
+          h: currentH,
+          dpr: Number(v?.dpr ?? 1),
+          sw: Number(v?.sw ?? currentW),
+          sh: Number(v?.sh ?? currentH),
+        };
+        // mobile: false is the safe default — CDP provides no way to query
+        // the active mobile flag, and inferring from navigator.maxTouchPoints
+        // would false-positive on touch-enabled desktops.
+        await send("Emulation.setDeviceMetricsOverride", {
+          width: Math.ceil(Math.max(currentW, contentWidth)),
+          height: Math.ceil(Math.max(currentH, contentHeight)),
+          deviceScaleFactor: savedVp.dpr,
+          mobile: false,
+          screenWidth: savedVp.sw,
+          screenHeight: savedVp.sh,
+        });
       }
     }
 
@@ -84,19 +117,55 @@ export async function captureScreenshot(opts: {
     const quality =
       format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
-    const result = (await send("Page.captureScreenshot", {
-      format,
-      ...(quality !== undefined ? { quality } : {}),
-      fromSurface: true,
-      captureBeyondViewport: true,
-      ...(clip ? { clip } : {}),
-    })) as { data?: string };
+    try {
+      // fromSurface: false avoids a Chromium compositor bug where cross-origin
+      // image textures are lost when fromSurface: true + captureBeyondViewport: true
+      // extends the capture surface (see https://issues.chromium.org/40760789).
+      const result = (await send("Page.captureScreenshot", {
+        format,
+        ...(quality !== undefined ? { quality } : {}),
+        fromSurface: false,
+        captureBeyondViewport: true,
+      })) as { data?: string };
 
-    const base64 = result?.data;
-    if (!base64) {
-      throw new Error("Screenshot failed: missing data");
+      const base64 = result?.data;
+      if (!base64) {
+        throw new Error("Screenshot failed: missing data");
+      }
+      return Buffer.from(base64, "base64");
+    } finally {
+      if (savedVp) {
+        // Clear the temporary viewport expansion first.  If the tab had
+        // prior device emulation the clear will change the viewport back to
+        // the browser's natural dimensions — detect that and re-apply the
+        // saved emulation so the tab's original state is preserved.
+        await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
+        try {
+          const postResult = (await send("Runtime.evaluate", {
+            expression:
+              "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
+            returnByValue: true,
+          })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
+          const p = postResult?.result?.value;
+          if (
+            Number(p?.w) !== savedVp.w ||
+            Number(p?.h) !== savedVp.h ||
+            Number(p?.dpr) !== savedVp.dpr
+          ) {
+            await send("Emulation.setDeviceMetricsOverride", {
+              width: savedVp.w,
+              height: savedVp.h,
+              deviceScaleFactor: savedVp.dpr,
+              mobile: false,
+              screenWidth: savedVp.sw,
+              screenHeight: savedVp.sh,
+            });
+          }
+        } catch {
+          // Best-effort restoration; ignore failures in the cleanup path.
+        }
+      }
     }
-    return Buffer.from(base64, "base64");
   });
 }
 
