@@ -433,7 +433,7 @@
       "durationMs": 20
     },
     "extensions/telegram/src/bot-message-context.implicit-mention.test.ts": {
-      "durationMs": 20
+      "durationMs": 13300
     },
     "extensions/telegram/src/action-runtime.test.ts": {
       "durationMs": 19

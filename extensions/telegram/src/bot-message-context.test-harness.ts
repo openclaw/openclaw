@@ -45,6 +45,7 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
+    loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
