@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const normalizeChannelIdMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -9,26 +9,31 @@ type TargetNormalizationModule = typeof import("./target-normalization.js");
 let buildTargetResolverSignature: TargetNormalizationModule["buildTargetResolverSignature"];
 let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
+let resetTargetNormalizerCacheForTests: TargetNormalizationModule["__testing"]["resetTargetNormalizerCacheForTests"];
 
-async function loadTargetNormalizationModule() {
-  vi.doMock("../../channels/plugins/index.js", () => ({
-    normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
-    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  }));
-  vi.doMock("../../plugins/runtime.js", () => ({
-    getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-      getActivePluginChannelRegistryVersionMock(...args),
-  }));
+vi.mock("../../channels/plugins/index.js", () => ({
+  normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
+  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+}));
+
+vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
+    getActivePluginChannelRegistryVersionMock(...args),
+}));
+
+beforeAll(async () => {
   ({ buildTargetResolverSignature, normalizeChannelTargetInput, normalizeTargetForProvider } =
     await import("./target-normalization.js"));
-}
+  ({
+    __testing: { resetTargetNormalizerCacheForTests },
+  } = await import("./target-normalization.js"));
+});
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   normalizeChannelIdMock.mockReset();
   getChannelPluginMock.mockReset();
   getActivePluginChannelRegistryVersionMock.mockReset();
-  await loadTargetNormalizationModule();
+  resetTargetNormalizerCacheForTests();
 });
 
 describe("normalizeChannelTargetInput", () => {

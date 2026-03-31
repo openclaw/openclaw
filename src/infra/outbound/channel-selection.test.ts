@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -21,8 +21,7 @@ let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessage
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
 let runtimeModule: RuntimeModule;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   runtimeModule = await import("../../runtime.js");
   ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));

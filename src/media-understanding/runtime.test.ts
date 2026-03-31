@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   withBundledPluginAllowlistCompat,
@@ -13,11 +13,22 @@ import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 
+const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
+  resolveRuntimePluginRegistryMock: vi.fn<
+    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
+  >(() => undefined),
+}));
+
+vi.mock("../plugins/loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/loader.js")>();
+  return {
+    ...actual,
+    resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+  };
+});
+
 let describeImageFile: typeof import("./runtime.js").describeImageFile;
 let runMediaUnderstandingFile: typeof import("./runtime.js").runMediaUnderstandingFile;
-let resolveRuntimePluginRegistryMock: ReturnType<
-  typeof vi.fn<(params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined>
->;
 
 function setCompatibleActiveMediaUnderstandingRegistry(
   pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
@@ -53,21 +64,13 @@ function setCompatibleActiveMediaUnderstandingRegistry(
 }
 
 describe("media-understanding runtime helpers", () => {
+  beforeAll(async () => {
+    ({ describeImageFile, runMediaUnderstandingFile } = await import("./runtime.js"));
+  });
+
   afterEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
-    vi.doUnmock("../plugins/loader.js");
-  });
-
-  beforeEach(async () => {
-    vi.resetModules();
-    resolveRuntimePluginRegistryMock = vi.fn<
-      (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
-    >(() => undefined);
-    vi.doMock("../plugins/loader.js", () => ({
-      resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
-    }));
-    ({ describeImageFile, runMediaUnderstandingFile } = await import("./runtime.js"));
   });
 
   it("describes images through the active media-understanding registry", async () => {

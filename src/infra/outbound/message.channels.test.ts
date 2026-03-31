@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -22,9 +22,11 @@ vi.mock("../../gateway/call.js", () => ({
 let sendMessage: typeof import("./message.js").sendMessage;
 let sendPoll: typeof import("./message.js").sendPoll;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ sendMessage, sendPoll } = await import("./message.js"));
+});
+
+beforeEach(() => {
   callGatewayMock.mockClear();
   setRegistry(emptyRegistry);
 });

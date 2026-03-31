@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+
+let hasBundledWebSearchCredential: typeof import("./bundled-web-search-registry.js").hasBundledWebSearchCredential;
+let listBundledWebSearchProviders: typeof import("./bundled-web-search.js").listBundledWebSearchProviders;
+let resolveBundledWebSearchPluginIds: typeof import("./bundled-web-search.js").resolveBundledWebSearchPluginIds;
 
 function resolveManifestBundledWebSearchPluginIds() {
   return loadPluginManifestRegistry({})
@@ -14,12 +18,17 @@ function resolveManifestBundledWebSearchPluginIds() {
 }
 
 async function resolveRegistryBundledWebSearchPluginIds() {
-  const { listBundledWebSearchProviders } = await import("./bundled-web-search.js");
   return listBundledWebSearchProviders()
     .map(({ pluginId }) => pluginId)
     .filter((value, index, values) => values.indexOf(value) === index)
     .toSorted((left, right) => left.localeCompare(right));
 }
+
+beforeAll(async () => {
+  ({ listBundledWebSearchProviders, resolveBundledWebSearchPluginIds } =
+    await import("./bundled-web-search.js"));
+  ({ hasBundledWebSearchCredential } = await import("./bundled-web-search-registry.js"));
+});
 
 function expectBundledWebSearchIds(actual: readonly string[], expected: readonly string[]) {
   expect(actual).toEqual(expected);
@@ -33,12 +42,7 @@ function expectBundledWebSearchAlignment(params: {
 }
 
 describe("bundled web search metadata", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
   it("keeps bundled web search compat ids aligned with bundled manifests", async () => {
-    const { resolveBundledWebSearchPluginIds } = await import("./bundled-web-search.js");
     expectBundledWebSearchAlignment({
       actual: resolveBundledWebSearchPluginIds({}),
       expected: resolveManifestBundledWebSearchPluginIds(),
@@ -54,10 +58,6 @@ describe("bundled web search metadata", () => {
 });
 
 describe("hasBundledWebSearchCredential", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
   const baseCfg = {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     browser: { enabled: false },
@@ -103,7 +103,6 @@ describe("hasBundledWebSearchCredential", () => {
       env: { OPENROUTER_API_KEY: "sk-or-v1-test" },
     },
   ] as const)("$name", async ({ config, env }) => {
-    const { hasBundledWebSearchCredential } = await import("./bundled-web-search-registry.js");
     expect(hasBundledWebSearchCredential({ config, env })).toBe(true);
   });
 });

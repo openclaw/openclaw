@@ -29,6 +29,11 @@ afterEach(() => {
 
 const emptyRegistry = createTestRegistry([]);
 
+async function flushPendingDelivery(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function isDiscordExecApprovalClientEnabledForTest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -368,9 +373,8 @@ describe("exec approval forwarder", () => {
 
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-    await vi.waitFor(() => {
-      expect(deliver).toHaveBeenCalled();
-    });
+    await flushPendingDelivery();
+    expect(deliver).toHaveBeenCalled();
     expect(beforeDeliverPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         hint: { kind: "approval-pending", approvalKind: "exec" },

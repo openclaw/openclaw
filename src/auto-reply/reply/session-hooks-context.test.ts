@@ -65,7 +65,7 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
@@ -89,8 +89,8 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });

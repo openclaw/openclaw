@@ -25,7 +25,6 @@ let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindow
 let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     createIcaclsResetCommand,
     formatIcaclsResetCommand,

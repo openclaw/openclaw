@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const ensureOpenClawModelsJsonMock = vi.fn<
@@ -39,14 +39,21 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   ) => resolveModelMock(provider, modelId, agentDir, cfg, options),
 }));
 
+let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
+
 describe("gateway startup primary model warmup", () => {
+  beforeAll(async () => {
+    ({
+      __testing: { prewarmConfiguredPrimaryModel },
+    } = await import("./server-startup.js"));
+  });
+
   beforeEach(() => {
     ensureOpenClawModelsJsonMock.mockClear();
     resolveModelMock.mockClear();
   });
 
   it("prewarms an explicit configured primary model", async () => {
-    const { __testing } = await import("./server-startup.js");
     const cfg = {
       agents: {
         defaults: {
@@ -57,7 +64,7 @@ describe("gateway startup primary model warmup", () => {
       },
     } as OpenClawConfig;
 
-    await __testing.prewarmConfiguredPrimaryModel({
+    await prewarmConfiguredPrimaryModel({
       cfg,
       log: { warn: vi.fn() },
     });
@@ -69,9 +76,7 @@ describe("gateway startup primary model warmup", () => {
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {
-    const { __testing } = await import("./server-startup.js");
-
-    await __testing.prewarmConfiguredPrimaryModel({
+    await prewarmConfiguredPrimaryModel({
       cfg: {} as OpenClawConfig,
       log: { warn: vi.fn() },
     });
