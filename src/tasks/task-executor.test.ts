@@ -224,6 +224,7 @@ describe("task-executor", () => {
         task: "Patch file",
         startedAt: 10,
         deliveryStatus: "pending",
+        notifyPolicy: "silent",
       });
 
       completeTaskRunByRunId({
