@@ -1171,6 +1171,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
             }
           : {}),
+        // Registration modes are intentionally layered:
+        // - full: expose the complete plugin registration surface
+        // - provider-only: keep snapshot/discovery loads limited to provider registration
+        // - setup-only/setup-runtime/cli-metadata: allow lightweight setup/metadata paths
         ...(registrationMode === "full" || registrationMode === "provider-only"
           ? {
               registerProvider: (provider) => registerProvider(record, provider),
