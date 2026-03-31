@@ -1575,7 +1575,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-// Load session entry before attachment parsing so we can gate media-URI
+    // Load session entry before attachment parsing so we can gate media-URI
     // marker injection on the model's image capability. This prevents opaque
     // media:// markers from leaking into prompts for text-only model runs.
     const rawSessionKey = p.sessionKey;
@@ -1589,11 +1589,22 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (normalizedAttachments.length > 0) {
       const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      const supportsImages = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        provider: modelRef.provider,
-        model: modelRef.model,
-      });
+
+      // Check if imageModel is configured - if so, preserve images for the switch logic.
+      // This allows automatic model switching when the current model doesn't support images
+      // but a valid imageModel is configured.
+      const imageModelConfig = cfg.agents?.defaults?.imageModel;
+      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+
+      // If imageModel is configured, preserve images for the switch logic.
+      // Otherwise, check if the current model supports images.
+      const supportsImages = imageModelPrimary
+        ? true
+        : await resolveGatewayModelSupportsImages({
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+            provider: modelRef.provider,
+            model: modelRef.model,
+          });
 
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
@@ -1980,11 +1991,22 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (normalizedAttachments.length > 0) {
       const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      const supportsImages = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        provider: modelRef.provider,
-        model: modelRef.model,
-      });
+
+      // Check if imageModel is configured - if so, preserve images for the switch logic.
+      // This allows automatic model switching when the current model doesn't support images
+      // but a valid imageModel is configured.
+      const imageModelConfig = cfg.agents?.defaults?.imageModel;
+      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+
+      // If imageModel is configured, preserve images for the switch logic.
+      // Otherwise, check if the current model supports images.
+      const supportsImages = imageModelPrimary
+        ? true
+        : await resolveGatewayModelSupportsImages({
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+            provider: modelRef.provider,
+            model: modelRef.model,
+          });
 
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
