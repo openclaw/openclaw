@@ -206,4 +206,11 @@ describe("Dockerfile", () => {
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
   });
+
+  it("exposes the openclaw CLI on PATH inside the runtime image", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    expect(dockerfile).toContain("ln -sf /app/openclaw.mjs /usr/local/bin/openclaw");
+    expect(dockerfile).toContain("chmod 755 /app/openclaw.mjs");
+  });
 });
