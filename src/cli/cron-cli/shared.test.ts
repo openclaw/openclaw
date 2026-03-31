@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { getCronChannelOptions, printCronList } from "./shared.js";
+
+const hoisted = vi.hoisted(() => ({
+  listChannelPluginsMock: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  listChannelPlugins: hoisted.listChannelPluginsMock,
+}));
 
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
@@ -31,6 +39,11 @@ function createBaseJob(overrides: Partial<CronJob>): CronJob {
 }
 
 describe("printCronList", () => {
+  beforeEach(() => {
+    hoisted.listChannelPluginsMock.mockReset();
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
+  });
+
   it("handles job with undefined sessionTarget (#9649)", () => {
     const { logs, runtime } = createRuntimeLogCapture();
 
@@ -170,6 +183,12 @@ describe("printCronList", () => {
 
 describe("getCronChannelOptions", () => {
   it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
     expect(getCronChannelOptions()).toBe("last|<channel-id>");
+  });
+
+  it("lists discovered channel plugin ids when plugins are available", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
+    expect(getCronChannelOptions()).toBe("last|telegram|signal");
   });
 });

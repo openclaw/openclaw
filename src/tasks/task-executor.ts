@@ -1,22 +1,32 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createFlowForTask, deleteFlowRecordById, getFlowById } from "./flow-registry.js";
+import {
+  createFlowForTask,
+  createFlowRecord,
+  deleteFlowRecordById,
+  getFlowById,
+  updateFlowRecordById,
+} from "./flow-registry.js";
+import type { FlowRecord } from "./flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord,
   findLatestTaskForFlowId,
   linkTaskToFlowById,
+  listTasksForFlowId,
   markTaskLostById,
   markTaskRunningByRunId,
   markTaskTerminalByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./task-registry.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
   TaskRecord,
+  TaskRegistrySummary,
   TaskRuntime,
   TaskStatus,
   TaskTerminalOutcome,
@@ -93,6 +103,32 @@ export function createQueuedTaskRun(params: {
     task,
     requesterOrigin: params.requesterOrigin,
   });
+}
+
+export function createLinearFlow(params: {
+  ownerSessionKey: string;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  goal: string;
+  notifyPolicy?: TaskNotifyPolicy;
+  currentStep?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}): FlowRecord {
+  return createFlowRecord({
+    shape: "linear",
+    ownerSessionKey: params.ownerSessionKey,
+    requesterOrigin: params.requesterOrigin,
+    goal: params.goal,
+    notifyPolicy: params.notifyPolicy,
+    currentStep: params.currentStep,
+    status: "queued",
+    createdAt: params.createdAt,
+    updatedAt: params.updatedAt,
+  });
+}
+
+export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
+  return summarizeTaskRecords(listTasksForFlowId(flowId));
 }
 
 type RetryBlockedFlowResult = {
@@ -228,6 +264,79 @@ export function retryBlockedFlowAsRunningTaskRun(
     ...params,
     status: "running",
   });
+}
+
+type CancelFlowResult = {
+  found: boolean;
+  cancelled: boolean;
+  reason?: string;
+  flow?: FlowRecord;
+  tasks?: TaskRecord[];
+};
+
+function isActiveTaskStatus(status: TaskStatus): boolean {
+  return status === "queued" || status === "running";
+}
+
+function isTerminalFlowStatus(status: FlowRecord["status"]): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
+}
+
+export async function cancelFlowById(params: {
+  cfg: OpenClawConfig;
+  flowId: string;
+}): Promise<CancelFlowResult> {
+  const flow = getFlowById(params.flowId);
+  if (!flow) {
+    return {
+      found: false,
+      cancelled: false,
+      reason: "Flow not found.",
+    };
+  }
+  const linkedTasks = listTasksForFlowId(flow.flowId);
+  const activeTasks = linkedTasks.filter((task) => isActiveTaskStatus(task.status));
+  for (const task of activeTasks) {
+    await cancelTaskById({
+      cfg: params.cfg,
+      taskId: task.taskId,
+    });
+  }
+  const refreshedTasks = listTasksForFlowId(flow.flowId);
+  const remainingActive = refreshedTasks.filter((task) => isActiveTaskStatus(task.status));
+  if (remainingActive.length > 0) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: "One or more child tasks are still active.",
+      flow: getFlowById(flow.flowId),
+      tasks: refreshedTasks,
+    };
+  }
+  if (isTerminalFlowStatus(flow.status)) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: `Flow is already ${flow.status}.`,
+      flow,
+      tasks: refreshedTasks,
+    };
+  }
+  const updatedFlow = updateFlowRecordById(flow.flowId, {
+    status: "cancelled",
+    blockedTaskId: null,
+    blockedSummary: null,
+    endedAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  return {
+    found: true,
+    cancelled: true,
+    flow: updatedFlow ?? getFlowById(flow.flowId),
+    tasks: refreshedTasks,
+  };
 }
 
 export function createRunningTaskRun(params: {
