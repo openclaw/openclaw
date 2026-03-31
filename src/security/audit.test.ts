@@ -1838,6 +1838,22 @@ description: test skill
           "tools.exec.applyPatch.workspaceOnly=false",
         ],
       },
+      {
+        name: "acpx approve-all is treated as a dangerous break-glass flag",
+        cfg: {
+          plugins: {
+            entries: {
+              acpx: {
+                enabled: true,
+                config: {
+                  permissionMode: "approve-all",
+                },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        expectedDangerousDetails: ["plugins.entries.acpx.config.permissionMode=approve-all"],
+      },
     ] as const;
 
     await runConfigAuditCases(cases, (res, testCase) => {

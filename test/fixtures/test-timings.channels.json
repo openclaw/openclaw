@@ -9,6 +9,9 @@
     "extensions/telegram/src/bot-message-dispatch.test.ts": {
       "durationMs": 12600
     },
+    "extensions/discord/src/monitor/acp-bind-here.integration.test.ts": {
+      "durationMs": 15200
+    },
     "extensions/discord/src/monitor/exec-approvals.test.ts": {
       "durationMs": 11300
     },
@@ -70,7 +73,7 @@
       "durationMs": 2900
     },
     "extensions/slack/src/monitor/slash.test.ts": {
-      "durationMs": 2800
+      "durationMs": 12500
     },
     "extensions/whatsapp/src/send.test.ts": {
       "durationMs": 2700
@@ -397,7 +400,7 @@
       "durationMs": 42
     },
     "extensions/discord/src/monitor/monitor.test.ts": {
-      "durationMs": 40
+      "durationMs": 19800
     },
     "extensions/discord/src/monitor/provider.lifecycle.test.ts": {
       "durationMs": 39
@@ -430,7 +433,7 @@
       "durationMs": 20
     },
     "extensions/telegram/src/bot-message-context.implicit-mention.test.ts": {
-      "durationMs": 20
+      "durationMs": 13300
     },
     "extensions/telegram/src/action-runtime.test.ts": {
       "durationMs": 19
