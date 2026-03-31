@@ -19,20 +19,20 @@ export const listEnabledSignalAccounts: FacadeModule["listEnabledSignalAccounts"
   loadFacadeModule()["listEnabledSignalAccounts"](
     ...args,
   )) as FacadeModule["listEnabledSignalAccounts"];
-export const listSignalAccountIds: FacadeModule["listSignalAccountIds"] = ((...args) =>
-  loadFacadeModule()["listSignalAccountIds"](...args)) as FacadeModule["listSignalAccountIds"];
+export const listSignalAccountIds: FacadeModule["listSignalAccountIds"] =
+  createLazyFacadeObjectValue(
+    () => loadFacadeModule()["listSignalAccountIds"] as object,
+  ) as FacadeModule["listSignalAccountIds"];
 export const monitorSignalProvider: FacadeModule["monitorSignalProvider"] = ((...args) =>
   loadFacadeModule()["monitorSignalProvider"](...args)) as FacadeModule["monitorSignalProvider"];
 export const probeSignal: FacadeModule["probeSignal"] = ((...args) =>
   loadFacadeModule()["probeSignal"](...args)) as FacadeModule["probeSignal"];
 export const removeReactionSignal: FacadeModule["removeReactionSignal"] = ((...args) =>
   loadFacadeModule()["removeReactionSignal"](...args)) as FacadeModule["removeReactionSignal"];
-export const resolveDefaultSignalAccountId: FacadeModule["resolveDefaultSignalAccountId"] = ((
-  ...args
-) =>
-  loadFacadeModule()["resolveDefaultSignalAccountId"](
-    ...args,
-  )) as FacadeModule["resolveDefaultSignalAccountId"];
+export const resolveDefaultSignalAccountId: FacadeModule["resolveDefaultSignalAccountId"] =
+  createLazyFacadeObjectValue(
+    () => loadFacadeModule()["resolveDefaultSignalAccountId"] as object,
+  ) as FacadeModule["resolveDefaultSignalAccountId"];
 export const resolveSignalReactionLevel: FacadeModule["resolveSignalReactionLevel"] = ((...args) =>
   loadFacadeModule()["resolveSignalReactionLevel"](
     ...args,

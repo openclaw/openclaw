@@ -9102,7 +9102,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -9654,7 +9655,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -11459,7 +11461,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -14004,7 +14007,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -18897,7 +18901,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -19572,7 +19577,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20208,7 +20214,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20945,7 +20952,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22291,6 +22299,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.dm.threadReplies",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "inbound",
+        "always"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -22592,7 +22615,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22662,6 +22686,16 @@
       "kind": "channel",
       "type": "string",
       "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -23533,7 +23567,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -24085,7 +24120,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -24610,7 +24646,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -25581,7 +25618,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -26205,7 +26243,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -26544,7 +26583,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -27202,7 +27242,193 @@
       "hasChildren": false
     },
     {
+      "path": "channels.qqbot.stt",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.stt.apiKey",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "media",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.baseUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.model",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.qqbot.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.tts.apiKey",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "media",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.authStyle",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "bearer",
+        "api-key"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.baseUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.model",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.queryParams",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.tts.queryParams.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.speed",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.voice",
       "kind": "channel",
       "type": "string",
       "required": false,
@@ -27926,7 +28152,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -28680,7 +28907,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -29671,6 +29899,104 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.accounts.*.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.accounts.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -29773,7 +30099,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -31074,6 +31401,135 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approvals",
+      "help": "Slack-native exec approval routing and approver authorization. Enable this only when Slack should act as an explicit exec-approval client for the selected workspace account.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Agent Filter",
+      "help": "Optional allowlist of agent IDs eligible for Slack exec approvals, for example `[\"main\", \"ops-agent\"]`. Use this to keep approval prompts scoped to the agents you actually operate from Slack.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Approvers",
+      "help": "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to owner IDs inferred from channels.slack.allowFrom, channels.slack.dm.allowFrom, and defaultTo when possible.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approvals Enabled",
+      "help": "Enable Slack exec approvals for this account. When false or unset, Slack messages/buttons cannot approve exec requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network",
+        "storage"
+      ],
+      "label": "Slack Exec Approval Session Filter",
+      "help": "Optional session-key filters matched as substring or regex-style patterns before Slack approval routing is used. Use narrow patterns so Slack approvals only appear for intended sessions.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Target",
+      "help": "Controls where Slack approval prompts are sent: \"dm\" sends to approver DMs (default), \"channel\" sends to the originating Slack chat/thread, and \"both\" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted channels.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -31177,7 +31633,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -33298,7 +33755,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -35371,7 +35829,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -36612,6 +37071,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "block",
         "bullets",
         "code",
         "off"
@@ -37279,7 +37739,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37976,7 +38437,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -38237,7 +38699,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -38525,7 +38988,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -38931,7 +39395,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -39234,7 +39699,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
