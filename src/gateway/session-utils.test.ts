@@ -736,7 +736,7 @@ describe("resolveSessionModelIdentityRef", () => {
           models: [{ id: "qwen-max" }],
         },
       },
-    };
+    } as unknown as OpenClawConfig["models"];
 
     const resolved = resolveSessionModelIdentityRef(cfg, {
       sessionId: "custom-provider-runtime-model",
@@ -775,7 +775,7 @@ describe("resolveSessionModelIdentityRef", () => {
           models: [{ id: "qwen-max" }],
         },
       },
-    };
+    } as unknown as OpenClawConfig["models"];
 
     const resolved = resolveSessionModelIdentityRef(cfg, {
       sessionId: "ambiguous-custom-provider-runtime-model",

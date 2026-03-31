@@ -11,8 +11,16 @@ const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrup
 const listTasksForSessionKeyMock = vi.hoisted(() =>
   vi.fn((_: string) => [] as Array<Record<string, unknown>>),
 );
-const resolveEnvApiKeyMock = vi.hoisted(() => vi.fn(() => null));
-const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() => vi.fn(() => null));
+const resolveEnvApiKeyMock = vi.hoisted(
+  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
+);
+const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
+  () =>
+    vi.fn(
+      (_params?: { provider?: string }) =>
+        null as { apiKey: string; source: string } | null,
+    ),
+);
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -540,8 +548,8 @@ describe("session_status tool", () => {
         agentToAgent: { enabled: false },
       },
     };
-    resolveUsableCustomProviderApiKeyMock.mockImplementation(({ provider }: { provider: string }) =>
-      provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
+    resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
+      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
     );
 
     const tool = getSessionStatusTool();

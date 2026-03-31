@@ -284,7 +284,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -304,7 +304,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -323,7 +323,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -342,7 +342,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -361,7 +361,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -383,7 +383,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
