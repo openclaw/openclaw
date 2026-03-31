@@ -3,7 +3,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
@@ -38,6 +37,10 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
 let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
 let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
 let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
+let findTaskByRunId: typeof import("../../tasks/task-registry.js").findTaskByRunId;
+let resetTaskRegistryForTests: typeof import("../../tasks/task-registry.js").resetTaskRegistryForTests;
+let resetFlowRegistryForTests: typeof import("../../tasks/flow-registry.js").resetFlowRegistryForTests;
+let installInMemoryTaskAndFlowRegistryRuntime: typeof import("../../test-utils/task-flow-registry-runtime.js").installInMemoryTaskAndFlowRegistryRuntime;
 
 const baseCfg = {
   acp: {
@@ -51,13 +54,22 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetFlowRegistryForTests({ persist: false });
+    installInMemoryTaskAndFlowRegistryRuntime();
     try {
       await run(root);
     } finally {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetFlowRegistryForTests({ persist: false });
     }
   });
+}
+
+async function flushMicrotasks(rounds = 3): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function createRuntime(): {
@@ -172,6 +184,10 @@ describe("AcpSessionManager", () => {
       __testing: { resetAcpSessionManagerForTests },
     } = await import("./manager.js"));
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
+    ({ findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js"));
+    ({ resetFlowRegistryForTests } = await import("../../tasks/flow-registry.js"));
+    ({ installInMemoryTaskAndFlowRegistryRuntime } =
+      await import("../../test-utils/task-flow-registry-runtime.js"));
   });
 
   beforeEach(() => {
@@ -189,7 +205,8 @@ describe("AcpSessionManager", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetFlowRegistryForTests({ persist: false });
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {
@@ -311,6 +328,8 @@ describe("AcpSessionManager", () => {
         mode: "prompt",
         requestId: "direct-parented-run",
       });
+
+      await flushMicrotasks();
 
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({
         runtime: "acp",
