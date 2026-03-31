@@ -26,7 +26,6 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         openAiCompatTurnValidation: false,
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
-        transcriptToolCallIdMode: "strict9",
         transcriptToolCallIdModelHints: [
           "mistral",
           "mixtral",

@@ -72,9 +72,8 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   openrouter: {
     // OpenRouter routes to various backends (Mistral, Claude, etc.)
     // which may have different tool call ID requirements.
-    // Enable strict9 sanitization to ensure compatibility with
-    // restrictive backends like Mistral (requires 9-char alphanumeric IDs).
-    transcriptToolCallIdMode: "strict9",
+    // Enable strict9 sanitization only for Mistral-named models to ensure
+    // compatibility with restrictive backends (requires 9-char alphanumeric IDs).
     transcriptToolCallIdModelHints: [
       "mistral",
       "mixtral",
