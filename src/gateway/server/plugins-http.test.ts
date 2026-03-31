@@ -125,7 +125,7 @@ describe("createGatewayPluginRequestHandler", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("caps unauthenticated plugin routes to read-only runtime scopes", async () => {
+  it("keeps unauthenticated plugin routes off operator runtime scopes", async () => {
     const { handled, observedScopes, res } = await invokeRouteAndCollectRuntimeScopes({
       path: "/hook",
       auth: "plugin",
@@ -134,7 +134,7 @@ describe("createGatewayPluginRequestHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(observedScopes).toEqual(["operator.read"]);
+    expect(observedScopes).toEqual([]);
   });
 
   it("keeps gateway-authenticated plugin routes on write runtime scopes", async () => {

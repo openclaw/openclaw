@@ -121,7 +121,7 @@ describe("plugin HTTP route runtime scopes", () => {
       auth: "plugin" as const,
       gatewayAuthSatisfied: false,
       path: "/hook",
-      expectedScopes: ["operator.read"],
+      expectedScopes: [],
     },
     {
       auth: "gateway" as const,

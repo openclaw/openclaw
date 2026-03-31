@@ -3,7 +3,7 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { READ_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
+import { WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
@@ -30,7 +30,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 function createPluginRouteRuntimeClient(
   requiresGatewayAuth: boolean,
 ): GatewayRequestOptions["client"] {
-  const scopes = [requiresGatewayAuth ? WRITE_SCOPE : READ_SCOPE];
+  const scopes = requiresGatewayAuth ? [WRITE_SCOPE] : [];
   return {
     connect: {
       minProtocol: PROTOCOL_VERSION,
