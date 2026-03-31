@@ -1,16 +1,21 @@
+import type { Page } from "playwright-core";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
   BrowserPageError,
 } from "./pw-session.js";
-import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import { ensurePageState } from "./pw-session.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 
 export async function getPageErrorsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   clear?: boolean;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ errors: BrowserPageError[] }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const state = ensurePageState(page);
   const errors = [...state.errors];
   if (opts.clear) {
@@ -24,8 +29,10 @@ export async function getNetworkRequestsViaPlaywright(opts: {
   targetId?: string;
   filter?: string;
   clear?: boolean;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const state = ensurePageState(page);
   const raw = [...state.requests];
   const filter = typeof opts.filter === "string" ? opts.filter.trim() : "";
@@ -57,8 +64,10 @@ export async function getConsoleMessagesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   level?: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<BrowserConsoleMessage[]> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const state = ensurePageState(page);
   if (!opts.level) {
     return [...state.console];

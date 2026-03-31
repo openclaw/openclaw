@@ -1,6 +1,9 @@
+import type { Page } from "playwright-core";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_TRACE_DIR } from "./paths.js";
-import { ensureContextState, getPageForTargetId } from "./pw-session.js";
+import { ensureContextState } from "./pw-session.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 
 export async function traceStartViaPlaywright(opts: {
   cdpUrl: string;
@@ -8,8 +11,10 @@ export async function traceStartViaPlaywright(opts: {
   screenshots?: boolean;
   snapshots?: boolean;
   sources?: boolean;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const context = page.context();
   const ctxState = ensureContextState(context);
   if (ctxState.traceActive) {
@@ -27,8 +32,10 @@ export async function traceStopViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   path: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const context = page.context();
   const ctxState = ensureContextState(context);
   if (!ctxState.traceActive) {

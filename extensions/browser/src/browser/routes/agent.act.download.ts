@@ -47,7 +47,7 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!pw) {
           return;
         }
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -71,7 +71,9 @@ export function registerBrowserAgentActDownloadRoutes(
         const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
         const result = await pw.waitForDownloadViaPlaywright({
           ...requestBase,
+          page,
           path: downloadPath,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },
@@ -108,7 +110,7 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!pw) {
           return;
         }
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -128,8 +130,10 @@ export function registerBrowserAgentActDownloadRoutes(
         const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
         const result = await pw.downloadViaPlaywright({
           ...requestBase,
+          page,
           ref,
           path: downloadPath,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },

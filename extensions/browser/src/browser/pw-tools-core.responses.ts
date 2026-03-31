@@ -1,5 +1,8 @@
+import type { Page } from "playwright-core";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { ensurePageState } from "./pw-session.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
 
@@ -9,6 +12,8 @@ export async function responseBodyViaPlaywright(opts: {
   url: string;
   timeoutMs?: number;
   maxChars?: number;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   url: string;
   status?: number;
@@ -26,7 +31,7 @@ export async function responseBodyViaPlaywright(opts: {
       : 200_000;
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
 
   const promise = new Promise<unknown>((resolve, reject) => {

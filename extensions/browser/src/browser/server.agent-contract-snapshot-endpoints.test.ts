@@ -39,11 +39,13 @@ describe("browser control server", () => {
     };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
-    expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-    });
+    expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      }),
+    );
 
     const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
       r.json(),
@@ -51,10 +53,12 @@ describe("browser control server", () => {
     expect(snapAiZero.ok).toBe(true);
     expect(snapAiZero.format).toBe("ai");
     const [lastCall] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
-    expect(lastCall).toEqual({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-    });
+    expect(lastCall).toEqual(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+      }),
+    );
   });
 
   it("agent contract: navigation + common act commands", async () => {

@@ -77,7 +77,7 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -87,6 +87,8 @@ export function registerBrowserAgentStorageRoutes(
         const result = await pw.cookiesGetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, ...result });
       },
@@ -111,7 +113,7 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies set",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -121,6 +123,8 @@ export function registerBrowserAgentStorageRoutes(
         await pw.cookiesSetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           cookie: {
             name: toStringOrEmpty(cookie.name),
             value: toStringOrEmpty(cookie.value),
@@ -154,7 +158,7 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies clear",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -164,6 +168,8 @@ export function registerBrowserAgentStorageRoutes(
         await pw.cookiesClearViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId });
       },
@@ -185,7 +191,7 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "storage get",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -197,6 +203,8 @@ export function registerBrowserAgentStorageRoutes(
           targetId: tab.targetId,
           kind,
           key: key.trim() || undefined,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, ...result });
       },
@@ -221,7 +229,7 @@ export function registerBrowserAgentStorageRoutes(
       targetId: mutation.parsed.targetId,
       feature: "storage set",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -234,6 +242,8 @@ export function registerBrowserAgentStorageRoutes(
           kind: mutation.parsed.kind,
           key,
           value,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId });
       },
@@ -253,7 +263,7 @@ export function registerBrowserAgentStorageRoutes(
       targetId: mutation.parsed.targetId,
       feature: "storage clear",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -264,6 +274,8 @@ export function registerBrowserAgentStorageRoutes(
           cdpUrl,
           targetId: tab.targetId,
           kind: mutation.parsed.kind,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId });
       },

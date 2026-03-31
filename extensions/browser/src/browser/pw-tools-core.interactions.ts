@@ -1,3 +1,5 @@
+import type { Page } from "playwright-core";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
@@ -8,6 +10,7 @@ import {
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 import {
   normalizeTimeoutMs,
   requireRef,
@@ -19,6 +22,8 @@ import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-
 type TargetOpts = {
   cdpUrl: string;
   targetId?: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 const MAX_CLICK_DELAY_MS = 5_000;
@@ -37,7 +42,7 @@ function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: 
 }
 
 async function getRestoredPageForTarget(opts: TargetOpts) {
-  const page = await getPageForTargetId(opts);
+  const page = opts.page ?? (await getAllowedPageForTarget(opts));
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   return page;
@@ -293,6 +298,8 @@ export async function evaluateViaPlaywright(opts: {
   ref?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<unknown> {
   const fnText = String(opts.fn ?? "").trim();
   if (!fnText) {
@@ -499,8 +506,10 @@ export async function takeScreenshotViaPlaywright(opts: {
   element?: string;
   fullPage?: boolean;
   type?: "png" | "jpeg";
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ buffer: Buffer }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const type = opts.type ?? "png";
@@ -533,8 +542,10 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const type = opts.type ?? "png";
@@ -713,6 +724,8 @@ async function executeSingleAction(
   targetId?: string,
   evaluateEnabled?: boolean,
   depth = 0,
+  page?: Page,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
   if (depth > MAX_BATCH_DEPTH) {
     throw new Error(`Batch nesting depth exceeds maximum of ${MAX_BATCH_DEPTH}`);
@@ -833,6 +846,8 @@ async function executeSingleAction(
       await evaluateViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        page,
+        ssrfPolicy,
         fn: action.fn,
         ref: action.ref,
         timeoutMs: action.timeoutMs,
@@ -852,6 +867,8 @@ async function executeSingleAction(
         stopOnError: action.stopOnError,
         evaluateEnabled,
         depth: depth + 1,
+        page,
+        ssrfPolicy,
       });
       break;
     default:
@@ -866,6 +883,8 @@ export async function batchViaPlaywright(opts: {
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
   depth?: number;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
   const depth = opts.depth ?? 0;
   if (depth > MAX_BATCH_DEPTH) {
@@ -877,7 +896,15 @@ export async function batchViaPlaywright(opts: {
   const results: Array<{ ok: boolean; error?: string }> = [];
   for (const action of opts.actions) {
     try {
-      await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
+      await executeSingleAction(
+        action,
+        opts.cdpUrl,
+        opts.targetId,
+        opts.evaluateEnabled,
+        depth,
+        opts.page,
+        opts.ssrfPolicy,
+      );
       results.push({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

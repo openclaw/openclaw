@@ -284,7 +284,7 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       feature: "pdf",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -294,6 +294,8 @@ export function registerBrowserAgentSnapshotRoutes(
         const pdf = await pw.pdfViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         await saveBrowserMediaResponse({
           res,
@@ -363,7 +365,7 @@ export function registerBrowserAgentSnapshotRoutes(
           if (!pw) {
             return;
           }
-          await assertPlaywrightTabTargetAllowed({
+          const page = await assertPlaywrightTabTargetAllowed({
             ctx,
             pw,
             cdpUrl,
@@ -373,10 +375,12 @@ export function registerBrowserAgentSnapshotRoutes(
           const snap = await pw.takeScreenshotViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
+            page,
             ref,
             element,
             fullPage,
             type,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
           buffer = snap.buffer;
         } else {
@@ -507,7 +511,7 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl: profileCtx.profile.cdpUrl,
@@ -517,6 +521,7 @@ export function registerBrowserAgentSnapshotRoutes(
         const roleSnapshotArgs = {
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
+          page,
           selector: plan.selectorValue,
           frameSelector: plan.frameSelectorValue,
           refsMode: plan.refsMode,
@@ -525,6 +530,7 @@ export function registerBrowserAgentSnapshotRoutes(
             compact: plan.compact ?? undefined,
             maxDepth: plan.depth ?? undefined,
           },
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         };
 
         const snap = plan.wantsRoleSnapshot
@@ -533,6 +539,8 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
+                page,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 ...(typeof plan.resolvedMaxChars === "number"
                   ? { maxChars: plan.resolvedMaxChars }
                   : {}),
@@ -548,8 +556,10 @@ export function registerBrowserAgentSnapshotRoutes(
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
+            page,
             refs: "refs" in snap ? snap.refs : {},
             type: "png",
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
           const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
             maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -597,7 +607,7 @@ export function registerBrowserAgentSnapshotRoutes(
               if (!pw) {
                 return null;
               }
-              await assertPlaywrightTabTargetAllowed({
+              const page = await assertPlaywrightTabTargetAllowed({
                 ctx,
                 pw,
                 cdpUrl: profileCtx.profile.cdpUrl,
@@ -608,6 +618,8 @@ export function registerBrowserAgentSnapshotRoutes(
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 limit: plan.limit,
+                page,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               });
             });
           })()

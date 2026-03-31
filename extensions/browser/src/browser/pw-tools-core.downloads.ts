@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
@@ -11,6 +12,7 @@ import {
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 import {
   bumpDialogArmId,
   bumpDownloadArmId,
@@ -223,12 +225,14 @@ export async function waitForDownloadViaPlaywright(opts: {
   targetId?: string;
   path?: string;
   timeoutMs?: number;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   url: string;
   suggestedFilename: string;
   path: string;
 }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const state = ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
@@ -245,12 +249,14 @@ export async function downloadViaPlaywright(opts: {
   ref: string;
   path: string;
   timeoutMs?: number;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   url: string;
   suggestedFilename: string;
   path: string;
 }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   const state = ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);

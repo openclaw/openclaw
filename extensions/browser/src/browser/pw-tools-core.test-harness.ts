@@ -41,7 +41,14 @@ export function getPwToolsCoreSessionMocks() {
 }
 
 export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
-  currentPage = page;
+  if (!page) {
+    currentPage = null;
+    return;
+  }
+  currentPage = {
+    url: () => "https://example.com",
+    ...page,
+  };
 }
 
 export function setPwToolsCoreCurrentRefLocator(locator: Record<string, unknown> | null) {

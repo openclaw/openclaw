@@ -1,3 +1,4 @@
+import type { Page } from "playwright-core";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
@@ -23,6 +24,7 @@ import {
   type WithSnapshotForAI,
 } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 
 function isBrowserNavigationPolicyError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
@@ -32,12 +34,11 @@ export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   limit?: number;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   const res = (await withPageScopedCdpClient({
     cdpUrl: opts.cdpUrl,
@@ -61,11 +62,10 @@ export async function snapshotAiViaPlaywright(opts: {
   targetId?: string;
   timeoutMs?: number;
   maxChars?: number;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
 
   const maybe = page as unknown as WithSnapshotForAI;
@@ -107,15 +107,14 @@ export async function snapshotRoleViaPlaywright(opts: {
   frameSelector?: string;
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   snapshot: string;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
 
   if (opts.refsMode === "aria") {
@@ -287,8 +286,10 @@ export async function closePageViaPlaywright(opts: {
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ buffer: Buffer }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };

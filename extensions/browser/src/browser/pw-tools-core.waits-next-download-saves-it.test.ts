@@ -122,7 +122,9 @@ describe("pw-tools-core", () => {
       timeoutMs: 1000,
     });
 
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      harness.expectArmed();
+    });
     harness.trigger({
       url: () => params.downloadUrl,
       suggestedFilename: () => params.suggestedFilename,
@@ -142,7 +144,11 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    currentPage = { on, off };
+    currentPage = {
+      on,
+      off,
+      url: () => "https://example.com",
+    };
     return {
       trigger: (download: unknown) => {
         downloadHandler?.(download);
@@ -193,8 +199,9 @@ describe("pw-tools-core", () => {
         timeoutMs: 1000,
       });
 
-      await Promise.resolve();
-      harness.expectArmed();
+      await vi.waitFor(() => {
+        harness.expectArmed();
+      });
       harness.trigger(download);
 
       const res = await p;
@@ -227,8 +234,9 @@ describe("pw-tools-core", () => {
         timeoutMs: 1000,
       });
 
-      await Promise.resolve();
-      harness.expectArmed();
+      await vi.waitFor(() => {
+        harness.expectArmed();
+      });
       expect(click).toHaveBeenCalledWith({ timeout: 1000 });
 
       harness.trigger(download);
@@ -259,8 +267,9 @@ describe("pw-tools-core", () => {
           timeoutMs: 1000,
         });
 
-        await Promise.resolve();
-        harness.expectArmed();
+        await vi.waitFor(() => {
+          harness.expectArmed();
+        });
         harness.trigger({
           url: () => "https://example.com/file.bin",
           suggestedFilename: () => "file.bin",
@@ -314,7 +323,11 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    currentPage = { on, off };
+    currentPage = {
+      on,
+      off,
+      url: () => "https://example.com",
+    };
 
     const resp = {
       url: () => "https://example.com/api/data",
@@ -331,8 +344,9 @@ describe("pw-tools-core", () => {
       maxChars: 10,
     });
 
-    await Promise.resolve();
-    expect(responseHandler).toBeDefined();
+    await vi.waitFor(() => {
+      expect(responseHandler).toBeDefined();
+    });
     responseHandler?.(resp);
 
     const res = await p;

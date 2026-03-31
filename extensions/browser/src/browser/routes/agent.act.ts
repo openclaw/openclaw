@@ -1040,7 +1040,7 @@ export function registerBrowserAgentActRoutes(
             if (!pw) {
               return;
             }
-            await assertPlaywrightTabTargetAllowed({
+            const page = await assertPlaywrightTabTargetAllowed({
               ctx,
               pw,
               cdpUrl,
@@ -1050,9 +1050,11 @@ export function registerBrowserAgentActRoutes(
             const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              page,
               fn,
               ref,
               signal: req.signal,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             };
             if (evalTimeoutMs !== undefined) {
               evalRequest.timeoutMs = evalTimeoutMs;
@@ -1089,6 +1091,13 @@ export function registerBrowserAgentActRoutes(
             if (!pw) {
               return;
             }
+            const page = await assertPlaywrightTabTargetAllowed({
+              ctx,
+              pw,
+              cdpUrl,
+              targetId: tab.targetId,
+              url: tab.url,
+            });
             let actions: BrowserActRequest[];
             try {
               actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
@@ -1105,20 +1114,15 @@ export function registerBrowserAgentActRoutes(
             if (targetIdError) {
               return jsonError(res, 403, targetIdError);
             }
-            await assertPlaywrightTabTargetAllowed({
-              ctx,
-              pw,
-              cdpUrl,
-              targetId: tab.targetId,
-              url: tab.url,
-            });
             const stopOnError = toBoolean(body.stopOnError) ?? true;
             const result = await pw.batchViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              page,
               actions,
               stopOnError,
               evaluateEnabled,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
             return res.json({ ok: true, targetId: tab.targetId, results: result.results });
           }
@@ -1160,7 +1164,7 @@ export function registerBrowserAgentActRoutes(
         if (!pw) {
           return;
         }
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -1170,9 +1174,11 @@ export function registerBrowserAgentActRoutes(
         const result = await pw.responseBodyViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          page,
           url,
           timeoutMs: timeoutMs ?? undefined,
           maxChars: maxChars ?? undefined,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, response: result });
       },

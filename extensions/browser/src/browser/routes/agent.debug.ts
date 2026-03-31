@@ -28,7 +28,7 @@ export function registerBrowserAgentDebugRoutes(
       targetId,
       feature: "console messages",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -39,6 +39,8 @@ export function registerBrowserAgentDebugRoutes(
           cdpUrl,
           targetId: tab.targetId,
           level: level.trim() || undefined,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, messages, targetId: tab.targetId });
       },
@@ -56,7 +58,7 @@ export function registerBrowserAgentDebugRoutes(
       targetId,
       feature: "page errors",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -67,6 +69,8 @@ export function registerBrowserAgentDebugRoutes(
           cdpUrl,
           targetId: tab.targetId,
           clear,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, ...result });
       },
@@ -85,7 +89,7 @@ export function registerBrowserAgentDebugRoutes(
       targetId,
       feature: "network requests",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -97,6 +101,8 @@ export function registerBrowserAgentDebugRoutes(
           targetId: tab.targetId,
           filter: filter.trim() || undefined,
           clear,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId, ...result });
       },
@@ -117,7 +123,7 @@ export function registerBrowserAgentDebugRoutes(
       targetId,
       feature: "trace start",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -130,6 +136,8 @@ export function registerBrowserAgentDebugRoutes(
           screenshots,
           snapshots,
           sources,
+          page,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({ ok: true, targetId: tab.targetId });
       },
@@ -148,7 +156,7 @@ export function registerBrowserAgentDebugRoutes(
       targetId,
       feature: "trace stop",
       run: async ({ cdpUrl, tab, pw }) => {
-        await assertPlaywrightTabTargetAllowed({
+        const page = await assertPlaywrightTabTargetAllowed({
           ctx,
           pw,
           cdpUrl,
@@ -170,7 +178,9 @@ export function registerBrowserAgentDebugRoutes(
         await pw.traceStopViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          page,
           path: tracePath,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         res.json({
           ok: true,

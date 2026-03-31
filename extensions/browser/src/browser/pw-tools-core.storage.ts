@@ -1,10 +1,15 @@
-import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import type { Page } from "playwright-core";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { ensurePageState } from "./pw-session.js";
+import { getAllowedPageForTarget } from "./pw-tools-core.followup-guard.js";
 
 export async function cookiesGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ cookies: unknown[] }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   const cookies = await page.context().cookies();
   return { cookies };
@@ -24,8 +29,10 @@ export async function cookiesSetViaPlaywright(opts: {
     secure?: boolean;
     sameSite?: "Lax" | "None" | "Strict";
   };
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   const cookie = opts.cookie;
   if (!cookie.name || cookie.value === undefined) {
@@ -46,8 +53,10 @@ export async function cookiesSetViaPlaywright(opts: {
 export async function cookiesClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   await page.context().clearCookies();
 }
@@ -59,8 +68,10 @@ export async function storageGetViaPlaywright(opts: {
   targetId?: string;
   kind: StorageKind;
   key?: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ values: Record<string, string> }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   const kind = opts.kind;
   const key = typeof opts.key === "string" ? opts.key : undefined;
@@ -95,8 +106,10 @@ export async function storageSetViaPlaywright(opts: {
   kind: StorageKind;
   key: string;
   value: string;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   const key = String(opts.key ?? "");
   if (!key) {
@@ -115,8 +128,10 @@ export async function storageClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   kind: StorageKind;
+  page?: Page;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getAllowedPageForTarget(opts);
   ensurePageState(page);
   await page.evaluate(
     ({ kind }) => {

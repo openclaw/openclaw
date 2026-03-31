@@ -1,3 +1,4 @@
+import type { Page } from "playwright-core";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import {
@@ -93,11 +94,12 @@ export async function assertPlaywrightTabTargetAllowed(params: {
   cdpUrl: string;
   targetId: string;
   url: string;
-}): Promise<void> {
+}): Promise<Page> {
+  let page: Page | undefined;
   try {
     // Follow-up guards must verify the current Playwright page state, not cached route
     // metadata, or a redirect to a private URL could bypass the check during CDP churn.
-    const page = await params.pw
+    page = await params.pw
       .getPageForTargetId({
         cdpUrl: params.cdpUrl,
         targetId: params.targetId,
@@ -113,13 +115,18 @@ export async function assertPlaywrightTabTargetAllowed(params: {
       url: guardUrl,
       ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy),
     });
+    return page;
   } catch (err) {
-    await params.pw
-      .closePageViaPlaywright({
-        cdpUrl: params.cdpUrl,
-        targetId: params.targetId,
-      })
-      .catch(() => {});
+    if (page && typeof page.close === "function") {
+      await page.close().catch(() => {});
+    } else {
+      await params.pw
+        .closePageViaPlaywright({
+          cdpUrl: params.cdpUrl,
+          targetId: params.targetId,
+        })
+        .catch(() => {});
+    }
     throw err;
   }
 }

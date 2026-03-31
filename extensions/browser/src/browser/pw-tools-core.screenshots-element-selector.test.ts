@@ -74,7 +74,7 @@ describe("pw-tools-core", () => {
     });
 
     expect(res.buffer.toString()).toBe("R");
-    expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
+    expect(sessionMocks.refLocator).toHaveBeenCalledWith(expect.objectContaining(page), "76");
     expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg" });
   });
   it("rejects fullPage for element or ref screenshots", async () => {
