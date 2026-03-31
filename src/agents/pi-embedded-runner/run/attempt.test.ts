@@ -2,6 +2,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   isOllamaCompatProvider,
+  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,

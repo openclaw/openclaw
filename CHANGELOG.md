@@ -243,6 +243,7 @@ Docs: https://docs.openclaw.ai
 - ACPX/runtime: repair `queue owner unavailable` session recovery by replacing dead named sessions and resuming the backend session when ACPX exposes a stable session id, so the first ACP prompt no longer inherits a dead handle. (#58669) Thanks @neeravmakwana
 - ACPX/runtime: retry dead-session queue-owner repair without `--resume-session` when the reported ACPX session id is stale, so recovery still creates a fresh named session instead of failing session init. Thanks @obviyus.
 - Tools/web_search (Kimi): replay native Moonshot `$web_search` arguments verbatim, disable thinking for `kimi-k2.5`, and add Moonshot region/model setup prompts so bundled Kimi web search works again. (#59356) Thanks @Innocent-children.
+- Agents/compaction: resolve `agents.defaults.compaction.model` consistently for manual `/compact` and other context-engine compaction paths, so engine-owned compaction uses the configured override model across runtime entrypoints. (#56710) Thanks @oliviareid-svg
 
 ## 2026.3.31
 
