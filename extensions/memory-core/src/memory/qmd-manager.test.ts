@@ -20,7 +20,13 @@ const { watchMock } = vi.hoisted(() => ({
     });
   }),
 }));
+const { withFileLockMock } = vi.hoisted(() => ({
+  withFileLockMock: vi.fn(
+    async <T>(_filePath: string, _options: unknown, fn: () => Promise<T>) => await fn(),
+  ),
+}));
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
 type MockChild = EventEmitter & {
   stdout: EventEmitter;
@@ -106,6 +112,14 @@ vi.mock("chokidar", () => ({
   watch: watchMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/file-lock", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/file-lock")>();
+  return {
+    ...actual,
+    withFileLock: withFileLockMock,
+  };
+});
+
 import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -128,6 +142,7 @@ describe("QmdMemoryManager", () => {
   let cfg: OpenClawConfig;
   const agentId = "main";
   const openManagers = new Set<QmdMemoryManager>();
+  let embedStartupJitterSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   function trackManager<T extends QmdMemoryManager | null>(manager: T): T {
     if (manager) {
@@ -166,6 +181,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
+    withFileLockMock.mockClear();
     logWarnMock.mockClear();
     logDebugMock.mockClear();
     logInfoMock.mockClear();
@@ -202,6 +218,14 @@ describe("QmdMemoryManager", () => {
         },
       },
     } as OpenClawConfig;
+    embedStartupJitterSpy = vi
+      .spyOn(
+        QmdMemoryManager.prototype as unknown as {
+          resolveEmbedStartupJitterMs: () => number;
+        },
+        "resolveEmbedStartupJitterMs",
+      )
+      .mockReturnValue(0);
   });
 
   afterEach(async () => {
@@ -212,6 +236,8 @@ describe("QmdMemoryManager", () => {
     );
     openManagers.clear();
     await fs.rm(tmpRoot, { recursive: true, force: true });
+    embedStartupJitterSpy?.mockRestore();
+    embedStartupJitterSpy = null;
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
     if (originalPath === undefined) {
@@ -230,6 +256,7 @@ describe("QmdMemoryManager", () => {
       (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -3110,6 +3137,102 @@ describe("QmdMemoryManager", () => {
     expect(commandCalls).toEqual([["update"], ["embed"]]);
 
     await manager.close();
+  });
+
+  it("delays the first periodic embed maintenance run by stable startup jitter", async () => {
+    vi.useFakeTimers();
+    embedStartupJitterSpy?.mockRestore();
+    embedStartupJitterSpy = vi
+      .spyOn(
+        QmdMemoryManager.prototype as unknown as {
+          resolveEmbedStartupJitterMs: () => number;
+        },
+        "resolveEmbedStartupJitterMs",
+      )
+      .mockReturnValue(60_000);
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            embedInterval: "5m",
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    const beforeCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(beforeCalls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
+
+    await manager.close();
+  });
+
+  it("serializes qmd embeds within a process before taking the shared file lock", async () => {
+    vi.useFakeTimers();
+    const embedChildren: MockChild[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "embed") {
+        const child = createMockChild({ autoClose: false });
+        embedChildren.push(child);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const first = await createManager({ mode: "status" });
+    const second = await createManager({ mode: "status" });
+    const firstSync = first.manager.sync({ reason: "manual", force: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(embedChildren).toHaveLength(1);
+    expect(withFileLockMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        retries: expect.objectContaining({
+          retries: expect.any(Number),
+          maxTimeout: 10_000,
+        }),
+        stale: expect.any(Number),
+      }),
+      expect.any(Function),
+    );
+    const lockOptions = withFileLockMock.mock.calls[0]?.[1] as {
+      retries: { retries: number };
+      stale: number;
+    };
+    expect(lockOptions.retries.retries).toBeGreaterThanOrEqual(90);
+    expect(lockOptions.stale).toBeGreaterThanOrEqual(15 * 60 * 1000);
+
+    const secondSync = second.manager.sync({ reason: "manual", force: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(embedChildren).toHaveLength(1);
+
+    embedChildren[0]?.closeWith(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(embedChildren).toHaveLength(2);
+
+    embedChildren[1]?.closeWith(0);
+    await expect(firstSync).resolves.toBeUndefined();
+    await expect(secondSync).resolves.toBeUndefined();
+    await first.manager.close();
+    await second.manager.close();
   });
 
   it("runs qmd embed in search mode for forced sync", async () => {
