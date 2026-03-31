@@ -4,16 +4,19 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { resolveFlowRegistryDir, resolveFlowRegistrySqlitePath } from "./flow-registry.paths.js";
 import type { FlowRegistryStoreSnapshot } from "./flow-registry.store.js";
-import type { FlowRecord } from "./flow-registry.types.js";
+import type { FlowRecord, FlowShape } from "./flow-registry.types.js";
 
 type FlowRegistryRow = {
   flow_id: string;
+  shape: FlowShape | null;
   owner_session_key: string;
   requester_origin_json: string | null;
   status: FlowRecord["status"];
   notify_policy: FlowRecord["notifyPolicy"];
   goal: string;
   current_step: string | null;
+  blocked_task_id: string | null;
+  blocked_summary: string | null;
   created_at: number | bigint;
   updated_at: number | bigint;
   ended_at: number | bigint | null;
@@ -64,12 +67,15 @@ function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
   const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
   return {
     flowId: row.flow_id,
+    shape: row.shape === "linear" ? "linear" : "single_task",
     ownerSessionKey: row.owner_session_key,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     status: row.status,
     notifyPolicy: row.notify_policy,
     goal: row.goal,
     ...(row.current_step ? { currentStep: row.current_step } : {}),
+    ...(row.blocked_task_id ? { blockedTaskId: row.blocked_task_id } : {}),
+    ...(row.blocked_summary ? { blockedSummary: row.blocked_summary } : {}),
     createdAt: normalizeNumber(row.created_at) ?? 0,
     updatedAt: normalizeNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
@@ -79,12 +85,15 @@ function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
 function bindFlowRecord(record: FlowRecord) {
   return {
     flow_id: record.flowId,
+    shape: record.shape,
     owner_session_key: record.ownerSessionKey,
     requester_origin_json: serializeJson(record.requesterOrigin),
     status: record.status,
     notify_policy: record.notifyPolicy,
     goal: record.goal,
     current_step: record.currentStep ?? null,
+    blocked_task_id: record.blockedTaskId ?? null,
+    blocked_summary: record.blockedSummary ?? null,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
     ended_at: record.endedAt ?? null,
@@ -96,12 +105,15 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
     selectAll: db.prepare(`
       SELECT
         flow_id,
+        shape,
         owner_session_key,
         requester_origin_json,
         status,
         notify_policy,
         goal,
         current_step,
+        blocked_task_id,
+        blocked_summary,
         created_at,
         updated_at,
         ended_at
@@ -111,34 +123,43 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
     upsertRow: db.prepare(`
       INSERT INTO flow_runs (
         flow_id,
+        shape,
         owner_session_key,
         requester_origin_json,
         status,
         notify_policy,
         goal,
         current_step,
+        blocked_task_id,
+        blocked_summary,
         created_at,
         updated_at,
         ended_at
       ) VALUES (
         @flow_id,
+        @shape,
         @owner_session_key,
         @requester_origin_json,
         @status,
         @notify_policy,
         @goal,
         @current_step,
+        @blocked_task_id,
+        @blocked_summary,
         @created_at,
         @updated_at,
         @ended_at
       )
       ON CONFLICT(flow_id) DO UPDATE SET
+        shape = excluded.shape,
         owner_session_key = excluded.owner_session_key,
         requester_origin_json = excluded.requester_origin_json,
         status = excluded.status,
         notify_policy = excluded.notify_policy,
         goal = excluded.goal,
         current_step = excluded.current_step,
+        blocked_task_id = excluded.blocked_task_id,
+        blocked_summary = excluded.blocked_summary,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         ended_at = excluded.ended_at
@@ -152,22 +173,41 @@ function ensureSchema(db: DatabaseSync) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS flow_runs (
       flow_id TEXT PRIMARY KEY,
+      shape TEXT NOT NULL,
       owner_session_key TEXT NOT NULL,
       requester_origin_json TEXT,
       status TEXT NOT NULL,
       notify_policy TEXT NOT NULL,
       goal TEXT NOT NULL,
       current_step TEXT,
+      blocked_task_id TEXT,
+      blocked_summary TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       ended_at INTEGER
     );
   `);
+  ensureColumn(db, "flow_runs", "shape", "TEXT");
+  ensureColumn(db, "flow_runs", "blocked_task_id", "TEXT");
+  ensureColumn(db, "flow_runs", "blocked_summary", "TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_session_key ON flow_runs(owner_session_key);`,
   );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);`);
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+) {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>;
+  if (rows.some((row) => row.name === columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition};`);
 }
 
 function ensureFlowRegistryPermissions(pathname: string) {

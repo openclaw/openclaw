@@ -6,6 +6,7 @@ import {
   getFlowById,
   listFlowRecords,
   resetFlowRegistryForTests,
+  syncFlowFromTask,
   updateFlowRecordById,
 } from "./flow-registry.js";
 
@@ -81,6 +82,28 @@ describe("flow-registry", () => {
     });
   });
 
+  it("lists newest flows first", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const earlier = createFlowRecord({
+        ownerSessionKey: "agent:main:main",
+        goal: "First flow",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const later = createFlowRecord({
+        ownerSessionKey: "agent:main:main",
+        goal: "Second flow",
+        createdAt: 200,
+        updatedAt: 200,
+      });
+
+      expect(listFlowRecords().map((flow) => flow.flowId)).toEqual([later.flowId, earlier.flowId]);
+    });
+  });
+
   it("applies minimal defaults for new flow records", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -93,6 +116,7 @@ describe("flow-registry", () => {
 
       expect(created).toMatchObject({
         flowId: expect.any(String),
+        shape: "linear",
         ownerSessionKey: "agent:main:main",
         goal: "Background job",
         status: "queued",
@@ -127,6 +151,97 @@ describe("flow-registry", () => {
       expect(getFlowById(created.flowId)).toMatchObject({
         flowId: created.flowId,
         endedAt: 456,
+      });
+    });
+  });
+
+  it("stores blocked metadata and clears it when a later task resumes the same flow", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const created = createFlowRecord({
+        shape: "single_task",
+        ownerSessionKey: "agent:main:main",
+        goal: "Fix permissions",
+        status: "running",
+      });
+
+      const blocked = syncFlowFromTask({
+        taskId: "task-blocked",
+        parentFlowId: created.flowId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 200,
+        endedAt: 200,
+        terminalSummary: "Writable session required.",
+      });
+
+      expect(blocked).toMatchObject({
+        flowId: created.flowId,
+        status: "blocked",
+        blockedTaskId: "task-blocked",
+        blockedSummary: "Writable session required.",
+        endedAt: 200,
+      });
+
+      const resumed = syncFlowFromTask({
+        taskId: "task-retry",
+        parentFlowId: created.flowId,
+        status: "running",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 260,
+        progressSummary: "Retrying with writable session",
+      });
+
+      expect(resumed).toMatchObject({
+        flowId: created.flowId,
+        status: "running",
+      });
+      expect(resumed?.blockedTaskId).toBeUndefined();
+      expect(resumed?.blockedSummary).toBeUndefined();
+      expect(resumed?.endedAt).toBeUndefined();
+    });
+  });
+
+  it("does not auto-sync linear flow state from linked child tasks", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const created = createFlowRecord({
+        ownerSessionKey: "agent:main:main",
+        goal: "Cluster PRs",
+        status: "waiting",
+        currentStep: "wait_for",
+      });
+
+      const synced = syncFlowFromTask({
+        taskId: "task-child",
+        parentFlowId: created.flowId,
+        status: "running",
+        notifyPolicy: "done_only",
+        label: "Child task",
+        task: "Child task",
+        lastEventAt: 250,
+        progressSummary: "Running child task",
+      });
+
+      expect(synced).toMatchObject({
+        flowId: created.flowId,
+        shape: "linear",
+        status: "waiting",
+        currentStep: "wait_for",
+      });
+      expect(getFlowById(created.flowId)).toMatchObject({
+        flowId: created.flowId,
+        status: "waiting",
+        currentStep: "wait_for",
       });
     });
   });
