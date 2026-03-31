@@ -67,7 +67,7 @@
       "durationMs": 3200
     },
     "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
-      "durationMs": 18920
+      "durationMs": 15830
     },
     "extensions/telegram/src/webhook.test.ts": {
       "durationMs": 2900
@@ -151,7 +151,7 @@
       "durationMs": 1300
     },
     "extensions/telegram/src/bot-message-context.named-account-dm.test.ts": {
-      "durationMs": 1200
+      "durationMs": 24070
     },
     "extensions/slack/src/monitor/events/pins.test.ts": {
       "durationMs": 1200
@@ -169,7 +169,7 @@
       "durationMs": 1000
     },
     "extensions/telegram/src/bot-message-context.audio-transcript.test.ts": {
-      "durationMs": 17310
+      "durationMs": 20350
     },
     "extensions/whatsapp/src/monitor-inbox.append-upsert.test.ts": {
       "durationMs": 999
@@ -436,13 +436,13 @@
       "durationMs": 20
     },
     "extensions/telegram/src/bot-message-context.implicit-mention.test.ts": {
-      "durationMs": 13300
+      "durationMs": 21640
     },
     "extensions/telegram/src/action-runtime.test.ts": {
       "durationMs": 19
     },
     "extensions/telegram/src/bot-message-context.topic-agentid.test.ts": {
-      "durationMs": 19
+      "durationMs": 26500
     },
     "src/browser/routes/agent.existing-session.test.ts": {
       "durationMs": 19
@@ -523,7 +523,7 @@
       "durationMs": 11
     },
     "extensions/telegram/src/bot-message-context.sender-prefix.test.ts": {
-      "durationMs": 19410
+      "durationMs": 20090
     },
     "extensions/whatsapp/src/active-listener.test.ts": {
       "durationMs": 11

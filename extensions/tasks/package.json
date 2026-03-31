@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/tasks",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "OpenClaw durable tasks plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

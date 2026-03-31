@@ -31,6 +31,7 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerMemoryFlushPlan() {},
     registerMemoryRuntime() {},
     registerMemoryEmbeddingProvider() {},
+    registerOperationsRuntime() {},
     resolvePath(input: string) {
       return input;
     },

@@ -32,11 +32,11 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/flow-registry.js", () => ({
+vi.mock("openclaw/plugin-sdk/tasks", () => ({
   listFlowRecords: (...args: unknown[]) => mocks.listFlowRecords(...args),
 }));
 
-vi.mock("../tasks/task-registry.js", () => ({
+vi.mock("openclaw/plugin-sdk/tasks", () => ({
   listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowId(...args),
 }));
 
