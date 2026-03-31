@@ -140,11 +140,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
-  it("preserves compaction active status when willRetry is true", () => {
+  it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
     vi.useFakeTimers();
     const host = createHost();
 
-    // Start compaction
     handleAgentEvent(host, {
       runId: "run-1",
       seq: 1,
@@ -155,12 +154,12 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     });
 
     expect(host.compactionStatus).toEqual({
-      active: true,
+      phase: "active",
+      runId: "run-1",
       startedAt: expect.any(Number),
       completedAt: null,
     });
 
-    // End with willRetry=true - should not update status
     handleAgentEvent(host, {
       runId: "run-1",
       seq: 2,
@@ -170,8 +169,49 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: { phase: "end", willRetry: true },
     });
 
-    // Status should remain active (startedAt preserved), no timer set
-    expect((host.compactionStatus as { active: boolean })?.active).toBe(true);
+    expect(host.compactionStatus).toEqual({
+      phase: "retrying",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+    expect(host.compactionClearTimer).toBeNull();
+
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 3,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "retrying",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 4,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "complete",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: expect.any(Number),
+    });
+    expect(host.compactionClearTimer).not.toBeNull();
+
+    vi.advanceTimersByTime(5_000);
+    expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
 
     vi.useRealTimers();
