@@ -10,6 +10,53 @@ import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-conf
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
 
+type MatrixRoomEntries = Record<string, NonNullable<MatrixConfig["groups"]>[string]>;
+
+function selectInheritedMatrixRoomEntries(params: {
+  entries: MatrixRoomEntries | undefined;
+  accountId: string;
+  isMultiAccount: boolean;
+}): MatrixRoomEntries | undefined {
+  const entries = params.entries;
+  if (!entries) {
+    return undefined;
+  }
+  if (!params.isMultiAccount) {
+    return entries;
+  }
+  const selected = Object.fromEntries(
+    Object.entries(entries).filter(([, value]) => {
+      const scopedAccount =
+        typeof value?.account === "string" ? normalizeAccountId(value.account) : undefined;
+      return scopedAccount === undefined || scopedAccount === params.accountId;
+    }),
+  ) as MatrixRoomEntries;
+  return Object.keys(selected).length > 0 ? selected : undefined;
+}
+
+function mergeMatrixRoomEntries(
+  inherited: MatrixRoomEntries | undefined,
+  accountEntries: MatrixRoomEntries | undefined,
+): MatrixRoomEntries | undefined {
+  if (!inherited && !accountEntries) {
+    return undefined;
+  }
+  const merged: MatrixRoomEntries = {
+    ...(inherited ?? {}),
+  };
+  for (const [key, value] of Object.entries(accountEntries ?? {})) {
+    const inheritedValue = merged[key];
+    merged[key] =
+      inheritedValue && value
+        ? {
+            ...inheritedValue,
+            ...value,
+          }
+        : (value ?? inheritedValue);
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 export type ResolvedMatrixAccount = {
   accountId: string;
   enabled: boolean;
@@ -95,7 +142,7 @@ export function resolveMatrixAccount(params: {
   const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
-  const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
+  const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId, env });
   const explicitAuthConfig =
     accountId === DEFAULT_ACCOUNT_ID
       ? base
@@ -133,9 +180,11 @@ export function resolveMatrixAccount(params: {
 export function resolveMatrixAccountConfig(params: {
   cfg: CoreConfig;
   accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
 }): MatrixConfig {
+  const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
-  return resolveMergedAccountConfig<MatrixConfig>({
+  const merged = resolveMergedAccountConfig<MatrixConfig>({
     channelConfig: resolveMatrixBaseConfig(params.cfg),
     accounts: params.cfg.channels?.matrix?.accounts as
       | Record<string, Partial<MatrixConfig>>
@@ -144,4 +193,29 @@ export function resolveMatrixAccountConfig(params: {
     normalizeAccountId,
     nestedObjectKeys: ["dm", "actions"],
   });
+  const base = resolveMatrixBaseConfig(params.cfg);
+  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
+  const isMultiAccount = resolveConfiguredMatrixAccountIds(params.cfg, env).length > 1;
+  const groups = mergeMatrixRoomEntries(
+    selectInheritedMatrixRoomEntries({
+      entries: base.groups,
+      accountId,
+      isMultiAccount,
+    }),
+    accountConfig?.groups,
+  );
+  const rooms = mergeMatrixRoomEntries(
+    selectInheritedMatrixRoomEntries({
+      entries: base.rooms,
+      accountId,
+      isMultiAccount,
+    }),
+    accountConfig?.rooms,
+  );
+  const { groups: _ignoredGroups, rooms: _ignoredRooms, ...rest } = merged;
+  return {
+    ...rest,
+    ...(groups ? { groups } : {}),
+    ...(rooms ? { rooms } : {}),
+  };
 }
