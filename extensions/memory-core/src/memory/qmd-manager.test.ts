@@ -2080,6 +2080,153 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("prefers mcporter start and end lines over snippet header offsets", async () => {
+    const expectedDocId = "line-123";
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            results: [
+              {
+                docid: expectedDocId,
+                score: 0.91,
+                collection: "workspace-main",
+                start_line: 8,
+                end_line: 10,
+                snippet: "@@ -20,3\nline one\nline two\nline three",
+              },
+            ],
+          }),
+        );
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (typeof arg === "string" && arg.startsWith(expectedDocId)) {
+            return [{ collection: "workspace-main", path: "notes/welcome.md" }];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("line one", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 8,
+        endLine: 10,
+        score: 0.91,
+        snippet: "@@ -20,3\nline one\nline two\nline three",
+        source: "memory",
+      },
+    ]);
+
+    await manager.close();
+  });
+
+  it("uses snippet header width when mcporter only returns a start line", async () => {
+    const expectedDocId = "line-456";
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            results: [
+              {
+                docid: expectedDocId,
+                score: 0.73,
+                collection: "workspace-main",
+                start_line: 8,
+                snippet: "@@ -20,3\nline one\nline two\nline three",
+              },
+            ],
+          }),
+        );
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (typeof arg === "string" && arg.startsWith(expectedDocId)) {
+            return [{ collection: "workspace-main", path: "notes/welcome.md" }];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("line one", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 8,
+        endLine: 10,
+        score: 0.73,
+        snippet: "@@ -20,3\nline one\nline two\nline three",
+        source: "memory",
+      },
+    ]);
+
+    await manager.close();
+  });
+
   it('uses unified v2 args when the explicit mcporter search tool override is "query"', async () => {
     cfg = {
       ...cfg,
