@@ -16,14 +16,14 @@ describe("markdownTableToSlackTableBlock", () => {
     const block = markdownTableToSlackTableBlock(table);
 
     expect(block.column_settings).toHaveLength(20);
-    // header + 97 data rows + 1 indicator = 99 (Slack drops 100th row)
-    expect(block.rows).toHaveLength(99);
+    // header + 98 data rows + 1 indicator = 100 (within Slack's limit)
+    expect(block.rows).toHaveLength(100);
     expect(block.rows[0]).toHaveLength(20);
 
     // Last row should be the truncation indicator (both rows and columns)
-    // 120 input - 97 shown = 23 truncated rows, 25 - 20 = 5 truncated columns
+    // 120 input - 98 shown = 22 truncated rows, 25 - 20 = 5 truncated columns
     const lastRow = block.rows[block.rows.length - 1];
-    expect(lastRow?.[0]?.text).toBe("+23 more rows, +5 more columns");
+    expect(lastRow?.[0]?.text).toBe("+22 more rows, +5 more columns");
     expect(lastRow?.[1]?.text).toBe(" ");
   });
 
@@ -110,6 +110,6 @@ describe("renderSlackTableFallbackText", () => {
       rows: Array.from({ length: 110 }, (_, index) => [`item-${index}`, `${index}`]),
     });
 
-    expect(rendered).toContain("+11 more rows");
+    expect(rendered).toContain("+10 more rows");
   });
 });
