@@ -187,9 +187,27 @@ enum PermissionManager {
         return mic && speech
     }
 
+    /// ExecuTorch Talk Mode only captures microphone audio; Apple Speech also needs Speech Recognition.
+    static func talkModePermissionsGranted(useExecuTorch: Bool) -> Bool {
+        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if useExecuTorch {
+            return mic
+        }
+        let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
+        return mic && speech
+    }
+
     static func ensureVoiceWakePermissions(interactive: Bool) async -> Bool {
         let results = await self.ensure([.microphone, .speechRecognition], interactive: interactive)
         return results[.microphone] == true && results[.speechRecognition] == true
+    }
+
+    static func ensureTalkModePermissions(useExecuTorch: Bool, interactive: Bool) async -> Bool {
+        if useExecuTorch {
+            let results = await self.ensure([.microphone], interactive: interactive)
+            return results[.microphone] == true
+        }
+        return await self.ensureVoiceWakePermissions(interactive: interactive)
     }
 
     static func status(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {

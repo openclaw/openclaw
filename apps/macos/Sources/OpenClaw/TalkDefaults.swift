@@ -1,3 +1,4 @@
 enum TalkDefaults {
-    static let silenceTimeoutMs = 700
+    /// Pause length before end-of-utterance; keep aligned with gateway talk config.
+    static let silenceTimeoutMs = 1400
 }

@@ -89,6 +89,7 @@ actor ExecuTorchSTTBridge {
     private var audioEngine: AVAudioEngine?
     private var state: State = .idle
     private var transcriptBuffer = ""
+    /// Second argument: when true, the string is a full revised hypothesis (replace, do not merge).
     private var onTranscript: ((String, Bool) -> Void)?
     private var rollingBuffer: AudioRingBuffer?
     private static let rollingBufferCapacity = 16_000 * 30
@@ -110,6 +111,8 @@ actor ExecuTorchSTTBridge {
 
     // VAD/energy gate: skip decode when audio is quiet to save compute
     private var rollingRMS: Double = 0
+    /// Peak per-chunk RMS this listening session (used to reject single-token STT hallucinations on silence).
+    private var sessionPeakRMS: Double = 0
     private var quietFrameCount: Int = 0
     private var lastProbeTime: CFAbsoluteTime = 0
     private static let rmsAlpha = 0.1
@@ -126,6 +129,12 @@ actor ExecuTorchSTTBridge {
     private static let finalizeRecentSpeechWindowSeconds: CFAbsoluteTime = 1.25
     private static let emissionResumeGuardSeconds: CFAbsoluteTime = 0.35
     private static let weakFinalizeTokens: Set<String> = ["uh", "um", "hmm", "huh", "okay", "ok"]
+    /// Single-token outputs often hallucinated when no chunk crossed `rmsThreshold`.
+    private static let fullBufferHallucinationTokens: Set<String> = [
+        "yeah", "yep", "yes", "yup", "okay", "ok", "uh", "um", "hmm", "huh",
+    ]
+    /// Enough headroom for long utterances (Parakeet token cap); 128 was truncating mid-sentence.
+    private static let fullBufferMaxNewTokens: Int32 = 512
     private var isPolling = false
 
     /// When false, capture and poll continue but no transcript is forwarded (used during TTS to avoid echo).
@@ -252,6 +261,7 @@ actor ExecuTorchSTTBridge {
 
     // MARK: - Audio Capture
 
+    /// `onTranscript` second parameter is `true` when the model revised the whole phrase (replace, not merge).
     func startListening(onTranscript: @escaping (String, Bool) -> Void) throws {
         logger.info("executorch.stt: startListening() entered, state=\(String(describing: self.state))")
         guard case .ready = state else {
@@ -353,6 +363,7 @@ actor ExecuTorchSTTBridge {
         self.hasEmittedFirstTokenThisSession = false
         self.firstTokenEmitTime = nil
         self.rollingRMS = 0
+        self.sessionPeakRMS = 0
         self.quietFrameCount = 0
         self.lastProbeTime = 0
         self.emissionEnabled = true
@@ -377,6 +388,7 @@ actor ExecuTorchSTTBridge {
         self.offlinePollingActive = false
         self.lastOfflineTranscript = ""
         self.lastVoicedActivityAt = nil
+        self.sessionPeakRMS = 0
         self.emissionResumeGuardUntil = 0
         self.rollingBuffer?.removeAll()
         self.onTranscript = nil
@@ -432,6 +444,7 @@ actor ExecuTorchSTTBridge {
         self.observedChunkCount += 1
         buf.append(samples)
         let rms = Self.rms(samples)
+        self.sessionPeakRMS = max(self.sessionPeakRMS, rms)
         self.rollingRMS = Self.rmsAlpha * rms + (1 - Self.rmsAlpha) * self.rollingRMS
         if rms >= Double(Self.rmsThreshold) {
             self.lastVoicedActivityAt = CFAbsoluteTimeGetCurrent()
@@ -456,6 +469,7 @@ actor ExecuTorchSTTBridge {
         self.lastOfflineTranscript = ""
         self.lastVoicedActivityAt = nil
         if enabled {
+            self.sessionPeakRMS = 0
             self.emissionResumeGuardUntil = now + Self.emissionResumeGuardSeconds
             self.rollingBuffer?.removeAll()
             self.minSamplesReadyTime = nil
@@ -493,6 +507,15 @@ actor ExecuTorchSTTBridge {
             delta: delta,
             hadRecentSpeech: hadRecentSpeech,
             hadSessionSpeech: hadSessionSpeech) == .accept
+    }
+
+    /// Drop one-word hallucinations when no audio chunk reached the voiced threshold this session.
+    private static func shouldRejectFullBufferHallucination(transcript: String, sessionPeakRMS: Double) -> Bool {
+        let cleaned = cleanModelOutput(transcript)
+        let tokens = normalizedTokens(cleaned)
+        guard tokens.count == 1, let t = tokens.first else { return false }
+        guard fullBufferHallucinationTokens.contains(t) else { return false }
+        return sessionPeakRMS < Double(rmsThreshold)
     }
 
     private static func finalizeDeltaDecision(
@@ -538,6 +561,43 @@ actor ExecuTorchSTTBridge {
         logLatencyStats()
     }
 
+    /// Transcribe the entire rolling buffer as a single utterance for maximum accuracy.
+    /// Use at finalization instead of polling-accumulated partials.
+    func forceFullBufferDecode() -> String {
+        guard case .listening = self.state else { return "" }
+        guard let runtime = self.runtime, let runner = self.runner else { return "" }
+        guard let buf = self.rollingBuffer, buf.count > 0 else { return "" }
+        self.offlinePollTask?.cancel()
+        self.offlinePollTask = nil
+
+        let allSamples = buf.suffix(buf.count)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        do {
+            var transcript = Self.cleanModelOutput(
+                try runtime.transcribe(
+                    runner: runner,
+                    samples: allSamples,
+                    maxNewTokens: Self.fullBufferMaxNewTokens))
+            if Self.shouldRejectFullBufferHallucination(transcript: transcript, sessionPeakRMS: self.sessionPeakRMS) {
+                logger.info(
+                    "executorch.stt: full-buffer decode rejected likely silence hallucination " +
+                        "peakRMS=\(self.sessionPeakRMS) text=\(transcript.prefix(40), privacy: .public)")
+                transcript = ""
+            }
+            let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            logger.info(
+                "executorch.stt: full-buffer decode done in \(String(format: "%.0f", elapsed))ms " +
+                    "samples=\(allSamples.count) chars=\(transcript.count)")
+            return transcript
+        } catch {
+            let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            logger.error(
+                "executorch.stt: full-buffer decode failed after \(String(format: "%.0f", elapsed))ms — " +
+                    "\(error.localizedDescription, privacy: .public)")
+            return ""
+        }
+    }
+
     /// Attempt one last offline decode before finalization to capture tail words.
     /// Returns only newly discovered text since the last successful offline decode.
     func forceFinalOfflineDecodeDelta(baseTranscript: String) -> String {
@@ -545,7 +605,7 @@ actor ExecuTorchSTTBridge {
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
         let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 24 : 32
-        guard let delta = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) else { return "" }
+        guard let (delta, _) = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) else { return "" }
 
         let base = Self.cleanModelOutput(baseTranscript)
         let hadRecentSpeech = self.hadRecentVoicedActivity(now: CFAbsoluteTimeGetCurrent())
@@ -600,13 +660,15 @@ actor ExecuTorchSTTBridge {
             }
         }
         let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 16 : 24
-        guard let delta = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: force) else { return false }
+        guard let (delta, replaceHypothesis) = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: force)
+        else { return false }
         if Self.verboseLogging {
             logger.info("executorch.stt: offline emitted \(delta.count) chars: \"\(delta.prefix(80), privacy: .public)\"")
         }
         if self.emissionEnabled {
             self.transcriptBuffer += delta
-            self.onTranscript?(delta, false)
+            // When true, Talk Mode should replace lastTranscript (model revised the whole phrase).
+            self.onTranscript?(delta, replaceHypothesis)
             return true
         }
         return false
@@ -615,7 +677,7 @@ actor ExecuTorchSTTBridge {
     private func decodeOfflineDelta(
         maxNewTokens: Int32,
         force: Bool
-    ) -> String? {
+    ) -> (delta: String, replaceHypothesis: Bool)? {
         guard case .listening = self.state else { return nil }
         if !self.offlinePollingActive {
             return nil
@@ -663,10 +725,15 @@ actor ExecuTorchSTTBridge {
                 logger.info("executorch.stt: offline poll done in \(String(format: "%.0f", elapsed))ms chars=\(transcript.count)")
             }
             guard !transcript.isEmpty else { return nil }
-            let delta = Self.cleanModelOutput(
-                Self.deltaSuffix(previous: self.lastOfflineTranscript, current: transcript))
+            let previous = self.lastOfflineTranscript
+            let rawDelta = Self.deltaSuffix(previous: previous, current: transcript)
+            let delta = Self.cleanModelOutput(rawDelta)
             self.lastOfflineTranscript = transcript
             guard !delta.isEmpty else { return nil }
+            // When Parakeet rewrites the whole hypothesis (no prefix extension), delta equals the full
+            // new transcript; merging that with lastTranscript would concatenate garbage.
+            let replaceHypothesis =
+                !previous.isEmpty && !transcript.isEmpty && rawDelta == transcript && !transcript.hasPrefix(previous)
             if !self.hasEmittedFirstTokenThisSession, let start = self.sessionStartTime {
                 self.hasEmittedFirstTokenThisSession = true
                 self.firstTokenEmitTime = CFAbsoluteTimeGetCurrent()
@@ -677,7 +744,7 @@ actor ExecuTorchSTTBridge {
                 }
                 self.logLatencyStats()
             }
-            return delta
+            return (delta, replaceHypothesis)
         } catch {
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             logger.error(

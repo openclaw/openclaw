@@ -2,16 +2,11 @@ public enum TalkPromptBuilder: Sendable {
     public static func build(
         transcript: String,
         interruptedAtSeconds: Double?,
-        includeVoiceDirectiveHint: Bool = true,
-        sttBackendName: String? = nil,
-        sttBackendDebugHint: String? = nil
+        includeVoiceDirectiveHint: Bool = true
     ) -> String {
         var lines: [String] = [
             "Talk Mode active. Reply in a concise, spoken tone.",
         ]
-
-        // Do not inject sttBackendName / sttBackendDebugHint into the prompt; the model would
-        // otherwise mention them in replies (e.g. "I'm using ExecuTorch...").
 
         if includeVoiceDirectiveHint {
             lines.append(
@@ -34,11 +29,27 @@ public enum TalkPromptBuilder: Sendable {
     /// so the chat shows only what the user said, not the system instructions.
     public static func displayText(fromPrompt prompt: String) -> String {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.contains("Talk Mode active."),
-              let range = trimmed.range(of: "\n\n")
+        guard trimmed.contains("Talk Mode active.") else { return prompt }
+
+        // Strip leading System: lines (gateway-injected events like node connect/launch).
+        let lines = trimmed.components(separatedBy: "\n")
+        var contentStart = 0
+        for (i, line) in lines.enumerated() {
+            let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if stripped.isEmpty || stripped.hasPrefix("System:") || stripped.hasPrefix("System (untrusted)") {
+                contentStart = i + 1
+            } else {
+                break
+            }
+        }
+        let withoutSystemLines = lines[contentStart...].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard withoutSystemLines.contains("Talk Mode active."),
+              let range = withoutSystemLines.range(of: "\n\n")
         else { return prompt }
-        let before = String(trimmed[..<range.lowerBound])
-        guard before.hasPrefix("Talk Mode active.") else { return prompt }
-        return String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = String(withoutSystemLines[..<range.lowerBound])
+        guard before.contains("Talk Mode active.") else { return prompt }
+        return String(withoutSystemLines[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

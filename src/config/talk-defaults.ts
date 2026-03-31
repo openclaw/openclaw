@@ -1,7 +1,7 @@
 export const TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM = {
-  macos: 700,
-  android: 700,
-  ios: 900,
+  macos: 1400,
+  android: 1400,
+  ios: 1400,
 } as const;
 
 export function describeTalkSilenceTimeoutDefaults(): string {

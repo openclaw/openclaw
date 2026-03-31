@@ -113,7 +113,7 @@ Defaults:
 
 - `provider`: `elevenlabs` when legacy Talk fields are normalized into the current shape
 - `interruptOnSpeech`: true
-- `silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
+- `silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`1400 ms on macOS and Android, 1400 ms on iOS`)
 - `talk.providers.elevenlabs.voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` (or the first ElevenLabs voice when an API key is available)
 - `talk.providers.elevenlabs.modelId`: defaults to `eleven_v3` when unset
 - `talk.providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available)

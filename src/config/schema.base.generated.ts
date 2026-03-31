@@ -15285,7 +15285,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "talk.silenceTimeoutMs": {
       label: "Talk Silence Timeout (ms)",
-      help: "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (700 ms on macOS and Android, 900 ms on iOS).",
+      help: "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (1400 ms on macOS and Android, 1400 ms on iOS).",
       tags: ["performance", "media"],
     },
     "messages.messagePrefix": {

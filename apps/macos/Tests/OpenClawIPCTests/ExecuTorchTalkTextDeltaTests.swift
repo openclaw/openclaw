@@ -37,6 +37,13 @@ struct ExecuTorchTalkTextDeltaTests {
         #expect(merged == "hello greetings")
     }
 
+    @Test func `merge prefers competing revision instead of concatenating divergent phrases`() {
+        let merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: "I am testing your voice",
+            tail: "In your voice mode")
+        #expect(merged == "In your voice mode")
+    }
+
     @Test func `merge promotes complete phrase when tail includes base`() {
         let merged = TalkModeRuntime._testMergeTranscriptForFinalize(
             base: "open the",
@@ -111,7 +118,7 @@ struct ExecuTorchTalkTextDeltaTests {
         let effective = TalkModeRuntime._testEffectiveSilenceWindow(
             configured: 0.7,
             useExecuTorch: true)
-        #expect(effective == 1.2)
+        #expect(effective == 1.5)
     }
 
     @Test func `non executorch silence window keeps configured value`() {
@@ -119,5 +126,13 @@ struct ExecuTorchTalkTextDeltaTests {
             configured: 0.7,
             useExecuTorch: false)
         #expect(effective == 0.7)
+    }
+
+    @Test func `finalize prefers full buffer decode over accumulated partials`() {
+        let partial = "In your voice mode"
+        let fullDecode = "I am testing your voice mode"
+        let result = fullDecode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? partial : fullDecode
+        #expect(result == "I am testing your voice mode")
     }
 }

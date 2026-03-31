@@ -242,8 +242,12 @@ private struct ChatMessageBody: View {
             return content.text
         }
         let raw = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        if self.message.role.lowercased() == "user" {
+        let role = self.message.role.lowercased()
+        if role == "user" {
             return TalkPromptBuilder.displayText(fromPrompt: raw)
+        }
+        if role == "assistant" {
+            return raw
         }
         return raw
     }

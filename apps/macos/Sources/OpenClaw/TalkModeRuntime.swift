@@ -18,7 +18,8 @@ actor TalkModeRuntime {
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
-    private static let execuTorchMinSilenceWindowSeconds: TimeInterval = 1.2
+    /// Floor for ExecuTorch path: must exceed typical micro-pauses but stay responsive when the user stops talking.
+    private static let execuTorchMinSilenceWindowSeconds: TimeInterval = 1.5
     private static let execuTorchFinalizeDrainNs: UInt64 = 250_000_000
 
     private final class RMSMeter: @unchecked Sendable {
@@ -90,7 +91,7 @@ actor TalkModeRuntime {
 
     func setEnabled(_ enabled: Bool) async {
         guard enabled != self.isEnabled else { return }
-        self.logger.info("talk: setEnabled(\(enabled)) — \(enabled ? "starting" : "stopping") Talk Mode runtime")
+        self.logger.debug("talk: setEnabled(\(enabled)) — \(enabled ? "starting" : "stopping") Talk Mode runtime")
         self.isEnabled = enabled
         self.lifecycleGeneration &+= 1
         if enabled {
@@ -129,35 +130,42 @@ actor TalkModeRuntime {
 
     private func start() async {
         let gen = self.lifecycleGeneration
-        self.logger.info("talk: start() entered, voiceWakeSupported=\(voiceWakeSupported)")
+        self.logger.debug("talk: start() entered, voiceWakeSupported=\(voiceWakeSupported)")
         guard voiceWakeSupported else {
             self.logger.warning("talk: start() aborted — voice wake not supported")
             return
         }
-        guard PermissionManager.voiceWakePermissionsGranted() else {
-            self.logger.warning("talk: start() aborted — permissions missing")
-            return
-        }
-        self.logger.info("talk: reloading config...")
-        await self.reloadConfig()
         let backendFromApp = await MainActor.run { AppStateStore.shared.talkSttBackend }
         self.useExecuTorch = (backendFromApp == .executorch)
-        self.logger.info("talk: STT backend from app state: \(String(describing: backendFromApp.rawValue), privacy: .public) → useExecuTorch=\(self.useExecuTorch)")
+        if !PermissionManager.talkModePermissionsGranted(useExecuTorch: self.useExecuTorch) {
+            self.logger.debug("talk: permissions not yet granted — requesting interactively...")
+            let granted = await PermissionManager.ensureTalkModePermissions(
+                useExecuTorch: self.useExecuTorch,
+                interactive: true)
+            guard granted else {
+                self.logger.warning("talk: start() aborted — user denied permissions")
+                return
+            }
+            self.logger.debug("talk: permissions granted after interactive request")
+        }
+        self.logger.debug("talk: reloading config...")
+        await self.reloadConfig()
+        self.logger.debug("talk: STT backend from app state: \(String(describing: backendFromApp.rawValue), privacy: .public) → useExecuTorch=\(self.useExecuTorch)")
         if self.useExecuTorch {
-            self.logger.info("talk: STT backend ExecuTorch Parakeet-TDT — loading model...")
+            self.logger.debug("talk: STT backend ExecuTorch Parakeet-TDT — loading model...")
             await MainActor.run { TalkModeController.shared.updatePhase(.loading) }
             do {
                 try await self.etBridge.loadModel()
-                self.logger.info("talk: ExecuTorch model load succeeded")
+                self.logger.debug("talk: ExecuTorch model load succeeded")
             } catch {
                 self.logger.error("talk: ExecuTorch model load failed: \(error.localizedDescription, privacy: .public)")
                 await self.handleExecuTorchLoadFailure()
             }
         } else {
-            self.logger.info("talk: STT backend Apple Speech (no ExecuTorch)")
+            self.logger.debug("talk: STT backend Apple Speech (no ExecuTorch)")
         }
         guard self.isCurrent(gen) else {
-            self.logger.info("talk: start() generation outdated, exiting")
+            self.logger.debug("talk: start() generation outdated, exiting")
             return
         }
         if self.isPaused {
@@ -168,11 +176,11 @@ actor TalkModeRuntime {
             }
             return
         }
-        self.logger.info("talk: starting recognition (useExecuTorch=\(self.useExecuTorch))...")
+        self.logger.debug("talk: starting recognition (useExecuTorch=\(self.useExecuTorch))...")
         await self.startRecognition()
         guard self.isCurrent(gen) else { return }
         self.phase = .listening
-        self.logger.info("talk: recognition started, phase=listening")
+        self.logger.debug("talk: recognition started, phase=listening")
         await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
         self.startSilenceMonitor()
     }
@@ -203,7 +211,7 @@ actor TalkModeRuntime {
     private func handleExecuTorchLoadFailure() async {
         await self.etBridge.shutdown()
         self.useExecuTorch = false
-        self.logger.info("talk: STT backend falling back to Apple Speech")
+        self.logger.debug("talk: STT backend falling back to Apple Speech")
     }
 
     private func handleExecuTorchRecognitionFailure(_ error: Error) async {
@@ -225,22 +233,22 @@ actor TalkModeRuntime {
         if self.useExecuTorch, await self.etBridge.currentState == .listening {
             // Bridge already capturing (e.g. after TTS); just re-enable emission.
             await self.etBridge.setEmissionEnabled(true)
-            self.logger.info("talk: startRecognition() ExecuTorch already listening — emission re-enabled")
+            self.logger.debug("talk: startRecognition() ExecuTorch already listening — emission re-enabled")
             return
         }
         await self.stopRecognition()
         self.recognitionGeneration &+= 1
         let generation = self.recognitionGeneration
-        self.logger.info("talk: startRecognition() generation=\(generation) useExecuTorch=\(self.useExecuTorch)")
+        self.logger.debug("talk: startRecognition() generation=\(generation) useExecuTorch=\(self.useExecuTorch)")
 
         if self.useExecuTorch {
-            self.logger.info("talk: starting ExecuTorch recognition...")
+            self.logger.debug("talk: starting ExecuTorch recognition...")
             await self.startExecuTorchRecognition(generation: generation)
             return
         }
 
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
-        self.logger.info("talk: Apple Speech path — locale=\(locale, privacy: .public)")
+        self.logger.debug("talk: Apple Speech path — locale=\(locale, privacy: .public)")
         self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk: Apple Speech recognizer unavailable (locale=\(locale, privacy: .public))")
@@ -300,15 +308,18 @@ actor TalkModeRuntime {
     // MARK: - ExecuTorch Recognition
 
     private func startExecuTorchRecognition(generation: Int) async {
-        self.logger.info("talk: startExecuTorchRecognition() calling etBridge.startListening...")
+        self.logger.debug("talk: startExecuTorchRecognition() calling etBridge.startListening...")
         do {
-            try await self.etBridge.startListening { [weak self, generation] token, isFinal in
+            try await self.etBridge.startListening { [weak self, generation] token, replaceFullHypothesis in
                 guard let self else { return }
                 Task {
-                    await self.handleExecuTorchToken(token, isFinal: isFinal, generation: generation)
+                    await self.handleExecuTorchToken(
+                        token,
+                        replaceFullHypothesis: replaceFullHypothesis,
+                        generation: generation)
                 }
             }
-            self.logger.info("talk: ExecuTorch startListening returned (offline poll active)")
+            self.logger.debug("talk: ExecuTorch startListening returned (offline poll active)")
         } catch {
             await self.handleExecuTorchRecognitionFailure(error)
             guard generation == self.recognitionGeneration else { return }
@@ -316,7 +327,11 @@ actor TalkModeRuntime {
         }
     }
 
-    private func handleExecuTorchToken(_ token: String, isFinal: Bool, generation: Int) async {
+    private func handleExecuTorchToken(
+        _ token: String,
+        replaceFullHypothesis: Bool,
+        generation: Int) async
+    {
         guard generation == self.recognitionGeneration else { return }
         guard !self.isPaused else { return }
 
@@ -329,7 +344,12 @@ actor TalkModeRuntime {
         // interrupt → re-send → re-speak infinite loop. Suppress all input during speaking;
         // once TTS finishes the controller transitions to .listening and normal input resumes.
         guard self.phase == .listening else { return }
-        self.lastTranscript = Self.mergeTranscriptForFinalize(base: self.lastTranscript, tail: trimmed)
+        if replaceFullHypothesis {
+            // Parakeet revised the whole decode (not incremental); do not merge with prior text.
+            self.lastTranscript = trimmed
+        } else {
+            self.lastTranscript = Self.mergeTranscriptForFinalize(base: self.lastTranscript, tail: trimmed)
+        }
         self.lastHeard = Date()
     }
 
@@ -438,11 +458,13 @@ actor TalkModeRuntime {
         var finalTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if self.useExecuTorch {
             // Give the converter/tap pipeline a short drain window so the last spoken
-            // word lands in the rolling buffer before the forced finalize decode.
+            // word lands in the rolling buffer before the full-buffer decode.
             try? await Task.sleep(nanoseconds: Self.execuTorchFinalizeDrainNs)
-            let finalizeTailDelta = await self.etBridge.forceFinalOfflineDecodeDelta(baseTranscript: finalTranscript)
-            if !finalizeTailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: finalizeTailDelta)
+            // Decode the full rolling buffer as a single utterance for best accuracy.
+            // Fall back to the poll-accumulated transcript if the full decode returns empty.
+            let fullDecode = await self.etBridge.forceFullBufferDecode()
+            if !fullDecode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finalTranscript = fullDecode
             }
         }
 
@@ -478,7 +500,7 @@ actor TalkModeRuntime {
         }
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
-        self.logger.info(
+        self.logger.debug(
             "talk send start runId=\(runId, privacy: .public) " +
                 "session=\(sessionKey, privacy: .public) " +
                 "chars=\(prompt.count, privacy: .public)")
@@ -491,7 +513,7 @@ actor TalkModeRuntime {
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }
-            self.logger.info(
+            self.logger.debug(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
 
@@ -507,7 +529,7 @@ actor TalkModeRuntime {
             }
             guard self.isCurrent(gen) else { return }
 
-            self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
+            self.logger.debug("talk assistant text len=\(assistantText.count, privacy: .public)")
             await self.playAssistant(text: assistantText)
             guard self.isCurrent(gen) else { return }
             await self.resumeListeningIfNeeded()
@@ -536,22 +558,9 @@ actor TalkModeRuntime {
     private func buildPrompt(transcript: String) -> String {
         let interrupted = self.lastInterruptedAtSeconds
         self.lastInterruptedAtSeconds = nil
-        let sttBackend = self.useExecuTorch ? "ExecuTorch Parakeet-TDT" : "Apple Speech"
-        var debugHint: String?
-        if !self.useExecuTorch {
-            let bundleId = Bundle.main.bundleIdentifier
-            let raw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? "nil"
-            if let bundleId {
-                debugHint = "bundle=\(bundleId), raw=\(raw). To use Parakeet run: defaults write \(bundleId) openclaw.talkSttBackend executorch"
-            } else {
-                debugHint = "bundle=nil (raw executable from Xcode). Try: defaults write OpenClaw openclaw.talkSttBackend executorch then quit and relaunch. Or run the packaged app (dist/OpenClaw.app) and use: defaults write ai.openclaw.mac.debug openclaw.talkSttBackend executorch"
-            }
-        }
         return TalkPromptBuilder.build(
             transcript: transcript,
-            interruptedAtSeconds: interrupted,
-            sttBackendName: sttBackend,
-            sttBackendDebugHint: debugHint
+            interruptedAtSeconds: interrupted
         )
     }
 
@@ -664,17 +673,17 @@ actor TalkModeRuntime {
         }
         if let voice = resolvedVoice {
             if directive?.once == true {
-                self.logger.info("talk voice override (once) voiceId=\(voice, privacy: .public)")
+                self.logger.debug("talk voice override (once) voiceId=\(voice, privacy: .public)")
             } else {
                 self.currentVoiceId = voice
                 self.voiceOverrideActive = true
-                self.logger.info("talk voice override voiceId=\(voice, privacy: .public)")
+                self.logger.debug("talk voice override voiceId=\(voice, privacy: .public)")
             }
         }
 
         if let model = directive?.modelId {
             if directive?.once == true {
-                self.logger.info("talk model override (once) modelId=\(model, privacy: .public)")
+                self.logger.debug("talk model override (once) modelId=\(model, privacy: .public)")
             } else {
                 self.currentModelId = model
                 self.modelOverrideActive = true
@@ -701,7 +710,7 @@ actor TalkModeRuntime {
             self.ttsLogger.warning("talk TTS: missing voiceId; falling back to system voice")
         } else if let voiceId {
             self.ttsLogger
-                .info(
+                .debug(
                     "talk TTS request voiceId=\(voiceId, privacy: .public) " +
                         "chars=\(cleaned.count, privacy: .public)")
         }
@@ -753,7 +762,7 @@ actor TalkModeRuntime {
         }
 
         let request = makeRequest(outputFormat: outputFormat)
-        self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
+        self.ttsLogger.debug("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
         let client = ElevenLabsTTSClient(apiKey: apiKey)
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
@@ -772,7 +781,7 @@ actor TalkModeRuntime {
             makeRequest: makeRequest,
             stream: stream)
         self.ttsLogger
-            .info(
+            .debug(
                 "talk audio result finished=\(result.finished, privacy: .public) " +
                     "interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
         if !result.finished, result.interruptedAt == nil {
@@ -814,7 +823,7 @@ actor TalkModeRuntime {
     }
 
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
-        self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
+        self.ttsLogger.debug("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
         if self.interruptOnSpeech {
             guard await self.prepareForPlayback(generation: input.generation) else { return }
         }
@@ -827,7 +836,7 @@ actor TalkModeRuntime {
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
             language: ttsLanguage)
-        self.ttsLogger.info("talk system voice done")
+        self.ttsLogger.debug("talk system voice done")
     }
 
     private func prepareForPlayback(generation: Int) async -> Bool {
@@ -866,7 +875,7 @@ actor TalkModeRuntime {
             }
             let name = first.name ?? "unknown"
             self.ttsLogger
-                .info("talk default voice selected \(name, privacy: .public) (\(first.voiceId, privacy: .public))")
+                .debug("talk default voice selected \(name, privacy: .public) (\(first.voiceId, privacy: .public))")
             return first.voiceId
         } catch {
             self.ttsLogger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
@@ -943,7 +952,7 @@ actor TalkModeRuntime {
         guard baseTokens.count >= 3, tailTokens.count >= 3 else { return false }
 
         let similarity = Self.tokenJaccardSimilarity(baseTokens, tailTokens)
-        if similarity >= 0.35 { return true }
+        if similarity >= 0.28 { return true }
         return Self.looksCompleteUtterance(base) && Self.looksCompleteUtterance(tail)
     }
 
@@ -1082,7 +1091,7 @@ extension TalkModeRuntime {
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
         self.logger
-            .info(
+            .debug(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
@@ -1120,16 +1129,16 @@ extension TalkModeRuntime {
                 sagVoice: sagVoice,
                 envApiKey: envApiKey)
             if parsed.missingResolvedPayload {
-                self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
+                self.ttsLogger.debug("talk config ignored: normalized payload missing talk.resolved")
             }
             await MainActor.run {
                 AppStateStore.shared.seamColorHex = parsed.seamColorHex
             }
             if parsed.activeProvider != Self.defaultTalkProvider {
                 self.ttsLogger
-                    .info("talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
+                    .debug("talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
             } else if parsed.normalizedPayload {
-                self.ttsLogger.info("talk config provider from talk.resolved")
+                self.ttsLogger.debug("talk config provider from talk.resolved")
             }
             return parsed
         } catch {
