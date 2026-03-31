@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const installPluginFromPathMock = vi.fn();
@@ -20,6 +20,9 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
   }),
 );
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+let installPluginFromMarketplace: typeof import("./marketplace.js").installPluginFromMarketplace;
+let listMarketplacePlugins: typeof import("./marketplace.js").listMarketplacePlugins;
+let resolveMarketplaceInstallShortcut: typeof import("./marketplace.js").resolveMarketplaceInstallShortcut;
 
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
@@ -37,6 +40,11 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
+
+beforeAll(async () => {
+  ({ installPluginFromMarketplace, listMarketplacePlugins, resolveMarketplaceInstallShortcut } =
+    await import("./marketplace.js"));
+});
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-test-"));
@@ -96,7 +104,6 @@ function mockRemoteMarketplaceClone(params: { manifest: unknown; pluginDir?: str
 async function expectRemoteMarketplaceError(params: { manifest: unknown; expectedError: string }) {
   mockRemoteMarketplaceClone({ manifest: params.manifest });
 
-  const { listMarketplacePlugins } = await import("./marketplace.js");
   const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
 
   expect(result).toEqual({
@@ -188,7 +195,6 @@ describe("marketplace plugins", () => {
         ],
       });
 
-      const { listMarketplacePlugins } = await import("./marketplace.js");
       expectMarketplaceManifestListing(await listMarketplacePlugins({ marketplace: rootDir }));
     });
   });
@@ -216,7 +222,6 @@ describe("marketplace plugins", () => {
         extensions: ["index.ts"],
       });
 
-      const { installPluginFromMarketplace } = await import("./marketplace.js");
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
         plugin: "frontend-design",
@@ -248,7 +253,6 @@ describe("marketplace plugins", () => {
         }),
       );
 
-      const { resolveMarketplaceInstallShortcut } = await import("./marketplace.js");
       const shortcut = await withEnvAsync(
         { HOME: homeDir, OPENCLAW_HOME: openClawHome },
         async () => await resolveMarketplaceInstallShortcut("superpowers@claude-plugins-official"),
@@ -283,7 +287,6 @@ describe("marketplace plugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { installPluginFromMarketplace } = await import("./marketplace.js");
     const result = await installPluginFromMarketplace({
       marketplace: "owner/repo",
       plugin: "frontend-design",
@@ -307,7 +310,6 @@ describe("marketplace plugins", () => {
         ],
       });
 
-      const { installPluginFromMarketplace } = await import("./marketplace.js");
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
         plugin: "frontend-design",

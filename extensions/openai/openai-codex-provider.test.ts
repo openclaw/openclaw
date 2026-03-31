@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 
@@ -9,10 +9,12 @@ vi.mock("./openai-codex-provider.runtime.js", () => ({
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
 
 describe("openai codex provider", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    refreshOpenAICodexTokenMock.mockReset();
+  beforeAll(async () => {
     ({ buildOpenAICodexProviderPlugin } = await import("./openai-codex-provider.js"));
+  });
+
+  beforeEach(() => {
+    refreshOpenAICodexTokenMock.mockReset();
   });
 
   it("falls back to the cached credential when accountId extraction fails", async () => {

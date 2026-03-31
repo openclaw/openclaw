@@ -34,9 +34,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 export const runtime = createTestRuntime();
 
+let agentsCommandModulePromise: Promise<typeof import("./agents.js")> | undefined;
+
 export async function loadFreshAgentsCommandModuleForTest() {
-  vi.resetModules();
-  return await import("./agents.js");
+  agentsCommandModulePromise ??= import("./agents.js");
+  return await agentsCommandModulePromise;
 }
 
 export function resetAgentsBindTestHarness(): void {

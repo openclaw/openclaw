@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
@@ -11,9 +11,11 @@ type OutboundMediaModule = typeof import("./outbound-media.js");
 let loadOutboundMediaFromUrl: OutboundMediaModule["loadOutboundMediaFromUrl"];
 
 describe("loadOutboundMediaFromUrl", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ loadOutboundMediaFromUrl } = await import("./outbound-media.js"));
+  });
+
+  beforeEach(() => {
     loadWebMediaMock.mockReset();
   });
 

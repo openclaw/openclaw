@@ -19,6 +19,7 @@ export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   agentConfigOverride?: {
+    model?: unknown;
     subagents?: {
       model?: unknown;
     };
@@ -62,6 +63,7 @@ export async function resolveCronModelSelection(
 
   const subagentModelRaw =
     normalizeModelSelection(params.agentConfigOverride?.subagents?.model) ??
+    normalizeModelSelection(params.agentConfigOverride?.model) ??
     normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({

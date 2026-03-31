@@ -12,7 +12,6 @@ import {
 
 installSignalToolResultTestHooks();
 
-vi.resetModules();
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =

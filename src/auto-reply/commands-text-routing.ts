@@ -14,7 +14,7 @@ export function isNativeCommandSurface(surface?: string): boolean {
   if (!cachedNativeCommandSurfaces || cachedNativeCommandSurfacesVersion !== registryVersion) {
     cachedNativeCommandSurfaces = new Set(
       listChannelPlugins()
-        .filter((plugin) => plugin.capabilities.nativeCommands)
+        .filter((plugin) => plugin.capabilities?.nativeCommands === true)
         .map((plugin) => plugin.id),
     );
     cachedNativeCommandSurfacesVersion = registryVersion;

@@ -309,8 +309,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       return;
     }
     expectPositionalArgvCarrierRejected(`sh -lc "exec
-$0 \\"$1\\"" touch {marker}`,
-    );
+$0 \\"$1\\"" touch {marker}`);
   });
 
   it("rejects positional argv carriers when inline command contains extra shell operations", () => {
