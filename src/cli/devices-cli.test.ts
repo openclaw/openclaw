@@ -400,6 +400,7 @@ describe("devices cli list", () => {
     expect(output).toContain("win32 / 10");
     expect(output).toContain("10.0.0.2");
     expect(output).toMatch(/Last active/);
+    expect(output).toMatch(/\b(?:\d+[smhdw]|just now)\b(?:\s+ago)?/i);
   });
 });
 
