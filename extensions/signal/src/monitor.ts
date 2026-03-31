@@ -8,6 +8,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { runOutboundMessageHook } from "openclaw/plugin-sdk/plugin-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -306,10 +307,17 @@ async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
+    const hookResult = await runOutboundMessageHook({
+      to: target,
+      content: payload.text ?? "",
+      channel: "signal",
+      accountId,
+    });
+    if (hookResult === null) continue;
     const reply = resolveSendableOutboundReplyParts(payload);
     const delivered = await deliverTextOrMediaReply({
       payload,
-      text: reply.text,
+      text: hookResult.content || reply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {

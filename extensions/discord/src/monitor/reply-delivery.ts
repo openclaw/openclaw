@@ -2,6 +2,7 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { runOutboundMessageHook } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
@@ -269,9 +270,16 @@ export async function deliverDiscordReply(params: {
     : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
+    const hookResult = await runOutboundMessageHook({
+      to: params.target,
+      content: payload.text ?? "",
+      channel: "discord",
+      accountId: params.accountId,
+    });
+    if (hookResult === null) continue;
     const tableMode = params.tableMode ?? "code";
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: convertMarkdownTables(payload.text ?? "", tableMode),
+      text: convertMarkdownTables(hookResult.content, tableMode),
     });
     if (!reply.hasContent) {
       continue;

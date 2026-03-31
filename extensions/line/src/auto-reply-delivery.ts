@@ -1,4 +1,5 @@
 import type { messagingApi } from "@line/bot-sdk";
+import { runOutboundMessageHook } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { FlexContainer } from "./flex-templates.js";
@@ -114,8 +115,26 @@ export async function deliverLineAutoReply(params: {
     richMessages.push(deps.createLocationMessage(lineData.location));
   }
 
-  const processed = payload.text
-    ? deps.processLineMessage(payload.text)
+  // Run the message_sending hook only when there is text to potentially modify or cancel.
+  // When only rich messages (flex/template/location) exist, skip the hook — a plugin
+  // seeing empty text should not inadvertently cancel non-text rich content.
+  let effectiveText = payload.text ?? "";
+  if (effectiveText) {
+    const hookResult = await runOutboundMessageHook({
+      to,
+      content: effectiveText,
+      channel: "line",
+      accountId,
+    });
+    if (hookResult === null && richMessages.length === 0) {
+      return { replyTokenUsed };
+    }
+    if (hookResult !== null) {
+      effectiveText = hookResult.content;
+    }
+  }
+  const processed = effectiveText
+    ? deps.processLineMessage(effectiveText)
     : { text: "", flexMessages: [] };
 
   for (const flexMsg of processed.flexMessages) {

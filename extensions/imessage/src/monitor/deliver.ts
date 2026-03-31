@@ -1,5 +1,6 @@
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { runOutboundMessageHook } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -34,7 +35,14 @@ export async function deliverReplies(params: {
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
-    const rawText = sanitizeOutboundText(payload.text ?? "");
+    const hookResult = await runOutboundMessageHook({
+      to: target,
+      content: sanitizeOutboundText(payload.text ?? ""),
+      channel: "imessage",
+      accountId,
+    });
+    if (hookResult === null) continue;
+    const rawText = hookResult.content;
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(rawText, tableMode),
     });

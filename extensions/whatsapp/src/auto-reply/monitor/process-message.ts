@@ -425,6 +425,7 @@ export async function processMessage(params: {
           maxMediaBytes: params.maxMediaBytes,
           textLimit,
           chunkMode,
+          accountId: params.route.accountId,
           replyLogger: params.replyLogger,
           connectionId: params.connectionId,
           skipLog: false,
