@@ -12,7 +12,11 @@ import amazonBedrockPlugin from "./index.js";
 type TestStreamModel = { api: string; provider: string; id: string };
 type TestStreamContext = { messages: unknown[] };
 type TestStreamOptions = Record<string, unknown>;
-type TestStreamFn = (model: TestStreamModel, context: TestStreamContext, options: TestStreamOptions) => TestStreamOptions;
+type TestStreamFn = (
+  model: TestStreamModel,
+  context: TestStreamContext,
+  options: TestStreamOptions,
+) => TestStreamOptions;
 type TestConfig = {
   models?: {
     bedrockDiscovery?: { region?: string };
@@ -23,16 +27,21 @@ type TestConfig = {
 const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
 const passThroughFn: TestStreamFn = (_model, _context, options) => options;
 
-function wrapStream(modelId: string, config?: TestConfig) {
+function wrapStream(modelId: string, config?: TestConfig, model?: { baseUrl?: string }) {
   return provider.wrapStreamFn?.({
     provider: "amazon-bedrock",
     modelId,
     config,
+    model,
     streamFn: passThroughFn,
   } as never) as TestStreamFn | null | undefined;
 }
 
-function invokeWrapped(wrapped: TestStreamFn | null | undefined, modelId: string, api = "bedrock-converse-stream") {
+function invokeWrapped(
+  wrapped: TestStreamFn | null | undefined,
+  modelId: string,
+  api = "bedrock-converse-stream",
+) {
   return wrapped?.({ api, provider: "amazon-bedrock", id: modelId }, { messages: [] }, {});
 }
 
@@ -390,6 +399,24 @@ describe("amazon-bedrock provider plugin", () => {
         },
       });
       // Model resolution uses exact key "amazon-bedrock"; region must match.
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-west-1" });
+    });
+
+    it("falls back to resolved model baseUrl when config has no region", () => {
+      const modelId = "us.anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(modelId, undefined, {
+        baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+      });
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "us-west-2" });
+    });
+
+    it("prefers config region over resolved model baseUrl", () => {
+      const modelId = "eu.anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(
+        modelId,
+        { models: { bedrockDiscovery: { region: "eu-west-1" } } },
+        { baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com" },
+      );
       expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-west-1" });
     });
 

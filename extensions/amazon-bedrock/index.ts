@@ -142,10 +142,10 @@ export default definePluginEntry({
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       },
-      wrapStreamFn: ({ modelId, config, streamFn }) => {
+      wrapStreamFn: ({ modelId, config, model, streamFn }) => {
         // Apply guardrail + base stream wrapping from the pre-built wrapStreamFn.
         const wrapped = wrapStreamFn({ modelId, streamFn });
-        const region = resolveBedrockRegion(config);
+        const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
 
         if (!region) {
           return wrapped;
