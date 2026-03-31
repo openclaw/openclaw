@@ -2135,6 +2135,7 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   error?: string;
+  // Undefined values mean "omit this key during serialization", not "emit a JSON null".
   metadata?: Record<string, string | number | boolean | undefined>;
 };
 
