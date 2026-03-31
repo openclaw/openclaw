@@ -11,6 +11,7 @@
  * - Cold storage: Existing .jsonl transcript files (unchanged)
  */
 import { existsSync } from "node:fs";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { loadConfig } from "../config.js";
 import type { SessionStoreType } from "../types.base.js";
 import {
@@ -43,11 +44,11 @@ export function resolveSessionStoreType(): SessionStoreType {
 
 /**
  * Check if SQLite is available in the current Node runtime.
+ * Uses createRequire-based loader to work correctly in ESM context.
  */
 export function isSqliteAvailable(): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("node:sqlite");
+    requireNodeSqlite();
     return true;
   } catch {
     return false;

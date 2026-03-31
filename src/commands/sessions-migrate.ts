@@ -6,7 +6,6 @@ import { loadConfig } from "../config/config.js";
 import {
   getSessionStoreStats,
   isSqliteAvailable,
-  resolveEffectiveStoreType,
 } from "../config/sessions/store-facade.js";
 import {
   getSessionCountSqlite,
