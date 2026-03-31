@@ -611,9 +611,11 @@ export async function runReplyAgent(params: {
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
+        agent: agentId,
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey,
@@ -621,6 +623,7 @@ export async function runReplyAgent(params: {
         channel: replyToChannel,
         provider: providerUsed,
         model: modelUsed,
+        agent: agentId,
         usage: {
           input,
           output,
@@ -650,6 +653,7 @@ export async function runReplyAgent(params: {
         ? resolveModelCostConfig({
             provider: providerUsed,
             model: modelUsed,
+        agent: agentId,
             config: cfg,
           })
         : undefined;
