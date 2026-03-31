@@ -33,6 +33,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("surfaces timed-out exec tool errors for cron-triggered custom session keys", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        timedOut: true,
+        error: "Command timed out after 1800 seconds.",
+      },
+      sessionKey: "agent:main:project-alpha",
+      isCronTrigger: true,
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      detail: "Command timed out after 1800 seconds.",
+    });
+  });
+
   it("keeps non-timeout exec tool errors suppressed for cron sessions when verbose mode is off", () => {
     expectNoPayloads({
       lastToolError: { toolName: "exec", error: "Command not found" },
