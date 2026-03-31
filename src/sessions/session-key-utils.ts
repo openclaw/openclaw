@@ -9,6 +9,13 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
+export type ParsedSessionConversationRef = {
+  channel: string;
+  kind: "group" | "channel";
+  id: string;
+  threadId: string | undefined;
+};
+
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
  * Returned values are normalized to lowercase for stable comparisons/routing.
@@ -138,16 +145,54 @@ export function parseThreadSessionSuffix(
 
   const channelHint =
     normalizeThreadSuffixChannelHint(options?.channelHint) ?? inferThreadSuffixChannelHint(raw);
-  const topicIndex = channelHint === "telegram" ? raw.lastIndexOf(":topic:") : -1;
-  const threadIndex = raw.lastIndexOf(":thread:");
+  const lowerRaw = raw.toLowerCase();
+  const topicMarker = ":topic:";
+  const threadMarker = ":thread:";
+  const topicIndex = channelHint === "telegram" ? lowerRaw.lastIndexOf(topicMarker) : -1;
+  const threadIndex = lowerRaw.lastIndexOf(threadMarker);
   const markerIndex = Math.max(topicIndex, threadIndex);
-  const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
+  const marker = topicIndex > threadIndex ? topicMarker : threadMarker;
 
   const baseSessionKey = markerIndex === -1 ? raw : raw.slice(0, markerIndex);
   const threadIdRaw = markerIndex === -1 ? undefined : raw.slice(markerIndex + marker.length);
   const threadId = threadIdRaw?.trim() || undefined;
 
   return { baseSessionKey, threadId };
+}
+
+export function parseSessionConversationRef(
+  sessionKey: string | undefined | null,
+): ParsedSessionConversationRef | null {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const rawParts = raw.split(":").filter(Boolean);
+  const parts =
+    rawParts.length >= 3 && rawParts[0]?.trim().toLowerCase() === "agent"
+      ? rawParts.slice(2)
+      : rawParts;
+  if (parts.length < 3) {
+    return null;
+  }
+
+  const channel = normalizeThreadSuffixChannelHint(parts[0]);
+  const kind = parts[1]?.trim().toLowerCase();
+  if (!channel || (kind !== "group" && kind !== "channel")) {
+    return null;
+  }
+
+  const joined = parts.slice(2).join(":");
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(joined, {
+    channelHint: channel,
+  });
+  const id = (baseSessionKey ?? joined).trim();
+  if (!id) {
+    return null;
+  }
+
+  return { channel, kind, id, threadId };
 }
 
 export function resolveThreadParentSessionKey(

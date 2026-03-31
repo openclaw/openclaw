@@ -113,6 +113,19 @@ describe("thread session suffix parsing", () => {
       "agent:main:telegram:group:-100123",
     );
   });
+
+  it("parses mixed-case suffix markers without lowercasing the stored key", () => {
+    expect(
+      parseThreadSessionSuffix("agent:main:slack:channel:General:Thread:1699999999.0001"),
+    ).toEqual({
+      baseSessionKey: "agent:main:slack:channel:General",
+      threadId: "1699999999.0001",
+    });
+    expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:Topic:77")).toEqual({
+      baseSessionKey: "agent:main:telegram:group:-100123",
+      threadId: "77",
+    });
+  });
 });
 
 describe("session key canonicalization", () => {
