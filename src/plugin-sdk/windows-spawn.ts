@@ -265,7 +265,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
       windowsHide: params.candidate.windowsHide,
     };
   }
-  if (params.allowShellFallback !== false) {
+  if (params.allowShellFallback === true) {
     return {
       command: params.candidate.command,
       leadingArgv: [],
