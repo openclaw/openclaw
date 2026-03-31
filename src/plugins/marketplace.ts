@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
@@ -595,6 +598,29 @@ function resolveSafeMarketplaceDownloadFileName(url: string, fallback: string): 
   return fileName;
 }
 
+function resolveMarketplaceDownloadTimeoutMs(timeoutMs?: number): number {
+  const resolvedTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? timeoutMs
+      : DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS;
+  return Math.max(1_000, Math.floor(resolvedTimeoutMs));
+}
+
+function formatMarketplaceDownloadError(url: string, detail: string): string {
+  return (
+    `failed to download ${sanitizeForLog(redactSensitiveUrlLikeString(url))}: ` +
+    sanitizeForLog(detail)
+  );
+}
+
+function hasStreamingResponseBody(
+  response: Response,
+): response is Response & { body: ReadableStream<Uint8Array> } {
+  return Boolean(
+    response.body && typeof (response.body as { getReader?: unknown }).getReader === "function",
+  );
+}
+
 async function downloadUrlToTempFile(
   url: string,
   timeoutMs?: number,
@@ -613,10 +639,7 @@ async function downloadUrlToTempFile(
   let tmpDir: string | undefined;
   try {
     sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
-    const downloadTimeoutMs = Math.max(
-      1_000,
-      Math.floor(timeoutMs ?? DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS),
-    );
+    const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
     const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url,
       timeoutMs: downloadTimeoutMs,
@@ -624,10 +647,23 @@ async function downloadUrlToTempFile(
     });
     try {
       if (!response.ok) {
-        return { ok: false, error: `failed to download ${url}: HTTP ${response.status}` };
+        return {
+          ok: false,
+          error: formatMarketplaceDownloadError(url, `HTTP ${response.status}`),
+        };
       }
       if (!response.body) {
-        return { ok: false, error: `failed to download ${url}: empty response body` };
+        return {
+          ok: false,
+          error: formatMarketplaceDownloadError(url, "empty response body"),
+        };
+      }
+      // Fail closed unless we can stream and enforce the archive size bound incrementally.
+      if (!hasStreamingResponseBody(response)) {
+        return {
+          ok: false,
+          error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
+        };
       }
 
       const contentLength = response.headers.get("content-length");
@@ -673,7 +709,7 @@ async function downloadUrlToTempFile(
     }
     return {
       ok: false,
-      error: `failed to download ${url}: ${error instanceof Error ? error.message : String(error)}`,
+      error: formatMarketplaceDownloadError(url, formatErrorMessage(error)),
     };
   }
 }

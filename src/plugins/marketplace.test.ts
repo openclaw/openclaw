@@ -368,6 +368,51 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("falls back to the default archive timeout when the caller passes NaN", async () => {
+    await withTempDir(async (rootDir) => {
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: new Response(new Blob([Buffer.from("tgz-bytes")]), {
+          status: 200,
+        }),
+        finalUrl: "https://cdn.example.com/releases/12345",
+        release: vi.fn(async () => undefined),
+      });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+        timeoutMs: Number.NaN,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        pluginId: "frontend-design",
+      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://example.com/frontend-design.tgz",
+          timeoutMs: 120_000,
+          auditContext: "marketplace-plugin-download",
+        }),
+      );
+    });
+  });
+
   it("downloads archive plugin sources through the SSRF guard", async () => {
     await withTempDir(async (rootDir) => {
       const release = vi.fn(async () => {
@@ -423,6 +468,45 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("rejects non-streaming archive responses before buffering them", async () => {
+    await withTempDir(async (rootDir) => {
+      const arrayBuffer = vi.fn(async () => new Uint8Array([1, 2, 3]).buffer);
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          body: {} as Response["body"],
+          headers: new Headers(),
+          arrayBuffer,
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "streaming response body unavailable",
+      });
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("cleans up a partial download temp dir when streaming the archive fails", async () => {
     await withTempDir(async (rootDir) => {
       const beforeTempDirs = await listMarketplaceDownloadTempDirs();
@@ -457,6 +541,49 @@ describe("marketplace plugins", () => {
           "download too large: 314572800 bytes (limit: 268435456 bytes)",
       });
       expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("sanitizes archive download errors before returning them", async () => {
+    await withTempDir(async (rootDir) => {
+      fetchWithSsrFGuardMock.mockRejectedValueOnce(
+        new Error(
+          "blocked\n\u001b[31mAuthorization: Bearer sk-1234567890abcdefghijklmnop\u001b[0m",
+        ),
+      );
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://user:pass@example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.error).toContain(
+        "failed to download https://***:***@example.com/frontend-design.tgz:",
+      );
+      expect(result.error).toContain("Authorization: Bearer sk-123…mnop");
+      expect(result.error).not.toContain("user:pass@");
+      let hasControlChars = false;
+      for (const char of result.error) {
+        const codePoint = char.codePointAt(0);
+        if (codePoint != null && (codePoint < 0x20 || codePoint === 0x7f)) {
+          hasControlChars = true;
+          break;
+        }
+      }
+      expect(hasControlChars).toBe(false);
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
