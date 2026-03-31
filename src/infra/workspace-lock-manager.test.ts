@@ -439,30 +439,33 @@ describe("workspace lock manager", () => {
     await lockB.release();
   });
 
-  it("preserves case-sensitive distinct missing-file lock targets", async () => {
-    const dir = await makeCaseDir();
-    const targetUpper = path.join(dir, "New", "State.JSON");
-    const targetLower = path.join(dir, "new", "state.json");
+  it.skipIf(process.platform === "win32")(
+    "preserves case-sensitive distinct missing-file lock targets",
+    async () => {
+      const dir = await makeCaseDir();
+      const targetUpper = path.join(dir, "New", "State.JSON");
+      const targetLower = path.join(dir, "new", "state.json");
 
-    const lockA = await acquireWorkspaceLock(targetUpper, {
-      kind: "file",
-      timeoutMs: 100,
-      pollIntervalMs: 5,
-      ttlMs: 5_000,
-    });
+      const lockA = await acquireWorkspaceLock(targetUpper, {
+        kind: "file",
+        timeoutMs: 100,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      });
 
-    const lockB = await acquireWorkspaceLock(targetLower, {
-      kind: "file",
-      timeoutMs: 100,
-      pollIntervalMs: 5,
-      ttlMs: 5_000,
-    });
+      const lockB = await acquireWorkspaceLock(targetLower, {
+        kind: "file",
+        timeoutMs: 100,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      });
 
-    expect(lockA.lockPath).not.toBe(lockB.lockPath);
+      expect(lockA.lockPath).not.toBe(lockB.lockPath);
 
-    await lockA.release();
-    await lockB.release();
-  });
+      await lockA.release();
+      await lockB.release();
+    },
+  );
 
   it("keeps file lock path stable when parent directories appear later", async () => {
     const dir = await makeCaseDir();
@@ -500,41 +503,44 @@ describe("workspace lock manager", () => {
     await lockB.release();
   });
 
-  it("keeps mixed-case lock identity stable after materialization", async () => {
-    const dir = await makeCaseDir();
-    const target = path.join(dir, "New", "State.JSON");
+  it.skipIf(process.platform === "win32")(
+    "keeps mixed-case lock identity stable after materialization",
+    async () => {
+      const dir = await makeCaseDir();
+      const target = path.join(dir, "New", "State.JSON");
 
-    const lockA = await acquireWorkspaceLock(target, {
-      kind: "file",
-      timeoutMs: 100,
-      pollIntervalMs: 5,
-      ttlMs: 5_000,
-    });
-    const firstPath = lockA.lockPath;
-
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, "payload", "utf8");
-
-    await expect(
-      acquireWorkspaceLock(target, {
+      const lockA = await acquireWorkspaceLock(target, {
         kind: "file",
-        timeoutMs: 25,
+        timeoutMs: 100,
         pollIntervalMs: 5,
         ttlMs: 5_000,
-      }),
-    ).rejects.toThrow(/workspace lock timeout/);
+      });
+      const firstPath = lockA.lockPath;
 
-    await lockA.release();
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, "payload", "utf8");
 
-    const lockB = await acquireWorkspaceLock(target, {
-      kind: "file",
-      timeoutMs: 100,
-      pollIntervalMs: 5,
-      ttlMs: 5_000,
-    });
-    expect(lockB.lockPath).toBe(firstPath);
-    await lockB.release();
-  });
+      await expect(
+        acquireWorkspaceLock(target, {
+          kind: "file",
+          timeoutMs: 25,
+          pollIntervalMs: 5,
+          ttlMs: 5_000,
+        }),
+      ).rejects.toThrow(/workspace lock timeout/);
+
+      await lockA.release();
+
+      const lockB = await acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 100,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      });
+      expect(lockB.lockPath).toBe(firstPath);
+      await lockB.release();
+    },
+  );
 
   it("backs off when stale lock deletion fails", async () => {
     const dir = await makeCaseDir();
@@ -854,38 +860,41 @@ describe("workspace lock manager", () => {
     }
   });
 
-  it("preserves distinct unresolved file-path casing on case-sensitive darwin volumes", async () => {
-    const dir = await makeCaseDir();
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    if (!originalPlatformDescriptor) {
-      throw new Error("missing process.platform descriptor");
-    }
+  it.skipIf(process.platform === "win32")(
+    "preserves distinct unresolved file-path casing on case-sensitive darwin volumes",
+    async () => {
+      const dir = await makeCaseDir();
+      const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      if (!originalPlatformDescriptor) {
+        throw new Error("missing process.platform descriptor");
+      }
 
-    Object.defineProperty(process, "platform", {
-      ...originalPlatformDescriptor,
-      value: "darwin",
-    });
-
-    try {
-      const upper = await acquireWorkspaceLock(path.join(dir, "New", "State.json"), {
-        kind: "file",
-        timeoutMs: 100,
-        ttlMs: 5_000,
-      });
-      await upper.release();
-
-      const lower = await acquireWorkspaceLock(path.join(dir, "new", "state.json"), {
-        kind: "file",
-        timeoutMs: 100,
-        ttlMs: 5_000,
+      Object.defineProperty(process, "platform", {
+        ...originalPlatformDescriptor,
+        value: "darwin",
       });
 
-      expect(lower.lockPath).not.toBe(upper.lockPath);
-      await lower.release();
-    } finally {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
-  });
+      try {
+        const upper = await acquireWorkspaceLock(path.join(dir, "New", "State.json"), {
+          kind: "file",
+          timeoutMs: 100,
+          ttlMs: 5_000,
+        });
+        await upper.release();
+
+        const lower = await acquireWorkspaceLock(path.join(dir, "new", "state.json"), {
+          kind: "file",
+          timeoutMs: 100,
+          ttlMs: 5_000,
+        });
+
+        expect(lower.lockPath).not.toBe(upper.lockPath);
+        await lower.release();
+      } finally {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    },
+  );
 
   it("creates cross-user writable lock directories", async () => {
     const dir = await makeCaseDir();

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -59,7 +59,7 @@ async function shouldNormalizeUnresolvedPathCase(targetPath: string): Promise<bo
 
 async function probeDirectoryCaseInsensitive(existingPath: string): Promise<boolean> {
   const parent = path.dirname(existingPath);
-  const probeName = `.openclaw-case-probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const probeName = `.openclaw-case-probe-${process.pid}-${randomUUID()}`;
   const probePath = path.join(parent, probeName);
   const altPath = path.join(parent, probeName.toUpperCase());
   await fs.writeFile(probePath, "", { flag: "wx" });
@@ -473,7 +473,7 @@ export async function acquireWorkspaceLock(
       const handle = await fs.open(lockPath, "wx");
       const now = Date.now();
       const payload: LockPayload = {
-        token: `${process.pid}-${now}-${Math.random().toString(16).slice(2)}`,
+        token: `${process.pid}-${now}-${randomUUID()}`,
         pid: process.pid,
         createdAt: new Date(now).toISOString(),
         expiresAt: new Date(now + ttlMs).toISOString(),

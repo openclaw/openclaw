@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -679,7 +680,7 @@ async function shouldNormalizeMutationLockCase(targetPath: string): Promise<bool
 
 async function probeDirectoryCaseInsensitive(existingPath: string): Promise<boolean> {
   const parent = path.dirname(existingPath);
-  const probeName = `.openclaw-case-probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const probeName = `.openclaw-case-probe-${process.pid}-${randomUUID()}`;
   const probePath = path.join(parent, probeName);
   const altPath = path.join(parent, probeName.toUpperCase());
   await fs.writeFile(probePath, "", { flag: "wx" });
