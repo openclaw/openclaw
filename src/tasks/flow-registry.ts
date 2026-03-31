@@ -263,15 +263,15 @@ export function syncFlowFromTask(
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: resolveFlowGoal(task),
-    blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || undefined : undefined,
+    blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
     blockedSummary:
-      terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? undefined) : undefined,
+      terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     updatedAt: task.lastEventAt ?? Date.now(),
     ...(isTerminal
       ? {
           endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
         }
-      : { endedAt: undefined }),
+      : { endedAt: null }),
   });
 }
 
