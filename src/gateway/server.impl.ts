@@ -1,5 +1,4 @@
 import path from "node:path";
-import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -54,7 +53,10 @@ import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
-import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
+import {
+  resolveConfiguredDeferredChannelPluginIds,
+  resolveGatewayStartupPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -76,6 +78,10 @@ import {
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  getInspectableTaskRegistrySummary,
+  startTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -582,6 +588,13 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
+  const startupPluginIds = minimalTestGateway
+    ? []
+    : resolveGatewayStartupPluginIds({
+        config: gatewayPluginConfigAtStart,
+        workspaceDir: defaultWorkspaceDir,
+        env: process.env,
+      });
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
@@ -593,6 +606,7 @@ export async function startGatewayServer(
       log,
       coreGatewayHandlers,
       baseMethods,
+      pluginIds: startupPluginIds,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
   } else {
@@ -894,6 +908,7 @@ export async function startGatewayServer(
         });
 
     if (!minimalTestGateway) {
+      startTaskRegistryMaintenance();
       ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } =
         startGatewayMaintenanceTimers({
           broadcast,
@@ -1348,6 +1363,7 @@ export async function startGatewayServer(
           log,
           coreGatewayHandlers,
           baseMethods,
+          pluginIds: startupPluginIds,
           logDiagnostics: false,
         }));
       }

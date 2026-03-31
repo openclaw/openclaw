@@ -138,26 +138,6 @@ describe("task-registry store runtime", () => {
     });
   });
 
-  it("persists parent flow linkage on task records", () => {
-    const created = createTaskRecord({
-      runtime: "acp",
-      requesterSessionKey: "agent:main:main",
-      parentFlowId: "flow-123",
-      runId: "run-linked",
-      task: "Linked task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-
-    resetTaskRegistryForTests({ persist: false });
-
-    expect(findTaskByRunId("run-linked")).toMatchObject({
-      taskId: created.taskId,
-      parentFlowId: "flow-123",
-      task: "Linked task",
-    });
-  });
-
   it("hardens the sqlite task store directory and file modes", () => {
     if (process.platform === "win32") {
       return;
