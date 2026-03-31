@@ -173,26 +173,14 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }
-  if (entry.id === "tools.web.search.gemini.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
   if (entry.id === "plugins.entries.google.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
-  if (entry.id === "tools.web.search.grok.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
   if (entry.id === "plugins.entries.xai.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
-  if (entry.id === "tools.web.search.kimi.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
   if (entry.id === "plugins.entries.moonshot.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
-  if (entry.id === "tools.web.search.perplexity.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
   }
   if (entry.id === "plugins.entries.perplexity.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");

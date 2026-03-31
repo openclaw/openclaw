@@ -25,10 +25,6 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import {
-  listLegacyWebSearchConfigPaths,
-  normalizeLegacyWebSearchConfig,
-} from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
@@ -455,9 +451,8 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
-  const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
-  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+  const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -467,7 +462,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(normalizedRaw);
+  const validated = OpenClawSchema.safeParse(raw);
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
@@ -555,12 +550,7 @@ function validateConfigObjectWithPluginsBase(
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = listLegacyWebSearchConfigPaths(raw).map((path) => ({
-    path,
-    message:
-      `${path} is deprecated for web search provider config. ` +
-      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
-  }));
+  const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
