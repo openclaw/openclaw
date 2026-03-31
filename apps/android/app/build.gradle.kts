@@ -182,7 +182,7 @@ ktlint {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.03.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.03.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -228,8 +228,8 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-    testImplementation("io.kotest:kotest-runner-junit5-jvm:6.1.7")
-    testImplementation("io.kotest:kotest-assertions-core-jvm:6.1.7")
+    testImplementation("io.kotest:kotest-runner-junit5-jvm:6.1.9")
+    testImplementation("io.kotest:kotest-assertions-core-jvm:6.1.9")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.3")
