@@ -207,25 +207,29 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks path-override vars (OPENCLAW_AGENT_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
+  it("blocks path-override vars (OPENCLAW_AGENT_DIR, OPENCLAW_BUNDLED_PLUGINS_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir }) => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        const bundledPluginsDir = path.join(base, "attacker-bundled");
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
             "OPENCLAW_AGENT_DIR=./evil-agent",
+            `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "PI_CODING_AGENT_DIR=./evil-coding",
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
           ].join("\n"),
         );
 
         delete process.env.OPENCLAW_AGENT_DIR;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.PI_CODING_AGENT_DIR;
         delete process.env.OPENCLAW_OAUTH_DIR;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
       });
@@ -346,13 +350,15 @@ describe("loadCliDotEnv", () => {
 
   it("blocks workspace .env takeover vars before loading the global fallback", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        const bundledPluginsDir = path.join(base, "attacker-bundled");
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
             "SAFE_KEY=from-cwd",
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
+            `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "NODE_OPTIONS=--require ./evil.js",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
           ].join("\n"),
@@ -362,6 +368,7 @@ describe("loadCliDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
         delete process.env.OPENCLAW_CONFIG_PATH;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.BAR;
@@ -372,6 +379,7 @@ describe("loadCliDotEnv", () => {
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
       });
