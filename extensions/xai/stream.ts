@@ -33,6 +33,72 @@ function stripUnsupportedStrictFlag(tool: unknown): unknown {
   return { ...toolObj, function: nextFunction };
 }
 
+function supportsExplicitImageInput(model: { input?: unknown }): boolean {
+  return Array.isArray(model.input) && model.input.includes("image");
+}
+
+function normalizeXaiResponsesFunctionCallOutput(
+  item: unknown,
+  includeImages: boolean,
+): Array<Record<string, unknown>> {
+  if (!item || typeof item !== "object") {
+    return [];
+  }
+
+  const itemObj = item as Record<string, unknown>;
+  if (itemObj.type !== "function_call_output" || !Array.isArray(itemObj.output)) {
+    return [itemObj];
+  }
+
+  const outputParts = itemObj.output as Array<Record<string, unknown>>;
+  const textOutput = outputParts
+    .filter(
+      (part): part is { type: "input_text"; text: string } =>
+        part.type === "input_text" && typeof part.text === "string",
+    )
+    .map((part) => part.text)
+    .join("");
+
+  const imageParts = includeImages
+    ? outputParts.filter(
+        (part): part is { type: "input_image"; image_url: string; detail?: string } =>
+          part.type === "input_image" && typeof part.image_url === "string",
+      )
+    : [];
+  const hadNonTextParts = outputParts.some((part) => part.type !== "input_text");
+
+  const normalizedItems: Array<Record<string, unknown>> = [
+    {
+      ...itemObj,
+      output: textOutput || (hadNonTextParts ? "(see attached image)" : ""),
+    },
+  ];
+
+  if (imageParts.length > 0) {
+    normalizedItems.push({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "Attached image(s) from tool result:" }, ...imageParts],
+    });
+  }
+
+  return normalizedItems;
+}
+
+function normalizeXaiResponsesToolResultPayload(
+  payloadObj: Record<string, unknown>,
+  model: { api?: unknown; input?: unknown },
+): void {
+  if (model.api !== "openai-responses" || !Array.isArray(payloadObj.input)) {
+    return;
+  }
+
+  const includeImages = supportsExplicitImageInput(model);
+  payloadObj.input = payloadObj.input.flatMap((item) =>
+    normalizeXaiResponsesFunctionCallOutput(item, includeImages),
+  );
+}
+
 export function createXaiToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -47,6 +113,7 @@ export function createXaiToolPayloadCompatibilityWrapper(
           if (Array.isArray(payloadObj.tools)) {
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
+          normalizeXaiResponsesToolResultPayload(payloadObj, model);
           delete payloadObj.reasoning;
           delete payloadObj.reasoningEffort;
           delete payloadObj.reasoning_effort;
