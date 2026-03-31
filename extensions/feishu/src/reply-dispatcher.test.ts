@@ -20,12 +20,16 @@ const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
+const getAgentScopedMediaLocalRootsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
 }));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsMock,
+}));
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
@@ -68,6 +72,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     streamingInstances.length = 0;
+    getAgentScopedMediaLocalRootsMock.mockReturnValue(["/tmp/agent-workspace"]);
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
 
@@ -666,6 +671,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({
         replyToMessageId: "om_msg",
         replyInThread: true,
+      }),
+    );
+  });
+
+  it("passes agent-scoped mediaLocalRoots to media attachments", async () => {
+    const cfg = { agents: { agent: { workspace: "/tmp/agent-workspace" } } } as never;
+    const { options } = createDispatcherHarness({ cfg, agentId: "agent" });
+    await options.deliver({ mediaUrl: "/tmp/agent-workspace/file.md" }, { kind: "final" });
+
+    expect(getAgentScopedMediaLocalRootsMock).toHaveBeenCalledWith(cfg, "agent");
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "/tmp/agent-workspace/file.md",
+        mediaLocalRoots: ["/tmp/agent-workspace"],
       }),
     );
   });

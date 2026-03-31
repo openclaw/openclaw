@@ -3,6 +3,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   createChannelReplyPipeline,
   createReplyPrefixContext,
@@ -332,6 +333,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const sendMediaReplies = async (payload: ReplyPayload) => {
+    const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, agentId);
     await sendMediaWithLeadingCaption({
       mediaUrls: resolveSendableOutboundReplyParts(payload).mediaUrls,
       caption: "",
@@ -340,6 +342,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           cfg,
           to: chatId,
           mediaUrl,
+          mediaLocalRoots,
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           accountId,
