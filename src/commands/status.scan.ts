@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
-import { createEmptyTaskAuditSummary } from "openclaw/plugin-sdk/tasks";
-import { createEmptyTaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
+import {
+  createEmptyTaskAuditSummary,
+  createEmptyTaskRegistrySummary,
+} from "openclaw/plugin-sdk/tasks-empty-summary";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";

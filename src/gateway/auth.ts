@@ -322,6 +322,11 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
     }
+    if (auth.token) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but a shared token is also configured; remove gateway.auth.token / OPENCLAW_GATEWAY_TOKEN because trusted-proxy and token auth are mutually exclusive",
+      );
+    }
   }
 }
 
@@ -447,36 +452,12 @@ export async function authorizeGatewayConnect(
   if (auth.mode === "trusted-proxy") {
     // Same-host reverse proxies may forward identity headers without a full
     // forwarded chain; keep those on the trusted-proxy path so allowUsers and
-    // requiredHeaders still apply. Only raw local-direct traffic falls back.
+    // requiredHeaders still apply.
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
     }
     if (!trustedProxies || trustedProxies.length === 0) {
       return { ok: false, reason: "trusted_proxy_no_proxies_configured" };
-    }
-
-    const proxyUserHeader = auth.trustedProxy?.userHeader?.toLowerCase();
-    const hasProxyIdentityHeader =
-      proxyUserHeader !== undefined && Boolean(req?.headers?.[proxyUserHeader]);
-    if (localDirect && !hasProxyIdentityHeader) {
-      if (limiter) {
-        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
-        if (!rlCheck.allowed) {
-          return {
-            ok: false,
-            reason: "rate_limited",
-            rateLimited: true,
-            retryAfterMs: rlCheck.retryAfterMs,
-          };
-        }
-      }
-      return authorizeTokenAuth({
-        authToken: auth.token,
-        connectToken: connectAuth?.token,
-        limiter,
-        ip,
-        rateLimitScope,
-      });
     }
 
     const result = authorizeTrustedProxy({

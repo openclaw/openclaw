@@ -153,6 +153,13 @@ export function resolveApprovalRequestAccountId(params: {
     return null;
   }
 
+  const turnSourceAccountId = normalizeOptionalAccountId(
+    params.request.request.turnSourceAccountId,
+  );
+  if (turnSourceAccountId) {
+    return turnSourceAccountId;
+  }
+
   const sessionTarget = resolveApprovalRequestSessionTarget(params);
   const sessionBinding = resolveApprovalRequestSessionBinding(params);
   const sessionChannel = normalizeOptionalChannel(
@@ -162,16 +169,10 @@ export function resolveApprovalRequestAccountId(params: {
     return null;
   }
 
-  const turnSourceAccountId = normalizeOptionalAccountId(
-    params.request.request.turnSourceAccountId,
-  );
   const sessionAccountId = normalizeOptionalAccountId(
     sessionTarget?.accountId ?? sessionBinding?.accountId,
   );
-  if (turnSourceAccountId && sessionAccountId && turnSourceAccountId !== sessionAccountId) {
-    return null;
-  }
-  return turnSourceAccountId ?? sessionAccountId ?? null;
+  return sessionAccountId ?? null;
 }
 
 export function doesApprovalRequestMatchChannelAccount(params: {
@@ -190,6 +191,14 @@ export function doesApprovalRequestMatchChannelAccount(params: {
     return false;
   }
 
+  const turnSourceAccountId = normalizeOptionalAccountId(
+    params.request.request.turnSourceAccountId,
+  );
+  const expectedAccountId = normalizeOptionalAccountId(params.accountId);
+  if (turnSourceAccountId) {
+    return !expectedAccountId || expectedAccountId === turnSourceAccountId;
+  }
+
   const sessionTarget = resolveApprovalRequestSessionTarget(params);
   const sessionBinding = resolveApprovalRequestSessionBinding(params);
   const sessionChannel = normalizeOptionalChannel(
@@ -199,17 +208,9 @@ export function doesApprovalRequestMatchChannelAccount(params: {
     return false;
   }
 
-  const turnSourceAccountId = normalizeOptionalAccountId(
-    params.request.request.turnSourceAccountId,
-  );
   const sessionAccountId = normalizeOptionalAccountId(
     sessionTarget?.accountId ?? sessionBinding?.accountId,
   );
-  if (turnSourceAccountId && sessionAccountId && turnSourceAccountId !== sessionAccountId) {
-    return false;
-  }
-
-  const expectedAccountId = normalizeOptionalAccountId(params.accountId);
-  const boundAccountId = turnSourceAccountId ?? sessionAccountId;
+  const boundAccountId = sessionAccountId;
   return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
 }
