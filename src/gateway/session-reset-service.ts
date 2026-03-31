@@ -14,7 +14,11 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPathInDir,
+} from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-runtime.js";
@@ -311,21 +315,30 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    // Derive a fresh session file path for the new sessionId so history is
-    // cleanly rotated.  We pass `undefined` as the entry so
-    // resolveSessionFilePath does not reuse the old path verbatim (which
-    // would risk accumulated context when the archive step fails).
-    //
-    // However, if the current entry uses a *custom* sessionFile (i.e. one
-    // whose parent directory differs from the default sessions dir), we
-    // preserve that custom directory and only rotate the filename.  This
-    // avoids relocating spawned/owned sessions that intentionally use a
-    // non-default transcript location.  See #55474.
     const pathOpts = resolveSessionFilePathOptions({
       storePath,
       agentId: sessionAgentId,
     });
-    const sessionFile = resolveSessionFilePath(nextSessionId, undefined, pathOpts);
+    // Determine whether the current entry uses a custom transcript directory
+    // (i.e. one outside the default sessions dir).  If so, preserve that
+    // directory and only rotate the filename (new sessionId) so spawned/owned
+    // sessions don't silently relocate their transcripts.  See #55474.
+    const defaultSessionFile = resolveSessionFilePath(
+      currentEntry?.sessionId ?? nextSessionId,
+      undefined,
+      pathOpts,
+    );
+    const defaultSessionsDir = path.dirname(defaultSessionFile);
+    const explicitSessionFileDir = currentEntry?.sessionFile
+      ? path.dirname(path.resolve(currentEntry.sessionFile))
+      : undefined;
+    const hasCustomSessionFileDir =
+      explicitSessionFileDir !== undefined &&
+      path.relative(defaultSessionsDir, explicitSessionFileDir).startsWith("..");
+
+    const sessionFile = hasCustomSessionFileDir
+      ? resolveSessionTranscriptPathInDir(nextSessionId, explicitSessionFileDir)
+      : resolveSessionFilePath(nextSessionId, undefined, pathOpts);
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
