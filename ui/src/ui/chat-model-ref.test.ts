@@ -15,6 +15,7 @@ import {
   DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
 } from "./chat-model.test-helpers.ts";
+import type { ModelCatalogEntry } from "./types.ts";
 
 const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
   id: "claude-sonnet-4-5",
