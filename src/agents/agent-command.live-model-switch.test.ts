@@ -194,10 +194,11 @@ vi.mock("../utils/message-channel.js", () => ({
   resolveMessageChannel: () => "test",
 }));
 
+const resolveEffectiveModelFallbacksMock = vi.fn().mockReturnValue(undefined);
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => ["default"],
   resolveAgentDir: () => "/tmp/agent",
-  resolveEffectiveModelFallbacks: () => undefined,
+  resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSessionAgentId: () => "default",
   resolveAgentSkillsFilter: () => undefined,
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
@@ -459,5 +460,45 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     // runWithModelFallback should have been called twice.
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates hasSessionModelOverride for fallback resolution after switch", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation += 1;
+      if (invocation === 1) {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    resolveEffectiveModelFallbacksMock.mockClear();
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+    });
+
+    // First call: no session override (initial state).
+    expect(resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
+    expect(resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
+      hasSessionModelOverride: false,
+    });
+    // Second call (retry): session now has a model override from the switch.
+    expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
+      hasSessionModelOverride: true,
+    });
   });
 });

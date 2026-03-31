@@ -619,7 +619,7 @@ async function agentCommandInternal(
     }
 
     const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-    const storedModelOverride = sessionEntry?.modelOverride?.trim();
+    let storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
@@ -847,6 +847,9 @@ async function agentCommandInternal(
               ? err.authProfileIdSource
               : undefined;
           }
+          // After a live switch the session effectively has a model override,
+          // so fallback candidate resolution picks up default fallbacks too.
+          storedModelOverride = err.model;
           // Reset lifecycle tracking for the retry iteration.
           lifecycleEnded = false;
           log.info(
