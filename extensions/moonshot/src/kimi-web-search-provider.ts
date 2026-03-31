@@ -26,6 +26,7 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
+  isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
@@ -34,6 +35,8 @@ import {
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
 const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
+/** Models that require explicit thinking disablement for web search. */
+const KIMI_THINKING_MODELS = new Set(["kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -167,7 +170,7 @@ async function runKimiSearch(params: {
           },
           body: JSON.stringify({
             model: params.model,
-            thinking: { type: "disabled" },
+            ...(KIMI_THINKING_MODELS.has(params.model) ? { thinking: { type: "disabled" } } : {}),
             messages,
             tools: [KIMI_WEB_SEARCH_TOOL],
           }),
@@ -335,20 +338,31 @@ async function runKimiSearchProviderSetup(
     typeof existingPluginConfig?.model === "string" ? existingPluginConfig.model.trim() : "";
 
   // Region selection (baseUrl)
+  const isCustomBaseUrl = existingBaseUrl && !isNativeMoonshotBaseUrl(existingBaseUrl);
+  const regionOptions: Array<{ value: string; label: string; hint?: string }> = [];
+  if (isCustomBaseUrl) {
+    regionOptions.push({
+      value: existingBaseUrl,
+      label: `Keep current (${existingBaseUrl})`,
+      hint: "custom endpoint",
+    });
+  }
+  regionOptions.push(
+    {
+      value: MOONSHOT_BASE_URL,
+      label: "Moonshot API key (.ai)",
+      hint: "api.moonshot.ai",
+    },
+    {
+      value: MOONSHOT_CN_BASE_URL,
+      label: "Moonshot API key (.cn)",
+      hint: "api.moonshot.cn",
+    },
+  );
+
   const regionChoice = await ctx.prompter.select<string>({
     message: "Kimi API region",
-    options: [
-      {
-        value: MOONSHOT_BASE_URL,
-        label: "Moonshot API key (.ai)",
-        hint: "api.moonshot.ai",
-      },
-      {
-        value: MOONSHOT_CN_BASE_URL,
-        label: "Moonshot API key (.cn)",
-        hint: "api.moonshot.cn",
-      },
-    ],
+    options: regionOptions,
     initialValue: existingBaseUrl || MOONSHOT_BASE_URL,
   });
   const baseUrl = regionChoice;
@@ -391,7 +405,7 @@ async function runKimiSearchProviderSetup(
   }
 
   // Write baseUrl and model into plugins.entries.moonshot.config.webSearch
-  let next = { ...ctx.config };
+  const next = { ...ctx.config };
   setProviderWebSearchPluginConfigValue(next, "moonshot", "baseUrl", baseUrl);
   setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);
   return next;
