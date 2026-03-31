@@ -238,6 +238,42 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   });
 });
 
+describe("handleToolExecutionEnd timeout metadata", () => {
+  it("records timeout metadata for failed exec results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-timeout",
+        isError: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Command timed out after 1800 seconds.",
+            },
+          ],
+          details: {
+            status: "failed",
+            timedOut: true,
+            exitCode: null,
+            durationMs: 1_800_000,
+            aggregated: "",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      timedOut: true,
+    });
+  });
+});
+
 describe("handleToolExecutionEnd exec approval prompts", () => {
   it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
     const { ctx } = createTestContext();

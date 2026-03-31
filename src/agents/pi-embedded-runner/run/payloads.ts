@@ -27,6 +27,7 @@ type LastToolError = {
   toolName: string;
   meta?: string;
   error?: string;
+  timedOut?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
 };
@@ -63,10 +64,12 @@ function resolveToolErrorWarningPolicy(params: {
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  const isCronExecToolError =
+  const isCronTimedOutExecToolError =
     (normalizedToolName === "exec" || normalizedToolName === "bash") &&
+    params.lastToolError.timedOut === true &&
     isCronSessionKey(params.sessionKey);
-  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel) || isCronExecToolError;
+  const includeDetails =
+    isVerboseToolDetailEnabled(params.verboseLevel) || isCronTimedOutExecToolError;
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }

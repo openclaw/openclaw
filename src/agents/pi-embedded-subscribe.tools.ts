@@ -330,6 +330,25 @@ export function isToolResultError(result: unknown): boolean {
   return normalized === "error" || normalized === "timeout";
 }
 
+export function isToolResultTimedOut(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const record = result as { details?: unknown };
+  const details = record.details;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  const normalizedStatus =
+    typeof (details as { status?: unknown }).status === "string"
+      ? (details as { status?: string }).status?.trim().toLowerCase()
+      : undefined;
+  if (normalizedStatus === "timeout") {
+    return true;
+  }
+  return (details as { timedOut?: unknown }).timedOut === true;
+}
+
 export function extractToolErrorMessage(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
