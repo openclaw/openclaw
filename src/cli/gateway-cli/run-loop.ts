@@ -105,8 +105,12 @@ export async function runGatewayLoop(params: {
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
 
-  const request = (action: GatewayRunSignalAction, signal: string) => {
-    if (shuttingDown) {
+  const request = (
+    action: GatewayRunSignalAction,
+    signal: string,
+    opts: { allowDuringShutdown?: boolean } = {},
+  ) => {
+    if (shuttingDown && !opts.allowDuringShutdown) {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
@@ -191,12 +195,19 @@ export async function runGatewayLoop(params: {
 
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
+    if (shuttingDown) {
+      gatewayLog.info("received SIGTERM during shutdown; ignoring");
+      return;
+    }
+    shuttingDown = true;
     void consumeGatewayRestartIntent()
       .then((intent) => {
-        request(intent ? "service-restart" : "stop", intent?.reason ?? "SIGTERM");
+        request(intent ? "service-restart" : "stop", intent?.reason ?? "SIGTERM", {
+          allowDuringShutdown: true,
+        });
       })
       .catch(() => {
-        request("stop", "SIGTERM");
+        request("stop", "SIGTERM", { allowDuringShutdown: true });
       });
   };
   const onSigint = () => {
