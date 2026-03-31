@@ -695,7 +695,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const optionParts = [
     `Runtime: ${runtime.label}`,
-    `Think: ${thinkLevel === "adaptive" ? "adaptive (runtime: medium)" : thinkLevel}`,
+    `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,

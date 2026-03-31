@@ -115,23 +115,6 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
-  it("clarifies adaptive thinking with runtime mapping in status output", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "minimax/MiniMax-M2.5",
-      },
-      sessionEntry: {
-        sessionId: "adaptive",
-        updatedAt: 0,
-      },
-      resolvedThink: "adaptive",
-      sessionKey: "agent:main:main",
-      queue: { mode: "collect", depth: 0 },
-    });
-
-    expect(normalizeTestText(text)).toContain("Think: adaptive (runtime: medium)");
-  });
-
   it("shows fast mode when enabled", () => {
     const text = buildStatusMessage({
       agent: {
