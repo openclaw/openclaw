@@ -121,7 +121,7 @@
       "durationMs": 1600
     },
     "extensions/telegram/src/bot-message-context.dm-threads.test.ts": {
-      "durationMs": 60770
+      "durationMs": 23020
     },
     "extensions/whatsapp/src/inbound/access-control.test.ts": {
       "durationMs": 1600
@@ -241,7 +241,7 @@
       "durationMs": 610
     },
     "extensions/telegram/src/bot-message-context.dm-topic-threadid.test.ts": {
-      "durationMs": 73540
+      "durationMs": 31390
     },
     "extensions/slack/src/monitor.threading.missing-thread-ts.test.ts": {
       "durationMs": 570
