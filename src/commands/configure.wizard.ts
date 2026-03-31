@@ -160,12 +160,12 @@ async function promptWebToolsConfig(
   runtime: RuntimeEnv,
   prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
+  type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
   const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
-  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } = await import(
-    "../agents/codex-native-web-search.js"
-  );
+  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
+    await import("../agents/codex-native-web-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
 
   note(
@@ -185,7 +185,7 @@ async function promptWebToolsConfig(
     runtime,
   );
 
-  let nextSearch: Record<string, unknown> = {
+  let nextSearch: WebSearchConfig = {
     ...existingSearch,
     enabled: enableSearch,
   };
