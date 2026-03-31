@@ -16,6 +16,11 @@ final class TalkModeController {
             TalkOverlayController.shared.present()
         } else {
             TalkOverlayController.shared.dismiss()
+            // Resume voice wake listener if it was paused for Talk Mode
+            // (mirrors the push-to-talk teardown that calls refresh on exit).
+            if AppStateStore.shared.voiceWakeTriggersTalkMode {
+                Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
+            }
         }
         await TalkModeRuntime.shared.setEnabled(enabled)
     }
