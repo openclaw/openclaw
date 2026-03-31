@@ -5131,6 +5131,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  openaiCodex: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      mode: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "cached",
+                          },
+                          {
+                            type: "string",
+                            const: "live",
+                          },
+                        ],
+                      },
+                      allowedDomains: {},
+                      contextSize: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "low",
+                          },
+                          {
+                            type: "string",
+                            const: "medium",
+                          },
+                          {
+                            type: "string",
+                            const: "high",
+                          },
+                        ],
+                      },
+                      userLocation: {},
+                    },
+                    additionalProperties: false,
+                  },
                   brave: {
                     type: "object",
                     properties: {
@@ -12934,7 +12973,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.web.search.enabled": {
       label: "Enable Web Search Tool",
-      help: "Enable the web_search tool (requires a provider API key).",
+      help: "Enable managed web_search and optional Codex-native search for eligible models.",
       tags: ["tools"],
     },
     "tools.web.search.provider": {
@@ -12956,6 +12995,105 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Web Search Cache TTL (min)",
       help: "Cache TTL in minutes for web_search results.",
       tags: ["performance", "storage", "tools"],
+    },
+    "tools.web.search.openaiCodex.enabled": {
+      label: "Enable Native Codex Web Search",
+      help: "Enable native Codex web search for Codex-capable models.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.mode": {
+      label: "Codex Web Search Mode",
+      help: 'Native Codex web search mode: "cached" (default) or "live".',
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.allowedDomains": {
+      label: "Codex Allowed Domains",
+      help: "Optional domain allowlist passed to the native Codex web_search tool.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.search.openaiCodex.contextSize": {
+      label: "Codex Search Context Size",
+      help: 'Native Codex search context size hint: "low", "medium", or "high".',
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.country": {
+      label: "Codex User Country",
+      help: "Approximate country sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.region": {
+      label: "Codex User Region",
+      help: "Approximate region/state sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.city": {
+      label: "Codex User City",
+      help: "Approximate city sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.timezone": {
+      label: "Codex User Timezone",
+      help: "Approximate timezone sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.brave.mode": {
+      label: "Brave Search Mode",
+      help: 'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+      tags: ["tools"],
+    },
+    "tools.web.search.gemini.apiKey": {
+      label: "Gemini Search API Key",
+      help: "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.gemini.model": {
+      label: "Gemini Search Model",
+      help: 'Gemini model override (default: "gemini-2.5-flash").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.grok.apiKey": {
+      label: "Grok Search API Key",
+      help: "Grok (xAI) API key (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.grok.model": {
+      label: "Grok Search Model",
+      help: 'Grok model override (default: "grok-4-1-fast").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.kimi.apiKey": {
+      label: "Kimi Search API Key",
+      help: "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.kimi.baseUrl": {
+      label: "Kimi Search Base URL",
+      help: 'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.kimi.model": {
+      label: "Kimi Search Model",
+      help: 'Kimi model override (default: "moonshot-v1-128k").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.perplexity.apiKey": {
+      label: "Perplexity API Key",
+      help: "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.perplexity.baseUrl": {
+      label: "Perplexity Base URL",
+      help: "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.perplexity.model": {
+      label: "Perplexity Model",
+      help: 'Optional Sonar/OpenRouter model override (default: "perplexity/sonar-pro"). Setting this opts Perplexity into the legacy chat-completions compatibility path.',
+      tags: ["models", "tools"],
     },
     "tools.web.fetch.enabled": {
       label: "Enable Web Fetch Tool",
@@ -15613,22 +15751,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
-    "tools.web.search.gemini.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.grok.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.kimi.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.perplexity.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
     "mcp.servers.*.headers.*": {
       sensitive: true,
       tags: ["security"],
@@ -15650,12 +15772,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["tools", "url-secret"],
     },
     "tools.web.search.grok.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.kimi.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.perplexity.baseUrl": {
       tags: ["tools", "url-secret"],
     },
     "tools.media.models[].baseUrl": {

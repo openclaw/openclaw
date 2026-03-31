@@ -2229,6 +2229,74 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.memorySearch.qmd",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Memory Search QMD Collections",
+      "help": "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "QMD Extra Collections",
+      "help": "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.name",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.path",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.pattern",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.memorySearch.query",
       "kind": "core",
       "type": "object",
@@ -4745,6 +4813,66 @@
     },
     {
       "path": "agents.list.*.memorySearch.provider",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.name",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.path",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.pattern",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -26436,8 +26564,45 @@
     {
       "path": "channels.nostr.privateKey",
       "kind": "channel",
-      "type": "string",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.nostr.privateKey.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nostr.privateKey.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nostr.privateKey.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -54719,6 +54884,16 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.qqbot.config.defaultAccount",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.qqbot.config.enabled",
       "kind": "plugin",
       "type": "boolean",
@@ -54749,9 +54924,27 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.qqbot.config.stt",
+      "kind": "plugin",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.qqbot.config.systemPrompt",
       "kind": "plugin",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.tts",
+      "kind": "plugin",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -65797,7 +65990,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools"
+      ],
+      "label": "Brave Search Mode",
+      "help": "Brave Search mode: \"web\" (URL results) or \"llm-context\" (pre-extracted page content for LLM grounding).",
       "hasChildren": false
     },
     {
@@ -65837,7 +66034,7 @@
         "tools"
       ],
       "label": "Enable Web Search Tool",
-      "help": "Enable the web_search tool (requires a provider API key).",
+      "help": "Enable managed web_search and optional Codex-native search for eligible models.",
       "hasChildren": false
     },
     {
@@ -65945,6 +66142,8 @@
         "security",
         "tools"
       ],
+      "label": "Gemini Search API Key",
+      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -65997,7 +66196,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "Gemini Search Model",
+      "help": "Gemini model override (default: \"gemini-2.5-flash\").",
       "hasChildren": false
     },
     {
@@ -66025,6 +66229,8 @@
         "security",
         "tools"
       ],
+      "label": "Grok Search API Key",
+      "help": "Grok (xAI) API key (fallback: XAI_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -66087,7 +66293,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "Grok Search Model",
+      "help": "Grok model override (default: \"grok-4-1-fast\").",
       "hasChildren": false
     },
     {
@@ -66115,6 +66326,8 @@
         "security",
         "tools"
       ],
+      "label": "Kimi Search API Key",
+      "help": "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -66158,6 +66371,8 @@
         "tools",
         "url-secret"
       ],
+      "label": "Kimi Search Base URL",
+      "help": "Kimi base URL override (default: \"https://api.moonshot.ai/v1\").",
       "hasChildren": false
     },
     {
@@ -66167,7 +66382,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "Kimi Search Model",
+      "help": "Kimi model override (default: \"moonshot-v1-128k\").",
       "hasChildren": false
     },
     {
@@ -66183,6 +66403,81 @@
       ],
       "label": "Web Search Max Results",
       "help": "Number of results to return (1-10).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.openaiCodex.allowedDomains",
+      "kind": "core",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Codex Allowed Domains",
+      "help": "Optional domain allowlist passed to the native Codex web_search tool.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex.contextSize",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Codex Search Context Size",
+      "help": "Native Codex search context size hint: \"low\", \"medium\", or \"high\".",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable Native Codex Web Search",
+      "help": "Enable native Codex web search for Codex-capable models.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex.mode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Codex Web Search Mode",
+      "help": "Native Codex web search mode: \"cached\" (default) or \"live\".",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex.userLocation",
+      "kind": "core",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66210,6 +66505,8 @@
         "security",
         "tools"
       ],
+      "label": "Perplexity API Key",
+      "help": "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
       "hasChildren": true
     },
     {
@@ -66253,6 +66550,8 @@
         "tools",
         "url-secret"
       ],
+      "label": "Perplexity Base URL",
+      "help": "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
       "hasChildren": false
     },
     {
@@ -66262,7 +66561,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "Perplexity Model",
+      "help": "Optional Sonar/OpenRouter model override (default: \"perplexity/sonar-pro\"). Setting this opts Perplexity into the legacy chat-completions compatibility path.",
       "hasChildren": false
     },
     {
