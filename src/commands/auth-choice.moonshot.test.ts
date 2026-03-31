@@ -11,6 +11,16 @@ import {
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
+// Under --isolate=false, vi.mock calls from sibling test files
+// (auth-choice.apply.plugin-provider.test.ts, auth-choice.test.ts) leak into
+// this file. Re-declare real implementations so this file stays green.
+vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => {
+  return await importOriginal();
+});
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  return await importOriginal();
+});
+
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(overrides, { defaultSelect: "" });
 }
