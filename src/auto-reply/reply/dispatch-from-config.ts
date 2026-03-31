@@ -1,6 +1,20 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+
+/**
+ * Thrown when a `before_block_reply` plugin hook cancels delivery.
+ * The pipeline catch handler should treat this as "not sent" so the
+ * payload is not marked as delivered and can still appear in the
+ * final reply path.
+ */
+export class BlockReplyCancelledError extends Error {
+  readonly isBlockReplyCancelled = true;
+  constructor() {
+    super("block reply cancelled by before_block_reply hook");
+    this.name = "BlockReplyCancelledError";
+  }
+}
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -700,6 +714,8 @@ export async function dispatchReplyFromConfig(params: {
                 {
                   text: blockPayload.text,
                   mediaUrls: blockPayload.mediaUrls,
+                  // Note: isReasoning is always falsy here because reasoning
+                  // payloads are returned early above. Included for API completeness.
                   isReasoning: blockPayload.isReasoning,
                   trigger: context?.trigger,
                 },
@@ -712,7 +728,9 @@ export async function dispatchReplyFromConfig(params: {
                 },
               );
               if (hookResult?.cancel === true) {
-                return;
+                // Throw a typed error so the pipeline does not mark this payload
+                // as delivered (which would suppress it in the final reply path).
+                throw new BlockReplyCancelledError();
               }
               if (hookResult?.text !== undefined) {
                 blockPayload = { ...blockPayload, text: hookResult.text };

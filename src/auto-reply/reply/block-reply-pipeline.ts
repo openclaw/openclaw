@@ -1,6 +1,13 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
+
+function isBlockReplyCancelled(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as Error & { isBlockReplyCancelled?: boolean }).isBlockReplyCancelled === true
+  );
+}
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
@@ -151,6 +158,11 @@ export function createBlockReplyPipeline(params: {
               `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
             );
           }
+          return;
+        }
+        if (isBlockReplyCancelled(err)) {
+          // Plugin cancelled this delivery via before_block_reply hook.
+          // Do not mark as sent so the content can appear in the final reply.
           return;
         }
         logVerbose(`block reply delivery failed: ${String(err)}`);
