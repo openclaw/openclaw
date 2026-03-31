@@ -1,4 +1,8 @@
-import { isStrictDirectMembership, readJoinedMatrixMembers } from "../direct-room.js";
+import {
+  hasDirectMatrixMemberFlag,
+  isStrictDirectMembership,
+  readJoinedMatrixMembers,
+} from "../direct-room.js";
 import type { MatrixClient } from "../sdk.js";
 
 type DirectMessageCheck = {
@@ -13,6 +17,7 @@ type DirectRoomTrackerOptions = {
 
 const DM_CACHE_TTL_MS = 30_000;
 const MAX_TRACKED_DM_ROOMS = 1024;
+const MAX_TRACKED_DM_MEMBER_FLAGS = 2048;
 
 function rememberBounded<T>(map: Map<string, T>, key: string, value: T): void {
   map.set(key, value);
@@ -27,8 +32,12 @@ function rememberBounded<T>(map: Map<string, T>, key: string, value: T): void {
 export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
   let lastDmUpdateMs = 0;
+  // Once m.direct has seeded successfully, prefer the explicit cache over
+  // re-enabling the broad 2-person fallback after a later transient failure.
+  let hasSeededDmCache = false;
   let cachedSelfUserId: string | null = null;
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
+  const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -48,11 +57,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       return;
     }
     lastDmUpdateMs = now;
-    try {
-      await client.dms.update();
-    } catch (err) {
-      log(`matrix: dm cache refresh failed (${String(err)})`);
-    }
+    hasSeededDmCache = (await client.dms.update()) || hasSeededDmCache;
   };
 
   const resolveJoinedMembers = async (roomId: string): Promise<string[] | null> => {
@@ -74,42 +79,77 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     }
   };
 
+  const resolveDirectMemberFlag = async (
+    roomId: string,
+    userId?: string | null,
+  ): Promise<boolean | null> => {
+    const normalizedUserId = userId?.trim();
+    if (!normalizedUserId) {
+      return null;
+    }
+    const cacheKey = `${roomId}\n${normalizedUserId}`;
+    const cached = directMemberFlagCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.ts < DM_CACHE_TTL_MS) {
+      return cached.isDirect;
+    }
+    const isDirect = await hasDirectMatrixMemberFlag(client, roomId, normalizedUserId);
+    rememberBounded(directMemberFlagCache, cacheKey, { isDirect, ts: now });
+    return isDirect;
+  };
+
   return {
     invalidateRoom: (roomId: string): void => {
       joinedMembersCache.delete(roomId);
+      for (const key of directMemberFlagCache.keys()) {
+        if (key.startsWith(`${roomId}\n`)) {
+          directMemberFlagCache.delete(key);
+        }
+      }
       lastDmUpdateMs = 0;
       log(`matrix: invalidated dm cache room=${roomId}`);
     },
     isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
       const { roomId, senderId } = params;
-      await refreshDmCache();
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const joinedMembers = await resolveJoinedMembers(roomId);
+      const strictDirectMembership = isStrictDirectMembership({
+        selfUserId,
+        remoteUserId: senderId,
+        joinedMembers,
+      });
+
+      try {
+        await refreshDmCache();
+      } catch (err) {
+        log(`matrix: dm cache refresh failed (${String(err)})`);
+      }
 
       if (client.dms.isDm(roomId)) {
-        const directViaAccountData = Boolean(
-          isStrictDirectMembership({
-            selfUserId,
-            remoteUserId: senderId,
-            joinedMembers,
-          }),
-        );
-        if (directViaAccountData) {
+        if (strictDirectMembership) {
           log(`matrix: dm detected via m.direct room=${roomId}`);
           return true;
         }
         log(`matrix: ignoring stale m.direct classification room=${roomId}`);
       }
 
-      if (
-        isStrictDirectMembership({
-          selfUserId,
-          remoteUserId: senderId,
-          joinedMembers,
-        })
-      ) {
-        log(`matrix: dm detected via exact 2-member room room=${roomId}`);
-        return true;
+      if (strictDirectMembership) {
+        const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+        if (directViaSelf === true) {
+          log(`matrix: dm detected via member state room=${roomId}`);
+          return true;
+        }
+        if (directViaSelf === false) {
+          log(`matrix: dm rejected via member state room=${roomId}`);
+          return false;
+        }
+
+        if (!hasSeededDmCache) {
+          log(
+            `matrix: dm detected via exact 2-member fallback before dm cache seed room=${roomId}`,
+          );
+          return true;
+        }
       }
 
       log(

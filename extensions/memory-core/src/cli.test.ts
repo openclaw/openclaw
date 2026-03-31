@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "../../../src/cli/test-runtime-capture.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -519,6 +519,7 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("hello", {
       maxResults: undefined,
       minScore: undefined,
+      sessionKey: "agent:main:cli:direct:memory-search",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -535,6 +536,7 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("deployment notes", {
       maxResults: undefined,
       minScore: undefined,
+      sessionKey: "agent:main:cli:direct:memory-search",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -552,6 +554,7 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("flagged", {
       maxResults: undefined,
       minScore: undefined,
+      sessionKey: "agent:main:cli:direct:memory-search",
     });
     expect(close).toHaveBeenCalled();
   });

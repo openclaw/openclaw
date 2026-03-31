@@ -473,7 +473,7 @@ describe("config strict validation", () => {
     }
   });
 
-  it("flags legacy config entries without auto-migrating", async () => {
+  it("rejects removed legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         memorySearch: { provider: "local", fallback: "none" },

@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { encodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 class FakeMatrixEvent extends EventEmitter {
@@ -176,8 +175,8 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
 let matrixJsClient = createMatrixJsClientStub();
 let lastCreateClientOpts: Record<string, unknown> | null = null;
 
-vi.mock("matrix-js-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("matrix-js-sdk")>();
+vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("matrix-js-sdk/lib/matrix.js")>();
   return {
     ...actual,
     ClientEvent: { Event: "event", Room: "Room" },
@@ -189,14 +188,17 @@ vi.mock("matrix-js-sdk", async (importOriginal) => {
   };
 });
 
-import { MatrixClient } from "./sdk.js";
+const { encodeRecoveryKey } = await import("matrix-js-sdk/lib/crypto-api/recovery-key.js");
+let MatrixClient: typeof import("./sdk.js").MatrixClient;
 
 describe("MatrixClient request hardening", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    ({ MatrixClient } = await import("./sdk.js"));
   });
 
   afterEach(() => {
@@ -221,7 +223,7 @@ describe("MatrixClient request hardening", () => {
   });
 
   it("injects a guarded fetchFn into matrix-js-sdk", () => {
-    new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    new MatrixClient("https://matrix.example.org", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
@@ -239,7 +241,7 @@ describe("MatrixClient request hardening", () => {
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", undefined, undefined, {
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
@@ -269,7 +271,7 @@ describe("MatrixClient request hardening", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", undefined, undefined, {
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
@@ -445,7 +447,7 @@ describe("MatrixClient request hardening", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", undefined, undefined, {
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
@@ -476,7 +478,7 @@ describe("MatrixClient request hardening", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", undefined, undefined, {
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
     await client.doRequest("GET", "http://127.0.0.1:8008/start", undefined, undefined, {
@@ -501,7 +503,7 @@ describe("MatrixClient request hardening", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", undefined, undefined, {
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       localTimeoutMs: 25,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
@@ -518,7 +520,7 @@ describe("MatrixClient request hardening", () => {
     const storagePath = path.join(tempDir, "bot-storage.json");
 
     try {
-      const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+      const client = new MatrixClient("https://matrix.example.org", "token", {
         storagePath,
       });
 
@@ -732,7 +734,7 @@ describe("MatrixClient event bridge", () => {
 
   it("retries failed decryptions immediately on crypto key update signals", async () => {
     vi.useFakeTimers();
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     const failed: string[] = [];
@@ -833,7 +835,7 @@ describe("MatrixClient event bridge", () => {
 
   it("does not start duplicate retries when crypto signals fire while retry is in-flight", async () => {
     vi.useFakeTimers();
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     const delivered: string[] = [];
@@ -982,7 +984,7 @@ describe("MatrixClient crypto bootstrapping", () => {
   it("passes cryptoDatabasePrefix into initRustCrypto", async () => {
     matrixJsClient.getCrypto = vi.fn(() => undefined);
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       cryptoDatabasePrefix: "openclaw-matrix-test",
     });
@@ -1003,7 +1005,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       requestOwnUserVerification: vi.fn(async () => null),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
 
@@ -1018,7 +1020,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   it("retries bootstrap with forced reset when initial publish/verification is incomplete", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       password: "secret-password", // pragma: allowlist secret
     });
@@ -1051,7 +1053,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   it("does not force-reset bootstrap when the device is already signed by its owner", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       password: "secret-password", // pragma: allowlist secret
     });
@@ -1098,7 +1100,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   it("does not force-reset bootstrap when password is unavailable", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     const bootstrapSpy = vi.fn().mockResolvedValue({
@@ -1132,7 +1134,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       "utf8",
     );
 
-    new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       recoveryKeyPath,
     });
@@ -1168,7 +1170,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     vi.useFakeTimers();
     const databasesSpy = vi.spyOn(indexedDB, "databases").mockResolvedValue([]);
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       idbSnapshotPath: path.join(os.tmpdir(), "matrix-idb-interval.json"),
       cryptoDatabasePrefix: "openclaw-matrix-interval",
@@ -1202,7 +1204,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     await client.start();
@@ -1230,7 +1232,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     await client.start();
@@ -1273,7 +1275,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     }));
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-key-"));
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       recoveryKeyPath: path.join(recoveryDir, "recovery-key.json"),
     });
@@ -1313,7 +1315,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     }));
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-local-only-"));
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       recoveryKeyPath: path.join(recoveryDir, "recovery-key.json"),
     });
@@ -1362,7 +1364,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-untrusted-"));
     const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       recoveryKeyPath,
     });
@@ -1420,7 +1422,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       }),
       "utf8",
     );
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       recoveryKeyPath,
     });
@@ -1459,7 +1461,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockResolvedValue({ version: "11" });
@@ -1503,7 +1505,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
 
@@ -1547,7 +1549,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       isKeyBackupTrusted,
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
 
@@ -1585,7 +1587,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
 
@@ -1626,7 +1628,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     };
     matrixJsClient.getCrypto = vi.fn(() => crypto);
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockResolvedValue({ version: "9" });
@@ -1674,7 +1676,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     };
     matrixJsClient.getCrypto = vi.fn(() => crypto);
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockResolvedValue({ version: "5256" });
@@ -1703,7 +1705,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockResolvedValue({ version: "3" });
@@ -1747,7 +1749,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       isKeyBackupTrusted,
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
 
@@ -1782,7 +1784,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
@@ -1836,7 +1838,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       isKeyBackupTrusted,
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
@@ -1876,7 +1878,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
@@ -1915,7 +1917,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
@@ -1963,7 +1965,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
@@ -2000,7 +2002,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
@@ -2048,7 +2050,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
@@ -2106,7 +2108,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
@@ -2170,7 +2172,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       })),
     }));
 
-    const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
     });
     vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({

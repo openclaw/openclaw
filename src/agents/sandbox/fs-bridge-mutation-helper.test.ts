@@ -38,7 +38,7 @@ function runWritePlan(args: string[], input?: string) {
     mkdir: args[4] === "1",
   });
 
-  return spawnSync("sh", ["-c", plan.script, "moltbot-sandbox-fs", ...(plan.args ?? [])], {
+  return spawnSync("sh", ["-c", plan.script, "openclaw-sandbox-fs", ...(plan.args ?? [])], {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
@@ -57,6 +57,42 @@ describe("sandbox pinned mutation helper", () => {
       await expect(
         fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
       ).resolves.toBe("hello");
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reads through a pinned directory fd and rejects hardlinked files",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const nested = path.join(workspace, "nested");
+        await fs.mkdir(nested, { recursive: true });
+        await fs.writeFile(path.join(workspace, "read.txt"), "hello", "utf8");
+
+        const readResult = runMutation(["read", workspace, "", "read.txt"]);
+        expect(readResult.status).toBe(0);
+        expect(readResult.stdout).toBe("hello");
+
+        const hardlinkedFile = path.join(nested, "hardlinked.txt");
+        await fs.link(path.join(workspace, "read.txt"), hardlinkedFile);
+
+        const hardlinkResult = runMutation(["read", workspace, "nested", "hardlinked.txt"]);
+        expect(hardlinkResult.status).not.toBe(0);
+        expect(hardlinkResult.stderr).toMatch(/hardlinked file/i);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("rejects non-regular files while reading", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.mkdir(path.join(workspace, "folder"), { recursive: true });
+
+      const result = runMutation(["read", workspace, "", "folder"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/only regular files are allowed/i);
     });
   });
 

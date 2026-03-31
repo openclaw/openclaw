@@ -31,6 +31,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
@@ -43,7 +44,6 @@ import {
 } from "./bot-access.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import {
-  APPROVE_CALLBACK_DATA_RE,
   hasInboundMedia,
   hasReplyTargetMedia,
   isMediaSizeLimitError,
@@ -51,7 +51,10 @@ import {
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
-import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import {
+  parseTelegramNativeCommandCallbackData,
+  RegisterTelegramHandlerParams,
+} from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
@@ -67,15 +70,16 @@ import {
   resolveTelegramGroupAllowFromContext,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import {
   isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalAuthorizedSender,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 import {
@@ -192,13 +196,6 @@ export const registerTelegramHandlers = ({
         ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
         : async () => ({});
     return { message, me: ctx.me, getFile };
-  };
-  const isSelfAuthoredTelegramMessage = (
-    ctx: Pick<TelegramContext, "me">,
-    message: Message,
-  ): boolean => {
-    const botId = ctx.me?.id;
-    return typeof botId === "number" && message.from?.id === botId;
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
@@ -631,9 +628,7 @@ export const registerTelegramHandlers = ({
   type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
   const getChat =
     typeof (bot.api as { getChat?: unknown }).getChat === "function"
-      ? ((bot.api as { getChat: (chatId: string | number) => Promise<unknown> }).getChat.bind(
-          bot.api,
-        ) as (chatId: string | number) => Promise<unknown>)
+      ? ((bot.api as { getChat: TelegramGetChat }).getChat.bind(bot.api) as TelegramGetChat)
       : undefined;
 
   const TELEGRAM_EVENT_AUTH_RULES: Record<
@@ -1194,7 +1189,8 @@ export const registerTelegramHandlers = ({
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
-      const isApprovalCallback = APPROVE_CALLBACK_DATA_RE.test(data);
+      const approvalCallback = parseExecApprovalCommandText(data);
+      const isApprovalCallback = approvalCallback !== null;
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
@@ -1242,7 +1238,6 @@ export const registerTelegramHandlers = ({
       }
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
-      // DM callbacks must enforce the same sender authorization gate as normal DM commands.
       const authorizationMode: TelegramEventAuthorizationMode =
         !isGroup || (!execApprovalButtonsEnabled && inlineButtonsScope === "allowlist")
           ? "callback-allowlist"
@@ -1326,13 +1321,44 @@ export const registerTelegramHandlers = ({
       }
 
       const runtimeCfg = telegramDeps.loadConfig();
-      if (isApprovalCallback) {
-        if (
-          !isTelegramExecApprovalClientEnabled({ cfg: runtimeCfg, accountId }) ||
-          !isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
-        ) {
+      if (approvalCallback) {
+        const isPluginApproval = approvalCallback.approvalId.startsWith("plugin:");
+        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const authorizedApprovalSender = isPluginApproval
+          ? pluginApprovalAuthorizedSender
+          : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+        if (!authorizedApprovalSender) {
           logVerbose(
-            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
+            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
+          );
+          return;
+        }
+        try {
+          // Resolve approval callbacks directly so Telegram approvers are not forced through
+          // the generic chat-command authorization path.
+          await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
+            cfg: runtimeCfg,
+            approvalId: approvalCallback.approvalId,
+            decision: approvalCallback.decision,
+            senderId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
+          });
+        } catch (resolveErr) {
+          const errStr = String(resolveErr);
+          logVerbose(
+            `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
+          );
+          await replyToCallbackChat(
+            "❌ Failed to submit approval. Please try again or contact an admin.",
           );
           return;
         }
@@ -1341,12 +1367,14 @@ export const registerTelegramHandlers = ({
         } catch (editErr) {
           const errStr = String(editErr);
           if (
-            !errStr.includes("message is not modified") &&
-            !errStr.includes("there is no text in the message to edit")
+            errStr.includes("message is not modified") ||
+            errStr.includes("there is no text in the message to edit")
           ) {
-            logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
+            return;
           }
+          logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
         }
+        return;
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
@@ -1565,12 +1593,14 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
-        text: data,
+        text: nativeCallbackCommand ?? data,
       });
       await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+        ...(nativeCallbackCommand ? { commandSource: "native" as const } : {}),
         forceWasMentioned: true,
         messageIdOverride: callback.id,
       });
@@ -1736,9 +1766,6 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
-    if (isSelfAuthoredTelegramMessage(ctx, msg)) {
-      return;
-    }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
       chatId: msg.chat.id,
@@ -1748,6 +1775,11 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    // Bot-authored message updates can be echoed back by Telegram. Skip them here
+    // and rely on the dedicated channel_post handler for channel-originated posts.
+    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
+      return;
+    }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),

@@ -57,6 +57,9 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeInstallContext,
+  PluginHookBeforeInstallEvent,
+  PluginHookBeforeInstallResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -107,6 +110,9 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookBeforeInstallContext,
+  PluginHookBeforeInstallEvent,
+  PluginHookBeforeInstallResult,
 };
 
 export type HookRunnerLogger = {
@@ -122,7 +128,11 @@ export type HookRunnerOptions = {
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
-  mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult;
+  mergeResults?: (
+    accumulated: TResult | undefined,
+    next: TResult,
+    registration: PluginHookRegistration<K>,
+  ) => TResult;
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
@@ -312,7 +322,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
         if (handlerResult !== undefined && handlerResult !== null) {
           if (policy.mergeResults) {
-            result = policy.mergeResults(result, handlerResult);
+            result = policy.mergeResults(result, handlerResult, hook);
           } else {
             result = handlerResult;
           }
@@ -752,14 +762,24 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       {
-        mergeResults: (acc, next) => {
+        mergeResults: (acc, next, reg) => {
           if (acc?.block === true) {
             return acc;
           }
+          const approvalPluginId = acc?.requireApproval?.pluginId;
+          const freezeParamsForDifferentPlugin =
+            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
           return {
-            params: lastDefined(acc?.params, next.params),
+            params: freezeParamsForDifferentPlugin
+              ? acc?.params
+              : lastDefined(acc?.params, next.params),
             block: stickyTrue(acc?.block, next.block),
             blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            requireApproval:
+              acc?.requireApproval ??
+              (next.requireApproval
+                ? { ...next.requireApproval, pluginId: reg.pluginId }
+                : undefined),
           };
         },
         shouldStop: (result) => result.block === true,
@@ -1022,6 +1042,41 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Skill Install Hooks
+  // =========================================================================
+
+  /**
+   * Run before_install hook.
+   * Allows plugins to augment scan findings or block installs.
+   * Runs sequentially so higher-priority hooks can block before lower ones run.
+   */
+  async function runBeforeInstall(
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ): Promise<PluginHookBeforeInstallResult | undefined> {
+    return runModifyingHook<"before_install", PluginHookBeforeInstallResult>(
+      "before_install",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          const mergedFindings = [...(acc?.findings ?? []), ...(next.findings ?? [])];
+          return {
+            findings: mergedFindings.length > 0 ? mergedFindings : undefined,
+            block: stickyTrue(acc?.block, next.block),
+            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+          };
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -1074,6 +1129,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Install hooks
+    runBeforeInstall,
     // Utility
     hasHooks,
     getHookCount,
@@ -1081,3 +1138,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 }
 
 export type HookRunner = ReturnType<typeof createHookRunner>;
+
+export type SubagentLifecycleHookRunner = Pick<
+  HookRunner,
+  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+>;

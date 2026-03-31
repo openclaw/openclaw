@@ -5,71 +5,81 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry, createMockPluginRegistry } from "./hooks.test-helpers.js";
+import type {
+  PluginHookMessageSendingEvent,
+  PluginHookMessageSendingResult,
+  PluginHookMessageSentEvent,
+} from "./types.js";
+
+async function expectMessageHookCall(params: {
+  hookName: "message_sending" | "message_sent";
+  event: PluginHookMessageSendingEvent | PluginHookMessageSentEvent;
+  hookResult?: PluginHookMessageSendingResult;
+  expectedResult?: PluginHookMessageSendingResult;
+  channelCtx: { channelId: string };
+}) {
+  const handler =
+    params.hookResult === undefined ? vi.fn() : vi.fn().mockReturnValue(params.hookResult);
+  const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
+
+  if (params.hookName === "message_sending") {
+    const result = await runner.runMessageSending(
+      params.event as PluginHookMessageSendingEvent,
+      params.channelCtx,
+    );
+    expect(result).toEqual(expect.objectContaining(params.expectedResult ?? {}));
+  } else {
+    await runner.runMessageSent(params.event as PluginHookMessageSentEvent, params.channelCtx);
+  }
+
+  expect(handler).toHaveBeenCalledWith(params.event, params.channelCtx);
+}
 
 describe("message_sending hook runner", () => {
-  it("runMessageSending invokes registered hooks and returns modified content", async () => {
-    const handler = vi.fn().mockReturnValue({ content: "modified content" });
-    const registry = createMockPluginRegistry([{ hookName: "message_sending", handler }]);
-    const runner = createHookRunner(registry);
-
-    const result = await runner.runMessageSending(
-      { to: "user-123", content: "original content" },
-      { channelId: "telegram" },
-    );
-
-    expect(handler).toHaveBeenCalledWith(
-      { to: "user-123", content: "original content" },
-      { channelId: "telegram" },
-    );
-    expect(result?.content).toBe("modified content");
-  });
-
-  it("runMessageSending can cancel message delivery", async () => {
-    const handler = vi.fn().mockReturnValue({ cancel: true });
-    const registry = createMockPluginRegistry([{ hookName: "message_sending", handler }]);
-    const runner = createHookRunner(registry);
-
-    const result = await runner.runMessageSending(
-      { to: "user-123", content: "blocked" },
-      { channelId: "telegram" },
-    );
-
-    expect(result?.cancel).toBe(true);
+  const demoChannelCtx = { channelId: "demo-channel" };
+  it.each([
+    {
+      name: "runMessageSending invokes registered hooks and returns modified content",
+      event: { to: "user-123", content: "original content" },
+      hookResult: { content: "modified content" },
+      expected: { content: "modified content" },
+    },
+    {
+      name: "runMessageSending can cancel message delivery",
+      event: { to: "user-123", content: "blocked" },
+      hookResult: { cancel: true },
+      expected: { cancel: true },
+    },
+  ] as const)("$name", async ({ event, hookResult, expected }) => {
+    await expectMessageHookCall({
+      hookName: "message_sending",
+      event,
+      hookResult,
+      expectedResult: expected,
+      channelCtx: demoChannelCtx,
+    });
   });
 });
 
 describe("message_sent hook runner", () => {
-  it("runMessageSent invokes registered hooks with success=true", async () => {
-    const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "message_sent", handler }]);
-    const runner = createHookRunner(registry);
+  const demoChannelCtx = { channelId: "demo-channel" };
 
-    await runner.runMessageSent(
-      { to: "user-123", content: "hello", success: true },
-      { channelId: "telegram" },
-    );
-
-    expect(handler).toHaveBeenCalledWith(
-      { to: "user-123", content: "hello", success: true },
-      { channelId: "telegram" },
-    );
-  });
-
-  it("runMessageSent invokes registered hooks with error on failure", async () => {
-    const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "message_sent", handler }]);
-    const runner = createHookRunner(registry);
-
-    await runner.runMessageSent(
-      { to: "user-123", content: "hello", success: false, error: "timeout" },
-      { channelId: "telegram" },
-    );
-
-    expect(handler).toHaveBeenCalledWith(
-      { to: "user-123", content: "hello", success: false, error: "timeout" },
-      { channelId: "telegram" },
-    );
+  it.each([
+    {
+      name: "runMessageSent invokes registered hooks with success=true",
+      event: { to: "user-123", content: "hello", success: true },
+    },
+    {
+      name: "runMessageSent invokes registered hooks with error on failure",
+      event: { to: "user-123", content: "hello", success: false, error: "timeout" },
+    },
+  ] as const)("$name", async ({ event }) => {
+    await expectMessageHookCall({
+      hookName: "message_sent",
+      event,
+      channelCtx: demoChannelCtx,
+    });
   });
 });
 

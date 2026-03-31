@@ -1,3 +1,4 @@
+import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
@@ -7,21 +8,26 @@ export function createMockPluginRegistry(
     hookName: string;
     handler: (...args: unknown[]) => unknown;
     priority?: number;
+    pluginId?: string;
     messageReceivedMode?: "observe" | "blocking";
   }>,
 ): PluginRegistry {
+  const pluginIds =
+    hooks.length > 0
+      ? [...new Set(hooks.map((hook) => hook.pluginId ?? "test-plugin"))]
+      : ["test-plugin"];
   return {
-    plugins: [
+    plugins: pluginIds.map((pluginId) =>
       createPluginRecord({
-        id: "test-plugin",
+        id: pluginId,
         name: "Test Plugin",
         source: "test",
-        hookCount: hooks.length,
+        hookCount: hooks.filter((hook) => (hook.pluginId ?? "test-plugin") === pluginId).length,
       }),
-    ],
+    ),
     hooks: hooks as never[],
     typedHooks: hooks.map((h) => ({
-      pluginId: "test-plugin",
+      pluginId: h.pluginId ?? "test-plugin",
       hookName: h.hookName,
       handler: h.handler,
       priority: h.priority ?? 0,
@@ -46,6 +52,7 @@ export function createMockPluginRegistry(
 }
 
 export const TEST_PLUGIN_AGENT_CTX: PluginHookAgentContext = {
+  runId: "test-run-id",
   agentId: "test-agent",
   sessionKey: "test-session",
   sessionId: "test-session-id",
@@ -69,4 +76,62 @@ export function addTestHook(params: {
     source: "test",
     messageReceivedMode: params.messageReceivedMode,
   } as PluginHookRegistration);
+}
+
+export function addTestHooks(
+  registry: PluginRegistry,
+  hooks: ReadonlyArray<{
+    pluginId: string;
+    hookName: PluginHookRegistration["hookName"];
+    handler: PluginHookRegistration["handler"];
+    priority?: number;
+  }>,
+) {
+  for (const hook of hooks) {
+    addTestHook({
+      registry,
+      pluginId: hook.pluginId,
+      hookName: hook.hookName,
+      handler: hook.handler,
+      ...(hook.priority !== undefined ? { priority: hook.priority } : {}),
+    });
+  }
+}
+
+export function addStaticTestHooks<TResult>(
+  registry: PluginRegistry,
+  params: {
+    hookName: PluginHookRegistration["hookName"];
+    hooks: ReadonlyArray<{
+      pluginId: string;
+      result: TResult;
+      priority?: number;
+      handler?: () => TResult | Promise<TResult>;
+    }>;
+  },
+) {
+  addTestHooks(
+    registry,
+    params.hooks.map(({ pluginId, result, priority, handler }) => ({
+      pluginId,
+      hookName: params.hookName,
+      handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
+      ...(priority !== undefined ? { priority } : {}),
+    })),
+  );
+}
+
+export function createHookRunnerWithRegistry(
+  hooks: Array<{
+    hookName: string;
+    handler: (...args: unknown[]) => unknown;
+    pluginId?: string;
+  }>,
+  options?: Parameters<typeof createHookRunner>[1],
+) {
+  const registry = createMockPluginRegistry(hooks);
+  return {
+    registry,
+    runner: createHookRunner(registry, options),
+  };
 }
