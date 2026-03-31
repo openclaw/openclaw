@@ -25,6 +25,34 @@ function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
   return task.label?.trim() || task.task.trim() || "Background task";
 }
 
+function resolveFlowBlockedSummary(
+  task: Pick<TaskRecord, "status" | "terminalOutcome" | "terminalSummary" | "progressSummary">,
+): string | undefined {
+  if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
+    return undefined;
+  }
+  return task.terminalSummary?.trim() || task.progressSummary?.trim() || undefined;
+}
+
+type FlowRecordPatch = Partial<
+  Pick<
+    FlowRecord,
+    | "status"
+    | "notifyPolicy"
+    | "goal"
+    | "currentStep"
+    | "blockedTaskId"
+    | "blockedSummary"
+    | "updatedAt"
+    | "endedAt"
+  >
+> & {
+  currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  endedAt?: number | null;
+};
+
 export function deriveFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
 ): FlowStatus {
@@ -89,6 +117,8 @@ export function createFlowRecord(params: {
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
+  blockedTaskId?: string;
+  blockedSummary?: string;
   createdAt?: number;
   updatedAt?: number;
   endedAt?: number;
@@ -103,6 +133,8 @@ export function createFlowRecord(params: {
     notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
     goal: params.goal,
     currentStep: params.currentStep?.trim() || undefined,
+    blockedTaskId: params.blockedTaskId?.trim() || undefined,
+    blockedSummary: params.blockedSummary?.trim() || undefined,
     createdAt: now,
     updatedAt: params.updatedAt ?? now,
     ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
@@ -116,6 +148,7 @@ export function createFlowForTask(params: {
   task: Pick<
     TaskRecord,
     | "requesterSessionKey"
+    | "taskId"
     | "notifyPolicy"
     | "status"
     | "terminalOutcome"
@@ -124,6 +157,8 @@ export function createFlowForTask(params: {
     | "createdAt"
     | "lastEventAt"
     | "endedAt"
+    | "terminalSummary"
+    | "progressSummary"
   >;
   requesterOrigin?: FlowRecord["requesterOrigin"];
 }): FlowRecord {
@@ -143,18 +178,16 @@ export function createFlowForTask(params: {
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,
     goal: resolveFlowGoal(params.task),
+    blockedTaskId:
+      terminalFlowStatus === "blocked" ? params.task.taskId.trim() || undefined : undefined,
+    blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
     updatedAt: params.task.lastEventAt ?? params.task.createdAt,
     ...(endedAt !== undefined ? { endedAt } : {}),
   });
 }
 
-export function updateFlowRecordById(
-  flowId: string,
-  patch: Partial<
-    Pick<FlowRecord, "status" | "notifyPolicy" | "goal" | "currentStep" | "updatedAt" | "endedAt">
-  >,
-): FlowRecord | null {
+export function updateFlowRecordById(flowId: string, patch: FlowRecordPatch): FlowRecord | null {
   ensureFlowRegistryReady();
   const current = flows.get(flowId);
   if (!current) {
@@ -166,9 +199,19 @@ export function updateFlowRecordById(
     ...(patch.notifyPolicy ? { notifyPolicy: patch.notifyPolicy } : {}),
     ...(patch.goal ? { goal: patch.goal } : {}),
     currentStep:
-      patch.currentStep === undefined ? current.currentStep : patch.currentStep.trim() || undefined,
+      patch.currentStep === undefined
+        ? current.currentStep
+        : patch.currentStep?.trim() || undefined,
+    blockedTaskId:
+      patch.blockedTaskId === undefined
+        ? current.blockedTaskId
+        : patch.blockedTaskId?.trim() || undefined,
+    blockedSummary:
+      patch.blockedSummary === undefined
+        ? current.blockedSummary
+        : patch.blockedSummary?.trim() || undefined,
     updatedAt: patch.updatedAt ?? Date.now(),
-    ...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
+    endedAt: patch.endedAt === undefined ? current.endedAt : (patch.endedAt ?? undefined),
   };
   flows.set(flowId, next);
   persistFlowUpsert(next);
@@ -186,6 +229,9 @@ export function syncFlowFromTask(
     | "task"
     | "lastEventAt"
     | "endedAt"
+    | "taskId"
+    | "terminalSummary"
+    | "progressSummary"
   >,
 ): FlowRecord | null {
   const flowId = task.parentFlowId?.trim();
@@ -203,12 +249,15 @@ export function syncFlowFromTask(
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: resolveFlowGoal(task),
+    blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
+    blockedSummary:
+      terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     updatedAt: task.lastEventAt ?? Date.now(),
     ...(isTerminal
       ? {
           endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
         }
-      : {}),
+      : { endedAt: null }),
   });
 }
 
