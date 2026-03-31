@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -17,12 +17,17 @@ vi.mock("./store.js", () => ({
   loadSessionStore: () => storeState.store,
 }));
 
-import { extractDeliveryInfo, parseSessionThreadInfo } from "./delivery-info.js";
+let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
+let parseSessionThreadInfo: typeof import("./delivery-info.js").parseSessionThreadInfo;
 
 const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
   sessionId: "session-1",
   updatedAt: Date.now(),
   deliveryContext,
+});
+
+beforeAll(async () => {
+  ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
 });
 
 beforeEach(() => {
@@ -38,6 +43,14 @@ describe("extractDeliveryInfo", () => {
     expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
       baseSessionKey: "agent:main:slack:channel:C1",
       threadId: "123.456",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:matrix:channel:!room:example.org",
+      threadId: "$AbC123:example.org",
     });
     expect(parseSessionThreadInfo("agent:main:telegram:dm:user-1")).toEqual({
       baseSessionKey: "agent:main:telegram:dm:user-1",

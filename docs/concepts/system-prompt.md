@@ -59,7 +59,7 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
-- `MEMORY.md` and/or `memory.md` (when present in the workspace; either or both may be injected)
+- `MEMORY.md` when present, otherwise `memory.md` as a lowercase fallback
 
 All of these files are **injected into the context window** on every turn, which
 means they consume tokens. Keep them concise — especially `MEMORY.md`, which can

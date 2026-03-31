@@ -40,11 +40,14 @@ function createTestContext(): {
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
+      pendingToolMediaUrls: [],
+      pendingToolAudioAsVoice: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
+      deterministicApprovalPromptSent: false,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -172,6 +175,221 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("clears edit failure when the retry succeeds through common file path aliases", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-1",
+        args: {
+          file_path: "/tmp/demo.txt",
+          old_string: "beta stale",
+          new_string: "beta fixed",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-1",
+        isError: true,
+        result: { error: "Could not find the exact text in /tmp/demo.txt" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError?.toolName).toBe("edit");
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-2",
+        args: {
+          file: "/tmp/demo.txt",
+          oldText: "beta",
+          newText: "beta fixed",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-2",
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+});
+
+describe("handleToolExecutionEnd exec approval prompts", () => {
+  it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+            warningText: "Warning: heredoc execution requires explicit approval in allowlist mode.",
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("```txt\n/approve 12345678 allow-once\n```"),
+        channelData: {
+          execApproval: {
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
+  it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Discord",
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("chat exec approvals are not enabled on Discord"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("/approve"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("Pending command:"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("Host:"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("CWD:"),
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
+  it("emits the shared approver-DM notice when another approval client received the request", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable-dm-redirect",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Telegram",
+            sentApproverDms: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Approval required. I sent approval DMs to the approvers for this account.",
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
+  it("does not suppress assistant output when deterministic prompt delivery rejects", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = vi.fn(async () => {
+      throw new Error("delivery failed");
+    });
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-reject",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 });
 

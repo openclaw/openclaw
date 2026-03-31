@@ -8,6 +8,7 @@ import {
   connectOk,
   getReplyFromConfig,
   installGatewayTestHooks,
+  mockGetReplyFromConfigOnce,
   onceMessage,
   rpcReq,
   startServerWithClient,
@@ -83,15 +84,109 @@ async function fetchHistoryMessages(
   return historyRes.payload?.messages ?? [];
 }
 
+async function prepareMainHistoryHarness(params: {
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+  createSessionDir: () => Promise<string>;
+  historyMaxBytes?: number;
+}) {
+  if (params.historyMaxBytes !== undefined) {
+    __setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
+  }
+  await connectOk(params.ws);
+  const sessionDir = await params.createSessionDir();
+  await writeMainSessionStore();
+  return sessionDir;
+}
+
 describe("gateway server chat", () => {
+  test("chat.history backfills claude-cli sessions from Claude project files", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const originalHome = process.env.HOME;
+      const homeDir = path.join(sessionDir, "home");
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "queue-operation",
+            operation: "enqueue",
+            timestamp: "2026-03-26T16:29:54.722Z",
+            sessionId: cliSessionId,
+            content: "[Thu 2026-03-26 16:29 GMT] hi",
+          }),
+          JSON.stringify({
+            type: "user",
+            uuid: "user-1",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: {
+              role: "user",
+              content:
+                'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+            },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "assistant-1",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: {
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "text", text: "hello from Claude" }],
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      process.env.HOME = homeDir;
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              updatedAt: Date.now(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: {
+                "claude-cli": {
+                  sessionId: cliSessionId,
+                },
+              },
+            },
+          },
+        });
+
+        const messages = await fetchHistoryMessages(ws);
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).toMatchObject({
+          role: "user",
+          content: "hi",
+        });
+        expect(messages[1]).toMatchObject({
+          role: "assistant",
+          provider: "claude-cli",
+        });
+      } finally {
+        if (originalHome === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = originalHome;
+        }
+      }
+    });
+  });
+
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const bigText = "x".repeat(2_000);
       const historyLines: string[] = [];
@@ -152,9 +247,8 @@ describe("gateway server chat", () => {
       await writeMainSessionStore();
       testState.agentConfig = { blockStreamingDefault: "on" };
       try {
-        spy.mockClear();
         let capturedOpts: GetReplyOptions | undefined;
-        spy.mockImplementationOnce(async (_ctx: unknown, opts?: GetReplyOptions) => {
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
           capturedOpts = opts;
           return undefined;
         });
@@ -180,11 +274,11 @@ describe("gateway server chat", () => {
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
@@ -219,11 +313,11 @@ describe("gateway server chat", () => {
   test("chat.history keeps recent small messages when latest message is oversized", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const baseText = "s".repeat(1_200);
       const lines: string[] = [];
@@ -270,6 +364,37 @@ describe("gateway server chat", () => {
       expect(serialized).toContain("small-29:");
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+    });
+  });
+
+  test("chat.history preserves usage and cost metadata for assistant messages", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            timestamp: Date.now(),
+            content: [{ type: "text", text: "hello" }],
+            usage: { input: 12, output: 5, totalTokens: 17 },
+            cost: { total: 0.0123 },
+            details: { debug: true },
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "assistant",
+        usage: { input: 12, output: 5, totalTokens: 17 },
+        cost: { total: 0.0123 },
+      });
+      expect(messages[0]).not.toHaveProperty("details");
     });
   });
 
@@ -341,8 +466,7 @@ describe("gateway server chat", () => {
       await createSessionDir();
       await writeMainSessionStore();
 
-      spy.mockClear();
-      spy.mockImplementationOnce(async (_ctx, opts) => {
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");
         const signal = opts?.abortSignal;
         await new Promise<void>((resolve) => {

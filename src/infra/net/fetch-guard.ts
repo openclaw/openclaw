@@ -1,15 +1,18 @@
-import { EnvHttpProxyAgent, type Dispatcher } from "undici";
+import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { bindAbortRelay } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
+import { normalizeHostname } from "./hostname.js";
+import { hasEnvHttpProxyConfigured, hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  type PinnedDispatcherPolicy,
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -29,6 +32,7 @@ export type GuardedFetchOptions = {
   signal?: AbortSignal;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   mode?: GuardedFetchMode;
   pinDns?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
@@ -88,6 +92,34 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
   return GUARDED_FETCH_MODE.STRICT;
 }
 
+function keepsTrustedHostOnDirectPath(hostname: string, policy?: SsrFPolicy): boolean {
+  const normalizedHostname = normalizeHostname(hostname);
+  return (
+    policy?.allowPrivateNetwork === true ||
+    policy?.dangerouslyAllowPrivateNetwork === true ||
+    (normalizedHostname !== "" &&
+      (policy?.allowedHostnames ?? []).some(
+        (allowedHostname) => normalizeHostname(allowedHostname) === normalizedHostname,
+      ))
+  );
+}
+
+function assertExplicitProxySupportsPinnedDns(
+  url: URL,
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+  pinDns?: boolean,
+): void {
+  if (
+    pinDns !== false &&
+    dispatcherPolicy?.mode === "explicit-proxy" &&
+    url.protocol !== "https:"
+  ) {
+    throw new Error(
+      "Explicit proxy SSRF pinning requires HTTPS targets; plain HTTP targets are not supported",
+    );
+  }
+}
+
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
@@ -106,40 +138,6 @@ function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestIni
   return { ...init, headers };
 }
 
-function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
-    return { signal: undefined, cleanup: () => {} };
-  }
-
-  if (!timeoutMs) {
-    return { signal, cleanup: () => {} };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(controller.abort.bind(controller), timeoutMs);
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
-
-  const cleanup = () => {
-    clearTimeout(timeoutId);
-    if (signal) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  };
-
-  return { signal: controller.signal, cleanup };
-}
-
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const fetcher: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
@@ -152,7 +150,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
-  const { signal, cleanup } = buildAbortSignal({
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
   });
@@ -187,6 +185,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
+      assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: params.policy,
@@ -194,9 +193,18 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
+        const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+        const protocol = parsedUrl.protocol === "http:" ? "http" : "https";
+        const useEnvProxy =
+          hasEnvHttpProxyConfigured(protocol) &&
+          !params.dispatcherPolicy?.mode &&
+          !keepsTrustedHostOnDirectPath(parsedUrl.hostname, params.policy);
+        const dispatcherPolicy: PinnedDispatcherPolicy | undefined = useEnvProxy
+          ? Object.assign({}, params.dispatcherPolicy, { mode: "env-proxy" as const })
+          : params.dispatcherPolicy;
+        dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, params.policy);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {

@@ -239,7 +239,10 @@ async function downloadToFile(
                 size: total,
               });
             })
-            .catch(reject);
+            .catch(async (err) => {
+              await fs.rm(dest, { force: true }).catch(() => {});
+              reject(err);
+            });
         });
         req.on("error", reject);
         req.end();
@@ -254,6 +257,48 @@ export type SavedMedia = {
   size: number;
   contentType?: string;
 };
+
+function buildSavedMediaId(params: {
+  baseId: string;
+  ext: string;
+  originalFilename?: string;
+}): string {
+  if (!params.originalFilename) {
+    return params.ext ? `${params.baseId}${params.ext}` : params.baseId;
+  }
+
+  const base = path.parse(params.originalFilename).name;
+  const sanitized = sanitizeFilename(base);
+  return sanitized
+    ? `${sanitized}---${params.baseId}${params.ext}`
+    : `${params.baseId}${params.ext}`;
+}
+
+function buildSavedMediaResult(params: {
+  dir: string;
+  id: string;
+  size: number;
+  contentType?: string;
+}): SavedMedia {
+  return {
+    id: params.id,
+    path: path.join(params.dir, params.id),
+    size: params.size,
+    contentType: params.contentType,
+  };
+}
+
+async function writeSavedMediaBuffer(params: {
+  dir: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<string> {
+  const dest = path.join(params.dir, params.id);
+  await retryAfterRecreatingDir(params.dir, () =>
+    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
+  );
+  return dest;
+}
 
 export type SaveMediaSourceErrorCode =
   | "invalid-path"
@@ -321,20 +366,19 @@ export async function saveMediaSource(
       filePath: source,
     });
     const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-    const id = ext ? `${baseId}${ext}` : baseId;
+    const id = buildSavedMediaId({ baseId, ext });
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
-    return { id, path: finalDest, size, contentType: mime };
+    return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
   // local path
   try {
     const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
-    const id = ext ? `${baseId}${ext}` : baseId;
-    const dest = path.join(dir, id);
-    await retryAfterRecreatingDir(dir, () => fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE }));
-    return { id, path: dest, size: stat.size, contentType: mime };
+    const id = buildSavedMediaId({ baseId, ext });
+    await writeSavedMediaBuffer({ dir, id, buffer });
+    return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
     if (err instanceof SafeOpenError) {
       throw toSaveMediaSourceError(err);
@@ -359,19 +403,100 @@ export async function saveMediaBuffer(
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
+  const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
+  await writeSavedMediaBuffer({ dir, id, buffer });
+  return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
+}
 
-  let id: string;
-  if (originalFilename) {
-    // Embed original name: {sanitized}---{uuid}.ext
-    const base = path.parse(originalFilename).name;
-    const sanitized = sanitizeFilename(base);
-    id = sanitized ? `${sanitized}---${uuid}${ext}` : `${uuid}${ext}`;
-  } else {
-    // Legacy: just UUID
-    id = ext ? `${uuid}${ext}` : uuid;
+/**
+ * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
+ *
+ * This is the read-side counterpart to saveMediaBuffer and is used by the
+ * agent runner to hydrate opaque `media://inbound/<id>` URIs written by the
+ * Gateway's claim-check offload path.
+ *
+ * Security:
+ * - Rejects IDs containing path separators, "..", or null bytes to prevent
+ *   directory traversal and path injection outside the resolved subdir.
+ * - Verifies the resolved path is a regular file (not a symlink or directory)
+ *   before returning it, matching the write-side MEDIA_FILE_MODE policy.
+ *
+ * @param id      The media ID as returned by SavedMedia.id (may include
+ *                extension and original-filename prefix,
+ *                e.g. "photo---<uuid>.png" or "图片---<uuid>.png").
+ * @param subdir  The subdirectory the file was saved into (default "inbound").
+ * @returns       Absolute path to the file on disk.
+ * @throws        If the ID is unsafe, the file does not exist, or is not a
+ *                regular file.
+ */
+export async function resolveMediaBufferPath(
+  id: string,
+  subdir: "inbound" = "inbound",
+): Promise<string> {
+  // Guard against path traversal and null-byte injection.
+  //
+  // - Separator checks: reject any ID containing "/" or "\" (covers all
+  //   relative traversal sequences such as "../foo" or "..\\foo").
+  // - Exact ".." check: reject the bare traversal operator in case a caller
+  //   strips separators but keeps the dots.
+  // - Null-byte check: reject "\0" which can truncate paths on some platforms
+  //   and cause the OS to open a different file than intended.
+  //
+  // We allow consecutive dots in legitimate filenames (e.g. "report..draft.png"),
+  // so we only reject the exact two-character string "..".
+  //
+  // JSON.stringify is used in the error message so that control characters
+  // (including \0) are rendered visibly in logs rather than silently dropped.
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0") || id === "..") {
+    throw new Error(`resolveMediaBufferPath: unsafe media ID: ${JSON.stringify(id)}`);
   }
 
-  const dest = path.join(dir, id);
-  await retryAfterRecreatingDir(dir, () => fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE }));
-  return { id, path: dest, size: buffer.byteLength, contentType: mime };
+  const dir = path.join(resolveMediaDir(), subdir);
+  const resolved = path.join(dir, id);
+
+  // Double-check that path.join didn't escape the intended directory.
+  // This should be unreachable after the separator check above, but be
+  // explicit about the invariant.
+  if (!resolved.startsWith(dir + path.sep) && resolved !== dir) {
+    throw new Error(`resolveMediaBufferPath: path escapes media directory: ${JSON.stringify(id)}`);
+  }
+
+  // lstat (not stat) so we see symlinks rather than following them.
+  const stat = await fs.lstat(resolved);
+
+  if (stat.isSymbolicLink()) {
+    throw new Error(
+      `resolveMediaBufferPath: refusing to follow symlink for media ID: ${JSON.stringify(id)}`,
+    );
+  }
+  if (!stat.isFile()) {
+    throw new Error(
+      `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
+    );
+  }
+
+  return resolved;
+}
+
+/**
+ * Deletes a file previously saved by saveMediaBuffer.
+ *
+ * This is used by parseMessageWithAttachments to clean up files that were
+ * successfully offloaded earlier in the same request when a later attachment
+ * fails validation and the entire parse is aborted, preventing orphaned files
+ * from accumulating on disk ahead of the periodic TTL sweep.
+ *
+ * Uses resolveMediaBufferPath to apply the same path-safety guards as the
+ * read path (separator checks, symlink rejection, etc.) before unlinking.
+ *
+ * Errors are intentionally not suppressed — callers that want best-effort
+ * cleanup should catch and discard exceptions themselves (e.g. via
+ * Promise.allSettled).
+ *
+ * @param id     The media ID as returned by SavedMedia.id.
+ * @param subdir The subdirectory the file was saved into (default "inbound").
+ */
+export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
+  const physicalPath = await resolveMediaBufferPath(id, subdir);
+  await fs.unlink(physicalPath);
 }

@@ -65,7 +65,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig) {
 }
 
 function makeKimiSubagentCfg(params: {
-  agentPrimaryModel: string;
+  agentPrimaryModel?: string;
   agentSubagentModel?: string;
   defaultsSubagentModel?: string;
 }): OpenClawConfig {
@@ -83,7 +83,7 @@ function makeKimiSubagentCfg(params: {
       list: [
         {
           id: "kimi",
-          model: { primary: params.agentPrimaryModel },
+          model: params.agentPrimaryModel ? { primary: params.agentPrimaryModel } : undefined,
           subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
         },
       ],
@@ -147,6 +147,37 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.reasoningLevel).toBeUndefined();
+  });
+
+  test("persists fastMode=false (does not clear)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, fastMode: false },
+      }),
+    );
+    expect(entry.fastMode).toBe(false);
+  });
+
+  test("persists fastMode=true", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, fastMode: true },
+      }),
+    );
+    expect(entry.fastMode).toBe(true);
+  });
+
+  test("clears fastMode when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { fastMode: true } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: null },
+      }),
+    );
+    expect(entry.fastMode).toBeUndefined();
   });
 
   test("persists elevatedLevel=off (does not clear)", async () => {
@@ -252,6 +283,42 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnDepth).toBe(2);
   });
 
+  test("sets spawnedBy for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          spawnedBy: "agent:main:main",
+        },
+      }),
+    );
+    expect(entry.spawnedBy).toBe("agent:main:main");
+  });
+
+  test("sets spawnedWorkspaceDir for subagent sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:subagent:child",
+        patch: {
+          key: "agent:main:subagent:child",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        },
+      }),
+    );
+    expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
+  });
+
+  test("sets spawnDepth for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: { key: "agent:main:acp:child", spawnDepth: 2 },
+      }),
+    );
+    expect(entry.spawnDepth).toBe(2);
+  });
+
   test("rejects spawnDepth on non-subagent sessions", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
@@ -259,12 +326,19 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "spawnDepth is only supported");
   });
 
+  test("rejects spawnedWorkspaceDir on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
+    });
+    expectPatchError(result, "spawnedWorkspaceDir is only supported");
+  });
+
   test("normalizes exec/send/group patches", async () => {
     const entry = expectPatchOk(
       await runPatch({
         patch: {
           key: MAIN_SESSION_KEY,
-          execHost: " NODE ",
+          execHost: " AUTO ",
           execSecurity: " ALLOWLIST ",
           execAsk: " ON-MISS ",
           execNode: " worker-1 ",
@@ -273,7 +347,7 @@ describe("gateway sessions patch", () => {
         },
       }),
     );
-    expect(entry.execHost).toBe("node");
+    expect(entry.execHost).toBe("auto");
     expect(entry.execSecurity).toBe("allowlist");
     expect(entry.execAsk).toBe("on-miss");
     expect(entry.execNode).toBe("worker-1");
@@ -326,7 +400,6 @@ describe("gateway sessions patch", () => {
 
   test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: "anthropic/claude-sonnet-4-6",
       defaultsSubagentModel: SUBAGENT_MODEL,
     });
 

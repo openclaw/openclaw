@@ -4,31 +4,33 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 
 const mocks = vi.hoisted(() => ({
   loginOpenAICodex: vi.fn(),
-  createVpsAwareOAuthHandlers: vi.fn(),
   runOpenAIOAuthTlsPreflight: vi.fn(),
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  loginOpenAICodex: mocks.loginOpenAICodex,
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    loginOpenAICodex: mocks.loginOpenAICodex,
+  };
+});
 
-vi.mock("./oauth-flow.js", () => ({
-  createVpsAwareOAuthHandlers: mocks.createVpsAwareOAuthHandlers,
-}));
-
-vi.mock("./oauth-tls-preflight.js", () => ({
+vi.mock("../plugins/provider-openai-codex-oauth-tls.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
 }));
 
-import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
+import { loginOpenAICodexOAuth } from "../plugins/provider-openai-codex-oauth.js";
 
 function createPrompter() {
   const spin = { update: vi.fn(), stop: vi.fn() };
-  const prompter: Pick<WizardPrompter, "note" | "progress"> = {
+  const prompter: Pick<WizardPrompter, "note" | "progress" | "text"> = {
     note: vi.fn(async () => {}),
     progress: vi.fn(() => spin),
+    text: vi.fn(async () => "http://localhost:1455/auth/callback?code=test"),
   };
   return { prompter: prompter as unknown as WizardPrompter, spin };
 }
@@ -43,14 +45,17 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
-async function runCodexOAuth(params: { isRemote: boolean }) {
+async function runCodexOAuth(params: {
+  isRemote: boolean;
+  openUrl?: (url: string) => Promise<void>;
+}) {
   const { prompter, spin } = createPrompter();
   const runtime = createRuntime();
   const result = await loginOpenAICodexOAuth({
     prompter,
     runtime,
     isRemote: params.isRemote,
-    openUrl: async () => {},
+    openUrl: params.openUrl ?? (async () => {}),
   });
   return { result, prompter, spin, runtime };
 }
@@ -70,10 +75,6 @@ describe("loginOpenAICodexOAuth", () => {
       expires: Date.now() + 60_000,
       email: "user@example.com",
     };
-    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(),
-    });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 
     const { result, spin, runtime } = await runCodexOAuth({ isRemote: false });
@@ -92,11 +93,6 @@ describe("loginOpenAICodexOAuth", () => {
       expires: Date.now() + 60_000,
       email: "user@example.com",
     };
-    const onAuthSpy = vi.fn();
-    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
-      onAuth: onAuthSpy,
-      onPrompt: vi.fn(),
-    });
     mocks.loginOpenAICodex.mockImplementation(
       async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
         await opts.onAuth({
@@ -106,20 +102,18 @@ describe("loginOpenAICodexOAuth", () => {
       },
     );
 
-    await runCodexOAuth({ isRemote: false });
+    const openUrl = vi.fn(async () => {});
+    const { runtime } = await runCodexOAuth({ isRemote: false, openUrl });
 
-    expect(onAuthSpy).toHaveBeenCalledTimes(1);
-    const event = onAuthSpy.mock.calls[0]?.[0] as { url: string };
-    expect(event.url).toBe(
+    expect(openUrl).toHaveBeenCalledWith(
       "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
     );
   });
 
   it("reports oauth errors and rethrows", async () => {
-    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(),
-    });
     mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
 
     const { prompter, spin } = createPrompter();
@@ -141,6 +135,37 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("passes manual code input hook for remote oauth flows", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: {
+        onAuth: (event: { url: string }) => Promise<void>;
+        onManualCodeInput?: () => Promise<string>;
+      }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize?state=abc",
+        });
+        expect(opts.onManualCodeInput).toBeTypeOf("function");
+        await expect(opts.onManualCodeInput?.()).resolves.toContain("code=test");
+        return creds;
+      },
+    );
+
+    const { result, prompter } = await runCodexOAuth({ isRemote: true });
+
+    expect(result).toEqual(creds);
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Paste the authorization code (or full redirect URL):",
+      validate: expect.any(Function),
+    });
+  });
+
   it("continues OAuth flow on non-certificate preflight failures", async () => {
     const creds = {
       provider: "openai-codex" as const,
@@ -153,10 +178,6 @@ describe("loginOpenAICodexOAuth", () => {
       ok: false,
       kind: "network",
       message: "Client network socket disconnected before secure TLS connection was established",
-    });
-    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(),
     });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 

@@ -1,6 +1,9 @@
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/diffs";
+import {
+  definePluginEntry,
+  resolvePreferredOpenClawTmpDir,
+  type OpenClawPluginApi,
+} from "./api.js";
 import {
   diffsPluginConfigSchema,
   resolveDiffsPluginDefaults,
@@ -11,7 +14,7 @@ import { DIFFS_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
 import { DiffArtifactStore } from "./src/store.js";
 import { createDiffsTool } from "./src/tool.js";
 
-const plugin = {
+export default definePluginEntry({
   id: "diffs",
   name: "Diffs",
   description: "Read-only diff viewer and PNG/PDF renderer for agents.",
@@ -24,7 +27,9 @@ const plugin = {
       logger: api.logger,
     });
 
-    api.registerTool(createDiffsTool({ api, store, defaults }));
+    api.registerTool((ctx) => createDiffsTool({ api, store, defaults, context: ctx }), {
+      name: "diffs",
+    });
     api.registerHttpRoute({
       path: "/plugins/diffs",
       auth: "plugin",
@@ -33,12 +38,12 @@ const plugin = {
         store,
         logger: api.logger,
         allowRemoteViewer: security.allowRemoteViewer,
+        trustedProxies: api.config.gateway?.trustedProxies,
+        allowRealIpFallback: api.config.gateway?.allowRealIpFallback === true,
       }),
     });
     api.on("before_prompt_build", async () => ({
       prependSystemContext: DIFFS_AGENT_GUIDANCE,
     }));
   },
-};
-
-export default plugin;
+});

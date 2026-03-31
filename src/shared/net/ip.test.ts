@@ -2,12 +2,19 @@ import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
   extractEmbeddedIpv4FromIpv6,
+  isBlockedSpecialUseIpv4Address,
   isCanonicalDottedDecimalIPv4,
+  isCarrierGradeNatIpv4Address,
   isIpInCidr,
+  isIpv4Address,
   isIpv6Address,
   isLegacyIpv4Literal,
+  isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc1918Ipv4Address,
+  normalizeIpAddress,
   parseCanonicalIpAddress,
+  parseLooseIpAddress,
 } from "./ip.js";
 
 describe("shared ip helpers", () => {
@@ -24,6 +31,8 @@ describe("shared ip helpers", () => {
     expect(isIpInCidr("10.43.0.59", "10.42.0.0/24")).toBe(false);
     expect(isIpInCidr("2001:db8::1234", "2001:db8::/32")).toBe(true);
     expect(isIpInCidr("2001:db9::1234", "2001:db8::/32")).toBe(false);
+    expect(isIpInCidr("::ffff:127.0.0.1", "127.0.0.1")).toBe(true);
+    expect(isIpInCidr("127.0.0.1", "::ffff:127.0.0.2")).toBe(false);
   });
 
   it("extracts embedded IPv4 for transition prefixes", () => {
@@ -48,9 +57,50 @@ describe("shared ip helpers", () => {
 
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:db8::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:2::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("100::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
     }
     expect(isPrivateOrLoopbackIpAddress("2001:4860:4860::8888")).toBe(false);
+  });
+
+  it("normalizes canonical IP strings and loopback detection", () => {
+    expect(normalizeIpAddress("[::FFFF:127.0.0.1]")).toBe("127.0.0.1");
+    expect(normalizeIpAddress("  [2001:DB8::1]  ")).toBe("2001:db8::1");
+    expect(isLoopbackIpAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackIpAddress("198.18.0.1")).toBe(false);
+  });
+
+  it("parses loose legacy IPv4 literals that canonical parsing rejects", () => {
+    expect(parseCanonicalIpAddress("0177.0.0.1")).toBeUndefined();
+    expect(parseLooseIpAddress("0177.0.0.1")?.toString()).toBe("127.0.0.1");
+    expect(parseLooseIpAddress("[::1]")?.toString()).toBe("::1");
+  });
+
+  it("classifies RFC1918 and carrier-grade-nat IPv4 ranges", () => {
+    expect(isRfc1918Ipv4Address("10.42.0.59")).toBe(true);
+    expect(isRfc1918Ipv4Address("100.64.0.1")).toBe(false);
+    expect(isCarrierGradeNatIpv4Address("100.64.0.1")).toBe(true);
+    expect(isCarrierGradeNatIpv4Address("10.42.0.59")).toBe(false);
+  });
+
+  it("blocks special-use IPv4 ranges while allowing optional RFC2544 benchmark addresses", () => {
+    const loopback = parseCanonicalIpAddress("127.0.0.1");
+    const benchmark = parseCanonicalIpAddress("198.18.0.1");
+
+    expect(loopback?.kind()).toBe("ipv4");
+    expect(benchmark?.kind()).toBe("ipv4");
+    if (!loopback || !isIpv4Address(loopback) || !benchmark || !isIpv4Address(benchmark)) {
+      throw new Error("expected ipv4 fixtures");
+    }
+
+    expect(isBlockedSpecialUseIpv4Address(loopback)).toBe(true);
+    expect(isBlockedSpecialUseIpv4Address(benchmark)).toBe(true);
+    expect(isBlockedSpecialUseIpv4Address(benchmark, { allowRfc2544BenchmarkRange: true })).toBe(
+      false,
+    );
   });
 });

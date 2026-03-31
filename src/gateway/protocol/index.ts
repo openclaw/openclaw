@@ -48,6 +48,10 @@ import {
   TalkConfigParamsSchema,
   type TalkConfigResult,
   TalkConfigResultSchema,
+  type TalkSpeakParams,
+  TalkSpeakParamsSchema,
+  type TalkSpeakResult,
+  TalkSpeakResultSchema,
   type ChannelsStatusParams,
   ChannelsStatusParamsSchema,
   type ChannelsStatusResult,
@@ -120,6 +124,10 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type PluginApprovalRequestParams,
+  PluginApprovalRequestParamsSchema,
+  type PluginApprovalResolveParams,
+  PluginApprovalResolveParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -140,6 +148,14 @@ import {
   NodeDescribeParamsSchema,
   type NodeEventParams,
   NodeEventParamsSchema,
+  type NodePendingDrainParams,
+  NodePendingDrainParamsSchema,
+  type NodePendingDrainResult,
+  NodePendingDrainResultSchema,
+  type NodePendingEnqueueParams,
+  NodePendingEnqueueParamsSchema,
+  type NodePendingEnqueueResult,
+  NodePendingEnqueueResultSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
   type NodeInvokeResultParams,
@@ -178,12 +194,20 @@ import {
   type SecretsResolveResult,
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
+  type SessionsAbortParams,
+  SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCreateParams,
+  SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  type SessionsMessagesSubscribeParams,
+  SessionsMessagesSubscribeParamsSchema,
+  type SessionsMessagesUnsubscribeParams,
+  SessionsMessagesUnsubscribeParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
   type SessionsPreviewParams,
@@ -192,6 +216,8 @@ import {
   SessionsResetParamsSchema,
   type SessionsResolveParams,
   SessionsResolveParamsSchema,
+  type SessionsSendParams,
+  SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
   type ShutdownEvent,
@@ -208,6 +234,9 @@ import {
   type ToolsCatalogParams,
   ToolsCatalogParamsSchema,
   type ToolsCatalogResult,
+  type ToolsEffectiveParams,
+  ToolsEffectiveParamsSchema,
+  type ToolsEffectiveResult,
   type Snapshot,
   SnapshotSchema,
   type StateVersion,
@@ -296,6 +325,12 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
   NodeInvokeResultParamsSchema,
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
+export const validateNodePendingDrainParams = ajv.compile<NodePendingDrainParams>(
+  NodePendingDrainParamsSchema,
+);
+export const validateNodePendingEnqueueParams = ajv.compile<NodePendingEnqueueParams>(
+  NodePendingEnqueueParamsSchema,
+);
 export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
 export const validateSecretsResolveParams = ajv.compile<SecretsResolveParams>(
   SecretsResolveParamsSchema,
@@ -310,6 +345,17 @@ export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
 );
+export const validateSessionsCreateParams = ajv.compile<SessionsCreateParams>(
+  SessionsCreateParamsSchema,
+);
+export const validateSessionsSendParams = ajv.compile<SessionsSendParams>(SessionsSendParamsSchema);
+export const validateSessionsMessagesSubscribeParams = ajv.compile<SessionsMessagesSubscribeParams>(
+  SessionsMessagesSubscribeParamsSchema,
+);
+export const validateSessionsMessagesUnsubscribeParams =
+  ajv.compile<SessionsMessagesUnsubscribeParams>(SessionsMessagesUnsubscribeParamsSchema);
+export const validateSessionsAbortParams =
+  ajv.compile<SessionsAbortParams>(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
 export const validateSessionsResetParams =
@@ -340,6 +386,8 @@ export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(Wizard
 export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
 export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
 export const validateTalkConfigResult = ajv.compile<TalkConfigResult>(TalkConfigResultSchema);
+export const validateTalkSpeakParams = ajv.compile<TalkSpeakParams>(TalkSpeakParamsSchema);
+export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -349,6 +397,9 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
+export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
+  ToolsEffectiveParamsSchema,
+);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
@@ -389,6 +440,12 @@ export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequest
 );
 export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
+);
+export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalRequestParams>(
+  PluginApprovalRequestParamsSchema,
+);
+export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
+  PluginApprovalResolveParamsSchema,
 );
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
@@ -472,8 +529,16 @@ export {
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodePendingDrainParamsSchema,
+  NodePendingDrainResultSchema,
+  NodePendingEnqueueParamsSchema,
+  NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
+  SessionsResolveParamsSchema,
+  SessionsCreateParamsSchema,
+  SessionsSendParamsSchema,
+  SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
@@ -497,6 +562,8 @@ export {
   WizardStatusResultSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
+  TalkSpeakParamsSchema,
+  TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsLogoutParamsSchema,
@@ -521,6 +588,7 @@ export {
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
+  ToolsEffectiveParamsSchema,
   SkillsInstallParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
@@ -586,6 +654,8 @@ export type {
   WizardStatusResult,
   TalkConfigParams,
   TalkConfigResult,
+  TalkSpeakParams,
+  TalkSpeakResult,
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
@@ -611,6 +681,8 @@ export type {
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
+  ToolsEffectiveParams,
+  ToolsEffectiveResult,
   SkillsBinsParams,
   SkillsBinsResult,
   SkillsInstallParams,
@@ -621,6 +693,10 @@ export type {
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
+  NodePendingDrainParams,
+  NodePendingDrainResult,
+  NodePendingEnqueueParams,
+  NodePendingEnqueueResult,
   SessionsListParams,
   SessionsPreviewParams,
   SessionsResolveParams,

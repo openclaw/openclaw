@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+  makePathEnv,
+  makeTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlist,
   requiresExecApproval,
@@ -18,6 +23,31 @@ describe("resolveAllowAlwaysPatterns", () => {
     return exe;
   }
 
+  function resolvePersistedPatterns(params: {
+    command: string;
+    dir: string;
+    env: Record<string, string | undefined>;
+    safeBins: ReturnType<typeof resolveSafeBins>;
+  }) {
+    const analysis = evaluateShellAllowlist({
+      command: params.command,
+      allowlist: [],
+      safeBins: params.safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    return {
+      analysis,
+      persisted: resolveAllowAlwaysPatterns({
+        segments: analysis.segments,
+        cwd: params.dir,
+        env: params.env,
+        platform: process.platform,
+      }),
+    };
+  }
+
   function expectAllowAlwaysBypassBlocked(params: {
     dir: string;
     firstCommand: string;
@@ -26,19 +56,11 @@ describe("resolveAllowAlwaysPatterns", () => {
     persistedPattern: string;
   }) {
     const safeBins = resolveSafeBins(undefined);
-    const first = evaluateShellAllowlist({
+    const { persisted } = resolvePersistedPatterns({
       command: params.firstCommand,
-      allowlist: [],
+      dir: params.dir,
+      env: params.env,
       safeBins,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
-    });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
     });
     expect(persisted).toEqual([params.persistedPattern]);
 
@@ -61,6 +83,70 @@ describe("resolveAllowAlwaysPatterns", () => {
     ).toBe(true);
   }
 
+  function createShellScriptFixture() {
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(script, "echo ok\n");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    return { dir, scriptsDir, script, env, safeBins };
+  }
+
+  function expectPersistedShellScriptMatch(params: {
+    command: string;
+    script: string;
+    dir: string;
+    env: Record<string, string | undefined>;
+    safeBins: ReturnType<typeof resolveSafeBins>;
+  }) {
+    const { persisted } = resolvePersistedPatterns({
+      command: params.command,
+      dir: params.dir,
+      env: params.env,
+      safeBins: params.safeBins,
+    });
+    expect(persisted).toEqual([params.script]);
+
+    const second = evaluateShellAllowlist({
+      command: params.command,
+      allowlist: [{ pattern: params.script }],
+      safeBins: params.safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  }
+
+  function expectPositionalArgvCarrierRejected(command: string) {
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+    const expandedCommand = command.replaceAll("{marker}", marker);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: expandedCommand,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: expandedCommand,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  }
+
   it("returns direct executable paths for non-shell segments", () => {
     const exe = path.join("/tmp", "openclaw-tool");
     const patterns = resolveAllowAlwaysPatterns({
@@ -68,11 +154,37 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: exe,
           argv: [exe],
-          resolution: { rawExecutable: exe, resolvedPath: exe, executableName: "openclaw-tool" },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: exe,
+              resolvedPath: exe,
+              executableName: "openclaw-tool",
+            }),
+          }),
         },
       ],
     });
     expect(patterns).toEqual([exe]);
+  });
+
+  it("does not persist interpreter-like executables for allow-always", () => {
+    const awk = path.join("/tmp", "awk");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: `${awk} '{print $1}' data.csv`,
+          argv: [awk, "{print $1}", "data.csv"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: awk,
+              resolvedPath: awk,
+              executableName: "awk",
+            }),
+          }),
+        },
+      ],
+    });
+    expect(patterns).toEqual([]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
@@ -86,11 +198,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/bin/zsh -lc 'whoami'",
           argv: ["/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/bin/zsh",
-            resolvedPath: "/bin/zsh",
-            executableName: "zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/bin/zsh",
+              resolvedPath: "/bin/zsh",
+              executableName: "zsh",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -113,11 +227,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/bin/zsh -lc 'whoami && ls && whoami'",
           argv: ["/bin/zsh", "-lc", "whoami && ls && whoami"],
-          resolution: {
-            rawExecutable: "/bin/zsh",
-            resolvedPath: "/bin/zsh",
-            executableName: "zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/bin/zsh",
+              resolvedPath: "/bin/zsh",
+              executableName: "zsh",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -131,39 +247,14 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
-    const scriptsDir = path.join(dir, "scripts");
-    fs.mkdirSync(scriptsDir, { recursive: true });
-    const script = path.join(scriptsDir, "save_crystal.sh");
-    fs.writeFileSync(script, "echo ok\n");
-
-    const safeBins = resolveSafeBins(undefined);
-    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
-    const first = evaluateShellAllowlist({
+    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
+    expectPersistedShellScriptMatch({
       command: "bash scripts/save_crystal.sh",
-      allowlist: [],
+      script,
+      dir,
+      env,
       safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
     });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(persisted).toEqual([script]);
-
-    const second = evaluateShellAllowlist({
-      command: "bash scripts/save_crystal.sh",
-      allowlist: [{ pattern: script }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(true);
 
     const other = path.join(scriptsDir, "other.sh");
     fs.writeFileSync(other, "echo other\n");
@@ -182,51 +273,79 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
-    const scriptsDir = path.join(dir, "scripts");
-    fs.mkdirSync(scriptsDir, { recursive: true });
-    const script = path.join(scriptsDir, "save_crystal.sh");
-    fs.writeFileSync(script, "echo ok\n");
-
-    const safeBins = resolveSafeBins(undefined);
-    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
-    const first = evaluateShellAllowlist({
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    expectPersistedShellScriptMatch({
       command: "/usr/bin/nice bash scripts/save_crystal.sh",
-      allowlist: [],
+      script,
+      dir,
+      env,
       safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
     });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: dir,
+  });
+
+  it("rejects shell-wrapper positional argv carriers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    expectPositionalArgvCarrierRejected(`sh -lc '$0 "$1"' touch {marker}`);
+  });
+
+  it("rejects exec positional argv carriers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    expectPositionalArgvCarrierRejected(`sh -lc 'exec -- "$0" "$1"' touch {marker}`);
+  });
+
+  it("rejects positional argv carriers when $0 is single-quoted", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    expectPositionalArgvCarrierRejected(`sh -lc "'$0' "$1"" touch {marker}`);
+  });
+
+  it("rejects positional argv carriers when exec is separated from $0 by a newline", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    expectPositionalArgvCarrierRejected(`sh -lc "exec
+$0 \\"$1\\"" touch {marker}`);
+  });
+
+  it("rejects positional argv carriers when inline command contains extra shell operations", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc 'echo blocked; $0 "$1"' touch ${marker}`,
+      dir,
       env,
-      platform: process.platform,
+      safeBins,
     });
-    expect(persisted).toEqual([script]);
+    expect(persisted).not.toContain(touch);
 
     const second = evaluateShellAllowlist({
-      command: "/usr/bin/nice bash scripts/save_crystal.sh",
-      allowlist: [{ pattern: script }],
+      command: `sh -lc 'echo blocked; $0 "$1"' touch ${marker}`,
+      allowlist: [{ pattern: touch }],
       safeBins,
       cwd: dir,
       env,
       platform: process.platform,
     });
-    expect(second.allowlistSatisfied).toBe(true);
+    expect(second.allowlistSatisfied).toBe(false);
   });
 
   it("does not treat inline shell commands as persisted script paths", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
-    const scriptsDir = path.join(dir, "scripts");
-    fs.mkdirSync(scriptsDir, { recursive: true });
-    const script = path.join(scriptsDir, "save_crystal.sh");
-    fs.writeFileSync(script, "echo ok\n");
-    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const { dir, script, env } = createShellScriptFixture();
     expectAllowAlwaysBypassBlocked({
       dir,
       firstCommand: "bash scripts/save_crystal.sh",
@@ -240,12 +359,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
-    const scriptsDir = path.join(dir, "scripts");
-    fs.mkdirSync(scriptsDir, { recursive: true });
-    const script = path.join(scriptsDir, "save_crystal.sh");
-    fs.writeFileSync(script, "echo ok\n");
-    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const { dir, script, env } = createShellScriptFixture();
     expectAllowAlwaysBypassBlocked({
       dir,
       firstCommand: "bash scripts/save_crystal.sh",
@@ -261,11 +375,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/bin/zsh -s",
           argv: ["/bin/zsh", "-s"],
-          resolution: {
-            rawExecutable: "/bin/zsh",
-            resolvedPath: "/bin/zsh",
-            executableName: "zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/bin/zsh",
+              resolvedPath: "/bin/zsh",
+              executableName: "zsh",
+            }),
+          }),
         },
       ],
       platform: process.platform,
@@ -284,11 +400,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/usr/local/bin/zsh -lc whoami",
           argv: ["/usr/local/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/usr/local/bin/zsh",
-            resolvedPath: undefined,
-            executableName: "/usr/local/bin/zsh",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/usr/local/bin/zsh",
+              resolvedPath: undefined,
+              executableName: "/usr/local/bin/zsh",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -309,11 +427,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "/usr/bin/nice /bin/zsh -lc whoami",
           argv: ["/usr/bin/nice", "/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "/usr/bin/nice",
-            resolvedPath: "/usr/bin/nice",
-            executableName: "nice",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/usr/bin/nice",
+              resolvedPath: "/usr/bin/nice",
+              executableName: "nice",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -322,6 +442,34 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
     expect(patterns).toEqual([whoami]);
     expect(patterns).not.toContain("/usr/bin/nice");
+  });
+
+  it("unwraps time wrappers and persists the inner executable instead", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const whoami = makeExecutable(dir, "whoami");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/usr/bin/time -p /bin/zsh -lc whoami",
+          argv: ["/usr/bin/time", "-p", "/bin/zsh", "-lc", "whoami"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "/usr/bin/time",
+              resolvedPath: "/usr/bin/time",
+              executableName: "time",
+            }),
+          }),
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([whoami]);
+    expect(patterns).not.toContain("/usr/bin/time");
   });
 
   it("unwraps busybox/toybox shell applets and persists inner executables", () => {
@@ -338,11 +486,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: `${busybox} sh -lc whoami`,
           argv: [busybox, "sh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: busybox,
-            resolvedPath: busybox,
-            executableName: "busybox",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: busybox,
+              resolvedPath: busybox,
+              executableName: "busybox",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -364,11 +514,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: `${busybox} sed -n 1p`,
           argv: [busybox, "sed", "-n", "1p"],
-          resolution: {
-            rawExecutable: busybox,
-            resolvedPath: busybox,
-            executableName: "busybox",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: busybox,
+              resolvedPath: busybox,
+              executableName: "busybox",
+            }),
+          }),
         },
       ],
       cwd: dir,
@@ -384,11 +536,13 @@ describe("resolveAllowAlwaysPatterns", () => {
         {
           raw: "sudo /bin/zsh -lc whoami",
           argv: ["sudo", "/bin/zsh", "-lc", "whoami"],
-          resolution: {
-            rawExecutable: "sudo",
-            resolvedPath: "/usr/bin/sudo",
-            executableName: "sudo",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "sudo",
+              resolvedPath: "/usr/bin/sudo",
+              executableName: "sudo",
+            }),
+          }),
         },
       ],
       platform: process.platform,
@@ -431,6 +585,104 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
   });
 
+  it("prevents allow-always bypass for time wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/time -p /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/time -p /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("prevents allow-always bypass for awk interpreters", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: "awk '{print $1}' data.csv",
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
+      allowlist: persisted.map((pattern) => ({ pattern })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("prevents allow-always bypass for shell-carried awk interpreters", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$@"' awk '{print $1}' data.csv`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$@"' awk 'BEGIN{system("id > /tmp/pwned")}'`,
+      allowlist: persisted.map((pattern) => ({ pattern })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
+  it("prevents allow-always bypass for script wrapper chains", () => {
+    if (process.platform !== "darwin" && process.platform !== "freebsd") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/script -q /dev/null /bin/sh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/script -q /dev/null /bin/sh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("does not persist comment-tailed payload paths that never execute", () => {
     if (process.platform === "win32") {
       return;
@@ -446,5 +698,89 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       persistedPattern: benign,
     });
+  });
+
+  it("rejects positional carrier when carried executable is a dispatch wrapper", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const envPath = makeExecutable(dir, "env");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$@"' env echo SAFE`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$@"' env BASH_ENV=/tmp/payload.sh bash -lc 'id > /tmp/pwned'`,
+      allowlist: [{ pattern: envPath }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects positional carrier when carried executable is a shell wrapper", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const bashPath = makeExecutable(dir, "bash");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$@"' bash -lc 'echo safe'`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$@"' bash -lc 'id > /tmp/pwned'`,
+      allowlist: [{ pattern: bashPath }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects positional carrier when carried executable is an unknown dispatch carrier", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const xargsPath = makeExecutable(dir, "xargs");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$@"' xargs echo SAFE`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$@"' xargs sh -lc 'id > /tmp/pwned'`,
+      allowlist: [{ pattern: xargsPath }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
   });
 });

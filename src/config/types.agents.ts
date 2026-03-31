@@ -65,6 +65,12 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
+  /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  /** Optional per-agent default reasoning visibility. */
+  reasoningDefault?: "on" | "off" | "stream";
+  /** Optional per-agent default for fast mode. */
+  fastModeDefault?: boolean;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
@@ -79,6 +85,8 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
+    requireAgentId?: boolean;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

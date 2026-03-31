@@ -18,9 +18,15 @@ import {
   hasConfigurePlanChanges,
   type ConfigureCandidate,
 } from "./configure-plan.js";
+import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import type { SecretsApplyPlan } from "./plan.js";
-import { PROVIDER_ENV_VARS } from "./provider-env-vars.js";
-import { isValidSecretProviderAlias, resolveDefaultSecretProviderAlias } from "./ref-contract.js";
+import { getProviderEnvVars } from "./provider-env-vars.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
+  isValidSecretProviderAlias,
+  resolveDefaultSecretProviderAlias,
+} from "./ref-contract.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
@@ -242,7 +248,7 @@ function resolveSuggestedEnvSecretId(candidate: ConfigureCandidate): string | un
   if (!hintedProvider) {
     return undefined;
   }
-  const envCandidates = PROVIDER_ENV_VARS[hintedProvider];
+  const envCandidates = getProviderEnvVars(hintedProvider);
   if (!Array.isArray(envCandidates) || envCandidates.length === 0) {
     return undefined;
   }
@@ -743,6 +749,7 @@ export async function runSecretsConfigureInteractive(
     providersOnly?: boolean;
     skipProviderSetup?: boolean;
     agentId?: string;
+    allowExecInPreflight?: boolean;
   } = {},
 ): Promise<SecretsConfigureResult> {
   if (!process.stdin.isTTY) {
@@ -753,6 +760,7 @@ export async function runSecretsConfigureInteractive(
   }
 
   const env = params.env ?? process.env;
+  const allowExecInPreflight = Boolean(params.allowExecInPreflight);
   const io = createSecretsConfigIO({ env });
   const { snapshot } = await io.readConfigFileSnapshotForWrite();
   if (!snapshot.valid) {
@@ -917,7 +925,16 @@ export async function runSecretsConfigureInteractive(
         await text({
           message: "Secret id",
           initialValue: suggestedId,
-          validate: (value) => (String(value ?? "").trim().length > 0 ? undefined : "Required"),
+          validate: (value) => {
+            const trimmed = String(value ?? "").trim();
+            if (!trimmed) {
+              return "Required";
+            }
+            if (source === "exec" && !isValidExecSecretRefId(trimmed)) {
+              return formatExecSecretRefIdValidationMessage();
+            }
+            return undefined;
+          },
         }),
         "Secrets configure cancelled.",
       );
@@ -926,18 +943,28 @@ export async function runSecretsConfigureInteractive(
         provider: providerAlias,
         id: String(id).trim(),
       };
-      const resolved = await resolveSecretRefValue(ref, {
-        config: stagedConfig,
-        env,
-      });
-      assertExpectedResolvedSecretValue({
-        value: resolved,
-        expected: candidate.expectedResolvedValue,
-        errorMessage:
-          candidate.expectedResolvedValue === "string"
-            ? `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a non-empty string.`
-            : `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a supported value type.`,
-      });
+      if (ref.source === "exec" && !allowExecInPreflight) {
+        const staticError = getSkippedExecRefStaticError({
+          ref,
+          config: stagedConfig,
+        });
+        if (staticError) {
+          throw new Error(staticError);
+        }
+      } else {
+        const resolved = await resolveSecretRefValue(ref, {
+          config: stagedConfig,
+          env,
+        });
+        assertExpectedResolvedSecretValue({
+          value: resolved,
+          expected: candidate.expectedResolvedValue,
+          errorMessage:
+            candidate.expectedResolvedValue === "string"
+              ? `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a non-empty string.`
+              : `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a supported value type.`,
+        });
+      }
 
       const next = {
         ...candidate,
@@ -971,6 +998,7 @@ export async function runSecretsConfigureInteractive(
     plan,
     env,
     write: false,
+    allowExec: allowExecInPreflight,
   });
 
   return { plan, preflight };

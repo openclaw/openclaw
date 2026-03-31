@@ -4,6 +4,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -28,20 +29,9 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
 
-  // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:
-  let threadId: string | undefined;
   const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:(\d+)$/);
-  const threadMatch = restJoined.match(/:thread:(\d+)$/);
-  const match = topicMatch || threadMatch;
-
-  if (match) {
-    threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
-  }
-
-  // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  const { baseSessionKey, threadId } = parseSessionThreadInfo(restJoined);
+  const id = (baseSessionKey ?? restJoined).trim();
 
   if (!id) {
     return null;
@@ -51,32 +41,28 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
   const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
-  const kindTarget = (() => {
-    if (!normalizedChannel) {
-      return id;
-    }
-    if (normalizedChannel === "discord" || normalizedChannel === "slack") {
-      return `channel:${id}`;
-    }
-    return kind === "channel" ? `channel:${id}` : `group:${id}`;
-  })();
-  const normalized = normalizedChannel
-    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
-    : undefined;
+  const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
+  const genericTarget = kind === "channel" ? `channel:${id}` : `group:${id}`;
+  const normalized =
+    plugin?.messaging?.resolveSessionTarget?.({
+      kind,
+      id,
+      threadId,
+    }) ?? plugin?.messaging?.normalizeTarget?.(genericTarget);
   return {
     channel,
-    to: normalized ?? kindTarget,
+    to: normalized ?? (normalizedChannel ? genericTarget : id),
     threadId,
   };
 }
 
-export function buildAgentToAgentMessageContext(params: {
+function buildAgentSessionLines(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
-}) {
-  const lines = [
-    "Agent-to-agent message context:",
+  targetChannel?: string;
+}): string[] {
+  return [
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
@@ -84,7 +70,18 @@ export function buildAgentToAgentMessageContext(params: {
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-  ].filter(Boolean);
+    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+  ].filter((line): line is string => Boolean(line));
+}
+
+export function buildAgentToAgentMessageContext(params: {
+  requesterSessionKey?: string;
+  requesterChannel?: string;
+  targetSessionKey: string;
+}) {
+  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
+    Boolean,
+  );
   return lines.join("\n");
 }
 
@@ -103,14 +100,7 @@ export function buildAgentToAgentReplyContext(params: {
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
     `Turn ${params.turn} of ${params.maxTurns}.`,
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    ...buildAgentSessionLines(params),
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
   return lines.join("\n");
@@ -127,14 +117,7 @@ export function buildAgentToAgentAnnounceContext(params: {
 }) {
   const lines = [
     "Agent-to-agent announce step:",
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    ...buildAgentSessionLines(params),
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`

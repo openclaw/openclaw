@@ -1,400 +1,466 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MatrixClient } from "../sdk.js";
+import { EventType } from "../send/types.js";
 import { createDirectRoomTracker } from "./direct.js";
 
-// ---------------------------------------------------------------------------
-// Helpers -- minimal MatrixClient stub
-// ---------------------------------------------------------------------------
+type MockStateEvents = Record<string, Record<string, unknown>>;
 
-type StateEvent = Record<string, unknown>;
-type DmMap = Record<string, boolean>;
-
-function createMockClient(opts: {
-  dmRooms?: DmMap;
-  membersByRoom?: Record<string, string[]>;
-  stateEvents?: Record<string, StateEvent>;
-  selfUserId?: string;
+function createMockClient(params: {
+  isDm?: boolean;
+  members?: string[];
+  stateEvents?: MockStateEvents;
+  dmCacheAvailable?: boolean;
+  directAccountData?: Record<string, string[]>;
+  setAccountDataError?: Error;
 }) {
-  const {
-    dmRooms = {},
-    membersByRoom = {},
-    stateEvents = {},
-    selfUserId = "@bot:example.org",
-  } = opts;
-
+  let members = params.members ?? ["@alice:example.org", "@bot:example.org"];
+  const stateEvents = params.stateEvents ?? {};
+  let directAccountData = params.directAccountData ?? {};
+  const dmRoomIds = new Set<string>();
+  if (params.isDm === true) {
+    dmRoomIds.add("!room:example.org");
+  }
   return {
     dms: {
-      isDm: (roomId: string) => dmRooms[roomId] ?? false,
-      update: vi.fn().mockResolvedValue(undefined),
+      update: vi.fn().mockResolvedValue(params.dmCacheAvailable !== false),
+      isDm: vi.fn().mockImplementation((roomId: string) => dmRoomIds.has(roomId)),
     },
-    getUserId: vi.fn().mockResolvedValue(selfUserId),
-    getJoinedRoomMembers: vi.fn().mockImplementation(async (roomId: string) => {
-      return membersByRoom[roomId] ?? [];
-    }),
+    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    getAccountData: vi
+      .fn()
+      .mockImplementation(async (eventType: string) =>
+        eventType === EventType.Direct ? directAccountData : undefined,
+      ),
+    getJoinedRoomMembers: vi.fn().mockImplementation(async () => members),
     getRoomStateEvent: vi
       .fn()
-      .mockImplementation(async (roomId: string, eventType: string, stateKey: string) => {
+      .mockImplementation(async (roomId: string, eventType: string, stateKey = "") => {
         const key = `${roomId}|${eventType}|${stateKey}`;
-        const ev = stateEvents[key];
-        if (ev === undefined) {
-          // Simulate real homeserver M_NOT_FOUND response (matches MatrixError shape)
-          const err = new Error(`State event not found: ${key}`) as Error & {
-            errcode?: string;
-            statusCode?: number;
-          };
-          err.errcode = "M_NOT_FOUND";
-          err.statusCode = 404;
-          throw err;
+        const state = stateEvents[key];
+        if (state === undefined) {
+          throw new Error(`State event not found: ${key}`);
         }
-        return ev;
+        return state;
       }),
+    setAccountData: vi.fn().mockImplementation(async (eventType: string, content: unknown) => {
+      if (params.setAccountDataError) {
+        throw params.setAccountDataError;
+      }
+      if (eventType !== EventType.Direct) {
+        return;
+      }
+      directAccountData = (content as Record<string, string[]>) ?? {};
+      dmRoomIds.clear();
+      for (const value of Object.values(directAccountData)) {
+        if (!Array.isArray(value)) {
+          continue;
+        }
+        for (const roomId of value) {
+          if (typeof roomId === "string" && roomId.trim()) {
+            dmRoomIds.add(roomId);
+          }
+        }
+      }
+    }),
+    __setMembers(next: string[]) {
+      members = next;
+    },
+  } as unknown as MatrixClient & {
+    dms: {
+      update: ReturnType<typeof vi.fn>;
+      isDm: ReturnType<typeof vi.fn>;
+    };
+    getAccountData: ReturnType<typeof vi.fn>;
+    getJoinedRoomMembers: ReturnType<typeof vi.fn>;
+    getRoomStateEvent: ReturnType<typeof vi.fn>;
+    setAccountData: ReturnType<typeof vi.fn>;
+    __setMembers: (members: string[]) => void;
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tests -- isDirectMessage
-// ---------------------------------------------------------------------------
-
 describe("createDirectRoomTracker", () => {
-  describe("m.direct detection (SDK DM cache)", () => {
-    it("returns true when SDK DM cache marks room as DM", async () => {
-      const client = createMockClient({
-        dmRooms: { "!dm:example.org": true },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!dm:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(true);
-    });
-
-    it("returns false for rooms not in SDK DM cache (with >2 members)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!group:example.org": ["@alice:example.org", "@bob:example.org", "@carol:example.org"],
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!group:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(false);
-    });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  describe("is_direct state flag detection", () => {
-    it("returns true when sender's membership has is_direct=true", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: { "!room:example.org": ["@alice:example.org", "@bot:example.org"] },
-        stateEvents: {
-          "!room:example.org|m.room.member|@alice:example.org": { is_direct: true },
-          "!room:example.org|m.room.member|@bot:example.org": { is_direct: false },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
+  it("treats m.direct rooms as DMs", async () => {
+    const client = createMockClient({ isDm: true });
+    const tracker = createDirectRoomTracker(client);
 
-      const result = await tracker.isDirectMessage({
+    await expect(
+      tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
-      });
+      }),
+    ).resolves.toBe(true);
 
-      expect(result).toBe(true);
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("does not trust stale m.direct classifications for shared rooms", async () => {
+    const client = createMockClient({
+      isDm: true,
+      members: ["@alice:example.org", "@bot:example.org", "@extra:example.org"],
     });
+    const tracker = createDirectRoomTracker(client);
 
-    it("returns true when bot's own membership has is_direct=true", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: { "!room:example.org": ["@alice:example.org", "@bot:example.org"] },
-        stateEvents: {
-          "!room:example.org|m.room.member|@alice:example.org": { is_direct: false },
-          "!room:example.org|m.room.member|@bot:example.org": { is_direct: true },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
+    await expect(
+      tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
-        selfUserId: "@bot:example.org",
-      });
+      }),
+    ).resolves.toBe(false);
 
-      expect(result).toBe(true);
-    });
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
-  describe("conservative fallback (memberCount + room name)", () => {
-    it("returns true for 2-member room WITHOUT a room name (broken flags)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!broken-dm:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          // is_direct not set on either member (e.g. Continuwuity bug)
-          "!broken-dm:example.org|m.room.member|@alice:example.org": {},
-          "!broken-dm:example.org|m.room.member|@bot:example.org": {},
-          // No m.room.name -> getRoomStateEvent will throw (event not found)
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
+  it("does not classify 2-member rooms as DMs when the dm cache refresh succeeds", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client);
 
-      const result = await tracker.isDirectMessage({
-        roomId: "!broken-dm:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(true);
-    });
-
-    it("returns true for 2-member room with empty room name", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!broken-dm:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          "!broken-dm:example.org|m.room.member|@alice:example.org": {},
-          "!broken-dm:example.org|m.room.member|@bot:example.org": {},
-          "!broken-dm:example.org|m.room.name|": { name: "" },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!broken-dm:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(true);
-    });
-
-    it("returns false for 2-member room WITH a room name (named group)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!named-group:example.org": ["@alice:example.org", "@bob:example.org"],
-        },
-        stateEvents: {
-          "!named-group:example.org|m.room.member|@alice:example.org": {},
-          "!named-group:example.org|m.room.member|@bob:example.org": {},
-          "!named-group:example.org|m.room.name|": { name: "Project Alpha" },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!named-group:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(false);
-    });
-
-    it("returns false for 3+ member room without any DM signals", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!group:example.org": ["@alice:example.org", "@bob:example.org", "@carol:example.org"],
-        },
-        stateEvents: {
-          "!group:example.org|m.room.member|@alice:example.org": {},
-          "!group:example.org|m.room.member|@bob:example.org": {},
-          "!group:example.org|m.room.member|@carol:example.org": {},
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!group:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(false);
-    });
-
-    it("returns false for 1-member room (self-chat)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!solo:example.org": ["@bot:example.org"],
-        },
-        stateEvents: {
-          "!solo:example.org|m.room.member|@bot:example.org": {},
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!solo:example.org",
-        senderId: "@bot:example.org",
-      });
-
-      expect(result).toBe(false);
-    });
-  });
-
-  describe("detection priority", () => {
-    it("m.direct takes priority -- skips state and fallback checks", async () => {
-      const client = createMockClient({
-        dmRooms: { "!dm:example.org": true },
-        membersByRoom: {
-          "!dm:example.org": ["@alice:example.org", "@bob:example.org", "@carol:example.org"],
-        },
-        stateEvents: {
-          "!dm:example.org|m.room.name|": { name: "Named Room" },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
-        roomId: "!dm:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(true);
-      // Should not have checked member state or room name
-      expect(client.getRoomStateEvent).not.toHaveBeenCalled();
-      expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
-    });
-
-    it("is_direct takes priority over fallback -- skips member count", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        stateEvents: {
-          "!room:example.org|m.room.member|@alice:example.org": { is_direct: true },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
-
-      const result = await tracker.isDirectMessage({
+    await expect(
+      tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
-      });
+      }),
+    ).resolves.toBe(false);
 
-      expect(result).toBe(true);
-      // Should not have checked member count
-      expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
-    });
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
-  describe("edge cases", () => {
-    it("handles member count API failure gracefully", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        stateEvents: {
-          "!failing:example.org|m.room.member|@alice:example.org": {},
-          "!failing:example.org|m.room.member|@bot:example.org": {},
-        },
-      });
-      client.getJoinedRoomMembers.mockRejectedValue(new Error("API unavailable"));
-      const tracker = createDirectRoomTracker(client as never);
+  it("falls back to strict 2-member membership before m.direct account data is available", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
+    const tracker = createDirectRoomTracker(client);
 
-      const result = await tracker.isDirectMessage({
-        roomId: "!failing:example.org",
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("keeps using the strict 2-member fallback until the dm cache seeds successfully", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.dms.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not classify rooms with extra members as DMs when falling back", async () => {
+    const client = createMockClient({
+      isDm: false,
+      members: ["@alice:example.org", "@bot:example.org", "@observer:example.org"],
+      dmCacheAvailable: false,
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.getRoomStateEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not treat sender is_direct member state as a DM signal", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+      stateEvents: {
+        "!room:example.org|m.room.member|@alice:example.org": { is_direct: true },
+      },
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("treats self is_direct member state as a DM signal", async () => {
+    const client = createMockClient({
+      isDm: false,
+      stateEvents: {
+        "!room:example.org|m.room.member|@bot:example.org": { is_direct: true },
+      },
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("treats self is_direct false member state as a non-DM signal", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: false,
+      stateEvents: {
+        "!room:example.org|m.room.member|@bot:example.org": { is_direct: false },
+      },
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("treats strict rooms from recent invites as DMs after the dm cache has seeded", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client);
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({
+        "@alice:example.org": ["!room:example.org"],
+      }),
+    );
+  });
+
+  it("keeps recent invite candidates across room invalidation", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client);
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+    tracker.invalidateRoom("!room:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("still rejects recent invite candidates when self member state is_direct is false", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+      stateEvents: {
+        "!room:example.org|m.room.member|@bot:example.org": { is_direct: false },
+      },
+    });
+    const tracker = createDirectRoomTracker(client);
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not promote recent invite candidates when local vetoes mark the room as non-DM", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+    });
+    const tracker = createDirectRoomTracker(client, {
+      canPromoteRecentInvite: () => false,
+    });
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("still treats recent invite candidates as DMs when m.direct repair fails", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+      setAccountDataError: new Error("account data unavailable"),
+    });
+    const tracker = createDirectRoomTracker(client);
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("does not classify 2-member rooms whose sender is not a joined member when falling back", async () => {
+    const client = createMockClient({
+      isDm: false,
+      members: ["@mallory:example.org", "@bot:example.org"],
+      dmCacheAvailable: false,
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not re-enable the strict 2-member fallback after the dm cache has seeded", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    client.dms.update.mockResolvedValue(false);
+    tracker.invalidateRoom("!room:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("re-checks room membership after invalidation when fallback membership changes", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    client.__setMembers(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
+    tracker.invalidateRoom("!room:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("bounds joined-room membership cache size", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
+    const tracker = createDirectRoomTracker(client);
+
+    for (let i = 0; i <= 1024; i += 1) {
+      await tracker.isDirectMessage({
+        roomId: `!room-${i}:example.org`,
         senderId: "@alice:example.org",
       });
+    }
 
-      // Cannot determine member count -> conservative: classify as group
-      expect(result).toBe(false);
+    await tracker.isDirectMessage({
+      roomId: "!room-0:example.org",
+      senderId: "@alice:example.org",
     });
 
-    it("treats M_NOT_FOUND for room name as no name (DM)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!no-name:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          "!no-name:example.org|m.room.member|@alice:example.org": {},
-          "!no-name:example.org|m.room.member|@bot:example.org": {},
-          // m.room.name not in stateEvents -> mock throws generic Error
-        },
-      });
-      // Override to throw M_NOT_FOUND like a real homeserver
-      const originalImpl = client.getRoomStateEvent.getMockImplementation()!;
-      client.getRoomStateEvent.mockImplementation(
-        async (roomId: string, eventType: string, stateKey: string) => {
-          if (eventType === "m.room.name") {
-            const err = new Error("not found") as Error & {
-              errcode?: string;
-              statusCode?: number;
-            };
-            err.errcode = "M_NOT_FOUND";
-            err.statusCode = 404;
-            throw err;
-          }
-          return originalImpl(roomId, eventType, stateKey);
-        },
-      );
-      const tracker = createDirectRoomTracker(client as never);
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledTimes(1026);
+  });
 
-      const result = await tracker.isDirectMessage({
-        roomId: "!no-name:example.org",
-        senderId: "@alice:example.org",
-      });
+  it("refreshes dm and membership caches after the ttl expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-12T10:00:00Z"));
+    const client = createMockClient({ isDm: true });
+    const tracker = createDirectRoomTracker(client);
 
-      expect(result).toBe(true);
+    await tracker.isDirectMessage({
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
+    });
+    await tracker.isDirectMessage({
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
     });
 
-    it("treats non-404 room name errors as unknown (falls through to group)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!error-room:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          "!error-room:example.org|m.room.member|@alice:example.org": {},
-          "!error-room:example.org|m.room.member|@bot:example.org": {},
-        },
-      });
-      // Simulate a network/auth error (not M_NOT_FOUND)
-      const originalImpl = client.getRoomStateEvent.getMockImplementation()!;
-      client.getRoomStateEvent.mockImplementation(
-        async (roomId: string, eventType: string, stateKey: string) => {
-          if (eventType === "m.room.name") {
-            throw new Error("Connection refused");
-          }
-          return originalImpl(roomId, eventType, stateKey);
-        },
-      );
-      const tracker = createDirectRoomTracker(client as never);
+    expect(client.dms.update).toHaveBeenCalledTimes(1);
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledTimes(1);
 
-      const result = await tracker.isDirectMessage({
-        roomId: "!error-room:example.org",
-        senderId: "@alice:example.org",
-      });
+    vi.setSystemTime(new Date("2026-03-12T10:00:31Z"));
 
-      // Network error -> don't assume DM, classify as group
-      expect(result).toBe(false);
+    await tracker.isDirectMessage({
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
     });
 
-    it("whitespace-only room name is treated as no name", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!ws-name:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          "!ws-name:example.org|m.room.member|@alice:example.org": {},
-          "!ws-name:example.org|m.room.member|@bot:example.org": {},
-          "!ws-name:example.org|m.room.name|": { name: "   " },
-        },
-      });
-      const tracker = createDirectRoomTracker(client as never);
+    expect(client.dms.update).toHaveBeenCalledTimes(2);
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledTimes(2);
+  });
 
-      const result = await tracker.isDirectMessage({
-        roomId: "!ws-name:example.org",
-        senderId: "@alice:example.org",
-      });
-
-      expect(result).toBe(true);
+  it("caches member-state direct flag lookups until the ttl expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-12T10:00:00Z"));
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+      stateEvents: {
+        "!room:example.org|m.room.member|@alice:example.org": { is_direct: true },
+      },
     });
+    const tracker = createDirectRoomTracker(client);
+
+    await tracker.isDirectMessage({
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
+    });
+    await tracker.isDirectMessage({
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
+    });
+
+    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date("2026-03-12T10:00:31Z"));
+
+    await tracker.isDirectMessage({
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
+    });
+
+    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(2);
   });
 });

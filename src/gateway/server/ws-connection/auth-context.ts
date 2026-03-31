@@ -3,7 +3,6 @@ import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
-  type RateLimitCheckResult,
 } from "../../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
@@ -14,6 +13,7 @@ import {
 
 type HandshakeConnectAuth = {
   token?: string;
+  bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
 };
@@ -26,11 +26,13 @@ export type ConnectAuthState = {
   authMethod: GatewayAuthResult["method"];
   sharedAuthOk: boolean;
   sharedAuthProvided: boolean;
+  bootstrapTokenCandidate?: string;
   deviceTokenCandidate?: string;
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
 type VerifyDeviceTokenResult = { ok: boolean };
+type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
 
 export type ConnectAuthDecision = {
   authResult: GatewayAuthResult;
@@ -72,6 +74,12 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
   return { token: fallbackToken, source: "shared-token-fallback" };
 }
 
+function resolveBootstrapTokenCandidate(
+  connectAuth: HandshakeConnectAuth | null | undefined,
+): string | undefined {
+  return trimToUndefined(connectAuth?.bootstrapToken);
+}
+
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: HandshakeConnectAuth | null | undefined;
@@ -84,9 +92,11 @@ export async function resolveConnectAuthState(params: {
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
+  const bootstrapTokenCandidate = params.hasDeviceIdentity
+    ? resolveBootstrapTokenCandidate(params.connectAuth)
+    : undefined;
   const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
     params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
-  const hasDeviceTokenCandidate = Boolean(deviceTokenCandidate);
 
   let authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
     auth: params.resolvedAuth,
@@ -94,32 +104,10 @@ export async function resolveConnectAuthState(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
-    rateLimiter: hasDeviceTokenCandidate ? undefined : params.rateLimiter,
+    rateLimiter: sharedAuthProvided ? params.rateLimiter : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
-
-  if (
-    hasDeviceTokenCandidate &&
-    authResult.ok &&
-    params.rateLimiter &&
-    (authResult.method === "token" || authResult.method === "password")
-  ) {
-    const sharedRateCheck: RateLimitCheckResult = params.rateLimiter.check(
-      params.clientIp,
-      AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-    );
-    if (!sharedRateCheck.allowed) {
-      authResult = {
-        ok: false,
-        reason: "rate_limited",
-        rateLimited: true,
-        retryAfterMs: sharedRateCheck.retryAfterMs,
-      };
-    } else {
-      params.rateLimiter.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-    }
-  }
 
   const sharedAuthResult =
     sharedConnectAuth &&
@@ -148,6 +136,7 @@ export async function resolveConnectAuthState(params: {
       authResult.method ?? (params.resolvedAuth.mode === "password" ? "password" : "token"),
     sharedAuthOk,
     sharedAuthProvided,
+    bootstrapTokenCandidate,
     deviceTokenCandidate,
     deviceTokenCandidateSource,
   };
@@ -157,10 +146,18 @@ export async function resolveConnectAuthDecision(params: {
   state: ConnectAuthState;
   hasDeviceIdentity: boolean;
   deviceId?: string;
+  publicKey?: string;
   role: string;
   scopes: string[];
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
+  verifyBootstrapToken: (params: {
+    deviceId: string;
+    publicKey: string;
+    token: string;
+    role: string;
+    scopes: string[];
+  }) => Promise<VerifyBootstrapTokenResult>;
   verifyDeviceToken: (params: {
     deviceId: string;
     token: string;
@@ -171,6 +168,29 @@ export async function resolveConnectAuthDecision(params: {
   let authResult = params.state.authResult;
   let authOk = params.state.authOk;
   let authMethod = params.state.authMethod;
+
+  const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
+  if (
+    params.hasDeviceIdentity &&
+    params.deviceId &&
+    params.publicKey &&
+    !authOk &&
+    bootstrapTokenCandidate
+  ) {
+    const tokenCheck = await params.verifyBootstrapToken({
+      deviceId: params.deviceId,
+      publicKey: params.publicKey,
+      token: bootstrapTokenCandidate,
+      role: params.role,
+      scopes: params.scopes,
+    });
+    if (tokenCheck.ok) {
+      authOk = true;
+      authMethod = "bootstrap-token";
+    } else {
+      authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
+    }
+  }
 
   const deviceTokenCandidate = params.state.deviceTokenCandidate;
   if (!params.hasDeviceIdentity || !params.deviceId || authOk || !deviceTokenCandidate) {
@@ -202,6 +222,9 @@ export async function resolveConnectAuthDecision(params: {
       authOk = true;
       authMethod = "device-token";
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+      if (params.state.sharedAuthProvided) {
+        params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+      }
     } else {
       authResult = {
         ok: false,

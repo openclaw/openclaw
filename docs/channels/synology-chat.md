@@ -19,7 +19,7 @@ Synology Chat is plugin-based and not part of the default core channel install.
 Install from a local checkout:
 
 ```bash
-openclaw plugins install ./extensions/synology-chat
+openclaw plugins install ./path/to/local/synology-chat-plugin
 ```
 
 Details: [Plugins](/tools/plugin)
@@ -27,13 +27,17 @@ Details: [Plugins](/tools/plugin)
 ## Quick setup
 
 1. Install and enable the Synology Chat plugin.
+   - `openclaw onboard` now shows Synology Chat in the same channel setup list as `openclaw channels add`.
+   - Non-interactive setup: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 2. In Synology Chat integrations:
    - Create an incoming webhook and copy its URL.
    - Create an outgoing webhook with your secret token.
 3. Point the outgoing webhook URL to your OpenClaw gateway:
    - `https://gateway-host/webhook/synology` by default.
    - Or your custom `channels.synology-chat.webhookPath`.
-4. Configure `channels.synology-chat` in OpenClaw.
+4. Finish setup in OpenClaw.
+   - Guided: `openclaw onboard`
+   - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 5. Restart gateway and send a DM to the Synology Chat bot.
 
 Minimal config:
@@ -75,6 +79,7 @@ Config values override env vars.
 - In `allowlist` mode, an empty `allowedUserIds` list is treated as misconfiguration and the webhook route will not start (use `dmPolicy: "open"` for allow-all).
 - `dmPolicy: "open"` allows any sender.
 - `dmPolicy: "disabled"` blocks DMs.
+- Reply recipient binding stays on stable numeric `user_id` by default. `channels.synology-chat.dangerouslyAllowNameMatching: true` is break-glass compatibility mode that re-enables mutable username/nickname lookup for reply delivery.
 - Pairing approvals work with:
   - `openclaw pairing list synology-chat`
   - `openclaw pairing approve synology-chat <CODE>`
@@ -96,6 +101,13 @@ Media sends are supported by URL-based file delivery.
 
 Multiple Synology Chat accounts are supported under `channels.synology-chat.accounts`.
 Each account can override token, incoming URL, webhook path, DM policy, and limits.
+Direct-message sessions are isolated per account and user, so the same numeric `user_id`
+on two different Synology accounts does not share transcript state.
+Give each enabled account a distinct `webhookPath`. OpenClaw now rejects duplicate exact paths
+and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
+If you intentionally need legacy inheritance for a named account, set
+`dangerouslyAllowInheritedWebhookPath: true` on that account or at `channels.synology-chat`,
+but duplicate exact paths are still rejected fail-closed. Prefer explicit per-account paths.
 
 ```json5
 {
@@ -126,3 +138,13 @@ Each account can override token, incoming URL, webhook path, DM policy, and limi
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
 - Inbound webhook requests are token-verified and rate-limited per sender.
 - Prefer `dmPolicy: "allowlist"` for production.
+- Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
+- Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

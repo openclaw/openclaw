@@ -133,14 +133,12 @@
           "fileScale": {
             "type": "number",
             "minimum": 1,
-            "maximum": 4,
-            "default": 2
+            "maximum": 4
           },
           "fileMaxWidth": {
             "type": "number",
             "minimum": 640,
-            "maximum": 2400,
-            "default": 960
+            "maximum": 2400
           },
           "imageFormat": {
             "type": "string",

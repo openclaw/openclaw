@@ -3,6 +3,9 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import { resolveConnectAuthDecision, type ConnectAuthState } from "./auth-context.js";
 
 type VerifyDeviceTokenFn = Parameters<typeof resolveConnectAuthDecision>[0]["verifyDeviceToken"];
+type VerifyBootstrapTokenFn = Parameters<
+  typeof resolveConnectAuthDecision
+>[0]["verifyBootstrapToken"];
 
 function createRateLimiter(params?: { allowed?: boolean; retryAfterMs?: number }): {
   limiter: AuthRateLimiter;
@@ -38,6 +41,7 @@ function createBaseState(overrides?: Partial<ConnectAuthState>): ConnectAuthStat
 
 async function resolveDeviceTokenDecision(params: {
   verifyDeviceToken: VerifyDeviceTokenFn;
+  verifyBootstrapToken?: VerifyBootstrapTokenFn;
   stateOverrides?: Partial<ConnectAuthState>;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
@@ -46,8 +50,12 @@ async function resolveDeviceTokenDecision(params: {
     state: createBaseState(params.stateOverrides),
     hasDeviceIdentity: true,
     deviceId: "dev-1",
+    publicKey: "pub-1",
     role: "operator",
     scopes: ["operator.read"],
+    verifyBootstrapToken:
+      params.verifyBootstrapToken ??
+      (async () => ({ ok: false, reason: "bootstrap_token_invalid" })),
     verifyDeviceToken: params.verifyDeviceToken,
     ...(params.rateLimiter ? { rateLimiter: params.rateLimiter } : {}),
     ...(params.clientIp ? { clientIp: params.clientIp } : {}),
@@ -57,16 +65,23 @@ async function resolveDeviceTokenDecision(params: {
 describe("resolveConnectAuthDecision", () => {
   it("keeps shared-secret mismatch when fallback device-token check fails", async () => {
     const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: false }));
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    }));
     const decision = await resolveConnectAuthDecision({
       state: createBaseState(),
       hasDeviceIdentity: true,
       deviceId: "dev-1",
+      publicKey: "pub-1",
       role: "operator",
       scopes: ["operator.read"],
+      verifyBootstrapToken,
       verifyDeviceToken,
     });
     expect(decision.authOk).toBe(false);
     expect(decision.authResult.reason).toBe("token_mismatch");
+    expect(verifyBootstrapToken).not.toHaveBeenCalled();
     expect(verifyDeviceToken).toHaveBeenCalledOnce();
   });
 
@@ -78,8 +93,10 @@ describe("resolveConnectAuthDecision", () => {
       }),
       hasDeviceIdentity: true,
       deviceId: "dev-1",
+      publicKey: "pub-1",
       role: "operator",
       scopes: ["operator.read"],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
       verifyDeviceToken,
     });
     expect(decision.authOk).toBe(false);
@@ -97,7 +114,45 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authOk).toBe(true);
     expect(decision.authMethod).toBe("device-token");
     expect(verifyDeviceToken).toHaveBeenCalledOnce();
-    expect(rateLimiter.reset).toHaveBeenCalledOnce();
+    expect(rateLimiter.reset).toHaveBeenCalledWith("203.0.113.20", "device-token");
+  });
+
+  it("accepts valid bootstrap tokens before device-token fallback", async () => {
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({ ok: true }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    const decision = await resolveDeviceTokenDecision({
+      verifyBootstrapToken,
+      verifyDeviceToken,
+      stateOverrides: {
+        bootstrapTokenCandidate: "bootstrap-token",
+        deviceTokenCandidate: "device-token",
+      },
+    });
+    expect(decision.authOk).toBe(true);
+    expect(decision.authMethod).toBe("bootstrap-token");
+    expect(verifyBootstrapToken).toHaveBeenCalledOnce();
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it("reports invalid bootstrap tokens when no device token fallback is available", async () => {
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    const decision = await resolveDeviceTokenDecision({
+      verifyBootstrapToken,
+      verifyDeviceToken,
+      stateOverrides: {
+        bootstrapTokenCandidate: "bootstrap-token",
+        deviceTokenCandidate: undefined,
+        deviceTokenCandidateSource: undefined,
+      },
+    });
+    expect(decision.authOk).toBe(false);
+    expect(decision.authResult.reason).toBe("bootstrap_token_invalid");
+    expect(verifyBootstrapToken).toHaveBeenCalledOnce();
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
   });
 
   it("returns rate-limited auth result without verifying device token", async () => {
@@ -123,8 +178,10 @@ describe("resolveConnectAuthDecision", () => {
       }),
       hasDeviceIdentity: true,
       deviceId: "dev-1",
+      publicKey: "pub-1",
       role: "operator",
       scopes: [],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
       verifyDeviceToken,
     });
     expect(decision.authOk).toBe(true);
