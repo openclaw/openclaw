@@ -232,5 +232,7 @@ jobs:
 
       - name: Publish
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OPENCLAW_PREPACK_PREPARED: "1"
         run: bash scripts/openclaw-npm-publish.sh --publish "${{ steps.publish_tarball.outputs.path }}"
