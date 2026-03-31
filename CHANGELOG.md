@@ -160,6 +160,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: unwrap `caffeinate` and `sandbox-exec` before persisting allow-always trust so later shell payload changes still require a fresh approval. Thanks @tdjackey and @vincentkoc.
 - Matrix/DM threads: keep strict unnamed fresh-invite rooms promotable even when Matrix omits the optional direct hint, preserve repair-failed local DM promotions while still revalidating later room metadata, and keep both bound and thread-isolated Matrix sessions reporting the correct route policy. (#58099) Thanks @gumadeiras.
 - ClawFlow: add a small flow runtime substrate for authoring layers with persisted wait targets and output bags, plus bundled skills/Lobster examples and richer `flows show` / `doctor` recovery hints for multi-task flow state. (#58336) Thanks @mbelinky.
+- Sessions/Feishu: preserve conversation ids that legitimately embed `:topic:` in shared session helper parsing, while keeping Telegram topic session parsing intact. (#58100) Thanks @gumadeiras.
 
 ## 2026.3.28
 

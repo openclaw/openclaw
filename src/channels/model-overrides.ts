@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  parseSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -7,8 +10,6 @@ import {
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "./channel-config.js";
-
-const THREAD_SUFFIX_REGEX = /:(?:thread|topic):[^:]+$/i;
 
 export type ChannelModelOverride = {
   channel: string;
@@ -44,38 +45,51 @@ function resolveProviderEntry(
   );
 }
 
-function resolveParentGroupId(groupId: string | undefined): string | undefined {
+function resolveParentGroupId(
+  groupId: string | undefined,
+  channelHint?: string | null,
+): string | undefined {
   const raw = groupId?.trim();
-  if (!raw || !THREAD_SUFFIX_REGEX.test(raw)) {
+  if (!raw) {
     return undefined;
   }
-  const parent = raw.replace(THREAD_SUFFIX_REGEX, "").trim();
+  const parent = parseThreadSessionSuffix(raw, { channelHint }).baseSessionKey?.trim();
+  return parent && parent !== raw ? parent : undefined;
+}
+
+function resolveSenderScopedParentGroupId(groupId: string | undefined): string | undefined {
+  const raw = groupId?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parent = raw.replace(/:sender:[^:]+$/i, "").trim();
   return parent && parent !== raw ? parent : undefined;
 }
 
 function resolveGroupIdFromSessionKey(sessionKey?: string | null): string | undefined {
-  const raw = sessionKey?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  const candidate = parsed?.rest ?? raw;
-  const match = candidate.match(/(?:^|:)(?:group|channel):([^:]+)(?::|$)/i);
-  const id = match?.[1]?.trim();
-  return id || undefined;
+  return parseSessionConversationRef(sessionKey)?.id;
 }
 
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
-    "groupId" | "groupChannel" | "groupSubject" | "parentSessionKey"
+    "channel" | "groupId" | "groupChannel" | "groupSubject" | "parentSessionKey"
   >,
 ) {
+  const normalizedChannel =
+    normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
-  const parentGroupId = resolveParentGroupId(groupId);
+  const senderParentGroupId = resolveSenderScopedParentGroupId(groupId);
+  const parentGroupId = resolveParentGroupId(groupId, normalizedChannel);
   const parentGroupIdFromSession = resolveGroupIdFromSessionKey(params.parentSessionKey);
+  const senderParentGroupIdFromSession = resolveSenderScopedParentGroupId(parentGroupIdFromSession);
   const parentGroupIdResolved =
-    resolveParentGroupId(parentGroupIdFromSession) ?? parentGroupIdFromSession;
+    resolveParentGroupId(parentGroupIdFromSession, normalizedChannel) ?? parentGroupIdFromSession;
+  const senderParentResolved =
+    resolveParentGroupId(senderParentGroupId, normalizedChannel) ?? senderParentGroupId;
+  const senderParentFromSessionResolved =
+    resolveParentGroupId(senderParentGroupIdFromSession, normalizedChannel) ??
+    senderParentGroupIdFromSession;
   const groupChannel = params.groupChannel?.trim();
   const groupSubject = params.groupSubject?.trim();
   const channelBare = groupChannel ? groupChannel.replace(/^#/, "") : undefined;
@@ -85,7 +99,12 @@ function buildChannelCandidates(
 
   return buildChannelKeyCandidates(
     groupId,
+    senderParentGroupId,
+    senderParentResolved,
     parentGroupId,
+    parentGroupIdFromSession,
+    senderParentGroupIdFromSession,
+    senderParentFromSessionResolved,
     parentGroupIdResolved,
     groupChannel,
     channelBare,
