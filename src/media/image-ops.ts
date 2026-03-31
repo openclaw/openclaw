@@ -197,14 +197,7 @@ function validateImagePixelLimit(meta: ImageMetadata): ImageMetadata {
 }
 
 async function readImageMetadataForLimit(buffer: Buffer): Promise<ImageMetadata | null> {
-  const headerMetadata = readImageMetadataFromHeader(buffer);
-  if (headerMetadata) {
-    return headerMetadata;
-  }
-  if (!prefersSips()) {
-    return null;
-  }
-  return await sipsMetadataFromBuffer(buffer).catch(() => null);
+  return readImageMetadataFromHeader(buffer);
 }
 
 async function assertImagePixelLimit(buffer: Buffer): Promise<void> {
