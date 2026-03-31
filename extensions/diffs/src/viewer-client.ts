@@ -5,7 +5,7 @@ import type {
   FileDiffOptions,
   SupportedLanguages,
 } from "@pierre/diffs";
-import { filterSupportedLanguageHints } from "./language-hints.js";
+import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
@@ -29,12 +29,6 @@ const viewerState: ViewerState = {
   backgroundEnabled: true,
   wrapEnabled: true,
 };
-
-export async function filterSupportedHydrationLanguages(
-  languages: Iterable<string>,
-): Promise<SupportedLanguages[]> {
-  return filterSupportedLanguageHints(languages);
-}
 
 function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
   const raw = element.textContent?.trim();
@@ -256,7 +250,12 @@ function syncAllControllers(): void {
 }
 
 async function hydrateViewer(): Promise<void> {
-  const cards = getCards();
+  const cards = await Promise.all(
+    getCards().map(async ({ host, payload }) => ({
+      host,
+      payload: await normalizeDiffViewerPayloadLanguages(payload),
+    })),
+  );
   const langs = new Set<SupportedLanguages>();
   const firstPayload = cards[0]?.payload;
 
@@ -275,7 +274,7 @@ async function hydrateViewer(): Promise<void> {
 
   await preloadHighlighter({
     themes: ["pierre-light", "pierre-dark"],
-    langs: await filterSupportedHydrationLanguages(langs),
+    langs: [...langs],
   });
 
   syncDocumentTheme();

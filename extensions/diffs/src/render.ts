@@ -1,7 +1,11 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
-import { normalizeSupportedLanguageHint } from "./language-hints.js";
+import {
+  collectDiffPayloadLanguageHints,
+  normalizeDiffViewerPayloadLanguages,
+  normalizeSupportedLanguageHint,
+} from "./language-hints.js";
 import { ensurePierreThemesRegistered } from "./pierre-themes.js";
 import type {
   DiffInput,
@@ -177,27 +181,6 @@ function buildRenderVariants(params: { options: DiffRenderOptions; target: DiffR
       ? { imageOptions: buildDiffOptions(buildImageRenderOptions(params.options)) }
       : {}),
   };
-}
-
-function buildPayloadLanguages(payload: {
-  fileDiff?: FileDiffMetadata;
-  oldFile?: FileContents;
-  newFile?: FileContents;
-}): SupportedLanguages[] {
-  const langs = new Set<SupportedLanguages>();
-  if (payload.fileDiff?.lang) {
-    langs.add(payload.fileDiff.lang);
-  }
-  if (payload.oldFile?.lang) {
-    langs.add(payload.oldFile.lang);
-  }
-  if (payload.newFile?.lang) {
-    langs.add(payload.newFile.lang);
-  }
-  if (langs.size === 0) {
-    langs.add("text");
-  }
-  return [...langs];
 }
 
 function renderDiffCard(payload: DiffViewerPayload): string {
@@ -377,35 +360,35 @@ async function renderBeforeAfterDiff(
         })
       : Promise.resolve(undefined),
   ]);
-  const section = buildRenderedSection({
-    ...(viewerResult && viewerOptions
-      ? {
-          viewerPayload: {
-            prerenderedHTML: viewerResult.prerenderedHTML,
+  const [viewerPayload, imagePayload] = await Promise.all([
+    viewerResult && viewerOptions
+      ? normalizeDiffViewerPayloadLanguages({
+          prerenderedHTML: viewerResult.prerenderedHTML,
+          oldFile: viewerResult.oldFile,
+          newFile: viewerResult.newFile,
+          options: viewerOptions,
+          langs: collectDiffPayloadLanguageHints({
             oldFile: viewerResult.oldFile,
             newFile: viewerResult.newFile,
-            options: viewerOptions,
-            langs: buildPayloadLanguages({
-              oldFile: viewerResult.oldFile,
-              newFile: viewerResult.newFile,
-            }),
-          },
-        }
-      : {}),
-    ...(imageResult && imageOptions
-      ? {
-          imagePayload: {
-            prerenderedHTML: imageResult.prerenderedHTML,
+          }),
+        })
+      : Promise.resolve(undefined),
+    imageResult && imageOptions
+      ? normalizeDiffViewerPayloadLanguages({
+          prerenderedHTML: imageResult.prerenderedHTML,
+          oldFile: imageResult.oldFile,
+          newFile: imageResult.newFile,
+          options: imageOptions,
+          langs: collectDiffPayloadLanguageHints({
             oldFile: imageResult.oldFile,
             newFile: imageResult.newFile,
-            options: imageOptions,
-            langs: buildPayloadLanguages({
-              oldFile: imageResult.oldFile,
-              newFile: imageResult.newFile,
-            }),
-          },
-        }
-      : {}),
+          }),
+        })
+      : Promise.resolve(undefined),
+  ]);
+  const section = buildRenderedSection({
+    ...(viewerPayload ? { viewerPayload } : {}),
+    ...(imagePayload ? { imagePayload } : {}),
   });
 
   return {
@@ -455,27 +438,28 @@ async function renderPatchDiff(
           : Promise.resolve(undefined),
       ]);
 
+      const [viewerPayload, imagePayload] = await Promise.all([
+        viewerResult && viewerOptions
+          ? normalizeDiffViewerPayloadLanguages({
+              prerenderedHTML: viewerResult.prerenderedHTML,
+              fileDiff: viewerResult.fileDiff,
+              options: viewerOptions,
+              langs: collectDiffPayloadLanguageHints({ fileDiff: viewerResult.fileDiff }),
+            })
+          : Promise.resolve(undefined),
+        imageResult && imageOptions
+          ? normalizeDiffViewerPayloadLanguages({
+              prerenderedHTML: imageResult.prerenderedHTML,
+              fileDiff: imageResult.fileDiff,
+              options: imageOptions,
+              langs: collectDiffPayloadLanguageHints({ fileDiff: imageResult.fileDiff }),
+            })
+          : Promise.resolve(undefined),
+      ]);
+
       return buildRenderedSection({
-        ...(viewerResult && viewerOptions
-          ? {
-              viewerPayload: {
-                prerenderedHTML: viewerResult.prerenderedHTML,
-                fileDiff: viewerResult.fileDiff,
-                options: viewerOptions,
-                langs: buildPayloadLanguages({ fileDiff: viewerResult.fileDiff }),
-              },
-            }
-          : {}),
-        ...(imageResult && imageOptions
-          ? {
-              imagePayload: {
-                prerenderedHTML: imageResult.prerenderedHTML,
-                fileDiff: imageResult.fileDiff,
-                options: imageOptions,
-                langs: buildPayloadLanguages({ fileDiff: imageResult.fileDiff }),
-              },
-            }
-          : {}),
+        ...(viewerPayload ? { viewerPayload } : {}),
+        ...(imagePayload ? { imagePayload } : {}),
       });
     }),
   );
