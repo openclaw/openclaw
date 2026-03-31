@@ -127,6 +127,7 @@ export async function deliverLineAutoReply(params: {
       content: effectiveText,
       channel: "line",
       accountId,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
     });
     if (hookResult === null) {
       return { replyTokenUsed };

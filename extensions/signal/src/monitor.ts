@@ -312,6 +312,7 @@ async function deliverReplies(params: {
       content: payload.text ?? "",
       channel: "signal",
       accountId,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
     });
     if (hookResult === null) continue;
     const reply = resolveSendableOutboundReplyParts(payload);

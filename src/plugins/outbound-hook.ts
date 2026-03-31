@@ -13,6 +13,7 @@ export async function runOutboundMessageHook(params: {
   content: string;
   channel: string;
   accountId?: string;
+  mediaUrls?: string[];
 }): Promise<{ content: string } | null> {
   if (!hasGlobalHooks("message_sending")) {
     return { content: params.content };
@@ -29,6 +30,7 @@ export async function runOutboundMessageHook(params: {
         metadata: {
           channel: params.channel,
           accountId: params.accountId,
+          ...(params.mediaUrls?.length ? { mediaUrls: params.mediaUrls } : {}),
         },
       },
       {

@@ -275,6 +275,7 @@ export async function deliverDiscordReply(params: {
       content: payload.text ?? "",
       channel: "discord",
       accountId: params.accountId,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
     });
     if (hookResult === null) continue;
     const tableMode = params.tableMode ?? "code";

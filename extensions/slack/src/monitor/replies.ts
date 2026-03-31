@@ -40,6 +40,7 @@ export async function deliverReplies(params: {
       content: payload.text ?? "",
       channel: "slack",
       accountId: params.accountId,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
     });
     if (hookResult === null) continue;
     const reply = resolveSendableOutboundReplyParts(

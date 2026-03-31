@@ -68,6 +68,7 @@ export async function deliverWebReply(params: {
     content: replyResult.text ?? "",
     channel: "whatsapp",
     accountId,
+    mediaUrls: replyResult.mediaUrls ?? (replyResult.mediaUrl ? [replyResult.mediaUrl] : undefined),
   });
   if (hookResult === null) return;
   const effectiveSentText = hookResult.content !== (replyResult.text ?? "") ? hookResult.content : null;
@@ -125,7 +126,7 @@ export async function deliverWebReply(params: {
       },
       "auto-reply sent (text)",
     );
-    return;
+    return { sentText: effectiveSentText };
   }
 
   const remainingText = [...textChunks];

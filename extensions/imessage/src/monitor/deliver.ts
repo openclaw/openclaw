@@ -40,6 +40,7 @@ export async function deliverReplies(params: {
       content: sanitizeOutboundText(payload.text ?? ""),
       channel: "imessage",
       accountId,
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
     });
     if (hookResult === null) continue;
     const rawText = hookResult.content;
