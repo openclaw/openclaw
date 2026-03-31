@@ -1,5 +1,5 @@
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   resolveConfiguredMatrixAccountIds,
