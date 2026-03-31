@@ -58,7 +58,7 @@ const QNAIGC_MODELS = [
   {
     id: "moonshotai/kimi-k2.5",
     name: "Moonshot AI Kimi K2.5 (QNAIGC)",
-    reasoning: true,
+    reasoning: false,
     input: ["text"] as const,
     contextWindow: 256000,
     maxTokens: 32000,
@@ -66,10 +66,11 @@ const QNAIGC_MODELS = [
   {
     id: "xiaomi/mimo-v2-flash",
     name: "Xiaomi Mimo-V2-Flash (QNAIGC)",
-    reasoning: true,
+    reasoning: false,
     input: ["text"] as const,
     contextWindow: 256000,
     maxTokens: 32000,
+  },
   },
   {
     id: "z-ai/glm-5",
