@@ -14,7 +14,7 @@ function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
     return Array.from(new Set(["*", ...extra]));
   }
   if (base.length === 0) {
-    return base;
+    return Array.from(new Set(["*", ...extra]));
   }
   return Array.from(new Set([...base, ...extra]));
 }

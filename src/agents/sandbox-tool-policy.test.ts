@@ -39,7 +39,7 @@ describe("pickSandboxToolPolicy", () => {
         alsoAllow: ["web_search"],
       }),
     ).toEqual({
-      allow: [],
+      allow: ["*", "web_search"],
       deny: undefined,
     });
   });
