@@ -400,8 +400,7 @@ function tryCreateManualTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      ownerKey: `system:cron:${params.job.id}`,
-      scopeKind: "system",
+      requesterSessionKey: "",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,
@@ -437,6 +436,7 @@ function tryFinishManualTaskRun(
     if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
       completeTaskRunByRunId({
         runId: params.taskRunId,
+        runtime: "cron",
         endedAt: params.endedAt,
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
@@ -445,6 +445,7 @@ function tryFinishManualTaskRun(
     }
     failTaskRunByRunId({
       runId: params.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
           ? "timed_out"
