@@ -4,17 +4,18 @@ Skill Initializer - Creates a new skill from template
 
 Usage:
     init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples]
+    init_skill.py <skill-name> --path <path> --tool <tool-name> [--type bash|python|node] [--tool-desc "..."]
 
 Examples:
     init_skill.py my-new-skill --path skills/public
-    init_skill.py my-new-skill --path skills/public --resources scripts,references
     init_skill.py my-api-helper --path skills/private --resources scripts --examples
-    init_skill.py custom-skill --path /custom/location
+    init_skill.py data-processor --path skills/public --tool compress-pdf --type python --tool-desc "Compress PDF files"
 """
 
 import argparse
 import re
 import sys
+import subprocess
 from pathlib import Path
 
 MAX_SKILL_NAME_LENGTH = 64
@@ -317,12 +318,39 @@ def init_skill(skill_name, path, resources, include_examples):
     return skill_dir
 
 
+def generate_tool(skill_dir, tool_name, tool_type, tool_desc, tool_args):
+    """Generate a tool using toolgen.py"""
+    toolgen_path = Path(__file__).parent / "toolgen.py"
+    output_dir = skill_dir / "scripts"
+    output_dir.mkdir(exist_ok=True)
+
+    cmd = [
+        sys.executable, str(toolgen_path),
+        tool_name,
+        "--type", tool_type,
+        "--output", str(output_dir),
+        "--description", tool_desc
+    ]
+    if tool_args:
+        cmd.extend(["--args", tool_args])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Tool generation failed: {e.stderr}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Create a new skill directory with a SKILL.md template.",
     )
     parser.add_argument("skill_name", help="Skill name (normalized to hyphen-case)")
     parser.add_argument("--path", required=True, help="Output directory for the skill")
+
+    # Resource options
     parser.add_argument(
         "--resources",
         default="",
@@ -333,6 +361,29 @@ def main():
         action="store_true",
         help="Create example files inside the selected resource directories",
     )
+
+    # Tool generation options
+    parser.add_argument(
+        "--tool",
+        help="Generate a tool with the given name (implies scripts/)",
+    )
+    parser.add_argument(
+        "--type",
+        choices=["bash", "python", "node"],
+        default="python",
+        help="Tool type/language (default: python)",
+    )
+    parser.add_argument(
+        "--tool-desc",
+        default="",
+        help="Short description of the tool",
+    )
+    parser.add_argument(
+        "--tool-args",
+        default="",
+        help="Comma-separated tool arguments (e.g., '--input:str:Input file,--output:str:Output file')",
+    )
+
     args = parser.parse_args()
 
     raw_skill_name = args.skill_name
@@ -349,7 +400,19 @@ def main():
     if skill_name != raw_skill_name:
         print(f"Note: Normalized skill name from '{raw_skill_name}' to '{skill_name}'.")
 
-    resources = parse_resources(args.resources)
+    # Handle tool generation
+    if args.tool:
+        if not args.tool_desc:
+            print("[WARN] No --tool-desc provided; using generic description")
+            args.tool_desc = f"Tool for {skill_name}"
+        if "scripts" not in args.resources and not args.resources:
+            # Auto-add scripts if not specified
+            resources = parse_resources(args.resources) + ["scripts"]
+        else:
+            resources = parse_resources(args.resources)
+    else:
+        resources = parse_resources(args.resources)
+
     if args.examples and not resources:
         print("[ERROR] --examples requires --resources to be set.")
         sys.exit(1)
@@ -362,16 +425,38 @@ def main():
         print(f"   Resources: {', '.join(resources)}")
         if args.examples:
             print("   Examples: enabled")
+    if args.tool:
+        print(f"   Tool: {args.tool} ({args.type}) - {args.tool_desc}")
     else:
         print("   Resources: none (create as needed)")
     print()
 
+    # Create skill
     result = init_skill(skill_name, path, resources, args.examples)
 
     if result:
+        skill_dir = result
+
+        # Generate tool if requested
+        if args.tool:
+            print(f"\nGenerating tool '{args.tool}'...")
+            success = generate_tool(skill_dir, args.tool, args.type, args.tool_desc, args.tool_args)
+            if success:
+                print(f"✅ Tool generated: {skill_dir}/scripts/{args.tool}.{args_type_to_ext(args.type)}")
+                print("\nNext steps:")
+                print("1. Implement the tool logic (look for TODO in the file)")
+                print("2. Add usage examples to your SKILL.md")
+                print(f"3. Test: {skill_dir}/scripts/{args.tool}.{args_type_to_ext(args.type)} --help")
+            else:
+                print("[WARN] Tool generation had errors; check above")
+
         sys.exit(0)
     else:
         sys.exit(1)
+
+
+def args_type_to_ext(t):
+    return {"bash": "sh", "python": "py", "node": "js"}[t]
 
 
 if __name__ == "__main__":

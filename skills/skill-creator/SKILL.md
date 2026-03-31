@@ -268,7 +268,7 @@ Skip this step only if the skill being developed already exists, and iteration o
 
 When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
 
-Usage:
+#### Basic Usage
 
 ```bash
 scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
@@ -277,8 +277,13 @@ scripts/init_skill.py <skill-name> --path <output-directory> [--resources script
 Examples:
 
 ```bash
+# Minimal skill
 scripts/init_skill.py my-skill --path skills/public
+
+# With scripts and references
 scripts/init_skill.py my-skill --path skills/public --resources scripts,references
+
+# With example files in resources
 scripts/init_skill.py my-skill --path skills/public --resources scripts --examples
 ```
 
@@ -290,6 +295,36 @@ The script:
 - Optionally adds example files when `--examples` is set
 
 After initialization, customize the SKILL.md and add resources as needed. If you used `--examples`, replace or delete placeholder files.
+
+#### Generating Tools (NEW)
+
+Speed up tool creation by generating standardized tool templates directly inside your skill's `scripts/` directory. This is inspired by Claude Code's unified tool structure and promotes consistency across OpenClaw skills.
+
+Usage:
+
+```bash
+scripts/init_skill.py <skill-name> --path <output-directory> --tool <tool-name> --type <bash|python|node> --tool-desc "Description" --tool-args "flag:type:help,flag:type:help"
+```
+
+Example - create a skill with a Python tool that has arguments:
+
+```bash
+scripts/init_skill.py file-utils --path skills/public --tool compress --type python --tool-desc "Compress files" --tool-args "--input:str:Input file path,--output:str:Output file path,--level:int:Compression level 1-9"
+```
+
+This will:
+
+- Create the skill directory and SKILL.md as usual
+- Create `scripts/` (implied when `--tool` is used)
+- Generate a ready-to-implement tool script (e.g., `scripts/compress.py`) with:
+  - Standardized argument parsing (argparse for Python, getopts for bash, minimist for node)
+  - Error handling scaffolding
+  - Clear TODO markers for logic implementation
+  - Help and examples already configured
+
+After generation, edit the tool script to implement the actual functionality, then add usage documentation to your SKILL.md.
+
+**Note**: `--tool-args` format uses comma-separated items. Each item is `flag[:type][:help]`. Flags starting with `--` become optional arguments; otherwise they are positional. Supported types: `str`, `int`, `float`, `bool`. Avoid commas in help text for now.
 
 ### Step 4: Edit the Skill
 
