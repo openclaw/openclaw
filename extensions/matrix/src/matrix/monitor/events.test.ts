@@ -306,6 +306,27 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).not.toHaveBeenCalled();
   });
 
+  it("remembers invite provenance even when Matrix omits the direct invite hint", async () => {
+    const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
+    if (!roomInviteListener) {
+      throw new Error("room.invite listener was not registered");
+    }
+
+    roomInviteListener("!room:example.org", {
+      event_id: "$invite-group",
+      sender: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: {
+        membership: "invite",
+      },
+      state_key: "@bot:example.org",
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
+  });
+
   it("does not synthesize invite provenance from room joins", async () => {
     const { invalidateRoom, rememberInvite, roomJoinListener } = createHarness();
     if (!roomJoinListener) {

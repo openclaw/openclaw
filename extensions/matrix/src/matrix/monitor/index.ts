@@ -224,6 +224,24 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
         rooms: roomsConfig,
       }),
+    shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
+      try {
+        const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
+        if (!roomInfo.nameResolved || !roomInfo.aliasesResolved) {
+          return undefined;
+        }
+        return shouldPromoteRecentInviteRoom({
+          roomId,
+          roomInfo,
+          rooms: roomsConfig,
+        });
+      } catch (err) {
+        logVerboseMessage(
+          `matrix: local promotion revalidation failed room=${roomId} (${String(err)})`,
+        );
+        return undefined;
+      }
+    },
   });
   registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
