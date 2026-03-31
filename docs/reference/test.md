@@ -64,19 +64,40 @@ Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/bl
 
 Usage:
 
+- `pnpm test:startup:bench`
+- `pnpm test:startup:bench:smoke`
+- `pnpm test:startup:bench:save`
+- `pnpm test:startup:bench:update`
+- `pnpm test:startup:bench:check`
 - `pnpm tsx scripts/bench-cli-startup.ts`
 - `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
-- `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --case gatewayStatus --runs 3`
+- `pnpm tsx scripts/bench-cli-startup.ts --entry openclaw.mjs --entry-secondary dist/entry.js --preset all`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset all --output .artifacts/cli-startup-bench-all.json`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --output .artifacts/cli-startup-bench-smoke.json`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real --cpu-prof-dir .artifacts/cli-cpu`
+- `pnpm tsx scripts/bench-cli-startup.ts --json`
 
-This benchmarks these commands:
+Presets:
 
-- `--version`
-- `--help`
-- `health --json`
-- `status --json`
-- `status`
+- `startup`: `--version`, `--help`, `health`, `health --json`, `status --json`, `status`
+- `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
+- `all`: both presets
 
-Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
+Output includes avg, p50, p95, min/max, exit-code/signal distribution, and max RSS summaries for each command. Optional `--cpu-prof-dir` / `--heap-prof-dir` writes V8 profiles per run so timing and profile capture use the same harness.
+
+Saved output conventions:
+
+- `pnpm test:startup:bench:smoke` writes the targeted smoke artifact at `.artifacts/cli-startup-bench-smoke.json`
+- `pnpm test:startup:bench:save` writes the full-suite artifact at `.artifacts/cli-startup-bench-all.json`
+- `pnpm test:startup:bench:update` refreshes the checked-in baseline fixture at `test/fixtures/cli-startup-bench.json`
+
+Checked-in fixture:
+
+- `test/fixtures/cli-startup-bench.json`
+- Refresh with `pnpm test:startup:bench:update`
+- Compare current results against the fixture with `pnpm test:startup:bench:check`
 
 ## Onboarding E2E (Docker)
 
