@@ -8,6 +8,17 @@ import {
 import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
+const MattermostGroupSchema = z
+  .object({
+    /** Whether mentions are required to trigger the bot in this group. */
+    requireMention: z.boolean().optional(),
+    /** Whether the bot is enabled in this group. */
+    enabled: z.boolean().optional(),
+    /** Allowlist of sender IDs permitted to interact in this group. */
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  })
+  .strict();
+
 function requireMattermostOpenAllowFrom(params: {
   policy?: string;
   allowFrom?: Array<string | number>;
@@ -98,6 +109,8 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
+    /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
+    groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
     /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
     allowPrivateNetwork: z.boolean().optional(),
     /** Retry configuration for DM channel creation */
