@@ -2,6 +2,11 @@ import path from "node:path";
 import { z } from "openclaw/plugin-sdk/zod";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
+import type { MatrixRoomInfo } from "./room-info.js";
+
+type DirectRoomTrackerOptions = {
+  canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
+};
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
@@ -25,10 +30,12 @@ const hoisted = vi.hoisted(() => {
     drainPendingDecryptions: vi.fn(async () => undefined),
   };
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
-  const createDirectRoomTracker = vi.fn(() => ({
+  const createDirectRoomTracker = vi.fn((_client: unknown, _opts?: DirectRoomTrackerOptions) => ({
     isDirectMessage: vi.fn(async () => false),
   }));
-  const getRoomInfo = vi.fn(async () => ({
+  const getRoomInfo = vi.fn<
+    (roomId: string, opts?: { includeAliases?: boolean }) => Promise<MatrixRoomInfo>
+  >(async () => ({
     altAliases: [],
     nameResolved: true,
     aliasesResolved: true,
@@ -496,9 +503,7 @@ describe("monitorMatrixProvider", () => {
   it("wires recent-invite promotion to fail closed when room metadata is unresolved", async () => {
     await startMonitorAndAbortAfterStartup();
 
-    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1] as
-      | { canPromoteRecentInvite?: (roomId: string) => Promise<boolean> }
-      | undefined;
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
     if (!trackerOpts?.canPromoteRecentInvite) {
       throw new Error("recent invite promotion callback was not wired");
     }
@@ -515,9 +520,7 @@ describe("monitorMatrixProvider", () => {
   it("wires recent-invite promotion to reject named rooms", async () => {
     await startMonitorAndAbortAfterStartup();
 
-    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1] as
-      | { canPromoteRecentInvite?: (roomId: string) => Promise<boolean> }
-      | undefined;
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
     if (!trackerOpts?.canPromoteRecentInvite) {
       throw new Error("recent invite promotion callback was not wired");
     }
@@ -539,9 +542,7 @@ describe("monitorMatrixProvider", () => {
 
     await startMonitorAndAbortAfterStartup();
 
-    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1] as
-      | { canPromoteRecentInvite?: (roomId: string) => Promise<boolean> }
-      | undefined;
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
     if (!trackerOpts?.canPromoteRecentInvite) {
       throw new Error("recent invite promotion callback was not wired");
     }
