@@ -2,10 +2,7 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["telegram-surface"];
 type FacadeModule = FacadeEntry["module"];
-import {
-  createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -63,13 +60,15 @@ export const isTelegramExecApprovalTargetRecipient: FacadeModule["isTelegramExec
 export const listTelegramAccountIds: FacadeModule["listTelegramAccountIds"] = ((...args) =>
   loadFacadeModule()["listTelegramAccountIds"](...args)) as FacadeModule["listTelegramAccountIds"];
 export const listTelegramDirectoryGroupsFromConfig: FacadeModule["listTelegramDirectoryGroupsFromConfig"] =
-  createLazyFacadeObjectValue(
-    () => loadFacadeModule()["listTelegramDirectoryGroupsFromConfig"] as object,
-  ) as FacadeModule["listTelegramDirectoryGroupsFromConfig"];
+  ((...args) =>
+    loadFacadeModule()["listTelegramDirectoryGroupsFromConfig"](
+      ...args,
+    )) as FacadeModule["listTelegramDirectoryGroupsFromConfig"];
 export const listTelegramDirectoryPeersFromConfig: FacadeModule["listTelegramDirectoryPeersFromConfig"] =
-  createLazyFacadeObjectValue(
-    () => loadFacadeModule()["listTelegramDirectoryPeersFromConfig"] as object,
-  ) as FacadeModule["listTelegramDirectoryPeersFromConfig"];
+  ((...args) =>
+    loadFacadeModule()["listTelegramDirectoryPeersFromConfig"](
+      ...args,
+    )) as FacadeModule["listTelegramDirectoryPeersFromConfig"];
 export const looksLikeTelegramTargetId: FacadeModule["looksLikeTelegramTargetId"] = ((...args) =>
   loadFacadeModule()["looksLikeTelegramTargetId"](
     ...args,
