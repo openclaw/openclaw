@@ -26,7 +26,11 @@ import {
   runOpenShellCli,
   type OpenShellExecContext,
 } from "./cli.js";
-import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
+import {
+  normalizeOpenShellRemotePath,
+  resolveOpenShellPluginConfig,
+  type ResolvedOpenShellPluginConfig,
+} from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
@@ -391,14 +395,21 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async syncWorkspaceToRemote(): Promise<void> {
+    const remoteWorkspaceDir = normalizeOpenShellRemotePath(
+      this.params.remoteWorkspaceDir,
+      this.params.execContext.config.remoteWorkspaceDir,
+      "remoteWorkspaceDir",
+    );
+    const remoteAgentWorkspaceDir = normalizeOpenShellRemotePath(
+      this.params.remoteAgentWorkspaceDir,
+      this.params.execContext.config.remoteAgentWorkspaceDir,
+      "remoteAgentWorkspaceDir",
+    );
     await this.runRemoteShellScriptInternal({
       script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
-      args: [this.params.remoteWorkspaceDir],
+      args: [remoteWorkspaceDir],
     });
-    await this.uploadPathToRemote(
-      this.params.createParams.workspaceDir,
-      this.params.remoteWorkspaceDir,
-    );
+    await this.uploadPathToRemote(this.params.createParams.workspaceDir, remoteWorkspaceDir);
 
     if (
       this.params.createParams.cfg.workspaceAccess !== "none" &&
@@ -407,11 +418,11 @@ class OpenShellSandboxBackendImpl {
     ) {
       await this.runRemoteShellScriptInternal({
         script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
-        args: [this.params.remoteAgentWorkspaceDir],
+        args: [remoteAgentWorkspaceDir],
       });
       await this.uploadPathToRemote(
         this.params.createParams.agentWorkspaceDir,
-        this.params.remoteAgentWorkspaceDir,
+        remoteAgentWorkspaceDir,
       );
     }
   }
