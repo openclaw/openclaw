@@ -142,7 +142,7 @@ Disable specific tools:
 }
 ```
 
-Available tool groups: `group:web` (web_search, web_fetch, x_search), `group:memory` (memory_search), `group:runtime` (exec, code_execution), `group:openclaw` (all OpenClaw built-in tools).
+Available tool groups: `group:web` (web_search, web_fetch, x_search), `group:memory` (memory_search, memory_get), `group:runtime` (exec, process, code_execution), `group:openclaw` (all OpenClaw built-in tools).
 
 When `tool_deny` is omitted, the agent uses its configured tool policy. Per-request denials are ephemeral and do not persist to session state. This deny list is additive with any existing agent or global `tools.deny` config.
 
