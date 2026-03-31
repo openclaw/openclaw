@@ -7,10 +7,16 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
+  retryBlockedFlowAsQueuedTaskRun,
+  retryBlockedFlowAsRunningTaskRun,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "./task-registry.js";
+import {
+  findLatestTaskForFlowId,
+  findTaskByRunId,
+  resetTaskRegistryForTests,
+} from "./task-registry.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -194,6 +200,144 @@ describe("task-executor", () => {
 
       expect(created.parentFlowId).toBeUndefined();
       expect(listFlowRecords()).toEqual([]);
+    });
+  });
+
+  it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-executor-blocked",
+        task: "Patch file",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-executor-blocked",
+        endedAt: 40,
+        lastEventAt: 40,
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session required.",
+      });
+
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "blocked",
+        blockedTaskId: created.taskId,
+        blockedSummary: "Writable session required.",
+        endedAt: 40,
+      });
+
+      const retried = retryBlockedFlowAsQueuedTaskRun({
+        flowId: created.parentFlowId!,
+        runId: "run-executor-retry",
+        childSessionKey: "agent:codex:acp:retry-child",
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: true,
+        previousTask: expect.objectContaining({
+          taskId: created.taskId,
+        }),
+        task: expect.objectContaining({
+          parentFlowId: created.parentFlowId,
+          parentTaskId: created.taskId,
+          status: "queued",
+          runId: "run-executor-retry",
+        }),
+      });
+
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "queued",
+      });
+      expect(getFlowById(created.parentFlowId!)?.blockedTaskId).toBeUndefined();
+      expect(getFlowById(created.parentFlowId!)?.blockedSummary).toBeUndefined();
+      expect(getFlowById(created.parentFlowId!)?.endedAt).toBeUndefined();
+      expect(findLatestTaskForFlowId(created.parentFlowId!)).toMatchObject({
+        taskId: retried.task?.taskId,
+      });
+    });
+  });
+
+  it("can reopen blocked one-task flows directly into a running retry", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:subagent:child",
+        runId: "run-executor-blocked-running",
+        task: "Write summary",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-executor-blocked-running",
+        endedAt: 40,
+        lastEventAt: 40,
+        terminalOutcome: "blocked",
+        terminalSummary: "Need write approval.",
+      });
+
+      const retried = retryBlockedFlowAsRunningTaskRun({
+        flowId: created.parentFlowId!,
+        runId: "run-executor-running-retry",
+        childSessionKey: "agent:codex:subagent:retry",
+        startedAt: 55,
+        lastEventAt: 55,
+        progressSummary: "Retrying with approval",
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: true,
+        task: expect.objectContaining({
+          parentFlowId: created.parentFlowId,
+          status: "running",
+          runId: "run-executor-running-retry",
+          progressSummary: "Retrying with approval",
+        }),
+      });
+
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "running",
+      });
+    });
+  });
+
+  it("refuses to retry flows that are not currently blocked", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-executor-not-blocked",
+        task: "Patch file",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      const retried = retryBlockedFlowAsQueuedTaskRun({
+        flowId: created.parentFlowId!,
+        runId: "run-should-not-exist",
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: false,
+        reason: "Flow is not blocked.",
+      });
+      expect(findTaskByRunId("run-should-not-exist")).toBeUndefined();
     });
   });
 });
