@@ -62,6 +62,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
     if (
+      relativePath === "" ||
       relativePath === "." ||
       relativePath.startsWith("..") ||
       path.posix.isAbsolute(relativePath)

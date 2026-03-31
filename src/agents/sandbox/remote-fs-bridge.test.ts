@@ -85,6 +85,33 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects mount-root reads before invoking the mutation helper",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+
+        const { calls, runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+          }),
+          runtime,
+        });
+
+        await expect(bridge.readFile({ filePath: "." })).rejects.toThrow(
+          /Invalid sandbox entry target/,
+        );
+        expect(calls).toHaveLength(0);
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects symlink escapes while reading", async () => {
     await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
