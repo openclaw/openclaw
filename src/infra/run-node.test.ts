@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runNodeMain } from "../../scripts/run-node.mjs";
+import { resolveBuildRequirement, runNodeMain } from "../../scripts/run-node.mjs";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -129,6 +129,39 @@ function createSpawnRecorder(
     return { status: 1, stdout: "" };
   };
   return { spawnCalls, spawn, spawnSync };
+}
+
+function createBuildRequirementDeps(
+  tmp: string,
+  options: {
+    gitHead?: string;
+    gitStatus?: string;
+    env?: Record<string, string>;
+  } = {},
+) {
+  const { spawnSync } = createSpawnRecorder({
+    gitHead: options.gitHead,
+    gitStatus: options.gitStatus,
+  });
+  return {
+    cwd: tmp,
+    env: {
+      ...process.env,
+      ...options.env,
+    },
+    fs: fsSync,
+    spawnSync,
+    distRoot: path.join(tmp, "dist"),
+    distEntry: path.join(tmp, DIST_ENTRY),
+    buildStampPath: path.join(tmp, BUILD_STAMP),
+    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot())].map((sourceRoot) => ({
+      name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
+      path: sourceRoot,
+    })),
+    configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
+      path.join(tmp, filePath),
+    ),
+  };
 }
 
 async function runStatusCommand(params: {
@@ -430,6 +463,53 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
       await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
+    });
+  });
+
+  it("reports dirty watched source trees as an explicit build reason", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        buildPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: ` M ${ROOT_SRC}\n`,
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: true,
+        reason: "dirty_watched_tree",
+      });
+    });
+  });
+
+  it("reports a clean tree explicitly when dist is current", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
     });
   });
 
