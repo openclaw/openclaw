@@ -208,3 +208,10 @@ Notes:
 - Config lives under `tools.exec.applyPatch`.
 - `tools.exec.applyPatch.enabled` defaults to `true`; set it to `false` to disable the tool for OpenAI models.
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+
+## Related
+
+- [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
+- [Sandboxing](/gateway/sandboxing) — running commands in sandboxed environments
+- [Background Process](/gateway/background-process) — long-running exec and process tool
+- [Security](/gateway/security) — tool policy and elevated access
