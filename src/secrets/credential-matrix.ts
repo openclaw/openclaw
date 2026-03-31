@@ -26,8 +26,10 @@ const EXCLUDED_MUTABLE_OR_RUNTIME_MANAGED = [
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
   "auth-profiles.oauth.*",
-  "discord.threadBindings.*.webhookToken",
-  "whatsapp.creds.json",
+  "channels.discord.threadBindings.webhookToken",
+  "channels.discord.accounts.*.threadBindings.webhookToken",
+  "channels.whatsapp.creds.json",
+  "channels.whatsapp.accounts.*.creds.json",
 ];
 
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
