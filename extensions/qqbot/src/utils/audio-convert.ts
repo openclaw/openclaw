@@ -6,16 +6,6 @@ import { decode, encode, isSilk } from "silk-wasm";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
-/** Detect whether a file contains SILK audio payloads. */
-function isSilkFile(filePath: string): boolean {
-  try {
-    const buf = fs.readFileSync(filePath);
-    return isSilk(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
-  } catch {
-    return false;
-  }
-}
-
 /** Wrap PCM s16le bytes in a WAV container. */
 function pcmToWav(
   pcmData: Uint8Array,
