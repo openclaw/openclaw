@@ -763,6 +763,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
