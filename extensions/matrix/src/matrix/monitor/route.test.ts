@@ -127,6 +127,7 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.agentId).toBe("acp-agent");
     expect(route.matchedBy).toBe("binding.channel");
     expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
+    expect(route.lastRoutePolicy).toBe("session");
   });
 
   it("lets runtime conversation bindings override both sender and room route matches", () => {
@@ -183,6 +184,7 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.agentId).toBe("bound");
     expect(route.matchedBy).toBe("binding.channel");
     expect(route.sessionKey).toBe("agent:bound:session-1");
+    expect(route.lastRoutePolicy).toBe("session");
     expect(touch).not.toHaveBeenCalled();
   });
 });

@@ -58,6 +58,10 @@ export function resolveMatrixInboundRoute(params: {
         ...baseRoute,
         sessionKey: boundSessionKey,
         agentId: resolveAgentIdFromSessionKey(boundSessionKey) || baseRoute.agentId,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: boundSessionKey,
+          mainSessionKey: baseRoute.mainSessionKey,
+        }),
         matchedBy: "binding.channel",
       },
       configuredBinding: null,
@@ -86,6 +90,10 @@ export function resolveMatrixInboundRoute(params: {
             resolveAgentIdFromSessionKey(configuredSessionKey) ||
             configuredBinding.spec.agentId ||
             baseRoute.agentId,
+          lastRoutePolicy: deriveLastRoutePolicy({
+            sessionKey: configuredSessionKey,
+            mainSessionKey: baseRoute.mainSessionKey,
+          }),
           matchedBy: "binding.channel" as const,
         }
       : baseRoute;

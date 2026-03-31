@@ -353,6 +353,39 @@ describe("createDirectRoomTracker", () => {
     ).resolves.toBe(true);
   });
 
+  it("drops locally promoted direct rooms when room metadata later vetoes promotion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T23:00:00Z"));
+    let keepLocalPromotion = true;
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+      setAccountDataError: new Error("account data unavailable"),
+    });
+    const tracker = createDirectRoomTracker(client, {
+      canPromoteRecentInvite: () => true,
+      shouldKeepLocallyPromotedDirectRoom: () => keepLocalPromotion,
+    });
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    keepLocalPromotion = false;
+    vi.setSystemTime(new Date("2026-03-30T23:01:00Z"));
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("does not classify 2-member rooms whose sender is not a joined member when falling back", async () => {
     const client = createMockClient({
       isDm: false,
