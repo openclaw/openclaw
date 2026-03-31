@@ -21,6 +21,7 @@ import {
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
+  isToolResultTimedOut,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
@@ -503,6 +504,7 @@ export async function handleToolExecutionEnd(
       toolName,
       meta,
       error: errorMessage,
+      timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
     };

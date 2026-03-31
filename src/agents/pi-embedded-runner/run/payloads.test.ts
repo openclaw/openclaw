@@ -18,6 +18,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
+        timedOut: true,
         error:
           "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
       },
@@ -29,6 +30,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       title: "Exec",
       detail:
         "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+    });
+  });
+
+  it("keeps non-timeout exec tool errors suppressed for cron sessions when verbose mode is off", () => {
+    expectNoPayloads({
+      lastToolError: { toolName: "exec", error: "Command not found" },
+      sessionKey: "agent:main:cron:job-1",
+      verboseLevel: "off",
     });
   });
 
