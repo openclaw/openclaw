@@ -2,7 +2,7 @@
   "name": "@openclaw/databricks",
   "version": "2026.3.27",
   "private": true,
-  "description": "Databricks skill pack plugin for OpenClaw.",
+  "description": "Databricks read-only SQL runtime + skill pack plugin for OpenClaw.",
   "type": "module",
   "openclaw": {
     "extensions": [

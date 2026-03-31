@@ -1,15 +1,32 @@
 ---
 name: databricks
-description: Plan and execute Databricks workflows for SQL analytics, jobs orchestration, and Unity Catalog governance follow-up.
+description: Plan and execute Databricks workflows with OpenClaw's current runtime support for read-only SQL statement execution, plus guidance for jobs and governance planning.
 ---
 
 Use this skill when the user asks to work with Databricks SQL, notebooks, jobs, or catalog governance tasks.
 
+## Runtime support in this iteration
+
+- Available runtime tool: `databricks_sql_readonly`
+- Real execution support:
+  - single-statement `SELECT`
+  - single-statement `WITH ... SELECT`
+- Enforced limits:
+  - read-only only
+  - mutating statements blocked
+  - multi-statement SQL blocked
+
+## Not implemented yet
+
+- Jobs API execution
+- Unity Catalog or lineage API calls
+- Mutating SQL workflows
+
 ## Scope
 
-- Convert analysis requests into runnable Databricks SQL drafts.
-- Prepare job and workflow execution plans with pre-run and post-run checks.
-- Build governance and access review checklists for Unity Catalog objects.
+- Execute read-only SQL via the runtime tool when the request fits allowed policy.
+- Convert broader requests into safe, copy-paste ready plans when runtime support is not implemented yet.
+- Prepare job/workflow and governance checklists as planning output only.
 
 ## Inputs to request early
 
@@ -33,13 +50,13 @@ When preparing SQL work, produce this structure:
 
 1. Objective
 2. Data scope and assumptions
-3. Query draft
+3. Query draft (read-only)
 4. Cost and performance considerations
 5. Validation checklist
 
 ## Job orchestration template
 
-When preparing Databricks job execution:
+When preparing Databricks job execution (planning only in this iteration):
 
 1. Trigger mode (manual, scheduled, or event-based)
 2. Task graph and dependencies
@@ -49,7 +66,7 @@ When preparing Databricks job execution:
 
 ## Governance follow-up template
 
-For Unity Catalog and permissions follow-up:
+For Unity Catalog and permissions follow-up (planning only in this iteration):
 
 1. Assets in scope (catalogs, schemas, tables, volumes)
 2. Current access model summary

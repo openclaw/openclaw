@@ -1,10 +1,11 @@
-import { definePluginEntry, type OpenClawPluginApi } from "./runtime-api.js";
+import { definePluginEntry } from "./runtime-api.js";
+import { createDatabricksSqlReadOnlyTool } from "./src/operations/sql.js";
 
 export default definePluginEntry({
   id: "databricks",
   name: "Databricks",
-  description: "Plugin-shipped Databricks skills bundle",
-  register(_api: OpenClawPluginApi) {
-    // This plugin currently ships skills only.
+  description: "Databricks read-only SQL runtime + skills bundle",
+  register(api) {
+    api.registerTool(createDatabricksSqlReadOnlyTool(api));
   },
 });

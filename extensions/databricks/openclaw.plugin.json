@@ -1,11 +1,66 @@
 {
   "id": "databricks",
   "name": "Databricks",
-  "description": "Databricks skill pack for SQL operations, jobs orchestration, and Unity Catalog governance workflows.",
+  "description": "Databricks runtime plugin with read-only SQL statement execution and skill guidance.",
   "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "databricks": ["DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_WAREHOUSE_ID"]
+  },
+  "contracts": {
+    "tools": ["databricks_sql_readonly"]
+  },
+  "uiHints": {
+    "host": {
+      "label": "Databricks Host",
+      "help": "Workspace host URL, for example https://dbc-xxxx.cloud.databricks.com."
+    },
+    "token": {
+      "label": "Databricks Token",
+      "help": "Access token for SQL statement execution.",
+      "sensitive": true,
+      "placeholder": "dapi..."
+    },
+    "warehouseId": {
+      "label": "Warehouse ID",
+      "help": "Default SQL warehouse ID used by databricks_sql_readonly."
+    },
+    "readOnly": {
+      "label": "Read-Only Mode",
+      "help": "Must remain enabled in this iteration."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "host": {
+        "type": ["string", "object"],
+        "description": "Databricks workspace host URL (for example: https://dbc-xxxx.cloud.databricks.com)."
+      },
+      "token": {
+        "type": ["string", "object"],
+        "description": "Databricks access token (supports secret input resolution)."
+      },
+      "warehouseId": {
+        "type": ["string", "object"],
+        "description": "Default Databricks SQL warehouse ID for statement execution."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000,
+        "description": "HTTP timeout for Databricks requests in milliseconds."
+      },
+      "retryCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 3,
+        "description": "Retry attempts for transient Databricks request failures."
+      },
+      "readOnly": {
+        "type": "boolean",
+        "description": "Must stay true in this iteration. Mutating SQL operations are blocked."
+      }
+    }
   }
 }
