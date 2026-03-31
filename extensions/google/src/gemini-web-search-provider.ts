@@ -98,18 +98,21 @@ function resolveGeminiConfiguredCredentialValue(
         };
       }
     | undefined,
-): string | undefined {
-  const scopedApiKey = readConfiguredSecretString(
-    resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
-    "plugins.entries.google.config.webSearch.apiKey",
-  );
-  if (scopedApiKey) {
+): unknown {
+  const scopedApiKey = resolveProviderWebSearchPluginConfig(config, "google")?.apiKey;
+  if (typeof scopedApiKey === "string") {
+    if (scopedApiKey.trim().length > 0) {
+      return scopedApiKey;
+    }
+  } else if (scopedApiKey !== undefined) {
     return scopedApiKey;
   }
-  return readConfiguredSecretString(
-    config?.models?.providers?.google?.apiKey,
-    "models.providers.google.apiKey",
-  );
+
+  const providerApiKey = config?.models?.providers?.google?.apiKey;
+  if (typeof providerApiKey === "string") {
+    return providerApiKey.trim().length > 0 ? providerApiKey : undefined;
+  }
+  return providerApiKey;
 }
 
 function resolveGeminiBaseUrl(gemini?: GeminiConfig, providerConfig?: ModelProviderConfig): string {

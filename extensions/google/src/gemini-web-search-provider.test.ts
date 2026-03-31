@@ -134,6 +134,34 @@ describe("gemini web search provider", () => {
     ).toBe("scoped-secret");
   });
 
+  it("preserves scoped SecretRef values for auto-detect resolution", () => {
+    const provider = createGeminiWebSearchProvider();
+
+    expect(
+      provider.getConfiguredCredentialValue?.({
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "GEMINI_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_REF",
+    });
+  });
+
   it("treats blank scoped Gemini web search keys as unset for auto-detect fallback", () => {
     const provider = createGeminiWebSearchProvider();
 
@@ -161,6 +189,43 @@ describe("gemini web search provider", () => {
         },
       } as never),
     ).toBe("provider-secret");
+  });
+
+  it("preserves provider SecretRef fallback values for auto-detect resolution", () => {
+    const provider = createGeminiWebSearchProvider();
+
+    expect(
+      provider.getConfiguredCredentialValue?.({
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "   ",
+                },
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "GOOGLE_PROVIDER_REF",
+              },
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GOOGLE_PROVIDER_REF",
+    });
   });
 
   it("returns a missing-key error when no dedicated, env, or provider fallback exists", async () => {
