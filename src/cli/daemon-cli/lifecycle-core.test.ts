@@ -152,6 +152,39 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings).toBeUndefined();
   });
 
+  it("prefers service command env over process env for SecretRef token drift resolution", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "SERVICE_GATEWAY_TOKEN",
+          },
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "service-token",
+        SERVICE_GATEWAY_TOKEN: "service-token",
+      },
+    });
+    vi.stubEnv("SERVICE_GATEWAY_TOKEN", "process-token");
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+  });
+
   it("skips drift warning when disabled", async () => {
     await runServiceRestart({
       serviceNoun: "Node",
