@@ -29,12 +29,9 @@ type ParsedTtsCommand = {
   args: string;
 };
 
-type TtsAttemptDetail = {
-  provider: string;
-  outcome: "success" | "skipped" | "failed";
-  reasonCode: string;
-  latencyMs?: number;
-};
+type TtsAttemptDetail = NonNullable<
+  NonNullable<ReturnType<typeof getLastTtsAttempt>>["attempts"]
+>[number];
 
 function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   // Accept `/tts` and `/tts <action> [args]` as a single control surface.

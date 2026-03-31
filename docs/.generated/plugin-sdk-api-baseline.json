@@ -1455,8 +1455,8 @@
           "exportName": "createAccountStatusSink",
           "kind": "function",
           "source": {
-            "line": 23,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 15,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1518,8 +1518,8 @@
           "exportName": "keepHttpServerTaskAlive",
           "kind": "function",
           "source": {
-            "line": 79,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 71,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1698,8 +1698,8 @@
           "exportName": "waitUntilAbort",
           "kind": "function",
           "source": {
-            "line": 38,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 30,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {

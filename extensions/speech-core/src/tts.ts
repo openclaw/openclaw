@@ -752,23 +752,23 @@ export async function synthesizeSpeech(params: {
   for (const provider of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
-    const resolvedProvider = resolveReadySpeechProvider({
-      provider,
-      cfg: params.cfg,
-      config,
-    });
-    if (resolvedProvider.kind === "skip") {
-      errors.push(resolvedProvider.message);
-      attempts.push({
-        provider,
-        outcome: "skipped",
-        reasonCode: resolvedProvider.reasonCode,
-        error: resolvedProvider.message,
-      });
-      logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
-      continue;
-    }
     try {
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+      });
+      if (resolvedProvider.kind === "skip") {
+        errors.push(resolvedProvider.message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: resolvedProvider.reasonCode,
+          error: resolvedProvider.message,
+        });
+        logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
+        continue;
+      }
       const synthesis = await resolvedProvider.provider.synthesize({
         text: params.text,
         cfg: params.cfg,
@@ -849,37 +849,27 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
-    const resolvedProvider = resolveReadySpeechProvider({
-      provider,
-      cfg: params.cfg,
-      config,
-      requireTelephony: true,
-    });
-    if (resolvedProvider.kind === "skip") {
-      errors.push(resolvedProvider.message);
-      attempts.push({
-        provider,
-        outcome: "skipped",
-        reasonCode: resolvedProvider.reasonCode,
-        error: resolvedProvider.message,
-      });
-      logVerbose(`TTS telephony: provider ${provider} skipped (${resolvedProvider.message})`);
-      continue;
-    }
     try {
-      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony;
-      if (!synthesizeTelephony) {
-        const message = `${provider}: unsupported for telephony`;
-        errors.push(message);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        requireTelephony: true,
+      });
+      if (resolvedProvider.kind === "skip") {
+        errors.push(resolvedProvider.message);
         attempts.push({
           provider,
           outcome: "skipped",
-          reasonCode: "unsupported_for_telephony",
-          error: message,
+          reasonCode: resolvedProvider.reasonCode,
+          error: resolvedProvider.message,
         });
-        logVerbose(`TTS telephony: provider ${provider} skipped (${message})`);
+        logVerbose(`TTS telephony: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
+      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
+        typeof resolvedProvider.provider.synthesizeTelephony
+      >;
       const synthesis = await synthesizeTelephony({
         text: params.text,
         cfg: params.cfg,
@@ -917,7 +907,7 @@ export async function textToSpeechTelephony(params: {
         latencyMs,
         error: errorMsg,
       });
-      const rawError = err instanceof Error ? err.message : String(err);
+      const rawError = sanitizeTtsErrorForLog(err);
       if (provider === primaryProvider) {
         const hasFallbacks = providers.length > 1;
         logVerbose(

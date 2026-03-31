@@ -1,3 +1,5 @@
+import { asObject, trimToUndefined, truncateErrorDetail } from "openclaw/plugin-sdk/speech";
+
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
@@ -56,20 +58,6 @@ export function resolveOpenAITtsInstructions(
 ): string | undefined {
   const next = instructions?.trim();
   return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
-}
-
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function truncateErrorDetail(detail: string, limit = 220): string {
-  return detail.length <= limit ? detail : `${detail.slice(0, limit - 1)}…`;
 }
 
 function formatOpenAiErrorPayload(payload: unknown): string | undefined {
