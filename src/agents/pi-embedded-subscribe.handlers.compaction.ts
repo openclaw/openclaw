@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
+import { readMessagesFromSessionTranscript } from "../hooks/session-transcript-messages.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -20,18 +21,22 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   });
 
   // Run before_compaction plugin hook (fire-and-forget)
+  // Read from transcript to preserve provenance and other extension fields
+  // that the in-memory AgentMessage[] may not carry.
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_compaction")) {
-    void hookRunner
-      .runBeforeCompaction(
-        {
-          messageCount: ctx.params.session.messages?.length ?? 0,
-          messages: ctx.params.session.messages,
-          sessionFile: ctx.params.session.sessionFile,
-        },
-        {
-          sessionKey: ctx.params.sessionKey,
-        },
+    void readMessagesFromSessionTranscript(ctx.params.session.sessionFile)
+      .then((transcriptMessages) =>
+        hookRunner.runBeforeCompaction(
+          {
+            messageCount: transcriptMessages?.length ?? ctx.params.session.messages?.length ?? 0,
+            messages: transcriptMessages ?? ctx.params.session.messages,
+            sessionFile: ctx.params.session.sessionFile,
+          },
+          {
+            sessionKey: ctx.params.sessionKey,
+          },
+        ),
       )
       .catch((err) => {
         ctx.log.warn(`before_compaction hook failed: ${String(err)}`);
