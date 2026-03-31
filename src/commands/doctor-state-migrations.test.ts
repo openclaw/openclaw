@@ -323,6 +323,7 @@ describe("doctor legacy state migrations", () => {
     const cfg: OpenClawConfig = {
       channels: {
         telegram: {
+          defaultAccount: "bot2",
           accounts: {
             bot1: {},
             bot2: {},
@@ -334,16 +335,16 @@ describe("doctor legacy state migrations", () => {
     expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
     expect(
       detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-default-allowFrom.json"]);
+    ).toEqual(["telegram-bot2-allowFrom.json"]);
     expect(result.warnings).toEqual([]);
 
     const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
     const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
     const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
     expect(fs.existsSync(bot1Target)).toBe(false);
-    expect(fs.existsSync(bot2Target)).toBe(false);
-    expect(fs.existsSync(defaultTarget)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(defaultTarget, "utf-8"))).toEqual({
+    expect(fs.existsSync(bot2Target)).toBe(true);
+    expect(fs.existsSync(defaultTarget)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
       version: 1,
       allowFrom: ["123456"],
     });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultTelegramAccountId } from "../channels/read-only-account-inspect.telegram.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLegacyStateDirs,
@@ -699,10 +700,11 @@ export async function detectLegacyStateMigrations(params: {
     fileExists(path.join(oauthDir, "creds.json")) &&
     !fileExists(path.join(targetWhatsAppAuthDir, "creds.json"));
   const legacyTelegramAllowFromPath = resolveChannelAllowFromPath("telegram", env);
+  const targetTelegramAccountId = resolveDefaultTelegramAccountId(params.cfg);
   const targetTelegramAllowFromPath = resolveChannelAllowFromPath(
     "telegram",
     env,
-    DEFAULT_ACCOUNT_ID,
+    targetTelegramAccountId,
   );
   const telegramPairingAllowFromPlans = fileExists(legacyTelegramAllowFromPath)
     ? [targetTelegramAllowFromPath]
