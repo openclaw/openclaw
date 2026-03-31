@@ -1,6 +1,6 @@
+import { resolveProviderPluginChoice } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import fptAiFactoryPlugin from "./index.js";
 import { applyFptAiFactoryConfig, FPT_AI_FACTORY_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildFptAiFactoryProvider } from "./provider-catalog.js";

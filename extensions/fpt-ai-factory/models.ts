@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const FPT_AI_FACTORY_BASE_URL = "https://mkp-api.fptcloud.com/v1";
 export const FPT_AI_FACTORY_DEFAULT_MODEL_ID = "Qwen3-32B";
