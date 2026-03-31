@@ -739,19 +739,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await compactionSafeguardDeps.summarizeInStages({
-                  messages: pruned.droppedMessagesList,
-                  model,
-                  apiKey: apiKey ?? "",
-                  headers,
-                  signal,
-                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
-                  maxChunkTokens: droppedMaxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: structuredInstructions,
-                  summarizationInstructions,
-                  previousSummary: preparation.previousSummary,
-                });
+                droppedSummary = stripAnalysisBlock(
+                  await compactionSafeguardDeps.summarizeInStages({
+                    messages: pruned.droppedMessagesList,
+                    model,
+                    apiKey: apiKey ?? "",
+                    headers,
+                    signal,
+                    reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+                    maxChunkTokens: droppedMaxChunkTokens,
+                    contextWindow: contextWindowTokens,
+                    customInstructions: structuredInstructions,
+                    summarizationInstructions,
+                    previousSummary: preparation.previousSummary,
+                  }),
+                );
               } catch (droppedError) {
                 log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
@@ -764,10 +766,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
-      // microCompact pre-pass: clear old bulky tool results before LLM
-      // summarization. Zero LLM cost — just string replacement.
-      messagesToSummarize = microCompactMessages(messagesToSummarize);
-
       const {
         summarizableMessages: summaryTargetMessages,
         preservedMessages: preservedRecentMessages,
@@ -775,7 +773,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messagesToSummarize = summaryTargetMessages;
+      // microCompact pre-pass: clear old bulky tool results before LLM
+      // summarization. Applied after split so preserved turns keep verbatim
+      // tool results. Zero LLM cost — just string replacement.
+      messagesToSummarize = microCompactMessages(summaryTargetMessages);
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
@@ -927,12 +928,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const workspaceContext = await readWorkspaceContextForSummary();
       // Post-compact transcript reference so the model can self-serve if it
       // needs details lost in summarization.
-      const sessionDir = ctx.sessionManager.getSessionDir?.();
-      const sessionId = ctx.sessionManager.getSessionId?.();
-      const transcriptRef =
-        sessionDir && sessionId
-          ? `\n\n---\n_Full session transcript: \`${sessionDir}/${sessionId}.jsonl\`_`
-          : "";
+      // Prefer getSessionFile() which handles forked-session filename patterns;
+      // fall back to manual dir/id construction for older session managers.
+      const sessionFile = (
+        ctx.sessionManager as { getSessionFile?: () => string | null }
+      ).getSessionFile?.();
+      const transcriptPath =
+        sessionFile ??
+        (() => {
+          const dir = ctx.sessionManager.getSessionDir?.();
+          const id = ctx.sessionManager.getSessionId?.();
+          return dir && id ? `${dir}/${id}.jsonl` : null;
+        })();
+      const transcriptRef = transcriptPath
+        ? `\n\n---\n_Full session transcript: \`${transcriptPath}\`_`
+        : "";
       const fullReservedSuffix = appendSummarySection(
         appendSummarySection(reservedSuffix, workspaceContext),
         transcriptRef,
