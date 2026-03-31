@@ -210,6 +210,20 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
     expect(route.mainSessionKey).not.toContain(":thread:");
   });
 
+  it("preserves mixed-case matrix thread ids in session keys", () => {
+    const { route } = resolveMatrixInboundRoute({
+      cfg: baseCfg as never,
+      accountId: "ops",
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
+      isDirectMessage: false,
+      threadId: "$AbC123:example.org",
+      resolveAgentRoute,
+    });
+
+    expect(route.sessionKey).toContain(":thread:$AbC123:example.org");
+  });
+
   it("does not scope session key when thread id is absent", () => {
     const { route } = resolveMatrixInboundRoute({
       cfg: baseCfg as never,

@@ -1,3 +1,4 @@
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { RelationType } from "./types.js";
 
@@ -6,6 +7,19 @@ export type MatrixThreadReplies = "off" | "inbound" | "always";
 export type MatrixThreadRouting = {
   threadId?: string;
 };
+
+export function resolveMatrixThreadSessionKeys(params: {
+  baseSessionKey: string;
+  threadId?: string | null;
+  parentSessionKey?: string;
+  useSuffix?: boolean;
+}): { sessionKey: string; parentSessionKey?: string } {
+  return resolveThreadSessionKeys({
+    ...params,
+    // Matrix event IDs are opaque and case-sensitive; keep the exact thread root.
+    normalizeThreadId: (threadId) => threadId,
+  });
+}
 
 function resolveMatrixRelatedReplyToEventId(relates: unknown): string | undefined {
   if (!relates || typeof relates !== "object") {

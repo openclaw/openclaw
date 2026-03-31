@@ -1,4 +1,3 @@
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   getSessionBindingService,
   resolveAgentIdFromSessionKey,
@@ -6,6 +5,7 @@ import {
   type PluginRuntime,
 } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
+import { resolveMatrixThreadSessionKeys } from "./threads.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;
 
@@ -91,7 +91,7 @@ export function resolveMatrixInboundRoute(params: {
 
   // When no binding overrides the session key, isolate threads into their own sessions.
   if (!configuredBinding && !configuredSessionKey && params.threadId) {
-    const threadKeys = resolveThreadSessionKeys({
+    const threadKeys = resolveMatrixThreadSessionKeys({
       baseSessionKey: effectiveRoute.sessionKey,
       threadId: params.threadId,
       parentSessionKey: effectiveRoute.sessionKey,
