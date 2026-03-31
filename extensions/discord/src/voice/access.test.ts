@@ -94,6 +94,34 @@ describe("authorizeDiscordVoiceIngress", () => {
     expect(access).toEqual({ ok: true });
   });
 
+  it("allows wildcard guild configs when only the guild id is available", async () => {
+    const access = await authorizeDiscordVoiceIngress({
+      cfg: baseCfg,
+      discordConfig: {
+        guilds: {
+          "*": {
+            channels: {
+              "*": {
+                users: ["discord:u-owner"],
+              },
+            },
+          },
+        },
+      } as DiscordAccountConfig,
+      groupPolicy: "allowlist",
+      guildId: "g1",
+      channelId: "c1",
+      channelSlug: "",
+      memberRoleIds: [],
+      sender: {
+        id: "u-owner",
+        name: "owner",
+      },
+    });
+
+    expect(access).toEqual({ ok: true });
+  });
+
   it("does not block commands when channel id is unavailable", async () => {
     const access = await authorizeDiscordVoiceIngress({
       cfg: baseCfg,

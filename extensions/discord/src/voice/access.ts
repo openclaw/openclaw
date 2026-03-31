@@ -42,7 +42,7 @@ export async function authorizeDiscordVoiceIngress(params: {
     }).groupPolicy;
   const guild =
     params.guild ??
-    (params.guildName ? ({ id: params.guildId, name: params.guildName } as Guild) : null);
+    ({ id: params.guildId, ...(params.guildName ? { name: params.guildName } : {}) } as Guild);
   const guildInfo = resolveDiscordGuildEntry({
     guild,
     guildId: params.guildId,

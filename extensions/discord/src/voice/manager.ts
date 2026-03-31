@@ -245,7 +245,11 @@ export class DiscordVoiceManager {
   private readonly speakerContextCache = new Map<
     string,
     {
+      id: string;
       label: string;
+      name?: string;
+      tag?: string;
+      memberRoleIds: string[];
       senderIsOwner: boolean;
       expiresAt: number;
     }
@@ -610,13 +614,13 @@ export class DiscordVoiceManager {
     logVoiceVerbose(
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
-    const speakerIdentity = await this.resolveSpeakerIdentity(entry.guildId, userId);
     if (!entry.guildName) {
       const guild = await this.params.client.fetchGuild(entry.guildId).catch(() => null);
       if (guild && typeof guild.name === "string" && guild.name.trim()) {
         entry.guildName = guild.name;
       }
     }
+    const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const access = await authorizeDiscordVoiceIngress({
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
@@ -626,11 +630,11 @@ export class DiscordVoiceManager {
       channelName: entry.channelName,
       channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
       channelLabel: formatMention({ channelId: entry.channelId }),
-      memberRoleIds: speakerIdentity.memberRoleIds,
+      memberRoleIds: speaker.memberRoleIds,
       sender: {
-        id: speakerIdentity.id,
-        name: speakerIdentity.name,
-        tag: speakerIdentity.tag,
+        id: speaker.id,
+        name: speaker.name,
+        tag: speaker.tag,
       },
     });
     if (!access.ok) {
@@ -654,15 +658,6 @@ export class DiscordVoiceManager {
       `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
-    this.setCachedSpeakerContext(entry.guildId, userId, {
-      label: speakerIdentity.label,
-      senderIsOwner: this.resolveSpeakerIsOwner({
-        id: speakerIdentity.id,
-        name: speakerIdentity.name,
-        tag: speakerIdentity.tag,
-      }),
-    });
-    const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
     const result = await agentCommandFromIngress(
@@ -821,7 +816,11 @@ export class DiscordVoiceManager {
     userId: string,
   ):
     | {
+        id: string;
         label: string;
+        name?: string;
+        tag?: string;
+        memberRoleIds: string[];
         senderIsOwner: boolean;
       }
     | undefined {
@@ -835,7 +834,11 @@ export class DiscordVoiceManager {
       return undefined;
     }
     return {
+      id: cached.id,
       label: cached.label,
+      name: cached.name,
+      tag: cached.tag,
+      memberRoleIds: cached.memberRoleIds,
       senderIsOwner: cached.senderIsOwner,
     };
   }
@@ -843,7 +846,14 @@ export class DiscordVoiceManager {
   private setCachedSpeakerContext(
     guildId: string,
     userId: string,
-    context: { label: string; senderIsOwner: boolean },
+    context: {
+      id: string;
+      label: string;
+      name?: string;
+      tag?: string;
+      memberRoleIds: string[];
+      senderIsOwner: boolean;
+    },
   ): void {
     const key = this.resolveSpeakerContextCacheKey(guildId, userId);
     this.speakerContextCache.set(key, {
@@ -857,7 +867,11 @@ export class DiscordVoiceManager {
     guildId: string,
     userId: string,
   ): Promise<{
+    id: string;
     label: string;
+    name?: string;
+    tag?: string;
+    memberRoleIds: string[];
     senderIsOwner: boolean;
   }> {
     const cached = this.getCachedSpeakerContext(guildId, userId);
@@ -866,7 +880,11 @@ export class DiscordVoiceManager {
     }
     const identity = await this.resolveSpeakerIdentity(guildId, userId);
     const context = {
+      id: identity.id,
       label: identity.label,
+      name: identity.name,
+      tag: identity.tag,
+      memberRoleIds: identity.memberRoleIds,
       senderIsOwner: this.resolveSpeakerIsOwner({
         id: identity.id,
         name: identity.name,
