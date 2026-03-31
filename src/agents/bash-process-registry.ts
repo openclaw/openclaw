@@ -223,6 +223,8 @@ function syncFinishedSessionSnapshot(session: ProcessSession) {
   if (!finished) {
     return;
   }
+  // Late pipe/PTY chunks can still arrive after exit. Keep only the output
+  // snapshot in sync here; exit metadata is finalized by markExited()/moveToFinished().
   finished.aggregated = session.aggregated;
   finished.tail = session.tail;
   finished.truncated = session.truncated;
