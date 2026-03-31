@@ -1418,19 +1418,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     searchCommand?: string,
   ): Array<{ type: string; query: string }> {
+    const normalizedQuery = searchCommand === "search" ? normalizeHanBm25Query(query) : query;
     switch (searchCommand) {
       case "search":
         // BM25 keyword search only
-        return [{ type: "lex", query }];
+        return [{ type: "lex", query: normalizedQuery }];
       case "vsearch":
         // Vector search only
-        return [{ type: "vec", query }];
+        return [{ type: "vec", query: normalizedQuery }];
       case "query":
       case undefined:
       default:
         // Full hybrid: lex + vec + hyde (query expansion)
+        // Only normalize the lexical component; keep the original for semantic matches.
         return [
-          { type: "lex", query },
+          { type: "lex", query: normalizeHanBm25Query(query) },
           { type: "vec", query },
           { type: "hyde", query },
         ];

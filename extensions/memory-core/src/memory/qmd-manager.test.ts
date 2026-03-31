@@ -1444,7 +1444,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("keeps original Han queries in qmd query mode", async () => {
+  it("keeps original Han queries in qmd query mode for vector and hyde, but normalizes lex", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1454,12 +1454,14 @@ describe("QmdMemoryManager", () => {
           searchMode: "query",
           update: { interval: "0s", debounceMs: 60_000, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
         },
       },
     } as OpenClawConfig;
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (cmd.includes("mcporter") && args[0] === "call") {
         emitAndClose(child, "stdout", "[]");
         return child;
       }
@@ -1467,14 +1469,28 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
+    // Force v2 MCP tool resolving
+    (manager as any).qmdMcpToolVersion = "v2";
+    
     await expect(
       manager.search("記憶系統升級 QMD", { sessionKey: "agent:main:slack:dm:u123" }),
     ).resolves.toEqual([]);
 
-    const queryCall = spawnMock.mock.calls.find(
-      (call: unknown[]) => (call[1] as string[])?.[0] === "query",
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("mcporter") && (call[1] as string[])?.[0] === "call",
     );
-    expect(queryCall?.[1]?.[1]).toBe("記憶系統升級 QMD");
+    expect(mcporterCall).toBeDefined();
+    
+    const callArgs = mcporterCall?.[1] as string[];
+    const jsonArgsIndex = callArgs.indexOf("--args") + 1;
+    const parsedArgs = JSON.parse(callArgs[jsonArgsIndex]);
+    
+    expect(parsedArgs.searches).toEqual([
+      { type: "lex", query: "記憶 憶系 系統 統升 升級 qmd" },
+      { type: "vec", query: "記憶系統升級 QMD" },
+      { type: "hyde", query: "記憶系統升級 QMD" },
+    ]);
+    
     await manager.close();
   });
 
