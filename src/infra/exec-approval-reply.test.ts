@@ -54,6 +54,14 @@ describe("exec approval reply helpers", () => {
     );
   });
 
+  it("mentions Slack in the fallback approval-client guidance", () => {
+    expect(
+      buildExecApprovalUnavailableReplyPayload({
+        reason: "no-approval-route",
+      }).text,
+    ).toContain("Discord, Slack, or Telegram exec approvals");
+  });
+
   it.each(invalidReplyMetadataCases)(
     "returns null for invalid reply metadata payload: $name",
     ({ payload }) => {

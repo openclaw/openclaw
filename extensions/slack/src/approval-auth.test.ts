@@ -3,12 +3,18 @@ import { slackApprovalAuth } from "./approval-auth.js";
 
 describe("slackApprovalAuth", () => {
   it("authorizes inferred Slack approvers by user id", () => {
-    const cfg = { channels: { slack: { allowFrom: ["U_OWNER"] } } };
+    const cfg = {
+      channels: {
+        slack: {
+          execApprovals: { enabled: true, approvers: ["user:U123OWNER"] },
+        },
+      },
+    };
 
     expect(
       slackApprovalAuth.authorizeActorAction({
         cfg,
-        senderId: "U_OWNER",
+        senderId: "U123OWNER",
         action: "approve",
         approvalKind: "exec",
       }),
@@ -17,7 +23,7 @@ describe("slackApprovalAuth", () => {
     expect(
       slackApprovalAuth.authorizeActorAction({
         cfg,
-        senderId: "U_ATTACKER",
+        senderId: "U999ATTACKER",
         action: "approve",
         approvalKind: "exec",
       }),

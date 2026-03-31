@@ -866,6 +866,16 @@ export const SlackAccountSchema = z
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
