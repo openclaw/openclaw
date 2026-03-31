@@ -176,6 +176,21 @@ function createMatrixThreadCommandParams(commandBody: string, overrides?: Record
   });
 }
 
+function createMatrixTriggerThreadCommandParams(
+  commandBody: string,
+  overrides?: Record<string, unknown>,
+) {
+  return buildCommandTestParams(commandBody, baseCfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example.org",
+    AccountId: "default",
+    MessageThreadId: "$root",
+    ...overrides,
+  });
+}
+
 function createMatrixRoomCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
   return buildCommandTestParams(commandBody, baseCfg, {
     Provider: "matrix",
@@ -246,6 +261,21 @@ function createMatrixBinding(overrides?: Partial<SessionBindingRecord>): Session
     },
     ...overrides,
   };
+}
+
+function createMatrixTriggerBinding(
+  overrides?: Partial<SessionBindingRecord>,
+): SessionBindingRecord {
+  return createMatrixBinding({
+    bindingId: "default:$root",
+    conversation: {
+      channel: "matrix",
+      accountId: "default",
+      conversationId: "$root",
+      parentConversationId: "!room:example.org",
+    },
+    ...overrides,
+  });
 }
 
 function expectIdleTimeoutSetReply(
@@ -401,6 +431,40 @@ describe("/session idle and /session max-age", () => {
     );
     const text = result?.reply?.text ?? "";
 
+    expectIdleTimeoutSetReply(
+      hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
+      text,
+      2 * 60 * 60 * 1000,
+      "2h",
+    );
+  });
+
+  it("sets idle timeout for the triggering Matrix always-thread turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createMatrixTriggerBinding());
+    hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
+      {
+        targetSessionKey: "agent:main:subagent:child",
+        boundAt: Date.now(),
+        lastActivityAt: Date.now(),
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+      },
+    ]);
+
+    const result = await handleSessionCommand(
+      createMatrixTriggerThreadCommandParams("/session idle 2h"),
+      true,
+    );
+    const text = result?.reply?.text ?? "";
+
+    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith({
+      channel: "matrix",
+      accountId: "default",
+      conversationId: "$root",
+      parentConversationId: "!room:example.org",
+    });
     expectIdleTimeoutSetReply(
       hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
       text,

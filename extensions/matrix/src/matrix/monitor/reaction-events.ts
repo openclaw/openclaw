@@ -5,7 +5,7 @@ import { resolveMatrixAccountConfig } from "../accounts.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
-import { resolveMatrixThreadRootId } from "./threads.js";
+import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 export type MatrixReactionNotificationMode = "off" | "own";
@@ -73,14 +73,24 @@ export async function handleInboundMatrixReaction(params: {
         content: targetContent,
       })
     : undefined;
+  const accountConfig = resolveMatrixAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const thread = resolveMatrixThreadRouting({
+    isDirectMessage: params.isDirectMessage,
+    threadReplies: accountConfig.threadReplies ?? "inbound",
+    dmThreadReplies: accountConfig.dm?.threadReplies,
+    messageId: reaction.eventId,
+    threadRootId,
+  });
   const { route, runtimeBindingId } = resolveMatrixInboundRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     roomId: params.roomId,
     senderId: params.senderId,
     isDirectMessage: params.isDirectMessage,
-    messageId: reaction.eventId,
-    threadRootId,
+    threadId: thread.threadId,
     eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });

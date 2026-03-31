@@ -10,6 +10,8 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
+  threadReplies?: "off" | "inbound" | "always";
 };
 
 export type MatrixRoomConfig = {
