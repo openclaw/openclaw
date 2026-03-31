@@ -176,7 +176,16 @@ export function sanitizesGeminiThoughtSignatures(
 
 function modelIncludesAnyHint(modelId: string | null | undefined, hints: string[]): boolean {
   const normalized = (modelId ?? "").toLowerCase();
-  return Boolean(normalized) && hints.some((hint) => normalized.includes(hint));
+  if (!normalized) {
+    return false;
+  }
+
+  // Use token-based matching to avoid false positives from naive substring matching.
+  // Split on common delimiters (/ - _ .) and match complete tokens.
+  // This prevents matching "notmistral" when looking for "mistral".
+  const tokens = normalized.split(/[/\-_.]+/).filter(Boolean);
+  const hintSet = new Set(hints.map((h) => h.toLowerCase()));
+  return tokens.some((t) => hintSet.has(t));
 }
 
 export function isOpenAiProviderFamily(
