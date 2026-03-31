@@ -8,7 +8,8 @@ echo Running: node openclaw.mjs --dev plugins --help
 echo.
 
 pnpm install
-node openclaw.mjs --dev plugins --help
+node openclaw.mjs plugins --help
+:: node openclaw.mjs --dev plugins --help
 
 
 echo.

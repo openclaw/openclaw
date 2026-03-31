@@ -14,15 +14,41 @@ echo 1. Start OpenClaw (Skip Build)
 echo 2. Build and Start OpenClaw
 echo 3. Only Build Project
 echo 4. Stop Running OpenClaw Services
+echo 5. Disable Security Interception (No Prompts)
+echo 6. Enable Security Interception (Default)
 echo 0. Exit
 echo =========================================
-choice /C 12340 /M "Please select an option:"
+choice /C 1234560 /M "Please select an option:"
 
-if errorlevel 5 goto END
+if errorlevel 7 goto END
+if errorlevel 6 goto ACTION_ENABLE_SECURITY
+if errorlevel 5 goto ACTION_DISABLE_SECURITY
 if errorlevel 4 goto ACTION_STOP_ONLY
 if errorlevel 3 goto ACTION_BUILD_ONLY
 if errorlevel 2 goto ACTION_BUILD_AND_START
 if errorlevel 1 goto ACTION_START
+
+:ACTION_DISABLE_SECURITY
+echo.
+echo =========================================
+echo Disabling Gateway Security Interception...
+echo =========================================
+call node openclaw.mjs config set tools.exec.ask off
+call node openclaw.mjs config set tools.exec.security full
+echo [INFO] Gateway security interception disabled. (Requires OpenClaw restart)
+pause
+goto MENU
+
+:ACTION_ENABLE_SECURITY
+echo.
+echo =========================================
+echo Enabling Gateway Security Interception...
+echo =========================================
+call node openclaw.mjs config set tools.exec.ask on-miss
+call node openclaw.mjs config set tools.exec.security allowlist
+echo [INFO] Gateway security interception enabled. (Requires OpenClaw restart)
+pause
+goto MENU
 
 :ACTION_START
 set "ABORT_START=0"
