@@ -2010,53 +2010,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (normalizedAttachments.length > 0) {
-      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-      const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-
-      // Check if imageModel is configured - if so, preserve images for the switch logic.
-      // This allows automatic model switching when the current model doesn't support images
-      // but a valid imageModel is configured.
-      const imageModelConfig = cfg.agents?.defaults?.imageModel;
-      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
-
-      // If imageModel is configured, preserve images for the switch logic.
-      // Otherwise, check if the current model supports images.
-      const supportsImages = imageModelPrimary
-        ? true
-        : await resolveGatewayModelSupportsImages({
-            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-            provider: modelRef.provider,
-            model: modelRef.model,
-          });
-
-      try {
-        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
-          log: context.logGateway,
-          supportsImages,
-        });
-        parsedMessage = parsed.message;
-        parsedImages = parsed.images;
-        parsedImageOrder = parsed.imageOrder;
-        parsedOffloadedRefs = parsed.offloadedRefs;
-      } catch (err) {
-        // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
-        // etc.). All other errors are client-side input validation failures.
-        // Map them to different HTTP status codes so callers can retry server
-        // faults without treating them as bad requests.
-        const isServerFault = err instanceof MediaOffloadError;
-        respond(
-          false,
-          undefined,
-          errorShape(
-            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
-        return;
-      }
-    }
+    // Reuse attachment parsing results from earlier (lines 1618-1626)
+    // to avoid duplicate parsing and potential orphaned offloaded blobs.
 
     try {
       const abortController = new AbortController();
