@@ -152,6 +152,16 @@ function parsePinnedIdentity(stdout: string): FileIdentityStat {
   return { dev, ino };
 }
 
+function resolvePython3InstallHint(stderr: string): string {
+  if (stderr && /xcrun|command.?line.?tools|xcode/i.test(stderr)) {
+    return " (install Xcode Command Line Tools: xcode-select --install)";
+  }
+  if (process.platform === "linux" && /no such file|not found|ENOENT/i.test(stderr)) {
+    return " (install python3, e.g. apt install python3 or dnf install python3)";
+  }
+  return "";
+}
+
 export async function runPinnedWriteHelper(params: {
   rootPath: string;
   relativeParentPath: string;
@@ -211,9 +221,12 @@ export async function runPinnedWriteHelper(params: {
 
     const [code, signal] = await exitPromise;
     if (code !== 0) {
+      const detail = stderr.trim();
+      const installHint = resolvePython3InstallHint(detail);
       throw new Error(
-        stderr.trim() ||
-          `Pinned write helper failed with code ${code ?? "null"} (${signal ?? "?"})`,
+        detail
+          ? `python3 helper failed: ${detail}${installHint}`
+          : `python3 helper failed with code ${code ?? "null"} (${signal ?? "?"}); ensure python3 is installed`,
       );
     }
     return parsePinnedIdentity(stdout);

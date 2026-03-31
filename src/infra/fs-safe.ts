@@ -869,9 +869,14 @@ function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
   }
-  return new SafeOpenError("invalid-path", "path is not a regular file under root", {
-    cause: error instanceof Error ? error : undefined,
-  });
+  const causeMessage = error instanceof Error ? error.message : String(error);
+  return new SafeOpenError(
+    "invalid-path",
+    `pinned write failed: ${causeMessage || "unknown error"}`,
+    {
+      cause: error instanceof Error ? error : undefined,
+    },
+  );
 }
 
 function normalizePinnedPathError(error: unknown): Error {
