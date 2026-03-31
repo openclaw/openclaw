@@ -1,42 +1,71 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerSecurityCli } from "./security-cli.js";
 
-const loadConfig = vi.fn();
-const runSecurityAudit = vi.fn();
-const fixSecurityFootguns = vi.fn();
-const resolveCommandSecretRefsViaGateway = vi.fn();
-const getSecurityAuditCommandSecretTargetIds = vi.fn(
-  () => new Set(["gateway.auth.token", "gateway.auth.password"]),
-);
+const mocks = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn(),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return {
+    loadConfig: vi.fn(),
+    runSecurityAudit: vi.fn(),
+    fixSecurityFootguns: vi.fn(),
+    resolveCommandSecretRefsViaGateway: vi.fn(),
+    getSecurityAuditCommandSecretTargetIds: vi.fn(
+      () => new Set(["gateway.auth.token", "gateway.auth.password"]),
+    ),
+    defaultRuntime,
+    runtimeLogs,
+  };
+});
 
-const { defaultRuntime, runtimeLogs, resetRuntimeCapture } = createCliRuntimeCapture();
+const {
+  loadConfig,
+  runSecurityAudit,
+  fixSecurityFootguns,
+  resolveCommandSecretRefsViaGateway,
+  getSecurityAuditCommandSecretTargetIds,
+  runtimeLogs,
+} = mocks;
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfig(),
+  loadConfig: () => mocks.loadConfig(),
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../security/audit.js", () => ({
-  runSecurityAudit: (opts: unknown) => runSecurityAudit(opts),
+  runSecurityAudit: (opts: unknown) => mocks.runSecurityAudit(opts),
 }));
 
 vi.mock("../security/fix.js", () => ({
-  fixSecurityFootguns: () => fixSecurityFootguns(),
+  fixSecurityFootguns: () => mocks.fixSecurityFootguns(),
 }));
 
 vi.mock("./command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: (opts: unknown) => resolveCommandSecretRefsViaGateway(opts),
+  resolveCommandSecretRefsViaGateway: (opts: unknown) =>
+    mocks.resolveCommandSecretRefsViaGateway(opts),
 }));
 
 vi.mock("./command-secret-targets.js", () => ({
-  getSecurityAuditCommandSecretTargetIds: () => getSecurityAuditCommandSecretTargetIds(),
+  getSecurityAuditCommandSecretTargetIds: () => mocks.getSecurityAuditCommandSecretTargetIds(),
 }));
-
-const { registerSecurityCli } = await import("./security-cli.js");
 
 function createProgram() {
   const program = new Command();
@@ -63,7 +92,7 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
 
 describe("security CLI", () => {
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
     loadConfig.mockReset();
     runSecurityAudit.mockReset();
     fixSecurityFootguns.mockReset();

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
@@ -17,8 +17,21 @@ const mocks = vi.hoisted(() => ({
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
-beforeEach(async () => {
-  vi.resetModules();
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+  normalizeChannelId: (value: string) => value,
+}));
+
+vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
+}));
+
+beforeAll(async () => {
+  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
+    await import("./target-resolver.js"));
+});
+
+beforeEach(() => {
   mocks.listPeers.mockReset();
   mocks.listPeersLive.mockReset();
   mocks.listGroups.mockReset();
@@ -27,15 +40,7 @@ beforeEach(async () => {
   mocks.getChannelPlugin.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
-  vi.doMock("../../channels/plugins/index.js", () => ({
-    getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
-    normalizeChannelId: (value: string) => value,
-  }));
-  vi.doMock("../../plugins/runtime.js", () => ({
-    getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
-  }));
-  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
-    await import("./target-resolver.js"));
+  resetDirectoryCache();
 });
 
 async function expectOkResolution(

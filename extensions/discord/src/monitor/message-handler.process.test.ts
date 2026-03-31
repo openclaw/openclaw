@@ -464,9 +464,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    await vi.waitFor(() => {
-      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
-    });
+    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
   });
 });
 

@@ -265,6 +265,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueMicrotask(() => {
+      context.disconnectClientsForDevice?.(deviceId.trim(), { role: entry.role });
+    });
   },
   "device.token.revoke": async ({ params, respond, context }) => {
     if (!validateDeviceTokenRevokeParams(params)) {
