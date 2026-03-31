@@ -347,7 +347,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       expect(requestInit.dispatcher).toBeDefined();
-      expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+      expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });
 
