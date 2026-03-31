@@ -214,6 +214,44 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalled();
   });
 
+  it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "<@123> /status",
+      CommandBody: "<@123> /status",
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      WasMentioned: true,
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "<@123>",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          channelId: "discord",
+          isAuthorizedSender: true,
+          rawBodyNormalized: "<@123> /status",
+          commandBodyNormalized: "<@123> /status",
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+          isGroup: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: undefined });
+    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalled();
+  });
+
   it("skips stale queued messages that are at or before the /stop cutoff", async () => {
     const typing = createTypingController();
     const sessionEntry: SessionEntry = {
