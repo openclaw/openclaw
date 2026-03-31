@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
   stubFetchResponse,
@@ -35,9 +35,7 @@ async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T
 }
 
 describe("nodes camera helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({
       cameraTempPath,
       parseCameraClipPayload,
@@ -47,6 +45,10 @@ describe("nodes camera helpers", () => {
       writeUrlToFile,
     } = await import("./nodes-camera.js"));
     ({ parseScreenRecordPayload, screenRecordTempPath } = await import("./nodes-screen.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("parses camera.snap payload", () => {

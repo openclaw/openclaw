@@ -1,9 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { deliverAgentCommandResult } from "./agent/delivery.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
@@ -30,14 +31,7 @@ vi.mock("../infra/outbound/targets.js", async () => {
   };
 });
 
-let deliverAgentCommandResult: typeof import("./agent/delivery.js").deliverAgentCommandResult;
-
 describe("deliverAgentCommandResult", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ deliverAgentCommandResult } = await import("./agent/delivery.js"));
-  });
-
   function createRuntime(): RuntimeEnv {
     return {
       log: vi.fn(),

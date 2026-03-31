@@ -177,7 +177,6 @@ function installModelsListCommandForwardCompatMocks() {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   installModelsListCommandForwardCompatMocks();
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });

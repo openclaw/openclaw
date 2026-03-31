@@ -98,7 +98,6 @@ describe("onboard-search provider resolution", () => {
   let mod: typeof import("./onboard-search.js");
 
   beforeAll(async () => {
-    vi.resetModules();
     mod = await import("./onboard-search.js");
   });
 

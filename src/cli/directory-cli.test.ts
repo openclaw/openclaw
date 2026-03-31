@@ -1,16 +1,30 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDirectoryCli } from "./directory-cli.js";
-import type { CliRuntimeCapture } from "./test-runtime-capture.js";
 
-const runtimeState = vi.hoisted(() => ({ capture: null as CliRuntimeCapture | null }));
-
-function getRuntimeCapture(): CliRuntimeCapture {
-  if (!runtimeState.capture) {
-    throw new Error("runtime capture not initialized");
-  }
-  return runtimeState.capture;
-}
+const runtimeState = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`exit:${code}`);
+    }),
+  };
+  return { defaultRuntime, runtimeLogs, runtimeErrors };
+});
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -49,16 +63,15 @@ vi.mock("../channels/plugins/helpers.js", () => ({
   resolveChannelDefaultAccountId: mocks.resolveChannelDefaultAccountId,
 }));
 
-vi.mock("../runtime.js", async () => {
-  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
-  runtimeState.capture ??= createCliRuntimeCapture();
-  return { defaultRuntime: runtimeState.capture.defaultRuntime };
-});
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtimeState.defaultRuntime,
+}));
 
 describe("registerDirectoryCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getRuntimeCapture().resetRuntimeCapture();
+    runtimeState.runtimeLogs.length = 0;
+    runtimeState.runtimeErrors.length = 0;
     mocks.loadConfig.mockReturnValue({ channels: {} });
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
@@ -69,7 +82,12 @@ describe("registerDirectoryCli", () => {
       configured: ["demo-channel"],
       source: "explicit",
     });
-    getRuntimeCapture().defaultRuntime.exit.mockImplementation((code: number) => {
+    runtimeState.defaultRuntime.log.mockClear();
+    runtimeState.defaultRuntime.error.mockClear();
+    runtimeState.defaultRuntime.writeStdout.mockClear();
+    runtimeState.defaultRuntime.writeJson.mockClear();
+    runtimeState.defaultRuntime.exit.mockClear();
+    runtimeState.defaultRuntime.exit.mockImplementation((code: number) => {
       throw new Error(`exit:${code}`);
     });
   });
@@ -113,10 +131,10 @@ describe("registerDirectoryCli", () => {
         accountId: "default",
       }),
     );
-    expect(getRuntimeCapture().defaultRuntime.log).toHaveBeenCalledWith(
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
-    expect(getRuntimeCapture().defaultRuntime.error).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
   });
 
   it("uses the auto-enabled config snapshot for omitted channel selection", async () => {

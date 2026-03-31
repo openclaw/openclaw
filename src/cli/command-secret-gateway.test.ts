@@ -1,10 +1,15 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 
-const callGateway = vi.fn();
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+}));
+
+const { callGateway } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway,
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../secrets/runtime-web-tools.js", () => ({
@@ -15,13 +20,6 @@ vi.mock("../utils/message-channel.js", () => ({
   GATEWAY_CLIENT_MODES: { CLI: "cli" },
   GATEWAY_CLIENT_NAMES: { CLI: "cli" },
 }));
-
-let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
-});
 
 beforeEach(() => {
   callGateway.mockReset();

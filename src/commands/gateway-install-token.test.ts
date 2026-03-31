@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
@@ -56,8 +57,6 @@ vi.mock("../secrets/resolve.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   randomToken: randomTokenMock,
 }));
-
-const { resolveGatewayInstallToken } = await import("./gateway-install-token.js");
 
 describe("resolveGatewayInstallToken", () => {
   beforeEach(() => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../channels/config-presence.js", () => ({
   hasPotentialConfiguredChannels: vi.fn(() => true),
@@ -113,21 +113,20 @@ vi.mock("./status.link-channel.js", () => ({
 const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
-
-async function loadStatusSummaryForTest() {
-  vi.resetModules();
-  const { getStatusSummary } = await import("./status.summary.js");
-  const { statusSummaryRuntime } = await import("./status.summary.runtime.js");
-  return { getStatusSummary, statusSummaryRuntime };
-}
+let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
+let statusSummaryRuntime: typeof import("./status.summary.runtime.js").statusSummaryRuntime;
 
 describe("getStatusSummary", () => {
+  beforeAll(async () => {
+    ({ getStatusSummary } = await import("./status.summary.js"));
+    ({ statusSummaryRuntime } = await import("./status.summary.runtime.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("includes runtimeVersion in the status payload", async () => {
-    const { getStatusSummary } = await loadStatusSummaryForTest();
     const summary = await getStatusSummary();
 
     expect(summary.runtimeVersion).toBe("2026.3.8");
@@ -138,7 +137,6 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    const { getStatusSummary } = await loadStatusSummaryForTest();
     vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);
 
     const summary = await getStatusSummary();
@@ -150,7 +148,6 @@ describe("getStatusSummary", () => {
   });
 
   it("does not trigger async context warmup while building status summaries", async () => {
-    const { getStatusSummary, statusSummaryRuntime } = await loadStatusSummaryForTest();
     await getStatusSummary();
 
     expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
