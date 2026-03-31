@@ -72,6 +72,9 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   openai: {
     providerFamily: "openai",
   },
+  qianfan: {
+    dropThinkingBlockModelHints: ["qianfan-code"],
+  },
 };
 
 const defaultResolveProviderCapabilitiesWithPlugin = resolveProviderCapabilitiesWithPluginRuntime;
