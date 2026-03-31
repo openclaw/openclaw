@@ -97,6 +97,18 @@ supports direct messages & group chats, streaming replies, and proactive messagi
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
+### EchoMemory
+
+OpenClaw plugin for syncing local markdown memories into EchoMem Cloud and making those memories retrievable from OpenClaw. 
+Supports semantic search, a local workspace viewer (default port 17823), and registers the `echo_memory_search` tool for natural language memory retrieval in conversations.
+
+- **npm:** `@echomem/echo-memory-cloud-openclaw-plugin`
+- **repo:** [github.com/Atlas-Graph-Academy/EchoMemory-Cloud-OpenClaw-Plugin](https://github.com/Atlas-Graph-Academy/EchoMemory-Cloud-OpenClaw-Plugin)
+
+```bash
+openclaw plugins install @echomem/echo-memory-cloud-openclaw-plugin
+```
+
 ## Submit your plugin
 
 We welcome community plugins that are useful, documented, and safe to operate.
