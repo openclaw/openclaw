@@ -211,12 +211,18 @@ openclaw plugins install <package>        # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>   # install from ClawHub only
 openclaw plugins install <path>          # install from local path
 openclaw plugins install -l <path>       # link (no copy) for dev
+openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id>             # update one plugin
 openclaw plugins update --all            # update all
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 ```
+
+`--dangerously-force-unsafe-install` is a break-glass override for false
+positives from the built-in dangerous-code scanner. It allows installs to
+continue past built-in `critical` findings, but it still does not bypass plugin
+`before_install` policy blocks or scan-failure blocking.
 
 See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 

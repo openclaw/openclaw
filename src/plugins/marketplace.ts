@@ -1031,6 +1031,7 @@ export async function resolveMarketplaceInstallShortcut(
 }
 
 export async function installPluginFromMarketplace(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
   marketplace: string;
   plugin: string;
   logger?: MarketplaceLogger;
@@ -1075,6 +1076,7 @@ export async function installPluginFromMarketplace(params: {
     installCleanup = resolved.cleanup;
 
     const result = await installPluginFromPath({
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       path: resolved.path,
       logger: params.logger,
       mode: params.mode,
