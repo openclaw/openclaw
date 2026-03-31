@@ -34,6 +34,7 @@ export class RunnerManager {
   private _state: RunnerState = "unloaded";
   private readyPromise: Promise<void> | null = null;
   private _native: NativeExecuTorchAddon | null = null;
+  private launchGeneration = 0;
 
   private get native(): NativeExecuTorchAddon {
     if (!this._native) this._native = loadNativeExecuTorchAddon();
@@ -108,22 +109,23 @@ export class RunnerManager {
   }
 
   stop(): void {
-    if (this.handle) {
-      try {
-        this.native.destroyRunner(this.handle);
-      } catch {
-        // already released
-      }
-      this.handle = null;
-    }
-    this._state = "unloaded";
+    this.launchGeneration += 1;
+    this.resetHandle();
   }
 
   private async launch(): Promise<void> {
-    this.stop();
+    const launchGeneration = this.launchGeneration + 1;
+    this.launchGeneration = launchGeneration;
+    this.resetHandle();
 
     await this.validatePaths();
+    if (!this.isActiveLaunch(launchGeneration)) {
+      return;
+    }
     await ensureRuntimeLibraryLoadable(this.runtimeLibraryPath, this.logger);
+    if (!this.isActiveLaunch(launchGeneration)) {
+      return;
+    }
 
     this._state = "loading";
     this.logger.info(
@@ -142,13 +144,42 @@ export class RunnerManager {
     }
 
     try {
-      this.handle = await this.native.createRunner(config);
+      const handle = await this.native.createRunner(config);
+      if (!this.isActiveLaunch(launchGeneration)) {
+        this.destroyHandle(handle);
+        return;
+      }
+      this.handle = handle;
       this._state = "ready";
       this.logger.info("[executorch] Model loaded — embedded runtime ready");
     } catch (error) {
+      if (!this.isActiveLaunch(launchGeneration)) {
+        return;
+      }
       this._state = "error";
       this.handle = null;
       throw error;
+    }
+  }
+
+  private isActiveLaunch(launchGeneration: number): boolean {
+    return this.launchGeneration === launchGeneration;
+  }
+
+  private resetHandle(): void {
+    this.destroyHandle(this.handle);
+    this.handle = null;
+    this._state = "unloaded";
+  }
+
+  private destroyHandle(handle: object | null): void {
+    if (!handle) {
+      return;
+    }
+    try {
+      this.native.destroyRunner(handle);
+    } catch {
+      // already released
     }
   }
 

@@ -83,7 +83,7 @@ describe("executorch plugin gateway_start hook", () => {
       | ((event: { port: number }, ctx: { port?: number }) => void | Promise<void>)
       | undefined;
 
-    const api: OpenClawPluginApi = {
+    const api = {
       id: "executorch",
       name: "ExecuTorch",
       source: "test",
@@ -110,9 +110,9 @@ describe("executorch plugin gateway_start hook", () => {
         return input;
       },
       on() {},
-    };
+    } satisfies Partial<OpenClawPluginApi>;
 
-    plugin.register(api);
+    plugin.register(api as unknown as OpenClawPluginApi);
     expect(gatewayStartHook).toBeTypeOf("function");
 
     await gatewayStartHook?.({ port: 18789 }, { port: 18789 });

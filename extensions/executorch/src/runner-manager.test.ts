@@ -163,4 +163,40 @@ describe("RunnerManager", () => {
       await fs.rm(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it("destroys a late runner when stop is called during cold load", async () => {
+    let releaseBarrier!: () => void;
+    const lateHandle = { runner: true };
+    mockState.createBarrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    mockState.createRunner.mockImplementation(async () => {
+      await mockState.createBarrier;
+      return lateHandle;
+    });
+    const fixture = await createRuntimeFixture();
+
+    try {
+      const manager = new RunnerManager({
+        runtimeLibraryPath: fixture.runtimeLibraryPath,
+        backend: "metal",
+        modelPath: fixture.modelPath,
+        tokenizerPath: fixture.tokenizerPath,
+        logger: { info() {}, warn() {}, error() {} },
+      });
+
+      const pendingReady = manager.ensureReady();
+      await waitForExpectation(() => expect(mockState.createRunner).toHaveBeenCalledTimes(1));
+
+      manager.stop();
+      releaseBarrier();
+      await pendingReady;
+
+      expect(manager.state).toBe("unloaded");
+      expect(manager.isAlive).toBe(false);
+      expect(mockState.destroyRunner).toHaveBeenCalledWith(lateHandle);
+    } finally {
+      await fs.rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
 });

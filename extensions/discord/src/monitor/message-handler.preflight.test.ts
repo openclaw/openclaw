@@ -649,7 +649,14 @@ describe("preflightDiscordMessage", () => {
 
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
-        cfg: DEFAULT_PREFLIGHT_CFG,
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,

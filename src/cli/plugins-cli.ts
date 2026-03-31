@@ -530,10 +530,14 @@ export function registerPluginsCli(program: Command) {
           inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
         ),
       );
-      if (plugin.status === "disabled" && plugin.origin === "bundled" && !plugin.error) {
+      if (
+        inspect.plugin.status === "disabled" &&
+        inspect.plugin.origin === "bundled" &&
+        !inspect.plugin.error
+      ) {
         lines.push(
           "",
-          `${theme.muted("Hint:")} Enable with: openclaw config set plugins.entries.${plugin.id}.enabled true`,
+          `${theme.muted("Hint:")} Enable with: openclaw config set plugins.entries.${inspect.plugin.id}.enabled true`,
         );
       }
       lines.push(...formatInspectSection("Install", formatInstallLines(install)));
