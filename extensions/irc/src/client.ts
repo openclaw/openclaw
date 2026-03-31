@@ -250,8 +250,18 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       }
       sendRaw(`BATCH -${batchId}`);
     } else {
-      // Single line or no multiline support - flatten newlines
-      socket.write(`PRIVMSG ${normalizedTarget} :${cleaned.replace(/\n/g, " ")}\r\n`);
+      // textChunkLimit can be large (default 16384), but without BATCH support we must still
+      // split at messageChunkMaxChars (~350) to stay under IRC's ~512 byte limit.
+      const flat = cleaned.replace(/\n/g, " ");
+      let remaining = flat;
+      while (remaining.length > 0) {
+        let splitAt = remaining.lastIndexOf(" ", messageChunkMaxChars);
+        if (splitAt < Math.floor(messageChunkMaxChars / 2)) splitAt = messageChunkMaxChars;
+        const piece = remaining.slice(0, splitAt).trim();
+        if (!piece) break;
+        socket.write(`PRIVMSG ${normalizedTarget} :${piece}\r\n`);
+        remaining = remaining.slice(piece.length).trimStart();
+      }
     }
   };
 
