@@ -24,12 +24,12 @@ export type ProactiveInsight = {
 };
 
 export type InsightType =
-  | "routine-prep"     // Prepare for upcoming routine
-  | "topic-reminder"   // Remind about recurring topic
+  | "routine-prep" // Prepare for upcoming routine
+  | "topic-reminder" // Remind about recurring topic
   | "workflow-suggest" // Suggest next step in a workflow
-  | "time-sensitive"   // Time-based opportunity
-  | "follow-up"        // Follow-up on previous conversation
-  | "optimization";    // Usage optimization suggestion
+  | "time-sensitive" // Time-based opportunity
+  | "follow-up" // Follow-up on previous conversation
+  | "optimization"; // Usage optimization suggestion
 
 export class AnticipationEngine {
   private detector: PatternDetector;
@@ -110,7 +110,8 @@ export class AnticipationEngine {
     ];
 
     for (const insight of insights.slice(0, 5)) {
-      const priority = insight.priority === "high" ? "🔴" : insight.priority === "medium" ? "🟡" : "🟢";
+      const priority =
+        insight.priority === "high" ? "🔴" : insight.priority === "medium" ? "🟡" : "🟢";
       lines.push(`${priority} **${insight.title}** — ${insight.description}`);
       if (insight.suggestedPrompt) {
         lines.push(`  💡 Suggest: "${insight.suggestedPrompt}"`);
@@ -133,7 +134,8 @@ export class AnticipationEngine {
     lines.push("");
 
     for (const insight of insights) {
-      const priority = insight.priority === "high" ? "🔴" : insight.priority === "medium" ? "🟡" : "🟢";
+      const priority =
+        insight.priority === "high" ? "🔴" : insight.priority === "medium" ? "🟡" : "🟢";
       lines.push(`### ${priority} ${insight.title}`);
       lines.push(insight.description);
       if (insight.suggestedPrompt) {
@@ -148,10 +150,7 @@ export class AnticipationEngine {
 
   // ── Private ────────────────────────────────────────────────────────────
 
-  private patternToInsight(
-    pattern: DetectedPattern,
-    currentHour: number,
-  ): ProactiveInsight | null {
+  private patternToInsight(pattern: DetectedPattern, currentHour: number): ProactiveInsight | null {
     const ts = Date.now();
     const dayKey = new Date(ts).toISOString().slice(0, 10);
 
@@ -224,10 +223,7 @@ export class AnticipationEngine {
     }
   }
 
-  private generateTimeSensitiveInsights(
-    dayOfWeek: number,
-    hourOfDay: number,
-  ): ProactiveInsight[] {
+  private generateTimeSensitiveInsights(dayOfWeek: number, hourOfDay: number): ProactiveInsight[] {
     const insights: ProactiveInsight[] = [];
     const dayKey = new Date().toISOString().slice(0, 10);
 

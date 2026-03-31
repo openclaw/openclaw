@@ -57,7 +57,8 @@ export function createCostReportTool(tracker: CostTracker, budgetManager: Budget
     async execute(_id: string, params: Record<string, unknown>) {
       const period = (typeof params.period === "string" ? params.period : "today") as TimePeriod;
       const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
-      const showDailyTrend = typeof params.showDailyTrend === "boolean" ? params.showDailyTrend : false;
+      const showDailyTrend =
+        typeof params.showDailyTrend === "boolean" ? params.showDailyTrend : false;
 
       const summary = tracker.getSummary(period, agentId);
       const budgetStatus = budgetManager.getStatus(agentId);
@@ -65,7 +66,14 @@ export function createCostReportTool(tracker: CostTracker, budgetManager: Budget
       const lines: string[] = [];
 
       // Header
-      const periodLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : "All Time";
+      const periodLabel =
+        period === "today"
+          ? "Today"
+          : period === "week"
+            ? "This Week"
+            : period === "month"
+              ? "This Month"
+              : "All Time";
       lines.push(`## 💰 Cost Report — ${periodLabel}`);
       if (agentId) {
         lines.push(`**Agent:** ${agentId}`);
@@ -91,7 +99,8 @@ export function createCostReportTool(tracker: CostTracker, budgetManager: Budget
         lines.push(`| --- | --- | --- |`);
         const sortedModels = [...summary.byModel.entries()].sort((a, b) => b[1].cost - a[1].cost);
         for (const [model, data] of sortedModels) {
-          const pct = summary.totalCost > 0 ? ((data.cost / summary.totalCost) * 100).toFixed(0) : "0";
+          const pct =
+            summary.totalCost > 0 ? ((data.cost / summary.totalCost) * 100).toFixed(0) : "0";
           lines.push(`| ${model} | ${formatUSD(data.cost)} (${pct}%) | ${data.events} |`);
         }
         lines.push("");
@@ -183,7 +192,9 @@ export function createSetBudgetTool(budgetManager: BudgetManager) {
         Type.Number({ description: "Maximum monthly spend in USD (0 = unlimited)" }),
       ),
       hardCap: Type.Optional(
-        Type.Boolean({ description: "Block requests when budget exceeded (default: false = warn only)" }),
+        Type.Boolean({
+          description: "Block requests when budget exceeded (default: false = warn only)",
+        }),
       ),
       alertThresholds: Type.Optional(
         Type.Array(Type.Number(), {
@@ -209,9 +220,15 @@ export function createSetBudgetTool(budgetManager: BudgetManager) {
       lines.push("");
       lines.push(`| Setting | Value |`);
       lines.push(`| --- | --- |`);
-      lines.push(`| Daily Budget | ${config.dailyBudget > 0 ? formatUSD(config.dailyBudget) : "Unlimited"} |`);
-      lines.push(`| Weekly Budget | ${config.weeklyBudget > 0 ? formatUSD(config.weeklyBudget) : "Unlimited"} |`);
-      lines.push(`| Monthly Budget | ${config.monthlyBudget > 0 ? formatUSD(config.monthlyBudget) : "Unlimited"} |`);
+      lines.push(
+        `| Daily Budget | ${config.dailyBudget > 0 ? formatUSD(config.dailyBudget) : "Unlimited"} |`,
+      );
+      lines.push(
+        `| Weekly Budget | ${config.weeklyBudget > 0 ? formatUSD(config.weeklyBudget) : "Unlimited"} |`,
+      );
+      lines.push(
+        `| Monthly Budget | ${config.monthlyBudget > 0 ? formatUSD(config.monthlyBudget) : "Unlimited"} |`,
+      );
       lines.push(`| Hard Cap | ${config.hardCap ? "Yes (blocks requests)" : "No (warns only)"} |`);
       lines.push(`| Alert Thresholds | ${config.alertThresholds.join("%, ")}% |`);
 
@@ -249,7 +266,9 @@ export function createClassifyTool() {
       lines.push("");
       lines.push(`| Property | Value |`);
       lines.push(`| --- | --- |`);
-      lines.push(`| Complexity | **${classification.tier}** (score: ${classification.score}/100) |`);
+      lines.push(
+        `| Complexity | **${classification.tier}** (score: ${classification.score}/100) |`,
+      );
       lines.push(`| Suggested Tier | **${suggestion.preferredTier}** |`);
       lines.push(`| Reasoning | ${suggestion.reasoning} |`);
       lines.push(`| Signals | ${classification.signals.join(", ")} |`);

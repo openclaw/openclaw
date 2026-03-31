@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { lookupPricing, calculateCost, getKnownProviders } from "./pricing-db.js";
-import { CostTracker } from "./cost-tracker.js";
 import { BudgetManager } from "./budget-manager.js";
+import { CostTracker } from "./cost-tracker.js";
+import { lookupPricing, calculateCost, getKnownProviders } from "./pricing-db.js";
 import { classifyComplexity, suggestModelTier } from "./task-classifier.js";
 
 // ── Pricing Database ─────────────────────────────────────────────────────────
@@ -355,7 +355,9 @@ describe("task-classifier", () => {
   });
 
   it("classifies short coding requests as moderate", () => {
-    const result = classifyComplexity("Write a function that sorts an array of objects by a given key");
+    const result = classifyComplexity(
+      "Write a function that sorts an array of objects by a given key",
+    );
     expect(["simple", "moderate"]).toContain(result.tier);
   });
 

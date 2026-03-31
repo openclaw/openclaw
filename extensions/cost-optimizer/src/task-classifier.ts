@@ -29,27 +29,56 @@ const VERY_LONG_MESSAGE = 500;
 // Patterns indicating higher complexity
 const COMPLEX_PATTERNS: Array<{ pattern: RegExp; weight: number; signal: string }> = [
   // Architecture & design
-  { pattern: /\b(architect|design|system|infrastructure|scalab)/i, weight: 12, signal: "architecture" },
+  {
+    pattern: /\b(architect|design|system|infrastructure|scalab)/i,
+    weight: 12,
+    signal: "architecture",
+  },
   { pattern: /\b(refactor|restructur|reorganiz|overhaul)/i, weight: 10, signal: "refactoring" },
   { pattern: /\b(migrat|upgrad|convert|port)\b/i, weight: 8, signal: "migration" },
 
   // Deep analysis
   { pattern: /\b(analyz|investigat|debug|diagnos|troubleshoot)/i, weight: 10, signal: "analysis" },
-  { pattern: /\b(comprehensive|thorough|detailed|in-depth|exhaustive)/i, weight: 8, signal: "depth" },
+  {
+    pattern: /\b(comprehensive|thorough|detailed|in-depth|exhaustive)/i,
+    weight: 8,
+    signal: "depth",
+  },
   { pattern: /\b(compar|evaluat|assess|benchmark|trade-?off)/i, weight: 7, signal: "evaluation" },
 
   // Code generation
-  { pattern: /\b(implement|build|create|develop|write)\b.*\b(function|class|module|component|service|api)/i, weight: 8, signal: "code-gen" },
+  {
+    pattern:
+      /\b(implement|build|create|develop|write)\b.*\b(function|class|module|component|service|api)/i,
+    weight: 8,
+    signal: "code-gen",
+  },
   { pattern: /\b(test|spec|coverage|unit test|integration test)/i, weight: 6, signal: "testing" },
-  { pattern: /\b(optimize|performance|latency|throughput|memory)/i, weight: 7, signal: "optimization" },
+  {
+    pattern: /\b(optimize|performance|latency|throughput|memory)/i,
+    weight: 7,
+    signal: "optimization",
+  },
 
   // Research & synthesis
-  { pattern: /\b(research|study|literature|state of the art|survey)/i, weight: 10, signal: "research" },
-  { pattern: /\b(report|document|whitepaper|proposal|specification)/i, weight: 8, signal: "document" },
+  {
+    pattern: /\b(research|study|literature|state of the art|survey)/i,
+    weight: 10,
+    signal: "research",
+  },
+  {
+    pattern: /\b(report|document|whitepaper|proposal|specification)/i,
+    weight: 8,
+    signal: "document",
+  },
   { pattern: /\b(strateg|roadmap|plan|approach|methodology)/i, weight: 7, signal: "planning" },
 
   // Multi-step indicators
-  { pattern: /\b(step[- ]by[- ]step|first.*then|multiple.*steps)/i, weight: 6, signal: "multi-step" },
+  {
+    pattern: /\b(step[- ]by[- ]step|first.*then|multiple.*steps)/i,
+    weight: 6,
+    signal: "multi-step",
+  },
   { pattern: /\b(and also|additionally|furthermore|moreover)/i, weight: 3, signal: "compound" },
 
   // Code context
@@ -59,8 +88,16 @@ const COMPLEX_PATTERNS: Array<{ pattern: RegExp; weight: number; signal: string 
 
 // Patterns indicating lower complexity
 const SIMPLE_PATTERNS: Array<{ pattern: RegExp; weight: number; signal: string }> = [
-  { pattern: /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure)\b/i, weight: -15, signal: "greeting" },
-  { pattern: /\b(what time|what date|what day|weather|temperature)\b/i, weight: -12, signal: "lookup" },
+  {
+    pattern: /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure)\b/i,
+    weight: -15,
+    signal: "greeting",
+  },
+  {
+    pattern: /\b(what time|what date|what day|weather|temperature)\b/i,
+    weight: -12,
+    signal: "lookup",
+  },
   { pattern: /\b(translate|convert)\b.{0,30}$/i, weight: -8, signal: "simple-convert" },
   { pattern: /\b(remind|timer|alarm|note)\b/i, weight: -6, signal: "utility" },
   { pattern: /^[^.!?]{0,50}[.!?]?\s*$/m, weight: -5, signal: "short-sentence" },

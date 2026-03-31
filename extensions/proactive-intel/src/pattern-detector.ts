@@ -49,14 +49,14 @@ export type DetectedPattern = {
 };
 
 export type PatternType =
-  | "temporal"       // Same time/day recurring behavior
-  | "sequential"     // Task A → Task B workflow
-  | "topical"        // Recurring topic/question
-  | "channel-pref"   // Preferred channel for task types
-  | "routine";       // Composite daily/weekly routine
+  | "temporal" // Same time/day recurring behavior
+  | "sequential" // Task A → Task B workflow
+  | "topical" // Recurring topic/question
+  | "channel-pref" // Preferred channel for task types
+  | "routine"; // Composite daily/weekly routine
 
 export type PatternTrigger = {
-  dayOfWeek?: number[];  // Days when pattern fires (0-6)
+  dayOfWeek?: number[]; // Days when pattern fires (0-6)
   hourRange?: [number, number]; // Hour range [start, end)
   precedingIntent?: IntentCategory; // Fires after this intent
   minOccurrences: number;
@@ -69,26 +69,114 @@ const INTENT_PATTERNS: Array<{ pattern: RegExp; intent: IntentCategory }> = [
   { pattern: /\b(do|make|create|build|implement|add|fix|update|delete|remove)\b/i, intent: "task" },
   { pattern: /\b(review|check|verify|test|validate|audit|inspect)\b/i, intent: "review" },
   { pattern: /\b(write|draft|compose|design|brainstorm|ideate)\b/i, intent: "creative" },
-  { pattern: /\b(code|function|class|module|debug|refactor|deploy|commit|push|merge|pr)\b/i, intent: "coding" },
+  {
+    pattern: /\b(code|function|class|module|debug|refactor|deploy|commit|push|merge|pr)\b/i,
+    intent: "coding",
+  },
   { pattern: /\b(send|email|message|notify|reply|forward|post|tweet)\b/i, intent: "communication" },
-  { pattern: /\b(schedule|meeting|calendar|reminder|appointment|deadline)\b/i, intent: "scheduling" },
-  { pattern: /\b(research|find|search|look up|investigate|analyze|compare)\b/i, intent: "research" },
+  {
+    pattern: /\b(schedule|meeting|calendar|reminder|appointment|deadline)\b/i,
+    intent: "scheduling",
+  },
+  {
+    pattern: /\b(research|find|search|look up|investigate|analyze|compare)\b/i,
+    intent: "research",
+  },
   { pattern: /\b(monitor|status|health|uptime|check on|watch)\b/i, intent: "monitoring" },
 ];
 
 // ── Topic Extraction ─────────────────────────────────────────────────────────
 
 const STOP_WORDS = new Set([
-  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "can", "shall", "must", "to", "of", "in",
-  "for", "on", "with", "at", "by", "from", "as", "into", "about", "like",
-  "through", "after", "over", "between", "out", "against", "during",
-  "without", "before", "under", "around", "among", "it", "this", "that",
-  "these", "those", "my", "your", "his", "her", "its", "our", "their",
-  "i", "me", "you", "he", "she", "we", "they", "and", "but", "or",
-  "not", "no", "so", "if", "then", "else", "just", "also", "please",
-  "thanks", "thank", "hi", "hello", "hey", "ok", "okay", "yes",
+  "the",
+  "a",
+  "an",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "can",
+  "shall",
+  "must",
+  "to",
+  "of",
+  "in",
+  "for",
+  "on",
+  "with",
+  "at",
+  "by",
+  "from",
+  "as",
+  "into",
+  "about",
+  "like",
+  "through",
+  "after",
+  "over",
+  "between",
+  "out",
+  "against",
+  "during",
+  "without",
+  "before",
+  "under",
+  "around",
+  "among",
+  "it",
+  "this",
+  "that",
+  "these",
+  "those",
+  "my",
+  "your",
+  "his",
+  "her",
+  "its",
+  "our",
+  "their",
+  "i",
+  "me",
+  "you",
+  "he",
+  "she",
+  "we",
+  "they",
+  "and",
+  "but",
+  "or",
+  "not",
+  "no",
+  "so",
+  "if",
+  "then",
+  "else",
+  "just",
+  "also",
+  "please",
+  "thanks",
+  "thank",
+  "hi",
+  "hello",
+  "hey",
+  "ok",
+  "okay",
+  "yes",
 ]);
 
 function extractTopics(message: string): string[] {
@@ -254,10 +342,7 @@ export class PatternDetector {
   /**
    * Import previously persisted state.
    */
-  importState(state: {
-    interactions?: InteractionRecord[];
-    patterns?: DetectedPattern[];
-  }): void {
+  importState(state: { interactions?: InteractionRecord[]; patterns?: DetectedPattern[] }): void {
     if (state.interactions) {
       this.interactions.push(...state.interactions);
       if (this.interactions.length > this.maxInteractions) {
@@ -302,14 +387,18 @@ export class PatternDetector {
       const [dayStr, hourStr] = key.split(":");
       const day = Number(dayStr);
       const hour = Number(hourStr);
-      const confidence = Math.min(95, Math.round((records.length / this.interactions.length) * 500));
+      const confidence = Math.min(
+        95,
+        Math.round((records.length / this.interactions.length) * 500),
+      );
 
       // Find dominant intent in this time slot
       const intentCounts = new Map<IntentCategory, number>();
       for (const r of records) {
         intentCounts.set(r.intent, (intentCounts.get(r.intent) ?? 0) + 1);
       }
-      const dominantIntent = [...intentCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other";
+      const dominantIntent =
+        [...intentCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other";
 
       const hourLabel = hour < 12 ? `${hour}AM` : hour === 12 ? "12PM" : `${hour - 12}PM`;
 
@@ -339,7 +428,11 @@ export class PatternDetector {
 
     for (const record of this.interactions) {
       for (const topic of record.topics) {
-        const existing = topicCounts.get(topic) ?? { count: 0, first: record.timestamp, last: record.timestamp };
+        const existing = topicCounts.get(topic) ?? {
+          count: 0,
+          first: record.timestamp,
+          last: record.timestamp,
+        };
         existing.count += 1;
         existing.last = Math.max(existing.last, record.timestamp);
         topicCounts.set(topic, existing);
@@ -435,7 +528,10 @@ export class PatternDetector {
       patterns.push({
         id: "routine:morning",
         type: "routine",
-        confidence: Math.min(80, Math.round((morningActivity.length / this.interactions.length) * 200)),
+        confidence: Math.min(
+          80,
+          Math.round((morningActivity.length / this.interactions.length) * 200),
+        ),
         occurrences: morningActivity.length,
         description: `Your morning routine typically involves: ${topIntents.join(", ")}`,
         trigger: {
@@ -461,7 +557,10 @@ export class PatternDetector {
       patterns.push({
         id: "routine:evening",
         type: "routine",
-        confidence: Math.min(80, Math.round((eveningActivity.length / this.interactions.length) * 200)),
+        confidence: Math.min(
+          80,
+          Math.round((eveningActivity.length / this.interactions.length) * 200),
+        ),
         occurrences: eveningActivity.length,
         description: `Your evening routine typically involves: ${topIntents.join(", ")}`,
         trigger: {

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { PatternDetector } from "./pattern-detector.js";
 import { AnticipationEngine } from "./anticipation-engine.js";
+import { PatternDetector } from "./pattern-detector.js";
 
 // ── Pattern Detector ─────────────────────────────────────────────────────────
 

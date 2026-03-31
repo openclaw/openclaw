@@ -11,10 +11,7 @@ import { Type } from "@sinclair/typebox";
 import type { AnticipationEngine } from "./anticipation-engine.js";
 import type { PatternDetector } from "./pattern-detector.js";
 
-export function createInsightsTool(
-  detector: PatternDetector,
-  engine: AnticipationEngine,
-) {
+export function createInsightsTool(detector: PatternDetector, engine: AnticipationEngine) {
   return {
     name: "insights",
     label: "Proactive Insights",
@@ -31,7 +28,8 @@ export function createInsightsTool(
       ),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
-      const includePatterns = typeof params.includePatterns === "boolean" ? params.includePatterns : false;
+      const includePatterns =
+        typeof params.includePatterns === "boolean" ? params.includePatterns : false;
       const deliverNow = typeof params.deliverNow === "boolean" ? params.deliverNow : false;
 
       // Trigger analysis
@@ -46,7 +44,9 @@ export function createInsightsTool(
       // Stats
       lines.push("");
       lines.push("---");
-      lines.push(`*${detector.getInteractionCount()} interactions analyzed • ${detector.getPatternCount()} patterns detected*`);
+      lines.push(
+        `*${detector.getInteractionCount()} interactions analyzed • ${detector.getPatternCount()} patterns detected*`,
+      );
 
       if (includePatterns) {
         lines.push("");
@@ -91,9 +91,8 @@ export function createPatternsTool(detector: PatternDetector) {
 
       // Fresh analysis
       const allPatterns = detector.analyzePatterns();
-      const patterns = filterType === "all"
-        ? allPatterns
-        : allPatterns.filter((p) => p.type === filterType);
+      const patterns =
+        filterType === "all" ? allPatterns : allPatterns.filter((p) => p.type === filterType);
 
       const lines: string[] = [];
       lines.push("## 📊 Your Interaction Patterns");
@@ -104,7 +103,9 @@ export function createPatternsTool(detector: PatternDetector) {
       if (patterns.length === 0) {
         lines.push("No patterns detected yet. Keep using OpenClaw and patterns will emerge.");
         lines.push("");
-        lines.push(`> **Tip:** I need at least 5 repeated behaviors in the same time slot or topic to detect a pattern.`);
+        lines.push(
+          `> **Tip:** I need at least 5 repeated behaviors in the same time slot or topic to detect a pattern.`,
+        );
       } else {
         // Group by type
         const groupedPatterns = new Map<string, typeof patterns>();

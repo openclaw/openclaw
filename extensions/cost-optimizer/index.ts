@@ -1,8 +1,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolFactory } from "./runtime-api.js";
 import { BudgetManager } from "./src/budget-manager.js";
-import { CostTracker } from "./src/cost-tracker.js";
 import { createClassifyTool, createCostReportTool, createSetBudgetTool } from "./src/cost-tools.js";
+import { CostTracker } from "./src/cost-tracker.js";
 
 export default definePluginEntry({
   id: "cost-optimizer",

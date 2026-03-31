@@ -1,12 +1,12 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolFactory } from "./runtime-api.js";
 import { AnticipationEngine } from "./src/anticipation-engine.js";
-import { PatternDetector } from "./src/pattern-detector.js";
 import {
   createInsightsTool,
   createLearnPreferenceTool,
   createPatternsTool,
 } from "./src/intel-tools.js";
+import { PatternDetector } from "./src/pattern-detector.js";
 
 export default definePluginEntry({
   id: "proactive-intel",

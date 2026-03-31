@@ -46,7 +46,9 @@ function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
   };
 }
 
-function extractSlackSessionKind(sessionKey?: string | null): "direct" | "channel" | "group" | null {
+function extractSlackSessionKind(
+  sessionKey?: string | null,
+): "direct" | "channel" | "group" | null {
   if (!sessionKey) {
     return null;
   }
