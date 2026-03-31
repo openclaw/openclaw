@@ -172,6 +172,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         if (isFirst) {
           return await sendDiscordComponentMessage(target, componentSpec, {
             mediaUrl,
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
             replyTo: ctx.replyToId ?? undefined,
@@ -183,6 +184,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         return await send(target, text, {
           verbose: false,
           mediaUrl,
+          mediaAccess: ctx.mediaAccess,
           mediaLocalRoots: ctx.mediaLocalRoots,
           mediaReadFile: ctx.mediaReadFile,
           replyTo: ctx.replyToId ?? undefined,

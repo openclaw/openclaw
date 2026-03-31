@@ -28,10 +28,10 @@ import {
   DEFAULT_ACCOUNT_ID,
   createAccountStatusSink,
   getChatChannelMeta,
+  loadOutboundMediaFromUrl,
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   fetchRemoteMedia,
-  loadWebMedia,
   resolveChannelMediaMaxBytes,
   runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
@@ -401,6 +401,7 @@ export const googlechatPlugin = createChatChannelPlugin({
         to,
         text,
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
         mediaReadFile,
         accountId,
@@ -433,11 +434,11 @@ export const googlechatPlugin = createChatChannelPlugin({
               url: mediaUrl,
               maxBytes: effectiveMaxBytes,
             })
-          : await loadWebMedia(mediaUrl, {
+          : await loadOutboundMediaFromUrl(mediaUrl, {
               maxBytes: effectiveMaxBytes,
-              localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
-              readFile: mediaReadFile,
-              hostReadCapability: Boolean(mediaReadFile),
+              mediaAccess,
+              mediaLocalRoots,
+              mediaReadFile,
             });
         const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
           await loadGoogleChatChannelRuntime();

@@ -28,6 +28,7 @@ function createRoute(params: {
 }
 
 function createMockLogger(): SubsystemLogger {
+  const child = vi.fn<(name: string) => SubsystemLogger>();
   const logger = {
     subsystem: "test/plugins-http-runtime-scopes",
     isEnabled: () => true,
@@ -38,10 +39,10 @@ function createMockLogger(): SubsystemLogger {
     error: vi.fn(),
     fatal: vi.fn(),
     raw: vi.fn(),
-    child: vi.fn(),
-  } satisfies Omit<SubsystemLogger, "child"> & { child: ReturnType<typeof vi.fn> };
-  logger.child.mockImplementation(() => logger);
-  return logger;
+    child,
+  } satisfies SubsystemLogger;
+  child.mockImplementation(() => logger);
+  return logger as SubsystemLogger;
 }
 
 function assertWriteHelperAllowed() {

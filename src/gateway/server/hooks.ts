@@ -7,11 +7,7 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  normalizeHookDispatchSessionKey,
-  type HookAgentDispatchPayload,
-  type HooksConfigResolved,
-} from "../hooks.js";
+import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;

@@ -11,7 +11,6 @@ import {
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
@@ -19,6 +18,7 @@ import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -49,6 +49,10 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
@@ -231,6 +235,10 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
@@ -239,11 +247,11 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
+  const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
-    localRoots: params.mediaLocalRoots,
-    readFile: params.mediaReadFile,
-    hostReadCapability: Boolean(params.mediaReadFile),
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
   const uploadTitle = params.uploadTitle ?? uploadFileName;
@@ -373,6 +381,7 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      mediaAccess: opts.mediaAccess,
       uploadFileName: opts.uploadFileName,
       uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,

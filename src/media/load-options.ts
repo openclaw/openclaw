@@ -1,7 +1,15 @@
+export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
+
+export type OutboundMediaAccess = {
+  localRoots?: readonly string[];
+  readFile?: OutboundMediaReadFile;
+};
+
 export type OutboundMediaLoadParams = {
   maxBytes?: number;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  mediaReadFile?: OutboundMediaReadFile;
   optimizeImages?: boolean;
 };
 
@@ -19,19 +27,40 @@ export function resolveOutboundMediaLocalRoots(
   return mediaLocalRoots && mediaLocalRoots.length > 0 ? mediaLocalRoots : undefined;
 }
 
+export function resolveOutboundMediaAccess(
+  params: {
+    mediaAccess?: OutboundMediaAccess;
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: OutboundMediaReadFile;
+  } = {},
+): OutboundMediaAccess | undefined {
+  const localRoots = resolveOutboundMediaLocalRoots(
+    params.mediaAccess?.localRoots ?? params.mediaLocalRoots,
+  );
+  const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
+  if (!localRoots && !readFile) {
+    return undefined;
+  }
+  return {
+    ...(localRoots ? { localRoots } : {}),
+    ...(readFile ? { readFile } : {}),
+  };
+}
+
 export function buildOutboundMediaLoadOptions(
   params: OutboundMediaLoadParams = {},
 ): OutboundMediaLoadOptions {
-  if (params.mediaReadFile) {
+  const mediaAccess = resolveOutboundMediaAccess(params);
+  if (mediaAccess?.readFile) {
     return {
       ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
       localRoots: "any",
-      readFile: params.mediaReadFile,
+      readFile: mediaAccess.readFile,
       hostReadCapability: true,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
     };
   }
-  const localRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
+  const localRoots = mediaAccess?.localRoots;
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     ...(localRoots ? { localRoots } : {}),

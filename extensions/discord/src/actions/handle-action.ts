@@ -25,6 +25,7 @@ export async function handleDiscordMessageAction(
     | "accountId"
     | "requesterSenderId"
     | "toolContext"
+    | "mediaAccess"
     | "mediaLocalRoots"
     | "mediaReadFile"
   >,
@@ -32,6 +33,7 @@ export async function handleDiscordMessageAction(
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
   const actionOptions = {
+    mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   } as const;
