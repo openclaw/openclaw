@@ -1106,8 +1106,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       messaging: {
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
         resolveSessionConversation: ({ rawId }) => resolveFeishuSessionConversation(rawId),
-        resolveParentConversationCandidates: ({ rawId }) =>
-          resolveFeishuParentConversationCandidates(rawId),
         resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeFeishuId,

@@ -6,8 +6,9 @@ import {
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "./channel-config.js";
+import { normalizeChatType } from "./chat-type.js";
 import {
-  resolveParentConversationCandidates,
+  resolveSessionConversation,
   resolveSessionConversationRef,
 } from "./plugins/session-conversation.js";
 
@@ -24,6 +25,7 @@ type ChannelModelOverrideParams = {
   cfg: OpenClawConfig;
   channel?: string | null;
   groupId?: string | null;
+  groupChatType?: string | null;
   groupChannel?: string | null;
   groupSubject?: string | null;
   parentSessionKey?: string | null;
@@ -48,13 +50,24 @@ function resolveProviderEntry(
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
-    "channel" | "groupId" | "groupChannel" | "groupSubject" | "parentSessionKey"
+    "channel" | "groupId" | "groupChatType" | "groupChannel" | "groupSubject" | "parentSessionKey"
   >,
 ): { keys: string[]; parentKeys: string[] } {
   const normalizedChannel =
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const groupConversationKind =
+    normalizeChatType(params.groupChatType ?? undefined) === "channel"
+      ? "channel"
+      : sessionConversation?.kind === "channel"
+        ? "channel"
+        : "group";
+  const groupConversation = resolveSessionConversation({
+    channel: normalizedChannel ?? "",
+    kind: groupConversationKind,
+    rawId: groupId ?? "",
+  });
   const groupChannel = params.groupChannel?.trim();
   const groupSubject = params.groupSubject?.trim();
   const channelBare = groupChannel ? groupChannel.replace(/^#/, "") : undefined;
@@ -74,11 +87,7 @@ function buildChannelCandidates(
       subjectSlug,
     ),
     parentKeys: buildChannelKeyCandidates(
-      ...resolveParentConversationCandidates({
-        channel: normalizedChannel ?? "",
-        kind: "group",
-        rawId: groupId ?? "",
-      }),
+      ...(groupConversation?.parentConversationCandidates ?? []),
       ...(sessionConversation?.parentConversationCandidates ?? []),
     ),
   };

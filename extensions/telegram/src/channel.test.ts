@@ -200,11 +200,15 @@ describe("telegramPlugin messaging", () => {
       parentConversationCandidates: ["-1001"],
     });
     expect(
-      telegramPlugin.messaging?.resolveParentConversationCandidates?.({
+      telegramPlugin.messaging?.resolveSessionConversation?.({
         kind: "group",
-        rawId: "-1001:topic:77",
+        rawId: "-1001:Topic:77",
       }),
-    ).toEqual(["-1001"]);
+    ).toEqual({
+      id: "-1001",
+      threadId: "77",
+      parentConversationCandidates: ["-1001"],
+    });
     expect(
       telegramPlugin.messaging?.resolveSessionConversation?.({
         kind: "group",

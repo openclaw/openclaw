@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import {
-  resolveParentConversationCandidates,
+  resolveSessionConversation,
   resolveSessionConversationRef,
   resolveSessionParentSessionKey,
   resolveSessionThreadInfo,
@@ -46,6 +47,20 @@ describe("session conversation routing", () => {
     );
   });
 
+  it("keeps bundled Telegram topic parsing available before registry bootstrap", () => {
+    resetPluginRuntimeStateForTest();
+
+    expect(resolveSessionConversationRef("agent:main:telegram:group:-100123:topic:77")).toEqual({
+      channel: "telegram",
+      kind: "group",
+      rawId: "-100123:topic:77",
+      id: "-100123",
+      threadId: "77",
+      baseSessionKey: "agent:main:telegram:group:-100123",
+      parentConversationCandidates: ["-100123"],
+    });
+  });
+
   it("lets Feishu own parent fallback candidates", () => {
     expect(
       resolveSessionConversationRef(
@@ -62,16 +77,51 @@ describe("session conversation routing", () => {
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
     expect(
-      resolveParentConversationCandidates({
-        channel: "feishu",
-        kind: "group",
-        rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      }),
-    ).toEqual(["oc_group_chat:topic:om_topic_root", "oc_group_chat"]);
-    expect(
       resolveSessionParentSessionKey(
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       ),
     ).toBeNull();
+  });
+
+  it("keeps the legacy parent-candidate hook as a fallback only", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "legacy-parent",
+          source: "test",
+          plugin: {
+            id: "legacy-parent",
+            meta: {
+              id: "legacy-parent",
+              label: "Legacy Parent",
+              selectionLabel: "Legacy Parent",
+              docsPath: "/channels/legacy-parent",
+              blurb: "test stub.",
+            },
+            capabilities: { chatTypes: ["group"] },
+            messaging: {
+              resolveParentConversationCandidates: ({ rawId }: { rawId: string }) =>
+                rawId.endsWith(":sender:user") ? [rawId.replace(/:sender:user$/i, "")] : null,
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveSessionConversation({
+        channel: "legacy-parent",
+        kind: "group",
+        rawId: "room:sender:user",
+      }),
+    ).toEqual({
+      id: "room:sender:user",
+      threadId: undefined,
+      parentConversationCandidates: ["room"],
+    });
   });
 });

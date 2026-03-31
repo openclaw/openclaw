@@ -1,3 +1,4 @@
+import { parseTelegramTopicConversation } from "../../acp/conversation-id.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -23,7 +24,15 @@ export type ResolvedSessionConversationRef = {
   parentConversationCandidates: string[];
 };
 
-type SessionConversationResolution = ResolvedSessionConversation;
+type SessionConversationHookResult = {
+  id: string;
+  threadId?: string | null;
+  parentConversationCandidates?: string[];
+};
+
+type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
+  hasExplicitParentConversationCandidates: boolean;
+};
 
 function normalizeResolvedChannel(channel: string): string {
   return (
@@ -80,40 +89,82 @@ function buildGenericConversationResolution(rawId: string): ResolvedSessionConve
   };
 }
 
+function normalizeSessionConversationResolution(
+  resolved: SessionConversationHookResult | null | undefined,
+): NormalizedSessionConversationResolution | null {
+  if (!resolved?.id?.trim()) {
+    return null;
+  }
+
+  return {
+    id: resolved.id.trim(),
+    threadId: resolved.threadId?.trim() || undefined,
+    parentConversationCandidates: dedupeConversationIds(
+      resolved.parentConversationCandidates ?? [],
+    ),
+    hasExplicitParentConversationCandidates: Object.hasOwn(
+      resolved,
+      "parentConversationCandidates",
+    ),
+  };
+}
+
+function resolveBundledSessionConversationFallback(params: {
+  channel: string;
+  rawId: string;
+}): NormalizedSessionConversationResolution | null {
+  if (normalizeResolvedChannel(params.channel) !== "telegram") {
+    return null;
+  }
+
+  const parsed = parseTelegramTopicConversation({ conversationId: params.rawId });
+  if (!parsed) {
+    return null;
+  }
+
+  return {
+    id: parsed.chatId,
+    threadId: parsed.topicId,
+    parentConversationCandidates: [parsed.chatId],
+    hasExplicitParentConversationCandidates: true,
+  };
+}
+
 function resolveSessionConversationResolution(params: {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
-}): SessionConversationResolution | null {
+}): ResolvedSessionConversation | null {
   const rawId = params.rawId.trim();
   if (!rawId) {
     return null;
   }
 
   const messaging = getMessagingAdapter(params.channel);
-  const pluginResolved = messaging?.resolveSessionConversation?.({
-    kind: params.kind,
-    rawId,
-  });
+  const pluginResolved = normalizeSessionConversationResolution(
+    messaging?.resolveSessionConversation?.({
+      kind: params.kind,
+      rawId,
+    }),
+  );
   const resolved =
-    pluginResolved && pluginResolved.id?.trim()
-      ? {
-          id: pluginResolved.id.trim(),
-          threadId: pluginResolved.threadId?.trim() || undefined,
-          parentConversationCandidates: dedupeConversationIds(
-            pluginResolved.parentConversationCandidates ?? [],
-          ),
-        }
-      : buildGenericConversationResolution(rawId);
+    pluginResolved ??
+    resolveBundledSessionConversationFallback({
+      channel: params.channel,
+      rawId,
+    }) ??
+    buildGenericConversationResolution(rawId);
   if (!resolved) {
     return null;
   }
 
   const parentConversationCandidates = dedupeConversationIds(
-    messaging?.resolveParentConversationCandidates?.({
-      kind: params.kind,
-      rawId,
-    }) ?? resolved.parentConversationCandidates,
+    pluginResolved?.hasExplicitParentConversationCandidates
+      ? resolved.parentConversationCandidates
+      : (messaging?.resolveParentConversationCandidates?.({
+          kind: params.kind,
+          rawId,
+        }) ?? resolved.parentConversationCandidates),
   );
 
   return {
@@ -128,14 +179,6 @@ export function resolveSessionConversation(params: {
   rawId: string;
 }): ResolvedSessionConversation | null {
   return resolveSessionConversationResolution(params);
-}
-
-export function resolveParentConversationCandidates(params: {
-  channel: string;
-  kind: "group" | "channel";
-  rawId: string;
-}): string[] {
-  return resolveSessionConversationResolution(params)?.parentConversationCandidates ?? [];
 }
 
 function buildBaseSessionKey(raw: RawSessionConversationRef, id: string): string {

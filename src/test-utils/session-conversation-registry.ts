@@ -132,8 +132,6 @@ export function createSessionConversationTestRegistry() {
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: ({ rawId }: { rawId: string }) =>
             parseTelegramTopicConversation(rawId),
-          resolveParentConversationCandidates: ({ rawId }: { rawId: string }) =>
-            parseTelegramTopicConversation(rawId)?.parentConversationCandidates ?? null,
         },
         config: {
           listAccountIds: () => ["default"],
@@ -158,8 +156,6 @@ export function createSessionConversationTestRegistry() {
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: ({ rawId }: { rawId: string }) =>
             resolveFeishuConversation(rawId),
-          resolveParentConversationCandidates: ({ rawId }: { rawId: string }) =>
-            resolveFeishuConversation(rawId)?.parentConversationCandidates ?? null,
         },
         config: {
           listAccountIds: () => ["default"],

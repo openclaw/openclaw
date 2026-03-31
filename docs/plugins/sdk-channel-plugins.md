@@ -36,10 +36,16 @@ Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
 If your platform stores extra scope inside conversation ids, keep that parsing
-in the plugin by implementing `messaging.resolveSessionConversation(...)` and
-`messaging.resolveParentConversationCandidates(...)`. Use those hooks for
-platform-specific suffixes or inheritance rules instead of adding provider
-checks to core.
+in the plugin with `messaging.resolveSessionConversation(...)`. That is the
+canonical hook for mapping `rawId` to the base conversation id, optional thread
+id, and any `parentConversationCandidates`.
+
+`messaging.resolveParentConversationCandidates(...)` remains available as a
+legacy compatibility fallback when a plugin only needs parent fallbacks on top
+of the generic/raw id. If both hooks exist, core uses
+`resolveSessionConversation(...).parentConversationCandidates` first and only
+falls back to `resolveParentConversationCandidates(...)` when the canonical hook
+omits them.
 
 ## Approvals and channel capabilities
 
