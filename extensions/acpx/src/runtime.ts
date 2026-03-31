@@ -119,6 +119,15 @@ function summarizeLogText(text: string, maxChars = 240): string {
   return `${normalized.slice(0, maxChars)}...`;
 }
 
+function shouldRetainNamedSessionForDeadStatus(detail: AcpxJsonObject | undefined): boolean {
+  const status = asTrimmedString(detail?.status)?.toLowerCase();
+  if (status !== "dead") {
+    return false;
+  }
+  const summary = asTrimmedString(detail?.summary)?.toLowerCase();
+  return summary?.includes("queue owner unavailable") ?? false;
+}
+
 function findSessionIdentifierEvent(events: AcpxJsonObject[]): AcpxJsonObject | undefined {
   return events.find(
     (event) =>
@@ -358,6 +367,12 @@ export class AcpxRuntime implements AcpRuntime {
     const status = asTrimmedString(detail?.status)?.toLowerCase();
     if (status === "dead") {
       const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
+      if (shouldRetainNamedSessionForDeadStatus(detail)) {
+        this.logger?.warn?.(
+          `acpx ensureSession retaining dead named session with recoverable status: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
+        );
+        return false;
+      }
       this.logger?.warn?.(
         `acpx ensureSession replacing dead named session: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
       );
@@ -414,6 +429,13 @@ export class AcpxRuntime implements AcpRuntime {
     const detail = events.find((event) => !toAcpxErrorEvent(event));
     const status = asTrimmedString(detail?.status)?.toLowerCase();
     if (status === "dead") {
+      const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
+      if (shouldRetainNamedSessionForDeadStatus(detail)) {
+        this.logger?.warn?.(
+          `acpx ensureSession retaining dead named session after ensure failure with recoverable status: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
+        );
+        return events;
+      }
       this.logger?.warn?.(
         `acpx ensureSession replacing dead named session after ensure failure: session=${params.sessionName} cwd=${params.cwd}`,
       );
