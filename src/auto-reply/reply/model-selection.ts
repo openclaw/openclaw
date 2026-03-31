@@ -688,8 +688,7 @@ export async function createModelSelectionState(params: {
       // fallbacks), and a stored override matching by name should be considered valid
       // without forcing a catalog check that could fail due to missing/stale metadata.
       const explicitKey = modelKey(storedProvider, storedModel);
-      const isExplicitProviderQualified =
-        imageModelKeys.has(explicitKey) || imageModelKeys.has(`${storedProvider}/${storedModel}`);
+      const isExplicitProviderQualified = imageModelKeys.has(explicitKey);
       if (!isExplicitProviderQualified) {
         const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
         const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
@@ -713,6 +712,12 @@ export async function createModelSelectionState(params: {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
       usingStoredOverride = true;
+      // Log when stored override is kept instead of imageModel override
+      if (params.hasAppliedImageModelOverride) {
+        console.log(
+          `[image-model-switch] Kept user's vision-capable stored model ${key} instead of imageModel override`,
+        );
+      }
     }
   }
 

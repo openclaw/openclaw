@@ -1938,26 +1938,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             context.logGateway.info(
               `[image-model-switch] User's stored model ${userModelKey} is already an image model and in allowlist, respecting user choice`,
             );
-          } else if (storedModelIsImageModel && !storedModelInAllowlist) {
-            // User's stored model is an image model but NOT in allowlist
-            // The stored model will be cleared anyway, switch to configured imageModel
-            imageModelOverride = resolvedImageModelPrimary;
-            imageModelFallbacks = prepareImageModelFallbacks({
-              fallbacks: effectiveImageModelFallbacks,
-              imageModelPrimary,
-              cfg,
-              agentId,
-              aliasIndex: imageFallbackAliasIndex,
-              defaultProvider,
-              defaultModel: agentDefault.model,
-              imageModelProvider,
-            });
-            context.logGateway.info(
-              `[image-model-switch] Stored model ${userModelKey} is image-capable but not in agent allowlist, switching to: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
-            );
           } else {
-            // User's stored model is not an image model
-            // Switch to imageModel
+            // Need to switch to imageModel:
+            // - stored model is an image model but NOT in allowlist (will be cleared anyway)
+            // - stored model is not an image model
+            // - no stored override
             imageModelOverride = resolvedImageModelPrimary;
             imageModelFallbacks = prepareImageModelFallbacks({
               fallbacks: effectiveImageModelFallbacks,
@@ -1969,8 +1954,13 @@ export const chatHandlers: GatewayRequestHandlers = {
               defaultModel: agentDefault.model,
               imageModelProvider,
             });
+            const logReason = sessionModelOverride
+              ? storedModelIsImageModel
+                ? `Stored model ${userModelKey} is image-capable but not in agent allowlist`
+                : `Detected ${parsedImages.length} image(s), stored model ${userModelKey} is not image-capable`
+              : `Detected ${parsedImages.length} image(s)`;
             context.logGateway.info(
-              `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+              `[image-model-switch] ${logReason}, switching to: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
             );
           }
         } else {
@@ -1987,7 +1977,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             imageModelProvider,
           });
           context.logGateway.info(
-            `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+            `[image-model-switch] Detected ${parsedImages.length} image(s), switching to: ${imageModelOverride}${imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
           );
         }
       } else {
