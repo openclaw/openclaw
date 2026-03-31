@@ -234,6 +234,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/duckduckgo/**"
+"extensions: strava":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/strava/**"
 "extensions: acpx":
   - changed-files:
       - any-glob-to-any-file:

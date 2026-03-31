@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/strava",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "OpenClaw Strava plugin — AI running coach powered by your activity data",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.30"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -595,6 +595,16 @@ importers:
 
   extensions/speech-core: {}
 
+  extensions/strava:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/synology-chat: {}
 
   extensions/synthetic: {}
