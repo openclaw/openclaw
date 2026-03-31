@@ -295,6 +295,8 @@ async function fetchDiscordMedia(params: {
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
+  // `totalTimeoutMs` is enforced per individual attachment or sticker fetch.
+  // The inbound worker's abort signal remains the outer bound for the message.
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
   let timedOut = false;
@@ -310,6 +312,9 @@ async function fetchDiscordMedia(params: {
     ...(signal ? { requestInit: { signal } } : {}),
   }).catch((error) => {
     if (timedOut) {
+      // After the timeout wins the race we abort the underlying fetch and keep
+      // this branch pending so the later AbortError does not surface as an
+      // unhandled rejection after Promise.race has already settled.
       return new Promise<never>(() => {});
     }
     throw error;
