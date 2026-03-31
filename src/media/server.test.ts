@@ -105,7 +105,6 @@ describe("media server", () => {
   beforeAll(async () => {
     vi.useRealTimers();
     vi.doUnmock("undici");
-    vi.resetModules();
     const require = createRequire(import.meta.url);
     ({ startMediaServer } = await import("./server.js"));
     ({ MEDIA_MAX_BYTES } = await import("./store.js"));

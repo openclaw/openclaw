@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "openclaw/plugin-sdk/zod";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
 
 const hoisted = vi.hoisted(() => {
@@ -273,9 +273,13 @@ vi.mock("./startup-verification.js", () => ({
   ensureMatrixStartupVerification: vi.fn(),
 }));
 
-const { monitorMatrixProvider } = await import("./index.js");
+let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
+  beforeAll(async () => {
+    ({ monitorMatrixProvider } = await import("./index.js"));
+  });
+
   async function startMonitorAndAbortAfterStartup(): Promise<void> {
     const abortController = new AbortController();
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
@@ -285,7 +289,6 @@ describe("monitorMatrixProvider", () => {
     abortController.abort();
     await monitorPromise;
   }
-
   beforeEach(() => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
@@ -437,6 +440,12 @@ describe("monitorMatrixProvider", () => {
 });
 
 describe("matrix plugin registration", () => {
+  let matrixPlugin: typeof import("../../../index.js").default;
+
+  beforeAll(async () => {
+    ({ default: matrixPlugin } = await import("../../../index.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -488,7 +497,6 @@ describe("matrix plugin registration", () => {
   }, 240_000);
 
   it("registers the channel without bootstrapping crypto runtime", async () => {
-    const { default: matrixPlugin } = await import("../../../index.js");
     const runtime = {} as never;
     const registerChannel = vi.fn();
     matrixPlugin.register({
