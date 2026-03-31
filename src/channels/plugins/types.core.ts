@@ -83,6 +83,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   allowPrivateNetwork?: boolean;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -463,6 +464,14 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  messageToolCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[] | undefined;
+  reactionGuidance?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";

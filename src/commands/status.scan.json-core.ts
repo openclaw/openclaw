@@ -1,3 +1,5 @@
+import { createEmptyTaskAuditSummary } from "openclaw/plugin-sdk/tasks";
+import { createEmptyTaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { loggingState } from "../logging/state.js";
@@ -72,6 +74,8 @@ function buildColdStartStatusSummary(): Awaited<ReturnType<typeof getStatusSumma
     },
     channelSummary: [],
     queuedSystemEvents: [],
+    tasks: createEmptyTaskRegistrySummary(),
+    taskAudit: createEmptyTaskAuditSummary(),
     sessions: {
       paths: [],
       count: 0,

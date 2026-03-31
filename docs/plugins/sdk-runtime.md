@@ -115,6 +115,40 @@ await api.runtime.subagent.deleteSession({
   Untrusted plugins can still run subagents, but override requests are rejected.
 </Warning>
 
+### `api.runtime.operations`
+
+Dispatch and query durable operation records behind a plugin-owned operations
+runtime.
+
+```typescript
+const created = await api.runtime.operations.dispatch({
+  type: "create",
+  namespace: "imports",
+  kind: "csv",
+  status: "queued",
+  description: "Import contacts.csv",
+  runId: "import-1",
+});
+
+const progressed = await api.runtime.operations.dispatch({
+  type: "transition",
+  runId: "import-1",
+  status: "running",
+  progressSummary: "Parsing rows",
+});
+
+const record = await api.runtime.operations.findByRunId("import-1");
+const list = await api.runtime.operations.list({ namespace: "imports" });
+const summary = await api.runtime.operations.summarize({ namespace: "imports" });
+```
+
+Notes:
+
+- `api.registerOperationsRuntime(...)` installs the active runtime.
+- Core exposes the facade; plugins own the operation semantics and storage.
+- The built-in default runtime maps the existing background task ledger into the
+  generic operations shape until a plugin overrides it.
+
 ### `api.runtime.tts`
 
 Text-to-speech synthesis.
@@ -330,15 +364,15 @@ export function tryGetRuntime() {
 
 Beyond `api.runtime`, the API object also provides:
 
-| Field                    | Type                      | Description                                               |
-| ------------------------ | ------------------------- | --------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                 |
-| `api.name`               | `string`                  | Plugin display name                                       |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                |
+| Field                    | Type                      | Description                                                      |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                        |
+| `api.name`               | `string`                  | Plugin display name                                              |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                       |
 
 ## Related
 

@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
@@ -9,14 +10,18 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
 }
 
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
-  const parsed = parsePositiveIntOrUndefined(timeout);
+  const parsedRaw =
+    typeof timeout === "string" && timeout.trim() ? Number.parseInt(timeout, 10) : undefined;
+  const parsed =
+    typeof parsedRaw === "number" && Number.isFinite(parsedRaw) && parsedRaw > 0
+      ? parsedRaw
+      : undefined;
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
     defaultRuntime.exit(1);
@@ -208,6 +213,85 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  const flowsCmd = program
+    .command("flows")
+    .description("Inspect ClawFlow state")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json),
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  flowsCmd.enablePositionalOptions();
+
+  flowsCmd
+    .command("list")
+    .description("List tracked ClawFlow runs")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            json?: boolean;
+            status?: string;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  flowsCmd
+    .command("show")
+    .description("Show one ClawFlow by flow id or owner session key")
+    .argument("<lookup>", "Flow id or owner session key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  flowsCmd
+    .command("cancel")
+    .description("Cancel a ClawFlow and its active child tasks")
+    .argument("<lookup>", "Flow id or owner session key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsCancelCommand(
+          {
+            lookup,
           },
           defaultRuntime,
         );

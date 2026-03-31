@@ -1,4 +1,11 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type { IMessageProbe } from "../../../extensions/imessage/runtime-api.js";
+import {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+  type TelegramProbe,
+  type TelegramTokenResolution,
+} from "../../../extensions/telegram/api.js";
 import type {
   BaseProbeResult,
   BaseTokenResolution,
@@ -11,7 +18,6 @@ import {
   type DiscordProbe,
   type DiscordTokenResolution,
 } from "../../../src/plugin-sdk/discord-surface.js";
-import type { IMessageProbe } from "../../../src/plugin-sdk/imessage.js";
 import type { LineProbeResult } from "../../../src/plugin-sdk/line.js";
 import type { SignalProbe } from "../../../src/plugin-sdk/signal-surface.js";
 import {
@@ -19,12 +25,6 @@ import {
   listSlackDirectoryPeersFromConfig,
   type SlackProbe,
 } from "../../../src/plugin-sdk/slack-surface.js";
-import {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-  type TelegramProbe,
-  type TelegramTokenResolution,
-} from "../../../src/plugin-sdk/telegram-surface.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,

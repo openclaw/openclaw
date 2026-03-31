@@ -23,6 +23,7 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../canvas-capability.js";
+import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
@@ -47,7 +48,6 @@ import {
   respondUnavailableOnNodeInvokeError,
   respondUnavailableOnThrow,
   safeParseJson,
-  uniqueSortedStrings,
 } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -127,16 +127,6 @@ async function clearStaleApnsRegistrationIfNeeded(
     nodeId,
     registration,
   });
-}
-
-function isNodeEntry(entry: { role?: string; roles?: string[] }) {
-  if (entry.role === "node") {
-    return true;
-  }
-  if (Array.isArray(entry.roles) && entry.roles.includes("node")) {
-    return true;
-  }
-  return false;
 }
 
 async function delayMs(ms: number): Promise<void> {
@@ -668,73 +658,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listDevicePairing();
-      const pairedById = new Map(
-        list.paired
-          .filter((entry) => isNodeEntry(entry))
-          .map((entry) => [
-            entry.deviceId,
-            {
-              nodeId: entry.deviceId,
-              displayName: entry.displayName,
-              platform: entry.platform,
-              version: undefined,
-              coreVersion: undefined,
-              uiVersion: undefined,
-              deviceFamily: undefined,
-              modelIdentifier: undefined,
-              remoteIp: entry.remoteIp,
-              caps: [],
-              commands: [],
-              permissions: undefined,
-            },
-          ]),
-      );
-      const connected = context.nodeRegistry.listConnected();
-      const connectedById = new Map(connected.map((n) => [n.nodeId, n]));
-      const nodeIds = new Set<string>([...pairedById.keys(), ...connectedById.keys()]);
-
-      const nodes = [...nodeIds].map((nodeId) => {
-        const paired = pairedById.get(nodeId);
-        const live = connectedById.get(nodeId);
-
-        const caps = uniqueSortedStrings([...(live?.caps ?? paired?.caps ?? [])]);
-        const commands = uniqueSortedStrings([...(live?.commands ?? paired?.commands ?? [])]);
-
-        return {
-          nodeId,
-          displayName: live?.displayName ?? paired?.displayName,
-          platform: live?.platform ?? paired?.platform,
-          version: live?.version ?? paired?.version,
-          coreVersion: live?.coreVersion ?? paired?.coreVersion,
-          uiVersion: live?.uiVersion ?? paired?.uiVersion,
-          deviceFamily: live?.deviceFamily ?? paired?.deviceFamily,
-          modelIdentifier: live?.modelIdentifier ?? paired?.modelIdentifier,
-          remoteIp: live?.remoteIp ?? paired?.remoteIp,
-          caps,
-          commands,
-          pathEnv: live?.pathEnv,
-          permissions: live?.permissions ?? paired?.permissions,
-          connectedAtMs: live?.connectedAtMs,
-          paired: Boolean(paired),
-          connected: Boolean(live),
-        };
+      const catalog = createKnownNodeCatalog({
+        pairedDevices: list.paired,
+        connectedNodes: context.nodeRegistry.listConnected(),
       });
-
-      nodes.sort((a, b) => {
-        if (a.connected !== b.connected) {
-          return a.connected ? -1 : 1;
-        }
-        const an = (a.displayName ?? a.nodeId).toLowerCase();
-        const bn = (b.displayName ?? b.nodeId).toLowerCase();
-        if (an < bn) {
-          return -1;
-        }
-        if (an > bn) {
-          return 1;
-        }
-        return a.nodeId.localeCompare(b.nodeId);
-      });
-
+      const nodes = listKnownNodes(catalog);
       respond(true, { ts: Date.now(), nodes }, undefined);
     });
   },
@@ -755,41 +683,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listDevicePairing();
-      const paired = list.paired.find((n) => n.deviceId === id && isNodeEntry(n));
-      const connected = context.nodeRegistry.listConnected();
-      const live = connected.find((n) => n.nodeId === id);
-
-      if (!paired && !live) {
+      const catalog = createKnownNodeCatalog({
+        pairedDevices: list.paired,
+        connectedNodes: context.nodeRegistry.listConnected(),
+      });
+      const node = getKnownNode(catalog, id);
+      if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
-
-      const caps = uniqueSortedStrings([...(live?.caps ?? [])]);
-      const commands = uniqueSortedStrings([...(live?.commands ?? [])]);
-
-      respond(
-        true,
-        {
-          ts: Date.now(),
-          nodeId: id,
-          displayName: live?.displayName ?? paired?.displayName,
-          platform: live?.platform ?? paired?.platform,
-          version: live?.version,
-          coreVersion: live?.coreVersion,
-          uiVersion: live?.uiVersion,
-          deviceFamily: live?.deviceFamily,
-          modelIdentifier: live?.modelIdentifier,
-          remoteIp: live?.remoteIp ?? paired?.remoteIp,
-          caps,
-          commands,
-          pathEnv: live?.pathEnv,
-          permissions: live?.permissions,
-          connectedAtMs: live?.connectedAtMs,
-          paired: Boolean(paired),
-          connected: Boolean(live),
-        },
-        undefined,
-      );
+      respond(true, { ts: Date.now(), ...node }, undefined);
     });
   },
   "node.canvas.capability.refresh": async ({ params, respond, client }) => {

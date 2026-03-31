@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { getMatrixScopedEnvVarNames } from "../plugin-sdk/matrix.js";
+import { getMatrixScopedEnvVarNames } from "../infra/matrix-config-helpers.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import {

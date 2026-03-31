@@ -266,10 +266,28 @@ function installPluginRuntimeDeps(params) {
   }
 }
 
+function installPluginRuntimeDepsWithRetries(params) {
+  const { attempts = 3 } = params;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      params.install({ ...params.installParams, attempt });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) {
+        break;
+      }
+    }
+  }
+  throw lastError;
+}
+
 export function stageBundledPluginRuntimeDeps(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const installPluginRuntimeDepsImpl =
     params.installPluginRuntimeDepsImpl ?? installPluginRuntimeDeps;
+  const installAttempts = params.installAttempts ?? 3;
   for (const pluginDir of listBundledPluginRuntimeDirs(repoRoot)) {
     const pluginId = path.basename(pluginDir);
     const packageJson = sanitizeBundledManifestForRuntimeInstall(pluginDir);
@@ -285,11 +303,15 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
       continue;
     }
-    installPluginRuntimeDepsImpl({
-      fingerprint,
-      packageJson,
-      pluginDir,
-      pluginId,
+    installPluginRuntimeDepsWithRetries({
+      attempts: installAttempts,
+      install: installPluginRuntimeDepsImpl,
+      installParams: {
+        fingerprint,
+        packageJson,
+        pluginDir,
+        pluginId,
+      },
     });
   }
 }

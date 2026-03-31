@@ -1,4 +1,6 @@
+import { defaultTaskOperationsRuntime } from "openclaw/plugin-sdk/tasks";
 import { resolveStateDir } from "../../config/paths.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -7,7 +9,7 @@ import {
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import { loadSiblingRuntimeModuleSync } from "./local-runtime-module.js";
+import { getRegisteredOperationsRuntime } from "../operations-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -50,16 +52,18 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
   };
 }
 
-type RuntimeImageGenerationModule = typeof import("./runtime-image-generation.runtime.js");
+type RuntimeImageGenerationModule = Pick<
+  typeof import("../../plugin-sdk/image-generation-runtime.js"),
+  "generateImage" | "listRuntimeImageGenerationProviders"
+>;
 let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
 
 function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
-  cachedRuntimeImageGenerationModule ??= loadSiblingRuntimeModuleSync<RuntimeImageGenerationModule>(
-    {
-      moduleUrl: import.meta.url,
-      relativeBase: "./runtime-image-generation.runtime",
-    },
-  );
+  cachedRuntimeImageGenerationModule ??=
+    loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
+      dirName: "image-generation-core",
+      artifactBasename: "runtime-api.js",
+    });
   return cachedRuntimeImageGenerationModule;
 }
 
@@ -91,6 +95,20 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
         provider: params.provider,
         cfg: params.cfg,
       }),
+  };
+}
+
+function createRuntimeOperations(): PluginRuntime["operations"] {
+  const resolveRuntime = () => getRegisteredOperationsRuntime() ?? defaultTaskOperationsRuntime;
+  return {
+    dispatch: (event) => resolveRuntime().dispatch(event),
+    getById: (operationId) => resolveRuntime().getById(operationId),
+    findByRunId: (runId) => resolveRuntime().findByRunId(runId),
+    list: (query) => resolveRuntime().list(query),
+    summarize: (query) => resolveRuntime().summarize(query),
+    audit: (query) => resolveRuntime().audit(query),
+    maintenance: (query) => resolveRuntime().maintenance(query),
+    cancel: (params) => resolveRuntime().cancel(params),
   };
 }
 
@@ -201,6 +219,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    operations: createRuntimeOperations(),
   } satisfies Omit<
     PluginRuntime,
     "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"

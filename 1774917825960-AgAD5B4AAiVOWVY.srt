@@ -1,0 +1,4 @@
+1
+00:00:00,000 --> 00:00:03,200
+Why does Saris keep spamming me with browser notepad?
+

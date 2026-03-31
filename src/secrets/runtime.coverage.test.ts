@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -12,11 +12,6 @@ const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvid
     resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
     resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
   }));
-
-const mockedModuleIds = [
-  "../plugins/web-search-providers.js",
-  "../plugins/web-search-providers.runtime.js",
-] as const;
 
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
@@ -259,13 +254,6 @@ describe("secrets runtime target coverage", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterAll(() => {
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
-    vi.resetModules();
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {

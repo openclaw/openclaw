@@ -1,3 +1,4 @@
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { loadConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
@@ -10,19 +11,7 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
 } {
-  if (!sessionKey) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-  const topicIndex = sessionKey.lastIndexOf(":topic:");
-  const threadIndex = sessionKey.lastIndexOf(":thread:");
-  const markerIndex = Math.max(topicIndex, threadIndex);
-  const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
-
-  const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
-  const threadIdRaw =
-    markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
-  const threadId = threadIdRaw?.trim() || undefined;
-  return { baseSessionKey, threadId };
+  return parseThreadSessionSuffix(sessionKey);
 }
 
 export function extractDeliveryInfo(sessionKey: string | undefined): {

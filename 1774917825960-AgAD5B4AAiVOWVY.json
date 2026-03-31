@@ -1,0 +1,20 @@
+{
+  "text": " Why does Saris keep spamming me with browser notepad?",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 3.2,
+      "text": " Why does Saris keep spamming me with browser notepad?",
+      "tokens": [
+        50364, 1545, 775, 6894, 271, 1066, 24028, 2810, 385, 365, 11185, 406, 595, 345, 30, 50524
+      ],
+      "temperature": 0.0,
+      "avg_logprob": -0.504666384528665,
+      "compression_ratio": 0.8688524590163934,
+      "no_speech_prob": 0.11564990878105164
+    }
+  ],
+  "language": "en"
+}

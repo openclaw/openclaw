@@ -132,6 +132,36 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     stt: {
       transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
     },
+    operations: {
+      dispatch: vi.fn().mockResolvedValue({
+        matched: false,
+        record: null,
+      }) as unknown as PluginRuntime["operations"]["dispatch"],
+      getById: vi.fn().mockResolvedValue(null) as unknown as PluginRuntime["operations"]["getById"],
+      findByRunId: vi
+        .fn()
+        .mockResolvedValue(null) as unknown as PluginRuntime["operations"]["findByRunId"],
+      list: vi.fn().mockResolvedValue([]) as unknown as PluginRuntime["operations"]["list"],
+      summarize: vi.fn().mockResolvedValue({
+        total: 0,
+        active: 0,
+        terminal: 0,
+        failures: 0,
+        byNamespace: {},
+        byKind: {},
+        byStatus: {},
+      }) as unknown as PluginRuntime["operations"]["summarize"],
+      audit: vi.fn().mockResolvedValue([]) as unknown as PluginRuntime["operations"]["audit"],
+      maintenance: vi.fn().mockResolvedValue({
+        reconciled: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      }) as unknown as PluginRuntime["operations"]["maintenance"],
+      cancel: vi.fn().mockResolvedValue({
+        found: false,
+        cancelled: false,
+      }) as unknown as PluginRuntime["operations"]["cancel"],
+    },
     channel: {
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
@@ -290,15 +320,21 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         shouldHandleTextCommands:
           vi.fn() as unknown as PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"],
       },
+      outbound: {
+        loadAdapter: vi.fn() as unknown as PluginRuntime["channel"]["outbound"]["loadAdapter"],
+      },
+      threadBindings: {
+        setIdleTimeoutBySessionKey:
+          vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"],
+        setMaxAgeBySessionKey:
+          vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
+      },
       discord: {} as PluginRuntime["channel"]["discord"],
       activity: {} as PluginRuntime["channel"]["activity"],
       line: {} as PluginRuntime["channel"]["line"],
       slack: {} as PluginRuntime["channel"]["slack"],
-      telegram: {} as PluginRuntime["channel"]["telegram"],
       matrix: {} as PluginRuntime["channel"]["matrix"],
       signal: {} as PluginRuntime["channel"]["signal"],
-      imessage: {} as PluginRuntime["channel"]["imessage"],
-      whatsapp: {} as PluginRuntime["channel"]["whatsapp"],
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],

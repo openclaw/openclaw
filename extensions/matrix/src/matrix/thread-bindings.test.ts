@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getSessionBindingService,
-  __testing,
-} from "../../../../src/infra/outbound/session-binding-service.js";
 import type { PluginRuntime } from "../../runtime-api.js";
+import { setMatrixRuntime } from "../runtime.js";
+import { resolveMatrixStateFilePath, resolveMatrixStoragePaths } from "./client/storage.js";
+import {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
@@ -24,14 +29,6 @@ vi.mock("./send.js", async () => {
     sendMessageMatrix: sendMessageMatrixMock,
   };
 });
-
-let resolveMatrixStateFilePath: typeof import("./client/storage.js").resolveMatrixStateFilePath;
-let resolveMatrixStoragePaths: typeof import("./client/storage.js").resolveMatrixStoragePaths;
-let createMatrixThreadBindingManager: typeof import("./thread-bindings.js").createMatrixThreadBindingManager;
-let resetMatrixThreadBindingsForTests: typeof import("./thread-bindings.js").resetMatrixThreadBindingsForTests;
-let setMatrixThreadBindingIdleTimeoutBySessionKey: typeof import("./thread-bindings.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
-let setMatrixThreadBindingMaxAgeBySessionKey: typeof import("./thread-bindings.js").setMatrixThreadBindingMaxAgeBySessionKey;
-let setMatrixRuntime: typeof import("../runtime.js").setMatrixRuntime;
 
 describe("matrix thread bindings", () => {
   let stateDir: string;
@@ -104,16 +101,6 @@ describe("matrix thread bindings", () => {
   }
 
   beforeEach(async () => {
-    vi.resetModules();
-    ({ setMatrixRuntime } = await import("../runtime.js"));
-    ({ resolveMatrixStateFilePath, resolveMatrixStoragePaths } =
-      await import("./client/storage.js"));
-    ({
-      createMatrixThreadBindingManager,
-      resetMatrixThreadBindingsForTests,
-      setMatrixThreadBindingIdleTimeoutBySessionKey,
-      setMatrixThreadBindingMaxAgeBySessionKey,
-    } = await import("./thread-bindings.js"));
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-thread-bindings-"));
     __testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();

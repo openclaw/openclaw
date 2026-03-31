@@ -4,6 +4,7 @@ const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
 const fetchClawHubPackageVersionMock = vi.fn();
 const downloadClawHubPackageArchiveMock = vi.fn();
+const archiveCleanupMock = vi.fn();
 const resolveLatestVersionFromPackageMock = vi.fn();
 const resolveCompatibilityHostVersionMock = vi.fn();
 const installPluginFromArchiveMock = vi.fn();
@@ -102,6 +103,7 @@ describe("installPluginFromClawHub", () => {
     fetchClawHubPackageDetailMock.mockReset();
     fetchClawHubPackageVersionMock.mockReset();
     downloadClawHubPackageArchiveMock.mockReset();
+    archiveCleanupMock.mockReset();
     resolveLatestVersionFromPackageMock.mockReset();
     resolveCompatibilityHostVersionMock.mockReset();
     installPluginFromArchiveMock.mockReset();
@@ -137,7 +139,9 @@ describe("installPluginFromClawHub", () => {
     downloadClawHubPackageArchiveMock.mockResolvedValue({
       archivePath: "/tmp/clawhub-demo/archive.zip",
       integrity: "sha256-demo",
+      cleanup: archiveCleanupMock,
     });
+    archiveCleanupMock.mockResolvedValue(undefined);
     resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.22");
     installPluginFromArchiveMock.mockResolvedValue({
       ok: true,
@@ -171,6 +175,39 @@ describe("installPluginFromClawHub", () => {
       "Compatibility: pluginApi=>=2026.3.22 minGateway=2026.3.0",
     );
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes dangerous force unsafe install through to archive installs", async () => {
+    await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      dangerouslyForceUnsafeInstall: true,
+    });
+
+    expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        archivePath: "/tmp/clawhub-demo/archive.zip",
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
+  it("cleans up the downloaded archive even when archive install fails", async () => {
+    installPluginFromArchiveMock.mockResolvedValueOnce({
+      ok: false,
+      error: "bad archive",
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "bad archive",
+    });
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([

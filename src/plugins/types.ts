@@ -54,6 +54,7 @@ import type {
 } from "../tts/provider-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { PluginOperationsRuntime } from "./operations-state.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -121,7 +122,7 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   browser?: {
     sandboxBridgeUrl?: string;
@@ -1603,6 +1604,14 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+/**
+ * Top-level CLI metadata for plugin-owned commands.
+ *
+ * Descriptors are the parse-time contract for lazy plugin CLI registration.
+ * If you want OpenClaw to keep a plugin command lazy-loaded while still
+ * advertising it at the root CLI level, provide descriptors that cover every
+ * top-level command root registered by that plugin CLI surface.
+ */
 export type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
@@ -1656,7 +1665,7 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
@@ -1666,7 +1675,7 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
+export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
@@ -1707,7 +1716,15 @@ export type OpenClawPluginApi = {
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {
+      /** Explicit top-level command roots owned by this registrar. */
       commands?: string[];
+      /**
+       * Parse-time command descriptors for lazy root CLI registration.
+       *
+       * When descriptors cover every top-level command root, OpenClaw can keep
+       * the plugin registrar lazy in the normal root CLI path. Command-only
+       * registrations stay on the eager compatibility path.
+       */
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
   ) => void;
@@ -1734,7 +1751,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
@@ -1751,6 +1768,8 @@ export type OpenClawPluginApi = {
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
+  /** Register the active operations runtime adapter (exclusive slot — only one active at a time). */
+  registerOperationsRuntime: (runtime: PluginOperationsRuntime) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
@@ -1803,7 +1822,8 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
-  | "before_dispatch";
+  | "before_dispatch"
+  | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1832,6 +1852,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "before_install",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -2003,7 +2024,7 @@ export type PluginHookBeforeCompactionEvent = {
   sessionFile?: string;
 };
 
-// before_reset hook — fired when /new or /reset clears a session
+// before_reset hook - fired when /new or /reset clears a session
 export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
@@ -2123,7 +2144,7 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
@@ -2163,7 +2184,7 @@ export type PluginHookBeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
-    /** Set automatically by the hook runner — plugins should not set this. */
+    /** Set automatically by the hook runner - plugins should not set this. */
     pluginId?: string;
     /**
      * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
@@ -2337,6 +2358,117 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginInstallTargetType = "skill" | "plugin";
+export type PluginInstallRequestKind =
+  | "skill-install"
+  | "plugin-dir"
+  | "plugin-archive"
+  | "plugin-file"
+  | "plugin-npm";
+export type PluginInstallSourcePathKind = "file" | "directory";
+
+export type PluginInstallFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+};
+
+export type PluginHookBeforeInstallRequest = {
+  /** Original install entrypoint/provenance. */
+  kind: PluginInstallRequestKind;
+  /** Install mode requested by the caller. */
+  mode: "install" | "update";
+  /** Raw user-facing specifier or path when available. */
+  requestedSpecifier?: string;
+};
+
+export type PluginHookBeforeInstallBuiltinScan = {
+  /** Whether the built-in scan completed successfully. */
+  status: "ok" | "error";
+  /** Number of files the built-in scanner actually inspected. */
+  scannedFiles: number;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: PluginInstallFinding[];
+  /** Scanner failure reason when status=`error`. */
+  error?: string;
+};
+
+export type PluginHookBeforeInstallSkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
+export type PluginHookBeforeInstallSkill = {
+  installId: string;
+  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+};
+
+export type PluginHookBeforeInstallPlugin = {
+  /** Canonical plugin id OpenClaw will install under. */
+  pluginId: string;
+  /** Normalized installable content shape after source resolution. */
+  contentType: "bundle" | "package" | "file";
+  packageName?: string;
+  manifestId?: string;
+  version?: string;
+  extensions?: string[];
+};
+
+// before_install hook
+export type PluginHookBeforeInstallContext = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Original install entrypoint/provenance. */
+  requestKind: PluginInstallRequestKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+};
+
+export type PluginHookBeforeInstallEvent = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Human-readable skill or plugin name. */
+  targetName: string;
+  /** Absolute path to the install target content being scanned. */
+  sourcePath: string;
+  /** Whether the install target content is a file or directory. */
+  sourcePathKind: PluginInstallSourcePathKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+  /** Install request provenance and caller mode. */
+  request: PluginHookBeforeInstallRequest;
+  /** Structured result of the built-in scanner. */
+  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  /** Present when targetType=`skill`. */
+  skill?: PluginHookBeforeInstallSkill;
+  /** Present when targetType=`plugin`. */
+  plugin?: PluginHookBeforeInstallPlugin;
+};
+
+export type PluginHookBeforeInstallResult = {
+  /** Additional findings to merge with built-in scanner results. */
+  findings?: PluginInstallFinding[];
+  /** If true, block the installation entirely. */
+  block?: boolean;
+  /** Human-readable reason for blocking. */
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -2443,6 +2575,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_install: (
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

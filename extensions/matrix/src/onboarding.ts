@@ -566,7 +566,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
         channel,
         configured: false,
         statusLines: ['Matrix: set "channels.matrix.defaultAccount" to select a named account'],
-        selectionHint: !sdkReady ? "install matrix-js-sdk" : "set defaultAccount",
+        selectionHint: !sdkReady ? "install Matrix deps" : "set defaultAccount",
       };
     }
     const account = resolveMatrixAccount({
@@ -580,7 +580,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
       statusLines: [
         `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
       ],
-      selectionHint: !sdkReady ? "install matrix-js-sdk" : configured ? "configured" : "needs auth",
+      selectionHint: !sdkReady ? "install Matrix deps" : configured ? "configured" : "needs auth",
     };
   },
   configure: async ({

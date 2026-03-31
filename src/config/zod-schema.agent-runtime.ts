@@ -432,7 +432,7 @@ const ToolExecSafeBinProfileSchema = z
   .strict();
 
 const ToolExecBaseShape = {
-  host: z.enum(["sandbox", "gateway", "node"]).optional(),
+  host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
@@ -604,6 +604,22 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    qmd: z
+      .object({
+        extraCollections: z
+          .array(
+            z
+              .object({
+                path: z.string(),
+                name: z.string().optional(),
+                pattern: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     multimodal: z
       .object({
         enabled: z.boolean().optional(),
@@ -796,6 +812,7 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),
