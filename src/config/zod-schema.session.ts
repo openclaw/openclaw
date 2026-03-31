@@ -50,6 +50,7 @@ export const SessionSchema = z
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
+    storeType: z.enum(["json", "sqlite"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     parentForkMaxTokens: z.number().int().nonnegative().optional(),

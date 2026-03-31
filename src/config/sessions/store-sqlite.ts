@@ -408,8 +408,7 @@ export function loadSessionStoreSqlite(sqlitePath: string): Record<string, Sessi
     }
     return store;
   } catch (err) {
-    log.warn("failed to load sessions from SQLite, returning empty store", { error: err });
-    return {};
+    throw err;
   }
 }
 

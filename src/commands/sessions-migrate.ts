@@ -227,7 +227,6 @@ export async function sessionsStoreInfoCommand(
   opts: SessionsStoreInfoOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = loadConfig();
   const rich = isRich();
 
   const jsonPath = resolveStorePath(opts.store, { agentId: opts.agent });
