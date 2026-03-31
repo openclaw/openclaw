@@ -1121,6 +1121,7 @@
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/tasks",
+                  "automation/clawflow",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
@@ -1432,6 +1433,7 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
+                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"
