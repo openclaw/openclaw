@@ -21,19 +21,19 @@ export type ExecSafeBinConfigScope = {
 };
 
 const INTERPRETER_LIKE_SAFE_BINS = new Set([
-  "awk",
   "ash",
+  "awk",
   "bash",
   "busybox",
   "bun",
   "cmd",
   "cmd.exe",
-  "gawk",
-  "gsed",
   "cscript",
   "dash",
   "deno",
   "fish",
+  "gawk",
+  "gsed",
   "ksh",
   "lua",
   "mawk",

@@ -19,6 +19,8 @@ describe("exec safe-bin runtime policy", () => {
     { bin: "/usr/local/bin/node20", expected: true },
     { bin: "awk", expected: true },
     { bin: "/opt/homebrew/bin/gawk", expected: true },
+    { bin: "mawk", expected: true },
+    { bin: "nawk", expected: true },
     { bin: "sed", expected: true },
     { bin: "gsed", expected: true },
     { bin: "ruby3.2", expected: true },
