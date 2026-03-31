@@ -2108,13 +2108,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
-    const match = SNIPPET_HEADER_RE.exec(snippet);
-    if (match) {
-      const start = Number(match[1]);
-      const count = Number(match[2]);
-      if (Number.isFinite(start) && Number.isFinite(count)) {
-        return { startLine: start, endLine: start + count - 1 };
-      }
+    const headerLines = this.parseSnippetHeaderLines(snippet);
+    if (headerLines) {
+      return headerLines;
     }
     const lines = snippet.split("\n").length;
     return { startLine: 1, endLine: lines };
@@ -2126,18 +2122,53 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): { startLine: number; endLine: number } {
     const explicitStart = this.normalizeSnippetLine(entry.startLine);
     const explicitEnd = this.normalizeSnippetLine(entry.endLine);
-    if (explicitStart !== undefined || explicitEnd !== undefined) {
-      const startLine = explicitStart ?? explicitEnd ?? 1;
-      const endLine = explicitEnd ?? explicitStart ?? startLine;
-      return startLine <= endLine
-        ? { startLine, endLine }
-        : { startLine: endLine, endLine: startLine };
+    const headerLines = this.parseSnippetHeaderLines(snippet);
+    if (explicitStart !== undefined && explicitEnd !== undefined) {
+      return explicitStart <= explicitEnd
+        ? { startLine: explicitStart, endLine: explicitEnd }
+        : { startLine: explicitEnd, endLine: explicitStart };
     }
-    return this.extractSnippetLines(snippet);
+    if (explicitStart !== undefined) {
+      if (headerLines) {
+        const width = headerLines.endLine - headerLines.startLine;
+        return {
+          startLine: explicitStart,
+          endLine: explicitStart + Math.max(0, width),
+        };
+      }
+      return { startLine: explicitStart, endLine: explicitStart };
+    }
+    if (explicitEnd !== undefined) {
+      if (headerLines) {
+        const width = headerLines.endLine - headerLines.startLine;
+        return {
+          startLine: Math.max(1, explicitEnd - Math.max(0, width)),
+          endLine: explicitEnd,
+        };
+      }
+      return { startLine: explicitEnd, endLine: explicitEnd };
+    }
+    if (headerLines) {
+      return headerLines;
+    }
+    return { startLine: 1, endLine: snippet.split("\n").length };
   }
 
   private normalizeSnippetLine(value: unknown): number | undefined {
     return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  private parseSnippetHeaderLines(snippet: string): { startLine: number; endLine: number } | null {
+    const match = SNIPPET_HEADER_RE.exec(snippet);
+    if (!match) {
+      return null;
+    }
+    const start = Number(match[1]);
+    const count = Number(match[2]);
+    if (Number.isFinite(start) && Number.isFinite(count)) {
+      return { startLine: start, endLine: start + count - 1 };
+    }
+    return null;
   }
 
   private readCounts(): {
