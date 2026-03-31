@@ -35,6 +35,36 @@ function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.Pro
   });
 }
 
+async function expectNoNewerVersionWarning(touchedVersion: string) {
+  await withTempHome(async (home) => {
+    const configDir = path.join(home, ".openclaw");
+    await fs.mkdir(configDir, { recursive: true });
+    const configPath = path.join(configDir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
+    );
+
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const io = createConfigIO({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+      logger,
+    });
+
+    io.loadConfig();
+
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Config was last written by a newer OpenClaw"),
+    );
+    expect(io.configPath).toBe(configPath);
+  });
+}
+
 describe("config io paths", () => {
   it("uses ~/.openclaw/openclaw.json when config exists", async () => {
     await withTempHome(async (home) => {
@@ -166,34 +196,7 @@ describe("config io paths", () => {
       throw new Error(`Unable to parse VERSION: ${VERSION}`);
     }
     const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-${(parsedVersion.revision ?? 0) + 1}`;
-
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
-      );
-
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-
-      io.loadConfig();
-
-      expect(logger.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Config was last written by a newer OpenClaw"),
-      );
-      expect(io.configPath).toBe(configPath);
-    });
+    await expectNoNewerVersionWarning(touchedVersion);
   });
 
   it("does not warn for same-base prerelease configs when current version is newer", async () => {
@@ -202,33 +205,6 @@ describe("config io paths", () => {
       throw new Error(`Unable to parse VERSION: ${VERSION}`);
     }
     const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-beta.1`;
-
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
-      );
-
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-
-      io.loadConfig();
-
-      expect(logger.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Config was last written by a newer OpenClaw"),
-      );
-      expect(io.configPath).toBe(configPath);
-    });
+    await expectNoNewerVersionWarning(touchedVersion);
   });
 });

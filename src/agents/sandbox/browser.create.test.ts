@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
+import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 import type { SandboxConfig } from "./types.js";
 
 let BROWSER_BRIDGES: Map<string, unknown>;
@@ -168,7 +169,7 @@ describe("ensureSandboxBrowser create args", () => {
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
     expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
-    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
+    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/sandbox\/novnc\?token=/);
     expect(result?.noVncUrl).not.toContain("password=");
   });
 
@@ -202,7 +203,7 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace:ro");
+    expect(createArgs).toContain("/tmp/workspace:/workspace:ro,z");
   });
 
   it("keeps the main workspace writable when workspaceAccess is rw", async () => {
@@ -219,7 +220,20 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace");
-    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
+    expect(createArgs).toContain("/tmp/workspace:/workspace:z");
+    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro,z");
+  });
+
+  it("stamps the mount format version label on browser containers", async () => {
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: buildConfig(false),
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const labels = collectDockerFlagValues(createArgs ?? [], "--label");
+    expect(labels).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
   });
 });

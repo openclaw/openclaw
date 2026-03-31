@@ -78,6 +78,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
 }));
+const agentEventMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -210,6 +213,13 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
     }),
   };
 });
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
+  return {
+    ...actual,
+    emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+  };
+});
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -257,6 +267,7 @@ function createDispatcher(): ReplyDispatcher {
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ ...counts })),
     getDeliveredCounts: vi.fn(() => ({ ...counts })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
@@ -318,8 +329,9 @@ describe("dispatchReplyFromConfig", () => {
           nativeCommands: true,
         },
       }),
-      execApprovals: {
-        shouldSuppressLocalPrompt: ({ payload }: { payload: ReplyPayload }) =>
+      outbound: {
+        deliveryMode: "direct",
+        shouldSuppressLocalPayloadPrompt: ({ payload }: { payload: ReplyPayload }) =>
           Boolean(
             payload.channelData &&
             typeof payload.channelData === "object" &&
@@ -367,6 +379,7 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.upsertAcpSessionMeta.mockReset();
     acpMocks.upsertAcpSessionMeta.mockResolvedValue(null);
     acpMocks.requireAcpRuntimeBackend.mockReset();
+    agentEventMocks.emitAgentEvent.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
     pluginBindingTesting.reset();
@@ -778,6 +791,34 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers tool summaries in forum topic sessions (group + IsForum)", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      IsForum: true,
+      MessageThreadId: 99,
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🔧 exec: ls" }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("delivers deterministic exec approval tool payloads in groups", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -1029,7 +1070,9 @@ describe("dispatchReplyFromConfig", () => {
     const streamedText = blockCalls.map((call) => (call[0] as ReplyPayload).text ?? "").join("");
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world" }),
+    );
   });
 
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
@@ -1118,6 +1161,127 @@ describe("dispatchReplyFromConfig", () => {
     expect(outcome).toBe("settled");
   });
 
+  it("emits lifecycle end for ACP turns using the current run id", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        runId: "run-acp-lifecycle-end",
+      },
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp-lifecycle-end",
+        sessionKey: "agent:codex-acp:session-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "end",
+        }),
+      }),
+    );
+  });
+
+  it("emits lifecycle error for ACP turn failures using the current run id", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([]);
+    runtime.runTurn.mockImplementation(async function* () {
+      yield { type: "status", tag: "usage_update", text: "warming up" };
+      throw new Error("ACP exploded");
+    });
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        runId: "run-acp-lifecycle-error",
+      },
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp-lifecycle-error",
+        sessionKey: "agent:codex-acp:session-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "error",
+          error: expect.stringContaining("ACP exploded"),
+        }),
+      }),
+    );
+  });
+
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -1181,8 +1345,8 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockCalls).toHaveLength(1);
     expect(blockCalls[0]?.[0]).toEqual(expect.objectContaining({ text: "hello" }));
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(1);
-    const noticePayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalCalls.length).toBe(2);
+    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
     expect(noticePayload?.text).toContain("Session ids resolved");
     expect(noticePayload?.text).toContain("agent session id: inner-123");
     expect(noticePayload?.text).toContain("acpx session id: acpx-123");
@@ -1267,8 +1431,8 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockCalls).toHaveLength(1);
     expect(blockCalls[0]?.[0]).toEqual(expect.objectContaining({ text: "hello" }));
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(1);
-    const noticePayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalCalls.length).toBe(2);
+    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
     expect(noticePayload?.text).toContain("Session ids resolved");
     expect(noticePayload?.text).toContain("agent session id: inner-123");
     expect(noticePayload?.text).toContain("acpx session id: acpx-123");
@@ -1666,7 +1830,9 @@ describe("dispatchReplyFromConfig", () => {
       .map((call) => ((call[0] as ReplyPayload).text ?? "").trim())
       .filter(Boolean);
     expect(blockTexts).toEqual(["What do you want to work on?"]);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "What do you want to work on?" }),
+    );
   });
 
   it("uses default-account TTS mode for Feishu ACP block-only fallback when AccountId is missing", async () => {

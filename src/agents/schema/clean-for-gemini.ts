@@ -291,6 +291,11 @@ function cleanSchemaForGeminiWithDefs(
       continue;
     }
 
+    // Google's schema validator rejects `"required": []` — omit empty arrays.
+    if (key === "required" && Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+
     if (key === "type" && (hasAnyOf || hasOneOf)) {
       continue;
     }

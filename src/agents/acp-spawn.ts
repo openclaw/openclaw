@@ -18,6 +18,7 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
+  requiresNativeThreadContextForThreadHere,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
@@ -25,8 +26,10 @@ import {
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
@@ -41,6 +44,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -83,6 +87,8 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
+  agentGroupId?: string;
   sandboxed?: boolean;
 };
 
@@ -125,6 +131,7 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
 type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
+  placement: "current" | "child";
   conversationId: string;
 };
 
@@ -352,13 +359,67 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
 }
 
 function resolveConversationIdForThreadBinding(params: {
+  channel?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): string | undefined {
-  return resolveConversationIdFromTargets({
+  const channel = params.channel?.trim().toLowerCase();
+  const normalizedThreadId =
+    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+  if (channel === "telegram") {
+    const rawChatId = (params.groupId ?? params.to ?? "").trim();
+    let chatId = rawChatId;
+    while (true) {
+      const next = (() => {
+        if (/^(telegram|tg):/i.test(chatId)) {
+          return chatId.replace(/^(telegram|tg):/i, "").trim();
+        }
+        if (/^(group|channel):/i.test(chatId)) {
+          return chatId.replace(/^(group|channel):/i, "").trim();
+        }
+        return chatId;
+      })();
+      if (next === chatId) {
+        break;
+      }
+      chatId = next;
+    }
+    const topicMatch = /^(.*?):topic:(\d+)$/i.exec(chatId);
+    if (topicMatch?.[1] && /^-?\d+$/.test(topicMatch[1].trim())) {
+      const topicId = normalizedThreadId ?? topicMatch[2];
+      return `${topicMatch[1].trim()}:topic:${topicId}`;
+    }
+    const shorthandTopicMatch = /^(.*?):(\d+)$/i.exec(chatId);
+    if (shorthandTopicMatch?.[1] && /^-?\d+$/.test(shorthandTopicMatch[1].trim())) {
+      const topicId = normalizedThreadId ?? shorthandTopicMatch[2];
+      return `${shorthandTopicMatch[1].trim()}:topic:${topicId}`;
+    }
+    if (/^-?\d+$/.test(chatId)) {
+      return normalizedThreadId ? `${chatId}:topic:${normalizedThreadId}` : chatId;
+    }
+    return undefined;
+  }
+
+  const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
   });
+  if (genericConversationId) {
+    return genericConversationId;
+  }
+  const target = params.to?.trim() || "";
+  if (channel === "line") {
+    const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
+    if (prefixed) {
+      return prefixed;
+    }
+    if (/^[UCR][a-f0-9]{32}$/i.test(target)) {
+      return target;
+    }
+  }
+
+  return undefined;
 }
 
 function prepareAcpThreadBinding(params: {
@@ -367,6 +428,7 @@ function prepareAcpThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
@@ -414,17 +476,20 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  const placement = requiresNativeThreadContextForThreadHere(policy.channel) ? "child" : "current";
+  if (!capabilities.bindSupported || !capabilities.placements.includes(placement)) {
     return {
       ok: false,
-      error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
+      error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const conversationId = resolveConversationIdForThreadBinding({
+  const conversationIdRaw = resolveConversationIdForThreadBinding({
+    channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
+    groupId: params.groupId,
   });
-  if (!conversationId) {
+  if (!conversationIdRaw) {
     return {
       ok: false,
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
@@ -436,7 +501,8 @@ function prepareAcpThreadBinding(params: {
     binding: {
       channel: policy.channel,
       accountId: policy.accountId,
-      conversationId,
+      placement,
+      conversationId: conversationIdRaw,
     },
   };
 }
@@ -583,7 +649,7 @@ async function bindPreparedAcpThread(params: {
       accountId: params.preparedBinding.accountId,
       conversationId: params.preparedBinding.conversationId,
     },
-    placement: "child",
+    placement: params.preparedBinding.placement,
     metadata: {
       threadName: resolveThreadBindingThreadName({
         agentId: params.targetAgentId,
@@ -615,12 +681,14 @@ async function bindPreparedAcpThread(params: {
   });
   if (!binding.conversation.conversationId) {
     throw new Error(
-      `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`,
+      params.preparedBinding.placement === "child"
+        ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
+        : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
     );
   }
 
   let sessionEntry = params.initializedRuntime.sessionEntry;
-  if (params.initializedRuntime.sessionId) {
+  if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
     const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
     if (boundThreadId) {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
@@ -646,38 +714,50 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   requester: AcpSpawnRequesterState;
   binding: SessionBindingRecord | null;
 }): AcpSpawnBootstrapDeliveryPlan {
-  // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
+  // Child-thread ACP spawns deliver bootstrap output to the new thread; current-conversation
+  // binds deliver back to the originating target.
   const boundThreadIdRaw = params.binding?.conversation.conversationId;
   const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
   const fallbackThreadIdRaw = params.requester.origin?.threadId;
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
+  const requesterConversationId = resolveConversationIdForThreadBinding({
+    channel: params.requester.origin?.channel,
+    threadId: fallbackThreadId,
+    to: params.requester.origin?.to,
+  });
+  const bindingMatchesRequesterConversation = Boolean(
+    params.requester.origin?.channel &&
+    params.binding?.conversation.channel === params.requester.origin.channel &&
+    params.binding?.conversation.accountId === (params.requester.origin.accountId ?? "default") &&
+    requesterConversationId &&
+    params.binding?.conversation.conversationId === requesterConversationId,
+  );
   const boundDeliveryTarget = resolveConversationDeliveryTarget({
     channel: params.requester.origin?.channel ?? params.binding?.conversation.channel,
     conversationId: params.binding?.conversation.conversationId,
     parentConversationId: params.binding?.conversation.parentConversationId,
   });
   const inferredDeliveryTo =
+    (bindingMatchesRequesterConversation ? params.requester.origin?.to?.trim() : undefined) ??
     boundDeliveryTarget.to ??
     params.requester.origin?.to?.trim() ??
     formatConversationTarget({
       channel: params.requester.origin?.channel,
       conversationId: deliveryThreadId,
     });
-  const resolvedDeliveryThreadId = boundDeliveryTarget.threadId ?? deliveryThreadId;
+  const resolvedDeliveryThreadId = bindingMatchesRequesterConversation
+    ? fallbackThreadId
+    : (boundDeliveryTarget.threadId ?? deliveryThreadId);
   const hasDeliveryTarget = Boolean(params.requester.origin?.channel && inferredDeliveryTo);
 
   // Thread-bound session spawns always deliver inline to their bound thread.
-  // Run-mode spawns use stream-to-parent when the requester is a subagent
-  // orchestrator with an active heartbeat relay route. For all other run-mode
-  // spawns from non-subagent requester sessions, fall back to inline delivery
-  // so the result reaches the originating channel.
+  // Background run-mode spawns should stay internal and report back through
+  // the parent task lifecycle notifier instead of letting the child ACP
+  // session write raw output directly into the originating channel.
   const useInlineDelivery =
-    hasDeliveryTarget &&
-    !params.effectiveStreamToParent &&
-    (params.spawnMode === "session" ||
-      (!params.requester.isSubagentSession && !params.requestThreadBinding));
+    hasDeliveryTarget && !params.effectiveStreamToParent && params.spawnMode === "session";
 
   return {
     useInlineDelivery,
@@ -712,7 +792,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
+  let requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -779,6 +859,7 @@ export async function spawnAcpDirect(
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
+      groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {
       return {
@@ -912,6 +993,27 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    try {
+      createRunningTaskRun({
+        runtime: "acp",
+        sourceId: childRunId,
+        requesterSessionKey: requesterInternalKey,
+        requesterOrigin: requesterState.origin,
+        childSessionKey: sessionKey,
+        runId: childRunId,
+        label: params.label,
+        task: params.task,
+        preferMetadata: true,
+        deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+        startedAt: Date.now(),
+      });
+    } catch (error) {
+      log.warn("Failed to create background task for ACP spawn", {
+        sessionKey,
+        runId: childRunId,
+        error,
+      });
+    }
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -920,6 +1022,28 @@ export async function spawnAcpDirect(
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
+  }
+
+  try {
+    createRunningTaskRun({
+      runtime: "acp",
+      sourceId: childRunId,
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin: requesterState.origin,
+      childSessionKey: sessionKey,
+      runId: childRunId,
+      label: params.label,
+      task: params.task,
+      preferMetadata: true,
+      deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+      startedAt: Date.now(),
+    });
+  } catch (error) {
+    log.warn("Failed to create background task for ACP spawn", {
+      sessionKey,
+      runId: childRunId,
+      error,
+    });
   }
 
   return {

@@ -1,5 +1,6 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -39,7 +40,7 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   if (max <= min) {
     return min;
   }
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return min + generateSecureInt(max - min + 1);
 }
 
 export type ReplyDispatcherOptions = {
@@ -83,6 +84,7 @@ export type ReplyDispatcher = {
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   getDeliveredCounts: () => Record<ReplyDispatchKind, number>;
+  getFailedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
 };
 
@@ -139,6 +141,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const failedCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -184,6 +191,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
       })
       .catch((err) => {
+        failedCounts[kind] += 1;
         options.onError?.(err, { kind });
       })
       .finally(() => {
@@ -231,6 +239,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     getDeliveredCounts: () => ({ ...deliveredCounts }),
+    getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
   };
 }

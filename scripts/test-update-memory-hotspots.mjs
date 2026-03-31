@@ -6,6 +6,31 @@ import { normalizeTrackedRepoPath, tryReadJsonFile, writeJsonFile } from "./test
 import { unitMemoryHotspotManifestPath } from "./test-runner-manifest.mjs";
 import { matchesHotspotSummaryLane } from "./test-update-memory-hotspots-utils.mjs";
 
+if (process.argv.slice(2).includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/test-update-memory-hotspots.mjs [options]",
+      "",
+      "Generate or refresh the unit memory-hotspot manifest from test-parallel memory logs.",
+      "",
+      "Options:",
+      "  --config <path>            Vitest config label stored in the output manifest",
+      "  --out <path>               Output manifest path (default: test/fixtures/test-memory-hotspots.unit.json)",
+      "  --lane <name>              Primary lane name to match (default: unit-fast)",
+      "  --lane-prefix <prefix>     Additional lane prefixes to include (repeatable)",
+      "  --log <path>               Memory trace log to ingest (repeatable, required)",
+      "  --min-delta-kb <kb>        Minimum RSS delta to retain (default: 262144)",
+      "  --limit <count>            Max hotspot entries to retain (default: 64)",
+      "  --help                     Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-update-memory-hotspots.mjs --log /tmp/unit-fast.log",
+      "  node scripts/test-update-memory-hotspots.mjs --log a.log --log b.log --lane-prefix unit-fast-batch-",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
+
 function parseArgs(argv) {
   return parseFlagArgs(
     argv,
