@@ -5,11 +5,17 @@ This document provides exhaustive instructions for building, deploying, and manu
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine + Compose plugin) installed and running
-- An AWS account with:
+- AWS CLI configured with a principal that can call `sts:AssumeRole`
+- An AWS account with the bedrock-obs infrastructure deployed:
   - Bedrock model access enabled in your target region
   - A Bedrock Guardrail created (note the guardrail ID and version)
-  - IAM credentials with `bedrock:InvokeModelWithResponseStream`, `bedrock:InvokeModel`, and `bedrock:ApplyGuardrail` permissions
-- A Bedrock model enabled in your account (e.g. `us.anthropic.claude-sonnet-4-20250514`)
+  - Application inference profiles provisioned (e.g. `test-pipeline-sonnet46`)
+  - An IAM role for openclaw testing with:
+    - `bedrock:InvokeModelWithResponseStream` and `bedrock:InvokeModel` scoped to the test inference profiles
+    - `bedrock:ApplyGuardrail` for the production guardrail
+    - Guardrail deny enforcement (rejects any Bedrock call without the guardrail attached)
+    - `bedrock:ListFoundationModels` (for auto-discovery, optional)
+  - A trust policy on the role allowing your CLI principal to assume it
 
 ## 1. Build the Docker Image
 
@@ -51,9 +57,46 @@ mkdir -p ~/.openclaw-test/config/identity
 mkdir -p ~/.openclaw-test/workspace
 ```
 
-## 3. Start the Gateway Container
+## 3. Obtain Temporary Credentials via STS
+
+Assume the test role to get ephemeral credentials. These expire after the specified duration (default 1 hour, max depends on role config) and require no cleanup.
+
+```bash
+ROLE_ARN="arn:aws:iam::ACCOUNT_ID:role/your-openclaw-test-role"
+REGION="us-east-1"
+
+# Assume the role (adjust --duration-seconds as needed, max 3600 for most roles)
+CREDS=$(aws sts assume-role \
+  --role-arn "$ROLE_ARN" \
+  --role-session-name "openclaw-guardrail-test" \
+  --duration-seconds 3600 \
+  --output json)
+
+# Extract the temporary credentials
+export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')
+export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')
+export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')
+export AWS_REGION="$REGION"
+
+# Verify the assumed identity
+aws sts get-caller-identity
+```
+
+The output should show the assumed role ARN, confirming you have the right principal.
+
+These credentials are temporary and scoped to the role's permissions. The guardrail
+deny enforcement on the role means any Bedrock call without `guardrailConfig` attached
+will be rejected by IAM — making a successful model response proof that the injection
+is working end-to-end.
+
+> If credentials expire mid-test, re-run the `aws sts assume-role` block and restart
+> the container with fresh values.
+
+## 4. Start the Gateway Container
 
 ### Option A: docker run (simple)
+
+Pass the STS temporary credentials as environment variables:
 
 ```bash
 docker run -d \
@@ -62,25 +105,12 @@ docker run -d \
   -v ~/.openclaw-test/config:/home/node/.openclaw \
   -v ~/.openclaw-test/workspace:/home/node/.openclaw/workspace \
   -e HOME=/home/node \
-  -e AWS_ACCESS_KEY_ID="AKIA..." \
-  -e AWS_SECRET_ACCESS_KEY="..." \
-  -e AWS_REGION="us-east-1" \
+  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
+  -e AWS_REGION="$AWS_REGION" \
   openclaw-guardrails-test \
   node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
-```
-
-Replace the AWS credential values with your actual credentials. If you use session tokens:
-
-```bash
-  -e AWS_SESSION_TOKEN="..." \
-```
-
-If you use a specific AWS profile via shared credentials file, mount it instead:
-
-```bash
-  -v ~/.aws:/home/node/.aws:ro \
-  -e AWS_PROFILE="your-profile" \
-  -e AWS_REGION="us-east-1" \
 ```
 
 ### Option B: docker compose (recommended for repeated testing)
@@ -93,8 +123,9 @@ OPENCLAW_CONFIG_DIR=~/.openclaw-test/config
 OPENCLAW_WORKSPACE_DIR=~/.openclaw-test/workspace
 OPENCLAW_GATEWAY_BIND=lan
 OPENCLAW_GATEWAY_TOKEN=test-token-change-me
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=...
+AWS_ACCESS_KEY_ID=<from STS output>
+AWS_SECRET_ACCESS_KEY=<from STS output>
+AWS_SESSION_TOKEN=<from STS output>
 AWS_REGION=us-east-1
 ```
 
@@ -103,6 +134,37 @@ Then start:
 ```bash
 docker compose up -d openclaw-gateway
 ```
+
+> When credentials expire, update the `.env` file with fresh STS values and
+> `docker compose up -d openclaw-gateway` to recreate the container.
+
+### Option C: Pre-seed config with guardrail details
+
+For a zero-touch start where the container boots with guardrails already configured,
+write the config JSON before starting:
+
+```bash
+cat > ~/.openclaw-test/config/config.json << EOF
+{
+  "plugins": {
+    "entries": {
+      "amazon-bedrock": {
+        "config": {
+          "guardrail": {
+            "guardrailIdentifier": "$GUARDRAIL_ID",
+            "guardrailVersion": "$GUARDRAIL_VERSION"
+          }
+        }
+      }
+    }
+  }
+}
+EOF
+```
+
+This skips the manual `config set` steps in section 6. The shell expands
+`$GUARDRAIL_ID` and `$GUARDRAIL_VERSION` at write time, so set those in your
+environment or replace them with literal values.
 
 ### Verify the gateway is running
 
@@ -113,7 +175,7 @@ curl http://localhost:18789/healthz
 
 The health endpoint should return HTTP 200.
 
-## 4. Configure the Bedrock Provider
+## 5. Configure the Bedrock Provider
 
 Run CLI commands inside the container to set up the provider and model:
 
@@ -145,7 +207,7 @@ Set it as the default model:
 oc config set agents.defaults.model.primary "amazon-bedrock/us.anthropic.claude-sonnet-4-20250514"
 ```
 
-## 5. Configure the Guardrail
+## 6. Configure the Guardrail
 
 This is the core of what we are testing. The guardrail config lives under `plugins.entries.amazon-bedrock.config`:
 
@@ -169,7 +231,7 @@ oc config get plugins.entries.amazon-bedrock.config
 
 Expected output should show the guardrail object with all fields you set.
 
-## 6. Restart the Gateway
+## 7. Restart the Gateway
 
 The gateway reads plugin config at startup. After changing config, restart:
 
@@ -184,7 +246,7 @@ Wait a few seconds, then verify it is healthy:
 curl http://localhost:18789/healthz
 ```
 
-## 7. Test Scenarios
+## 8. Test Scenarios
 
 ### Test 1: Guardrail allows the request (happy path)
 
@@ -223,7 +285,7 @@ The Bedrock API includes guardrail trace data in the response stream when tracin
 
 ### Test 4: No guardrail config (regression check)
 
-Remove the guardrail config and verify normal operation:
+Remove the guardrail config and verify behavior:
 
 ```bash
 oc config set plugins.entries.amazon-bedrock.config '{}'
@@ -231,7 +293,9 @@ docker restart openclaw-guardrails
 oc message send "What is 2 + 2?"
 ```
 
-Expected: Normal response, no guardrail-related errors. This confirms the absent-guardrail path still works.
+Expected behavior depends on your IAM setup:
+- If the role has guardrail deny enforcement: the request is rejected with `AccessDeniedException` because no `guardrailConfig` is present in the payload. This is correct — the deny policy is doing its job.
+- If the role does NOT have guardrail deny enforcement: normal response, no guardrail-related errors. This confirms the absent-guardrail code path still works.
 
 ### Test 5: Required fields only (no optional fields)
 
@@ -278,7 +342,7 @@ oc message send "What is the capital of France?"
 
 Expected: Normal response. Async mode means guardrail evaluation happens in parallel with streaming. The response should arrive without guardrail-related errors.
 
-## 8. Cleanup
+## 9. Cleanup
 
 ```bash
 # Stop and remove the container
@@ -290,6 +354,10 @@ docker rmi openclaw-guardrails-test
 
 # Remove test config
 rm -rf ~/.openclaw-test
+
+# STS temporary credentials expire automatically — no IAM cleanup needed.
+# Unset them from your shell if desired:
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION
 ```
 
 ## Troubleshooting
@@ -301,17 +369,26 @@ docker logs openclaw-guardrails
 ```
 
 Common causes:
-- Missing or invalid AWS credentials
+- Missing or expired STS credentials (re-run the assume-role block in section 3)
 - Port 18789 already in use on host
 - Config directory permissions (the container runs as `node` user, uid 1000)
 
 ### "AccessDeniedException" from Bedrock
 
-Your IAM credentials lack the required permissions. Ensure the IAM principal has:
-- `bedrock:InvokeModelWithResponseStream`
-- `bedrock:InvokeModel`
-- `bedrock:ApplyGuardrail`
-- `bedrock:ListFoundationModels` (for auto-discovery)
+Either the STS credentials expired or the role lacks required permissions. Check:
+- Run `aws sts get-caller-identity` with the same env vars to confirm they are still valid
+- If expired, re-run the assume-role block and restart the container with fresh values
+- Ensure the role has `bedrock:InvokeModelWithResponseStream`, `bedrock:InvokeModel`, and `bedrock:ApplyGuardrail`
+- If your role has guardrail deny enforcement and the request was rejected, this likely means the `guardrailConfig` was not injected — which is the bug you are looking for
+
+### "AccessDeniedException" specifically mentioning guardrail deny
+
+This is the IAM deny policy from your bedrock-obs infrastructure rejecting a call
+that lacks `guardrailConfig`. If you see this when guardrail config IS set in openclaw,
+it means the injection is not working correctly. Check:
+- The guardrail config was written: `oc config get plugins.entries.amazon-bedrock.config`
+- The gateway was restarted after config changes
+- The guardrail ID and version match what the deny policy expects
 
 ### "ResourceNotFoundException" for guardrail
 
