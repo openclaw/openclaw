@@ -6,7 +6,7 @@ import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
-import { retainSafeHeadersForCrossOriginRedirectHeaders } from "../infra/net/fetch-guard.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -211,7 +211,7 @@ async function downloadToFile(
             const redirectHeaders =
               new URL(redirectUrl).origin === parsedUrl.origin
                 ? headers
-                : retainSafeHeadersForCrossOriginRedirectHeaders(headers);
+                : retainSafeHeadersForCrossOriginRedirect(headers);
             resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1));
             return;
           }

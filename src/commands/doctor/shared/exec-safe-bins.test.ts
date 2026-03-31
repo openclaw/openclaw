@@ -81,6 +81,25 @@ describe("doctor exec safe bin helpers", () => {
     expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ jq: {} });
   });
 
+  it("warns on awk-family safeBins instead of scaffolding them", () => {
+    const result = maybeRepairExecSafeBinProfiles({
+      tools: {
+        exec: {
+          safeBins: ["awk", "sed"],
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- tools.exec.safeBins includes 'awk': awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+      "- tools.exec.safeBins includes 'sed': sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+      "- tools.exec.safeBins includes interpreter/runtime 'awk' without profile; remove it from safeBins or use explicit allowlist entries.",
+      "- tools.exec.safeBins includes interpreter/runtime 'sed' without profile; remove it from safeBins or use explicit allowlist entries.",
+    ]);
+    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
+  });
+
   it("flags safeBins that resolve outside trusted directories", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-safe-bin-"));
     const binPath = join(tempDir, "custom-safe-bin");
