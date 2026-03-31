@@ -78,6 +78,7 @@ export function createDiscordMonitorClient(params: {
     eventQueue?: { listenerTimeout?: number };
   };
   runtime: RuntimeEnv;
+  restFetch?: typeof fetch;
   createClient: CreateClientFn;
   createGatewayPlugin: typeof createDiscordGatewayPlugin;
   createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
@@ -115,6 +116,7 @@ export function createDiscordMonitorClient(params: {
       token: params.token,
       autoDeploy: false,
       eventQueue: eventQueueOpts,
+      ...(params.restFetch ? { requestOptions: { fetch: params.restFetch } } : {}),
     },
     {
       commands: params.commands,

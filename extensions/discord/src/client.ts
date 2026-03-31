@@ -2,6 +2,7 @@ import { RequestClient } from "@buape/carbon";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
@@ -29,8 +30,24 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+function resolveRest(token: string, rest?: RequestClient, proxyUrl?: string) {
+  if (rest) return rest;
+  const proxy = proxyUrl?.trim();
+  if (proxy) {
+    try {
+      const agent = new ProxyAgent(proxy);
+      const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+        undiciFetch(input as string | URL, {
+          ...(init as Record<string, unknown>),
+          dispatcher: agent,
+        }) as unknown as Promise<Response>) as typeof fetch;
+      return new RequestClient(token, { fetch: proxyFetch });
+    } catch {
+      // Fall back to direct connection if proxy URL is malformed,
+      // consistent with resolveDiscordRestFetch() in rest-fetch.ts.
+    }
+  }
+  return new RequestClient(token);
 }
 
 function resolveAccountWithoutToken(params: {
@@ -66,7 +83,7 @@ export function createDiscordRestClient(
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveRest(token, opts.rest, account.config.proxy);
   return { token, rest, account };
 }
 

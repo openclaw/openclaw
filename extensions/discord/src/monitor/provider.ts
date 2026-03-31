@@ -904,6 +904,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceEnabled,
       discordConfig: discordCfg,
       runtime,
+      restFetch: discordRestFetch,
       createClient: createClientForTesting ?? ((...args) => new Client(...args)),
       createGatewayPlugin: createDiscordGatewayPluginForTesting ?? createDiscordGatewayPlugin,
       createGatewaySupervisor:
