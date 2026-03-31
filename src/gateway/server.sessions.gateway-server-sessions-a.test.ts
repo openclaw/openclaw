@@ -154,13 +154,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../plugin-sdk/browser-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugin-sdk/browser-runtime.js")>();
-  return {
-    ...actual,
-    closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
-  };
-});
+vi.mock("../plugin-sdk/browser-runtime.js", () => ({
+  closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
+  movePathToTrash: vi.fn(async () => {}),
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 
