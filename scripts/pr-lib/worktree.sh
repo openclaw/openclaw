@@ -55,18 +55,33 @@ write_pr_meta_files() {
 
   printf '%s\n' "$json" > .local/pr-meta.json
 
-  cat > .local/pr-meta.env <<EOF_ENV
-PR_NUMBER=$(printf '%s\n' "$json" | jq -r .number)
-PR_URL=$(printf '%s\n' "$json" | jq -r .url)
-PR_AUTHOR=$(printf '%s\n' "$json" | jq -r .author.login)
-PR_BASE=$(printf '%s\n' "$json" | jq -r .baseRefName)
-PR_HEAD=$(printf '%s\n' "$json" | jq -r .headRefName)
-PR_HEAD_SHA=$(printf '%s\n' "$json" | jq -r .headRefOid)
-PR_HEAD_REPO=$(printf '%s\n' "$json" | jq -r .headRepository.nameWithOwner)
-PR_HEAD_REPO_URL=$(printf '%s\n' "$json" | jq -r '.headRepository.url // ""')
-PR_HEAD_OWNER=$(printf '%s\n' "$json" | jq -r '.headRepositoryOwner.login // ""')
-PR_HEAD_REPO_NAME=$(printf '%s\n' "$json" | jq -r '.headRepository.name // ""')
-EOF_ENV
+  # Security: shell-escape all values with printf %q to prevent command injection
+  # via malicious branch names containing $() or backticks. See GHSA-xxxx-xxxx-xxxx.
+  local pr_number pr_url pr_author pr_base pr_head pr_head_sha
+  local pr_head_repo pr_head_repo_url pr_head_owner pr_head_repo_name
+  pr_number=$(printf '%s\n' "$json" | jq -r .number)
+  pr_url=$(printf '%s\n' "$json" | jq -r .url)
+  pr_author=$(printf '%s\n' "$json" | jq -r .author.login)
+  pr_base=$(printf '%s\n' "$json" | jq -r .baseRefName)
+  pr_head=$(printf '%s\n' "$json" | jq -r .headRefName)
+  pr_head_sha=$(printf '%s\n' "$json" | jq -r .headRefOid)
+  pr_head_repo=$(printf '%s\n' "$json" | jq -r .headRepository.nameWithOwner)
+  pr_head_repo_url=$(printf '%s\n' "$json" | jq -r '.headRepository.url // ""')
+  pr_head_owner=$(printf '%s\n' "$json" | jq -r '.headRepositoryOwner.login // ""')
+  pr_head_repo_name=$(printf '%s\n' "$json" | jq -r '.headRepository.name // ""')
+
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr_number" \
+    PR_URL "$pr_url" \
+    PR_AUTHOR "$pr_author" \
+    PR_BASE "$pr_base" \
+    PR_HEAD "$pr_head" \
+    PR_HEAD_SHA "$pr_head_sha" \
+    PR_HEAD_REPO "$pr_head_repo" \
+    PR_HEAD_REPO_URL "$pr_head_repo_url" \
+    PR_HEAD_OWNER "$pr_head_owner" \
+    PR_HEAD_REPO_NAME "$pr_head_repo_name" \
+    > .local/pr-meta.env
 }
 
 list_pr_worktrees() {
