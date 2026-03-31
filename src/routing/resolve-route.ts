@@ -168,6 +168,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
 type NormalizedPeerConstraint =
   | { state: "none" }
   | { state: "invalid" }
+  | { state: "wildcard-kind"; kind: ChatType }
   | { state: "valid"; kind: ChatType; id: string };
 
 type NormalizedBindingMatch = {
@@ -481,6 +482,9 @@ function normalizePeerConstraint(
   if (!kind || !id) {
     return { state: "invalid" };
   }
+  if (id === "*") {
+    return { state: "wildcard-kind", kind };
+  }
   return { state: "valid", kind, id };
 }
 
@@ -594,6 +598,11 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
       return false;
     }
   }
+  if (match.peer.state === "wildcard-kind") {
+    if (!scope.peer || !peerKindMatches(match.peer.kind, scope.peer.kind)) {
+      return false;
+    }
+  }
   if (match.guildId && match.guildId !== scope.guildId) {
     return false;
   }
@@ -699,6 +708,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
     if (value.state === "invalid") {
       return "invalid";
+    }
+    if (value.state === "wildcard-kind") {
+      return `${value.kind}:*`;
     }
     return `${value.kind}:${value.id}`;
   };
