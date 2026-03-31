@@ -58,7 +58,6 @@
         "skills": [
           "bodhi-pm",
           "bodhi-budget",
-          "bodhi-model-switch",
           "bodhi-switch",
           "bodhi-msf"
         ]
@@ -169,7 +168,6 @@
         // ── Bodhi — core ──────────────────────────────────────────────────
         "skills/bodhi-budget",
         "skills/bodhi-pm",
-        "skills/bodhi-model-switch",
         "skills/bodhi-msf",
         "skills/bodhi-switch",
         // ── Qenjin — business (personal, on bodhi1 at ~/openbodhi/skills/) ─
