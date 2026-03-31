@@ -133,7 +133,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
 
       if (!voice) {
         throw new Error(
-          "Azure voice not configured. Set voice in config or use [[tts:voice=zh-HK-HiuMaanNeural]] directive",
+          "Azure voice not configured. Set voice in config or use [[tts:azure_voice=zh-HK-HiuMaanNeural]] directive",
         );
       }
 
