@@ -7,10 +7,10 @@ import {
 } from "openclaw/plugin-sdk/core";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { initApiConfig } from "./api.js";
+import { applyQQBotSetupAccountConfig, validateQQBotSetupInput } from "./channel.setup.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  applyQQBotAccountConfig,
   listQQBotAccountIds,
   resolveQQBotAccount,
   resolveDefaultQQBotAccountId,
@@ -117,31 +117,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         accountId,
         name,
       }),
-    validateInput: ({ input }) => {
-      if (!input.token && !input.tokenFile && !input.useEnv) {
-        return "QQBot requires --token (format: appId:clientSecret) or --use-env";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      let appId = "";
-      let clientSecret = "";
-
-      if (input.token) {
-        const colonIdx = input.token.indexOf(":");
-        if (colonIdx > 0) {
-          appId = input.token.slice(0, colonIdx);
-          clientSecret = input.token.slice(colonIdx + 1);
-        }
-      }
-
-      return applyQQBotAccountConfig(cfg, accountId, {
-        appId,
-        clientSecret,
-        clientSecretFile: input.tokenFile,
-        name: input.name,
-      });
-    },
+    validateInput: ({ accountId, input }) => validateQQBotSetupInput({ accountId, input }),
+    applyAccountConfig: ({ cfg, accountId, input }) =>
+      applyQQBotSetupAccountConfig({ cfg, accountId, input }),
   },
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
