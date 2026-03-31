@@ -2,6 +2,7 @@ import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { registerConfigDerivedCache } from "./config-derived-caches.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -43,6 +44,15 @@ let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
+
+registerConfigDerivedCache({
+  name: "modelCatalog",
+  prefixes: ["models"],
+  invalidate: () => {
+    modelCatalogPromise = null;
+    hasLoggedModelCatalogError = false;
+  },
+});
 
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode"]);
 

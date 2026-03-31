@@ -8,6 +8,7 @@ import {
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { registerConfigDerivedCache } from "./config-derived-caches.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
@@ -15,6 +16,14 @@ const MODELS_JSON_READY_CACHE = new Map<
   string,
   Promise<{ fingerprint: string; result: { agentDir: string; wrote: boolean } }>
 >();
+
+registerConfigDerivedCache({
+  name: "modelsJsonReady",
+  prefixes: ["models"],
+  invalidate: () => {
+    MODELS_JSON_READY_CACHE.clear();
+  },
+});
 
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
