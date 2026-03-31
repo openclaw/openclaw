@@ -67,6 +67,11 @@ const targetedUnitProxyFiles = [
 ];
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+const HIGH_MEMORY_LOCAL_PLANNER_ENV = {
+  RUNNER_OS: "macOS",
+  OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+  OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+} as const;
 
 function createPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -84,6 +89,13 @@ function createLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
   });
 }
 
+function createHighMemoryLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return createLocalPlannerEnv({
+    ...HIGH_MEMORY_LOCAL_PLANNER_ENV,
+    ...overrides,
+  });
+}
+
 function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): string {
   return execFileSync("node", ["scripts/test-parallel.mjs", ...args], {
     cwd: REPO_ROOT,
@@ -96,11 +108,7 @@ function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): s
 function runHighMemoryLocalMultiSurfacePlan(): string {
   return runPlannerPlan(
     ["--plan", "--surface", "unit", "--surface", "extensions", "--surface", "channels"],
-    createLocalPlannerEnv({
-      RUNNER_OS: "macOS",
-      OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-    }),
+    createHighMemoryLocalPlannerEnv(),
   );
 }
 
@@ -297,11 +305,7 @@ describe("scripts/test-parallel lane planning", () => {
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
     const highMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
     const midMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
@@ -351,11 +355,7 @@ describe("scripts/test-parallel lane planning", () => {
         "channels",
         ...targetedChannelProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
 
     const channelBatchLines = getPlanLines(output, "channels-batch-");
@@ -383,11 +383,7 @@ describe("scripts/test-parallel lane planning", () => {
         "unit",
         ...targetedUnitProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
 
     const unitBatchLines = getPlanLines(output, "unit-batch-");
