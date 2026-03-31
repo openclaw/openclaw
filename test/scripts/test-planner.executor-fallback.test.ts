@@ -27,9 +27,9 @@ describe("test planner executor", () => {
       kill: vi.fn(),
     });
     const spawnMock = vi.fn(() => {
-      setTimeout(() => {
+      process.nextTick(() => {
         fakeChild.emit("exit", 0, null);
-      }, 0);
+      });
       return fakeChild;
     });
     const artifacts = createExecutionArtifacts({ OPENCLAW_TEST_CLOSE_GRACE_MS: "10" });
@@ -140,10 +140,10 @@ describe("test planner executor", () => {
     let capturedEnv;
     const spawnMock = vi.fn((_command, _args, options) => {
       capturedEnv = options?.env;
-      setTimeout(() => {
+      process.nextTick(() => {
         fakeChild.emit("exit", 0, null);
         fakeChild.emit("close", 0, null);
-      }, 0);
+      });
       return fakeChild;
     });
     const artifacts = createExecutionArtifacts({

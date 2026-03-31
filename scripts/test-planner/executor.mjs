@@ -807,6 +807,7 @@ export async function executePlan(plan, options = {}) {
           child.stderr?.destroy();
           finalizeRun(code, signal, "exit-timeout");
         }, closeGraceMs);
+        closeFallbackTimer?.unref?.();
       });
       child.on("close", (code, signal) => {
         finalizeRun(childExitState?.code ?? code, childExitState?.signal ?? signal, "close");
