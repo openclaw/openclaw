@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
+
+const log = createSubsystemLogger("agents/agent-step");
 
 type GatewayCaller = typeof callGateway;
 
@@ -51,6 +54,15 @@ export async function runAgentStep(params: {
   sourceChannel?: string;
   sourceTool?: string;
 }): Promise<string | undefined> {
+  // [Isolation Audit] Detect cross-session context leakage
+  if (params.sourceSessionKey && params.sourceSessionKey !== params.sessionKey) {
+    log.warn("ISOLATION_VIOLATION: Cross-session context leakage detected", {
+      sourceSessionKey: params.sourceSessionKey,
+      targetSessionKey: params.sessionKey,
+      sourceTool: params.sourceTool,
+    });
+  }
+
   const stepIdem = crypto.randomUUID();
   const response = await agentStepDeps.callGateway<{ runId?: string }>({
     method: "agent",

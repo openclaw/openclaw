@@ -1,3 +1,10 @@
+vi.mock("../agents/pi-embedded.js", () => ({
+  runEmbeddedPiAgent: vi.fn(),
+}));
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: vi.fn(),
+}));
+
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
