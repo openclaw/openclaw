@@ -42,6 +42,26 @@ const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
 );
 
+function freezeHookSnapshot<T>(value: T): T {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      freezeHookSnapshot(item);
+    }
+    return Object.freeze(value);
+  }
+  if (isPlainObject(value)) {
+    for (const nested of Object.values(value)) {
+      freezeHookSnapshot(nested);
+    }
+    return Object.freeze(value);
+  }
+  return value;
+}
+
+function cloneHookSnapshot<T>(value: T): T {
+  return freezeHookSnapshot(structuredClone(value));
+}
+
 function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
     return `${params.runId}:${params.toolCallId}`;
@@ -199,18 +219,16 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
     };
-    const hookResult = await hookRunner.runBeforeToolCall(
-      {
-        toolName,
-        params: normalizedParams,
-        ...(args.ctx?.runId && { runId: args.ctx.runId }),
-        ...(args.toolCallId && { toolCallId: args.toolCallId }),
-        ...(args.ctx?.getSystemPrompt && { systemPrompt: args.ctx.getSystemPrompt() }),
-        ...(args.ctx?.getMessages && { messages: args.ctx.getMessages() }),
-        ...(args.ctx?.getTools && { tools: args.ctx.getTools() }),
-      },
-      toolContext,
-    );
+    const hookEvent = freezeHookSnapshot({
+      toolName,
+      params: cloneHookSnapshot(normalizedParams),
+      ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      ...(args.ctx?.getSystemPrompt && { systemPrompt: args.ctx.getSystemPrompt() }),
+      ...(args.ctx?.getMessages && { messages: cloneHookSnapshot(args.ctx.getMessages()) }),
+      ...(args.ctx?.getTools && { tools: cloneHookSnapshot(args.ctx.getTools()) }),
+    });
+    const hookResult = await hookRunner.runBeforeToolCall(hookEvent, toolContext);
 
     if (hookResult?.block) {
       return {
