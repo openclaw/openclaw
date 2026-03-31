@@ -182,6 +182,7 @@ describe("noteWorkspaceStatus", () => {
         status: "waiting",
         notifyPolicy: "done_only",
         goal: "Process PRs",
+        waitingOnTaskId: "task-wait-missing",
         createdAt: 10,
         updatedAt: 20,
       },
@@ -210,7 +211,9 @@ describe("noteWorkspaceStatus", () => {
       const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "ClawFlow recovery");
       expect(recoveryCalls).toHaveLength(1);
       const body = String(recoveryCalls[0]?.[0]);
-      expect(body).toContain("flow-orphaned: waiting linear flow has no linked tasks");
+      expect(body).toContain(
+        "flow-orphaned: waiting flow points at missing task task-wait-missing",
+      );
       expect(body).toContain("flow-blocked: blocked flow points at missing task task-missing");
       expect(body).toContain("openclaw flows show <flow-id>");
       expect(body).toContain("openclaw flows cancel <flow-id>");
