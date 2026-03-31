@@ -110,6 +110,26 @@ describe("campfire channel plugin", () => {
     expect(route?.sessionKey).not.toContain("https://campfire.example.com");
   });
 
+  it("uses Basecamp bucket id for outbound session routing", async () => {
+    const plugin = createCampfirePlugin();
+
+    const route = await plugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "https://3.basecamp.com/1234567/buckets/7/chats/88/messages/99",
+    });
+
+    expect(route).toEqual(
+      expect.objectContaining({
+        peer: { kind: "group", id: "7" },
+        from: "campfire:room:7",
+        to: "campfire:room:7",
+      }),
+    );
+    expect(route?.sessionKey).toContain(":group:7");
+  });
+
   it("exposes setup applyAccountConfig for channel add", () => {
     const plugin = createCampfirePlugin();
 

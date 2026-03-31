@@ -24,7 +24,11 @@ export function resolveCampfireRoomIdFromTarget(target: string): string | null {
 
   try {
     const url = new URL(normalizedTarget);
-    return findSegmentAfter(url.pathname, "rooms") ?? findSegmentAfter(url.pathname, "chats");
+    return (
+      findSegmentAfter(url.pathname, "rooms") ??
+      findSegmentAfter(url.pathname, "buckets") ??
+      findSegmentAfter(url.pathname, "chats")
+    );
   } catch {
     return null;
   }
