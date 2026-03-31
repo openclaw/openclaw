@@ -759,12 +759,12 @@ export function attachGatewayWsMessageHandler(params: {
           ) => {
             const resolveApprovedScopeBaseline = (
               pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
-            ): string[] => {
+            ): string[] | null => {
               if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
-                return [];
+                return null;
               }
               if (!hasEffectivePairedDeviceRole(pairedCandidate, role)) {
-                return [];
+                return null;
               }
               return Array.isArray(pairedCandidate.approvedScopes)
                 ? pairedCandidate.approvedScopes
@@ -775,10 +775,13 @@ export function attachGatewayWsMessageHandler(params: {
             const pairingStateAllowsRequestedAccess = (
               pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
             ): boolean => {
+              const pairedScopes = resolveApprovedScopeBaseline(pairedCandidate);
+              if (pairedScopes === null) {
+                return false;
+              }
               if (scopes.length === 0) {
                 return true;
               }
-              const pairedScopes = resolveApprovedScopeBaseline(pairedCandidate);
               if (pairedScopes.length === 0) {
                 return false;
               }
@@ -832,9 +835,8 @@ export function attachGatewayWsMessageHandler(params: {
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              const silentApprovalScopes = resolveApprovedScopeBaseline(
-                await getPairedDevice(device.id),
-              );
+              const silentApprovalScopes =
+                resolveApprovedScopeBaseline(await getPairedDevice(device.id)) ?? [];
               approved = await approveDevicePairing(pairing.request.requestId, {
                 // Silent pairing may only inherit an already approved scope baseline.
                 callerScopes: silentApprovalScopes,

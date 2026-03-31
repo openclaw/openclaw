@@ -55,9 +55,7 @@ export function shouldAllowSilentLocalPairing(params: {
   return (
     params.isLocalClient &&
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" ||
-      params.reason === "scope-upgrade" ||
-      params.reason === "role-upgrade")
+    (params.reason === "scope-upgrade" || params.reason === "role-upgrade")
   );
 }
 
