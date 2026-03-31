@@ -192,5 +192,6 @@ export const discordChannelConfigUiHints = {
   token: {
     label: "Discord Bot Token",
     help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
+    sensitive: true,
   },
 } satisfies Record<string, ChannelConfigUiHint>;

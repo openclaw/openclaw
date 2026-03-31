@@ -348,6 +348,39 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.config.channels?.matrix?.accessToken).toBe("default-matrix-token");
   });
 
+  it("can skip auth-profile SecretRef resolution when includeAuthStoreRefs is false", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    const loadAuthStore = () =>
+      loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+        },
+      });
+
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({}),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore,
+      }),
+    ).rejects.toThrow(`Environment variable "${missingEnvVar}" is missing or empty.`);
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: {},
+      includeAuthStoreRefs: false,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore,
+    });
+
+    expect(snapshot.authStores).toEqual([]);
+  });
+
   it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
