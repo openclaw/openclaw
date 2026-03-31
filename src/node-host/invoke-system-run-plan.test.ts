@@ -503,6 +503,13 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 7,
     },
     {
+      name: "pnpm reporter dlx short-package tsx file",
+      argv: ["pnpm", "--reporter", "silent", "dlx", "-p", "tsx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 7,
+    },
+    {
       name: "pnpm reporter exec tsx file",
       argv: ["pnpm", "--reporter", "silent", "exec", "tsx", "./run.ts"],
       scriptName: "run.ts",

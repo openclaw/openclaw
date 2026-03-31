@@ -185,7 +185,7 @@ const PNPM_FLAG_OPTIONS = new Set([
   "-r",
 ]);
 
-const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package"]);
+const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
 
 type FileOperandCollection = {
   hits: number[];
