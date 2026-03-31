@@ -820,6 +820,9 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   if (params.shellCommand !== null) {
     return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
   }
+  if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv)) {
+    return true;
+  }
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
@@ -829,6 +832,77 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
     return false;
   }
   return isMutableScriptRunner(executable);
+}
+
+function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[]): boolean {
+  if (normalizePackageManagerExecToken(argv[0] ?? "") !== "pnpm") {
+    return false;
+  }
+
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token !== "dlx") {
+        return false;
+      }
+      return pnpmDlxTailNeedsFailClosedBinding(argv.slice(idx + 1));
+    }
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return false;
+  }
+
+  return false;
+}
+
+function pnpmDlxTailNeedsFailClosedBinding(argv: string[]): boolean {
+  let idx = 0;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      // A concrete dlx command should either bind cleanly or fail closed.
+      return true;
+    }
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (flag === "-c" || flag === "--shell-mode") {
+      return false;
+    }
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return true;
+  }
+
+  return true;
 }
 
 export function resolveMutableFileOperandSnapshotSync(params: {

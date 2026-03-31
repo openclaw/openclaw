@@ -257,6 +257,15 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
       fs.writeFileSync(path.join(tmp, "run.js"), 'console.log("SAFE")\n');
     },
   },
+  {
+    name: "rejects pnpm dlx invocations with unrecognized flags that cannot be safely bound",
+    binName: "pnpm",
+    tmpPrefix: "openclaw-pnpm-dlx-unknown-flag-",
+    command: ["pnpm", "dlx", "--future-flag", "tsx", "./run.ts"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
+    },
+  },
 ];
 
 describe("hardenApprovedExecutionPaths", () => {
