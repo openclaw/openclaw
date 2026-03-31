@@ -66,7 +66,7 @@ export function buildMediaUnderstandingRegistry(
           ? ((providerConfig as Record<string, unknown>).models as Array<Record<string, unknown>>)
           : [];
         const hasImageModel = models.some(
-          (m) => Array.isArray(m?.input) && (m.input as string[]).includes("image"),
+          (m) => Array.isArray(m?.input) && (m.input).includes("image"),
         );
         if (hasImageModel) {
           registry.set(normalizedKey, {

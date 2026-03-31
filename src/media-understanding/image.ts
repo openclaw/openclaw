@@ -66,7 +66,7 @@ async function resolveImageRuntime(params: {
     if (
       inlineModel &&
       Array.isArray(inlineModel.input) &&
-      (inlineModel.input as string[]).includes("image")
+      (inlineModel.input).includes("image")
     ) {
       const builtModel = {
         ...inlineModel,
