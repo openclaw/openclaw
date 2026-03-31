@@ -573,11 +573,19 @@ function parseExecValues(params: {
   }
 
   let parsed: unknown;
-  if (!params.jsonOnly && params.ids.length === 1) {
+
+  if (!params.jsonOnly) {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      if (params.ids.length === 1) {
+        return { [params.ids[0]]: trimmed };
+      }
+      throw providerResolutionError({
+        source: "exec",
+        provider: params.providerName,
+        message: `Exec provider "${params.providerName}" returned invalid JSON.`,
+      });
     }
   } else {
     try {
@@ -590,7 +598,6 @@ function parseExecValues(params: {
       });
     }
   }
-
   if (!isRecord(parsed)) {
     if (!params.jsonOnly && params.ids.length === 1 && typeof parsed === "string") {
       return { [params.ids[0]]: parsed };
