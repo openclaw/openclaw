@@ -27,6 +27,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { SmartRoutingConfig } from "./types.smart-routing.js";
 import type { ToolsConfig } from "./types.tools.js";
 
 export type OpenClawConfig = {
@@ -122,6 +123,7 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
   mcp?: McpConfig;
+  smartRouting?: SmartRoutingConfig;
 };
 
 declare const openClawConfigStateBrand: unique symbol;

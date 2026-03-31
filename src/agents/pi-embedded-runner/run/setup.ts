@@ -9,6 +9,7 @@ import {
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveSmartRoutingOverride } from "../../smart-routing.js";
 import { log } from "../logger.js";
 
 type HookContext = {
@@ -37,6 +38,7 @@ export async function resolveHookModelSelection(params: {
   prompt: string;
   provider: string;
   modelId: string;
+  cfg?: OpenClawConfig;
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
@@ -45,6 +47,31 @@ export async function resolveHookModelSelection(params: {
   let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
   let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
+
+  // Smart routing: classify message complexity and resolve model tier.
+  // Runs before plugin hooks so hooks can still override the routing decision.
+  // In "hybrid" strategy, may make a lightweight LLM call for ambiguous messages.
+  if (params.cfg) {
+    const smartOverride = await resolveSmartRoutingOverride({
+      cfg: params.cfg,
+      prompt: params.prompt,
+      sessionKey: params.hookContext.sessionKey,
+      // LLM classifier injection is handled at a higher level when hybrid mode
+      // is configured. For now, pattern-only runs synchronously. The LLM
+      // classifier can be wired in via the run.ts caller when the completeSimple
+      // infrastructure is available in the run context.
+    });
+    if (smartOverride) {
+      // Parse "provider/model" format
+      const slashIdx = smartOverride.model.indexOf("/");
+      if (slashIdx !== -1) {
+        provider = smartOverride.model.slice(0, slashIdx);
+        modelId = smartOverride.model.slice(slashIdx + 1);
+      } else {
+        modelId = smartOverride.model;
+      }
+    }
+  }
 
   // Run before_model_resolve hooks early so plugins can override the
   // provider/model before resolveModel().
