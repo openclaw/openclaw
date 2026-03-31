@@ -129,6 +129,7 @@ describe("getMessageFeishu", () => {
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
     expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
+  });
 
   it("passes card_msg_content_type param to message.get", async () => {
     mockClientGet.mockResolvedValueOnce({
