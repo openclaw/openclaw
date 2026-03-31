@@ -1099,6 +1099,44 @@ describe("matrix monitor handler pairing account scope", () => {
     );
   });
 
+  it("routes thread-root reaction notifications to the thread session when threadReplies is always", async () => {
+    const { handler, enqueueSystemEvent } = createReactionHarness({
+      cfg: {
+        channels: {
+          matrix: {
+            threadReplies: "always",
+          },
+        },
+      },
+      isDirectMessage: false,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@bot:example.org",
+            body: "start thread",
+          }),
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixReactionEvent({
+        eventId: "$reaction-root",
+        targetEventId: "$root",
+        key: "🧵",
+      }),
+    );
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Matrix reaction added: 🧵 by sender on msg $root",
+      {
+        sessionKey: "agent:ops:main:thread:$root",
+        contextKey: "matrix:reaction:add:!room:example.org:$root:@user:example.org:🧵",
+      },
+    );
+  });
+
   it("ignores reactions that do not target bot-authored messages", async () => {
     const { handler, enqueueSystemEvent, resolveAgentRoute } = createReactionHarness({
       targetSender: "@other:example.org",

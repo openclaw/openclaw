@@ -1,6 +1,5 @@
 import {
   AllowFromListSchema,
-  buildNestedDmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,

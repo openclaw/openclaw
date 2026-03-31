@@ -59,6 +59,35 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     );
   });
 
+  it("starts the thread-scoped session from the triggering message when threadReplies is always", async () => {
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        threadReplies: "always",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-root",
+        body: "@room start thread",
+        mentions: { room: true },
+      }),
+    );
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: "$thread-root",
+        ReplyToId: undefined,
+      }),
+    );
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:ops:main:thread:$thread-root",
+      }),
+    );
+  });
+
   it("records formatted poll results for inbound poll response events", async () => {
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({

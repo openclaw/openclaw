@@ -1,7 +1,12 @@
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { RelationType } from "./types.js";
 
-type MatrixThreadReplies = "off" | "inbound" | "always";
+export type MatrixThreadReplies = "off" | "inbound" | "always";
+
+export type MatrixThreadRouting = {
+  effectiveThreadReplies: MatrixThreadReplies;
+  threadId?: string;
+};
 
 function resolveMatrixRelatedReplyToEventId(relates: unknown): string | undefined {
   if (!relates || typeof relates !== "object") {
@@ -19,50 +24,34 @@ function resolveMatrixRelatedReplyToEventId(relates: unknown): string | undefine
   return undefined;
 }
 
-export function resolveMatrixEffectiveThreadReplies(params: {
+export function resolveMatrixThreadRouting(params: {
   isDirectMessage: boolean;
   threadReplies: MatrixThreadReplies;
   dmThreadReplies?: MatrixThreadReplies;
-}): MatrixThreadReplies {
-  return params.isDirectMessage && params.dmThreadReplies !== undefined
-    ? params.dmThreadReplies
-    : params.threadReplies;
-}
-
-export function resolveMatrixThreadSessionId(params: {
-  effectiveThreadReplies: MatrixThreadReplies;
   messageId: string;
   threadRootId?: string;
   isThreadRoot?: boolean;
-}): string | undefined {
-  if (params.effectiveThreadReplies === "off") {
-    return undefined;
-  }
+}): MatrixThreadRouting {
+  const effectiveThreadReplies =
+    params.isDirectMessage && params.dmThreadReplies !== undefined
+      ? params.dmThreadReplies
+      : params.threadReplies;
+  const messageId = params.messageId.trim();
+  const threadRootId = params.threadRootId?.trim();
   const isThreadRoot = params.isThreadRoot === true;
-  return params.threadRootId && params.threadRootId !== params.messageId && !isThreadRoot
-    ? params.threadRootId
-    : undefined;
-}
+  const inboundThreadId =
+    threadRootId && threadRootId !== messageId && !isThreadRoot ? threadRootId : undefined;
+  const threadId =
+    effectiveThreadReplies === "off"
+      ? undefined
+      : effectiveThreadReplies === "inbound"
+        ? inboundThreadId
+        : (inboundThreadId ?? (messageId || undefined));
 
-export function resolveMatrixThreadTarget(params: {
-  threadReplies: MatrixThreadReplies;
-  messageId: string;
-  threadRootId?: string;
-  isThreadRoot?: boolean;
-}): string | undefined {
-  const { threadReplies, messageId, threadRootId } = params;
-  if (threadReplies === "off") {
-    return undefined;
-  }
-  const isThreadRoot = params.isThreadRoot === true;
-  const hasInboundThread = Boolean(threadRootId && threadRootId !== messageId && !isThreadRoot);
-  if (threadReplies === "inbound") {
-    return hasInboundThread ? threadRootId : undefined;
-  }
-  if (threadReplies === "always") {
-    return threadRootId ?? messageId;
-  }
-  return undefined;
+  return {
+    effectiveThreadReplies,
+    threadId,
+  };
 }
 
 export function resolveMatrixThreadRootId(params: {

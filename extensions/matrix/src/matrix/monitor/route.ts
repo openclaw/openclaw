@@ -6,7 +6,6 @@ import {
   type PluginRuntime,
 } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixThreadSessionId } from "./threads.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;
 
@@ -16,9 +15,7 @@ export function resolveMatrixInboundRoute(params: {
   roomId: string;
   senderId: string;
   isDirectMessage: boolean;
-  messageId: string;
-  threadRootId?: string;
-  effectiveThreadReplies: "off" | "inbound" | "always";
+  threadId?: string;
   eventTs?: number;
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
 }): {
@@ -43,12 +40,8 @@ export function resolveMatrixInboundRoute(params: {
         }
       : undefined,
   });
-  const bindingConversationId =
-    params.threadRootId && params.threadRootId !== params.messageId
-      ? params.threadRootId
-      : params.roomId;
-  const bindingParentConversationId =
-    bindingConversationId === params.roomId ? undefined : params.roomId;
+  const bindingConversationId = params.threadId ?? params.roomId;
+  const bindingParentConversationId = params.threadId ? params.roomId : undefined;
   const sessionBindingService = getSessionBindingService();
   const runtimeBinding = sessionBindingService.resolveByConversation({
     channel: "matrix",
@@ -97,15 +90,10 @@ export function resolveMatrixInboundRoute(params: {
       : baseRoute;
 
   // When no binding overrides the session key, isolate threads into their own sessions.
-  const threadId = resolveMatrixThreadSessionId({
-    effectiveThreadReplies: params.effectiveThreadReplies,
-    messageId: params.messageId,
-    threadRootId: params.threadRootId,
-  });
-  if (!configuredBinding && !configuredSessionKey && threadId) {
+  if (!configuredBinding && !configuredSessionKey && params.threadId) {
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey: effectiveRoute.sessionKey,
-      threadId,
+      threadId: params.threadId,
       parentSessionKey: effectiveRoute.sessionKey,
     });
     return {

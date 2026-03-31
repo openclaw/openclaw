@@ -24,8 +24,6 @@ function resolveDmRoute(cfg: OpenClawConfig) {
     roomId: "!dm:example.org",
     senderId: "@alice:example.org",
     isDirectMessage: true,
-    messageId: "$msg1",
-    effectiveThreadReplies: "inbound",
     resolveAgentRoute,
   });
 }
@@ -197,16 +195,14 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
     );
   });
 
-  it("scopes session key to thread when threadRootId is present and differs from messageId", () => {
+  it("scopes session key to thread when a thread id is provided", () => {
     const { route } = resolveMatrixInboundRoute({
       cfg: baseCfg as never,
       accountId: "ops",
       roomId: "!room:example.org",
       senderId: "@alice:example.org",
       isDirectMessage: false,
-      messageId: "$reply1",
-      threadRootId: "$thread-root",
-      effectiveThreadReplies: "inbound",
+      threadId: "$thread-root",
       resolveAgentRoute,
     });
 
@@ -214,68 +210,16 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
     expect(route.mainSessionKey).not.toContain(":thread:");
   });
 
-  it("does not scope session key when threadRootId equals messageId", () => {
+  it("does not scope session key when thread id is absent", () => {
     const { route } = resolveMatrixInboundRoute({
       cfg: baseCfg as never,
       accountId: "ops",
       roomId: "!room:example.org",
       senderId: "@alice:example.org",
       isDirectMessage: false,
-      messageId: "$thread-root",
-      threadRootId: "$thread-root",
-      effectiveThreadReplies: "inbound",
       resolveAgentRoute,
     });
 
     expect(route.sessionKey).not.toContain(":thread:");
-  });
-
-  it("does not scope session key when threadRootId is absent", () => {
-    const { route } = resolveMatrixInboundRoute({
-      cfg: baseCfg as never,
-      accountId: "ops",
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-      isDirectMessage: false,
-      messageId: "$msg1",
-      effectiveThreadReplies: "inbound",
-      resolveAgentRoute,
-    });
-
-    expect(route.sessionKey).not.toContain(":thread:");
-  });
-
-  it("keeps room sessions flat when threadReplies is off", () => {
-    const { route } = resolveMatrixInboundRoute({
-      cfg: baseCfg as never,
-      accountId: "ops",
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-      isDirectMessage: false,
-      messageId: "$reply1",
-      threadRootId: "$thread-root",
-      effectiveThreadReplies: "off",
-      resolveAgentRoute,
-    });
-
-    expect(route.sessionKey).not.toContain(":thread:");
-    expect(route.mainSessionKey).not.toContain(":thread:");
-  });
-
-  it("keeps DM sessions flat when dm.threadReplies overrides threading off", () => {
-    const { route } = resolveMatrixInboundRoute({
-      cfg: baseCfg as never,
-      accountId: "ops",
-      roomId: "!dm:example.org",
-      senderId: "@alice:example.org",
-      isDirectMessage: true,
-      messageId: "$reply1",
-      threadRootId: "$thread-root",
-      effectiveThreadReplies: "off",
-      resolveAgentRoute,
-    });
-
-    expect(route.sessionKey).not.toContain(":thread:");
-    expect(route.mainSessionKey).not.toContain(":thread:");
   });
 });

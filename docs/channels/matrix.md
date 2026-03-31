@@ -504,7 +504,7 @@ Matrix supports native Matrix threads for both automatic replies and message-too
 
 - `threadReplies: "off"` keeps replies top-level and keeps inbound threaded messages on the parent session.
 - `threadReplies: "inbound"` replies inside a thread only when the inbound message was already in that thread.
-- `threadReplies: "always"` keeps room replies in a thread rooted at the triggering message.
+- `threadReplies: "always"` keeps room replies in a thread rooted at the triggering message and routes that conversation through the matching thread-scoped session from the first triggering message.
 - `dm.threadReplies` overrides the top-level setting for DMs only. For example, you can keep room threads isolated while keeping DMs flat.
 - Inbound threaded messages include the thread root message as extra agent context.
 - Message-tool sends now auto-inherit the current Matrix thread when the target is the same room, or the same DM user target, unless an explicit `threadId` is provided.
