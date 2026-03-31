@@ -839,22 +839,6 @@ async function agentCommandInternal(
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
-          // Validate the switched model against the agent allowlist before
-          // accepting it.  All other override paths (stored / explicit) are
-          // checked before entering the loop; the live-switch path must
-          // apply the same restriction to avoid bypassing allowedModelKeys.
-          const switchRef = normalizeModelRef(err.provider, err.model);
-          const switchKey = modelKey(switchRef.provider, switchRef.model);
-          if (!allowAnyModel && !allowedModelKeys.has(switchKey)) {
-            log.info(
-              `Live session model switch in subagent run ${runId}: ` +
-                `rejected ${err.provider}/${err.model} (not in allowlist)`,
-            );
-            throw new Error(
-              `Live model switch rejected: ${err.provider}/${err.model} is not in the agent allowlist`,
-              { cause: err },
-            );
-          }
           // Capture the pre-switch provider and model before mutating, so the
           // guard below can detect whether either actually changed.
           const previousProvider = provider;
