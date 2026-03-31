@@ -93,6 +93,8 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Per-request tool deny list override (supports group refs like "group:web"). */
+  toolDenyOverride?: string[];
 };
 
 export type AgentCommandIngressOpts = Omit<

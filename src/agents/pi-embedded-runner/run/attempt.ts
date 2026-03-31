@@ -467,6 +467,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          toolDenyOverride: params.toolDenyOverride,
           onYield: (message) => {
             yieldDetected = true;
             yieldMessage = message;

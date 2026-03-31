@@ -275,6 +275,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Per-request tool deny list override (supports group refs like "group:web"). */
+  toolDenyOverride?: string[];
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -602,6 +604,9 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         agentId,
       }),
+      ...(options?.toolDenyOverride?.length
+        ? [{ policy: { deny: options.toolDenyOverride }, label: "per-request tool_deny" }]
+        : []),
       { policy: sandboxToolPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
