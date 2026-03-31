@@ -163,12 +163,8 @@ function expectBundledProviderLoad(params?: { config?: unknown; env?: NodeJS.Pro
 }
 
 describe("resolvePluginProviders", () => {
-  beforeAll(async () => {
-    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
-    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
@@ -179,6 +175,8 @@ describe("resolvePluginProviders", () => {
       config: params.config,
       changes: [],
     }));
+    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
+    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
     setManifestPlugins([
       createManifestProviderPlugin({ id: "google", providerIds: ["google"] }),
       createManifestProviderPlugin({ id: "browser", providerIds: [] }),
