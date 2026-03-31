@@ -26,6 +26,9 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
   if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull()?.address ?: return false
+  if (address.size == 4) {
+    return address[0] == 127.toByte()
+  }
   if (address.size != 16) return false
   // `::1` is 15 zero bytes followed by `0x01`.
   val isIpv6Loopback = address.copyOfRange(0, 15).all { it == 0.toByte() } && address[15] == 1.toByte()
