@@ -63,9 +63,12 @@ async function expectRedirectSaveResult(params: {
   expectedText: string;
   expectedContentType: string;
   expectedExtension: string;
+  headers?: Record<string, string>;
+  assertRequests?: () => void;
 }) {
-  const saved = await saveMediaSource("https://example.com/start");
+  const saved = await saveMediaSource("https://example.com/start", params.headers);
   expect(mockRequest).toHaveBeenCalledTimes(2);
+  params.assertRequests?.();
   expect(saved.contentType).toBe(params.expectedContentType);
   expect(path.extname(saved.path)).toBe(params.expectedExtension);
   expect(await fs.readFile(saved.path, "utf8")).toBe(params.expectedText);
@@ -130,6 +133,56 @@ describe("media store redirects", () => {
       expectedText: "redirected",
       expectedContentType: "text/plain",
       expectedExtension: ".txt",
+    });
+  });
+
+  it("drops sensitive headers on cross-origin redirects", async () => {
+    let call = 0;
+    mockRequest.mockImplementation((_url, _opts, cb) => {
+      call += 1;
+      if (call === 1) {
+        const exchange = mockRedirectExchange({ location: "https://other.example/final" });
+        exchange.send(cb);
+        return exchange.req;
+      }
+
+      const exchange = mockSuccessfulTextExchange({
+        text: "redirected",
+        contentType: "text/plain",
+      });
+      exchange.send(cb);
+      return exchange.req;
+    });
+
+    await expectRedirectSaveResult({
+      expectedText: "redirected",
+      expectedContentType: "text/plain",
+      expectedExtension: ".txt",
+      headers: {
+        Accept: "text/plain",
+        Authorization: "Bearer secret-token",
+        "User-Agent": "OpenClawTest/1.0",
+      },
+      assertRequests: () => {
+        expect(mockRequest.mock.calls[0]?.[1]).toMatchObject({
+          headers: {
+            Accept: "text/plain",
+            Authorization: "Bearer secret-token",
+            "User-Agent": "OpenClawTest/1.0",
+          },
+        });
+        expect(mockRequest.mock.calls[1]?.[1]).toMatchObject({
+          headers: {
+            accept: "text/plain",
+            "user-agent": "OpenClawTest/1.0",
+          },
+        });
+        expect(mockRequest.mock.calls[1]?.[1]).not.toMatchObject({
+          headers: {
+            authorization: expect.any(String),
+          },
+        });
+      },
     });
   });
 
