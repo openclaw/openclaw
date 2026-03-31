@@ -228,4 +228,63 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(installCount).toBe(2);
     expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe("2\n");
   });
+
+  it("retries transient runtime dependency staging failures before surfacing an error", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "left-pad": "1.3.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        if (installCount < 3) {
+          throw new Error(`attempt ${installCount} failed`);
+        }
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "ok\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(3);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "ok\n",
+    );
+  });
+
+  it("surfaces the last staging error after exhausting retries", () => {
+    const { repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "left-pad": "1.3.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+
+    let installCount = 0;
+    expect(() =>
+      stageBundledPluginRuntimeDeps({
+        cwd: repoRoot,
+        installAttempts: 2,
+        installPluginRuntimeDepsImpl: () => {
+          installCount += 1;
+          throw new Error(`attempt ${installCount} failed`);
+        },
+      }),
+    ).toThrow("attempt 2 failed");
+    expect(installCount).toBe(2);
+  });
 });

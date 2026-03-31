@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendModule = await import("./send.js");
 const fetchChannelPermissionsDiscordMock = vi.fn();
@@ -6,11 +6,20 @@ vi.spyOn(sendModule, "fetchChannelPermissionsDiscord").mockImplementation(
   fetchChannelPermissionsDiscordMock,
 );
 
-describe("discord audit", () => {
-  it("collects numeric channel ids and counts unresolved keys", async () => {
-    const { collectDiscordAuditChannelIds, auditDiscordChannelPermissions } =
-      await import("./audit.js");
+let auditDiscordChannelPermissions: typeof import("./audit.js").auditDiscordChannelPermissions;
+let collectDiscordAuditChannelIds: typeof import("./audit.js").collectDiscordAuditChannelIds;
 
+describe("discord audit", () => {
+  beforeAll(async () => {
+    ({ collectDiscordAuditChannelIds, auditDiscordChannelPermissions } =
+      await import("./audit.js"));
+  });
+
+  beforeEach(() => {
+    fetchChannelPermissionsDiscordMock.mockReset();
+  });
+
+  it("collects numeric channel ids and counts unresolved keys", async () => {
     const cfg = {
       channels: {
         discord: {
@@ -55,9 +64,7 @@ describe("discord audit", () => {
     expect(audit.channels[0]?.missing).toContain("SendMessages");
   });
 
-  it("does not count '*' wildcard key as unresolved channel", async () => {
-    const { collectDiscordAuditChannelIds } = await import("./audit.js");
-
+  it("does not count '*' wildcard key as unresolved channel", () => {
     const cfg = {
       channels: {
         discord: {
@@ -81,9 +88,7 @@ describe("discord audit", () => {
     expect(collected.unresolvedChannels).toBe(0);
   });
 
-  it("handles guild with only '*' wildcard and no numeric channel ids", async () => {
-    const { collectDiscordAuditChannelIds } = await import("./audit.js");
-
+  it("handles guild with only '*' wildcard and no numeric channel ids", () => {
     const cfg = {
       channels: {
         discord: {
@@ -106,9 +111,7 @@ describe("discord audit", () => {
     expect(collected.unresolvedChannels).toBe(0);
   });
 
-  it("collects audit channel ids without resolving SecretRef-backed Discord tokens", async () => {
-    const { collectDiscordAuditChannelIds } = await import("./audit.js");
-
+  it("collects audit channel ids without resolving SecretRef-backed Discord tokens", () => {
     const cfg = {
       channels: {
         discord: {

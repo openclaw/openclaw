@@ -6,7 +6,11 @@ read_when:
 title: "Authentication"
 ---
 
-# Authentication
+# Authentication (Model Providers)
+
+<Note>
+This page covers **model provider** authentication (API keys, OAuth, setup tokens). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+</Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
 hosts, API keys are usually the most predictable option. Subscription/OAuth

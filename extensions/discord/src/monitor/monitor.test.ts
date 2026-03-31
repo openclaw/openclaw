@@ -10,7 +10,7 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
   buildPluginBindingResolvedTextMock,
@@ -308,8 +308,7 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       createDiscordComponentButton,
       createDiscordComponentStringSelect,
@@ -322,6 +321,9 @@ describe("discord component interactions", () => {
       resolveDiscordModalEntry,
     } = await import("../components-registry.js"));
     sendComponents = await import("../send.components.js");
+  });
+
+  beforeEach(() => {
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
       .mockResolvedValue({
@@ -699,14 +701,16 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          conversationId: "channel:group-dm-1",
-          senderId: "123456789",
+    await vi.waitFor(() => {
+      expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            conversationId: "channel:group-dm-1",
+            senderId: "123456789",
+          }),
         }),
-      }),
-    );
+      );
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
