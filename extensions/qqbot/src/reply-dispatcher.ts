@@ -37,7 +37,6 @@ import {
 import {
   getQQBotDataDir,
   normalizePath,
-  resolveQQBotLocalMediaPath,
   resolveQQBotPayloadLocalFilePath,
   sanitizeFileName,
 } from "./utils/platform.js";

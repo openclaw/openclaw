@@ -84,6 +84,20 @@ describe("qqbot local media path remapping", () => {
     expect(resolveQQBotPayloadLocalFilePath(outsideFile)).toBeNull();
   });
 
+  it("blocks structured payload paths that escape QQ Bot media via '..'", () => {
+    const escapedPath = path.join(
+      getHomeDir(),
+      ".openclaw",
+      "media",
+      "qqbot",
+      "..",
+      "..",
+      "qqbot-escape.txt",
+    );
+
+    expect(resolveQQBotPayloadLocalFilePath(escapedPath)).toBeNull();
+  });
+
   it("allows structured payload files inside the QQ Bot media directory", () => {
     const actualHome = getHomeDir();
     const openclawDir = path.join(actualHome, ".openclaw");

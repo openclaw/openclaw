@@ -159,7 +159,7 @@ export function resolveQQBotLocalMediaPath(p: string): string {
  * QQ Bot-owned storage roots.
  */
 export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
-  const candidate = resolveQQBotLocalMediaPath(normalizePath(p));
+  const candidate = resolveQQBotLocalMediaPath(p);
   if (!candidate.trim()) {
     return null;
   }
