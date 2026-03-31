@@ -870,7 +870,7 @@ async function agentCommandInternal(
           if (!allowAnyModel && allowedModelKeys.size > 0 && !allowedModelKeys.has(switchKey)) {
             log.info(
               `Live session model switch in subagent run ${runId}: ` +
-                `rejected ${err.provider}/${err.model} (not in allowlist)`,
+                `rejected ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} (not in allowlist)`,
             );
             if (!lifecycleEnded) {
               emitAgentEvent({
@@ -905,6 +905,9 @@ async function agentCommandInternal(
           // Clear the stale compaction count so the new profile is not
           // treated as already aged by resolveSessionAuthProfileOverride.
           if (sessionEntry) {
+            // Shallow-copy to avoid mutating the cached/shared original
+            // entry in-place, which could leak overrides across runs.
+            sessionEntry = { ...sessionEntry };
             sessionEntry.authProfileOverride = err.authProfileId;
             sessionEntry.authProfileOverrideSource = err.authProfileId
               ? err.authProfileIdSource
@@ -925,7 +928,7 @@ async function agentCommandInternal(
           // Reset lifecycle tracking for the retry iteration.
           lifecycleEnded = false;
           log.info(
-            `Live session model switch in subagent run ${runId}: switching to ${err.provider}/${err.model}`,
+            `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,
           );
           continue;
         }
