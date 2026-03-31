@@ -143,6 +143,9 @@ export class TelnyxProvider implements VoiceCallProvider {
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
+      direction: TelnyxProvider.parseDirection(data.payload?.direction),
+      from: data.payload?.from || undefined,
+      to: data.payload?.to || undefined,
     };
 
     switch (data.event_type) {
@@ -165,14 +168,19 @@ export class TelnyxProvider implements VoiceCallProvider {
           text: data.payload?.text || "",
         };
 
-      case "call.transcription":
+      case "call.transcription": {
+        // Telnyx nests transcript under transcription_data object
+        const txData = data.payload?.transcription_data as
+          | { transcript?: string; confidence?: number; is_final?: boolean }
+          | undefined;
         return {
           ...baseEvent,
           type: "call.speech",
-          transcript: data.payload?.transcription || "",
-          isFinal: data.payload?.is_final ?? true,
-          confidence: data.payload?.confidence,
+          transcript: txData?.transcript || data.payload?.transcription || "",
+          isFinal: txData?.is_final ?? data.payload?.is_final ?? true,
+          confidence: txData?.confidence ?? data.payload?.confidence,
         };
+      }
 
       case "call.hangup":
         return {
@@ -181,12 +189,21 @@ export class TelnyxProvider implements VoiceCallProvider {
           reason: this.mapHangupCause(data.payload?.hangup_cause),
         };
 
+      case "call.speak.ended":
+        return { ...baseEvent, type: "call.active" };
+
       case "call.dtmf.received":
         return {
           ...baseEvent,
           type: "call.dtmf",
           digits: data.payload?.digit || "",
         };
+
+      // Audio streaming lifecycle — log but no action needed
+      case "streaming.started":
+      case "streaming.stopped":
+        console.log(`[voice-call] Telnyx ${data.event_type} for ${baseEvent.providerCallId}`);
+        return null;
 
       default:
         return null;
@@ -262,7 +279,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
-   * Play TTS audio via Telnyx speak action.
+   * Play TTS audio via Telnyx speak action (native robot voice).
    */
   async playTts(input: PlayTtsInput): Promise<void> {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/speak`, {
@@ -270,6 +287,23 @@ export class TelnyxProvider implements VoiceCallProvider {
       payload: input.text,
       voice: input.voice || "female",
       language: input.locale || "en-US",
+    });
+  }
+
+  /**
+   * Play pre-generated audio bytes directly into the call via Telnyx playback_start.
+   * Accepts MP3 or WAV audio as a Buffer, base64-encodes it and sends inline.
+   * This bypasses native TTS entirely — use for Cartesia/external TTS output.
+   */
+  async playbackAudio(input: {
+    providerCallId: string;
+    audio: Buffer;
+    audioType?: "mp3" | "wav";
+  }): Promise<void> {
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/playback_start`, {
+      command_id: crypto.randomUUID(),
+      playback_content: input.audio.toString("base64"),
+      audio_type: input.audioType || "mp3",
     });
   }
 
@@ -284,6 +318,35 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
+   * Start real-time audio streaming to a WebSocket URL.
+   * Telnyx forks the inbound audio track and connects to the given WebSocket,
+   * sending mu-law 8kHz audio frames for external STT processing.
+   */
+  async startStreaming(input: {
+    providerCallId: string;
+    streamUrl: string;
+    clientState?: string;
+  }): Promise<void> {
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/streaming_start`, {
+      command_id: crypto.randomUUID(),
+      stream_url: input.streamUrl,
+      stream_track: "inbound_track",
+      ...(input.clientState ? { client_state: Buffer.from(input.clientState).toString("base64") } : {}),
+    });
+  }
+
+  /**
+   * Stop real-time audio streaming.
+   */
+  async stopStreaming(input: { providerCallId: string }): Promise<void> {
+    await this.apiRequest(
+      `/calls/${input.providerCallId}/actions/streaming_stop`,
+      { command_id: crypto.randomUUID() },
+      { allowNotFound: true },
+    );
+  }
+
+  /**
    * Stop transcription via Telnyx.
    */
   async stopListening(input: StopListeningInput): Promise<void> {
@@ -292,6 +355,42 @@ export class TelnyxProvider implements VoiceCallProvider {
       { command_id: crypto.randomUUID() },
       { allowNotFound: true },
     );
+  }
+
+  /**
+   * Parse Telnyx direction string to normalized format.
+   */
+  private static parseDirection(direction?: string): "inbound" | "outbound" | undefined {
+    if (direction === "incoming") return "inbound";
+    if (direction === "outgoing") return "outbound";
+    return undefined;
+  }
+
+  /**
+   * Answer an inbound call via Telnyx API.
+   * Telnyx requires an explicit answer command (unlike Twilio's TwiML auto-answer).
+   */
+  async answerCall(input: { callId: string; providerCallId: string }): Promise<void> {
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, {
+      command_id: crypto.randomUUID(),
+    });
+  }
+
+  /**
+   * Transfer an active call to another number via Telnyx API.
+   * Used for [TRANSFER] signal call forwarding.
+   */
+  async transferCall(input: {
+    callId: string;
+    providerCallId: string;
+    to: string;
+    from?: string;
+  }): Promise<void> {
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/transfer`, {
+      command_id: crypto.randomUUID(),
+      to: input.to,
+      ...(input.from && { from: input.from }),
+    });
   }
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
@@ -342,6 +441,9 @@ interface TelnyxEvent {
     confidence?: number;
     hangup_cause?: string;
     digit?: string;
+    direction?: string;
+    from?: string;
+    to?: string;
     [key: string]: unknown;
   };
 }

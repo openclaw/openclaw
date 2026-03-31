@@ -75,4 +75,38 @@ export interface VoiceCallProvider {
    * so the caller can keep the call and rely on timer-based fallback.
    */
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
+
+  /**
+   * Answer an inbound call. Required for providers that don't auto-answer
+   * via response markup (e.g. Telnyx requires an explicit answer command).
+   */
+  answerCall?(input: { callId: string; providerCallId: string }): Promise<void>;
+
+  /**
+   * Start real-time audio streaming to a WebSocket URL for external STT.
+   * Used when streaming mode is enabled (e.g. Deepgram STT instead of native).
+   */
+  startStreaming?(input: {
+    providerCallId: string;
+    streamUrl: string;
+    clientState?: string;
+  }): Promise<void>;
+
+  /**
+   * Stop real-time audio streaming.
+   */
+  stopStreaming?(input: { providerCallId: string }): Promise<void>;
+
+  /**
+   * Transfer an active call to another number.
+   * Used for [TRANSFER] signal call forwarding on providers that support
+   * native call transfer (e.g. Telnyx). Falls back to provider-specific
+   * methods (e.g. Twilio TwiML update) when not available.
+   */
+  transferCall?(input: {
+    callId: string;
+    providerCallId: string;
+    to: string;
+    from?: string;
+  }): Promise<void>;
 }

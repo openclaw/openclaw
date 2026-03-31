@@ -25,6 +25,15 @@ export interface RealtimeSTTConfig {
 }
 
 /**
+ * Generic STT provider factory interface.
+ * Any STT provider (OpenAI Realtime, Deepgram, etc.) must implement this.
+ */
+export interface STTProvider {
+  readonly name: string;
+  createSession(): RealtimeSTTSession;
+}
+
+/**
  * Session for streaming audio and receiving transcripts.
  */
 export interface RealtimeSTTSession {
@@ -49,7 +58,7 @@ export interface RealtimeSTTSession {
 /**
  * Provider factory for OpenAI Realtime STT sessions.
  */
-export class OpenAIRealtimeSTTProvider {
+export class OpenAIRealtimeSTTProvider implements STTProvider {
   readonly name = "openai-realtime";
   private apiKey: string;
   private model: string;

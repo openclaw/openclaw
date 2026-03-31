@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "cartesia";
 
 export type TtsMode = "final" | "all";
 
@@ -75,6 +75,13 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Cartesia configuration. */
+  cartesia?: {
+    apiKey?: SecretInput;
+    modelId?: string;
+    voiceId?: string;
+    language?: string;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

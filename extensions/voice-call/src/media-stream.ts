@@ -1,17 +1,27 @@
 /**
  * Media Stream Handler
  *
- * Handles bidirectional audio streaming between Twilio and the AI services.
- * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to OpenAI Realtime STT for transcription
- * - Sends TTS audio back to Twilio
+ * Handles bidirectional audio streaming between telephony providers and AI services.
+ * Supports both Twilio and Telnyx WebSocket media stream formats.
+ * - Receives mu-law audio from provider via WebSocket
+ * - Forwards to STT provider (OpenAI Realtime, Deepgram, etc.) for transcription
+ * - Sends TTS audio back to provider
  */
 
+import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
+
+const STREAM_DEBUG_LOG = path.join(os.homedir(), ".openclaw", "voice-debug.log");
+function streamDebug(msg: string): void {
+  const line = `[${new Date().toISOString()}] [MediaStream] ${msg}\n`;
+  try { fs.appendFileSync(STREAM_DEBUG_LOG, line); } catch { /* ignore */ }
+}
 import type {
-  OpenAIRealtimeSTTProvider,
+  STTProvider,
   RealtimeSTTSession,
 } from "./providers/stt-openai-realtime.js";
 
@@ -19,8 +29,8 @@ import type {
  * Configuration for the media stream handler.
  */
 export interface MediaStreamConfig {
-  /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  /** STT provider for transcription (OpenAI Realtime, Deepgram, etc.) */
+  sttProvider: STTProvider;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -71,7 +81,7 @@ const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
 const DEFAULT_MAX_CONNECTIONS = 128;
 
 /**
- * Manages WebSocket connections for Twilio media streams.
+ * Manages WebSocket connections for telephony media streams (Twilio and Telnyx).
  */
 export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
@@ -105,6 +115,7 @@ export class MediaStreamHandler {
    * Handle WebSocket upgrade for media stream connections.
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    streamDebug(`WebSocket upgrade request: ${request.url} from ${request.socket.remoteAddress}`);
     if (!this.wss) {
       this.wss = new WebSocketServer({ noServer: true });
       this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
@@ -112,17 +123,19 @@ export class MediaStreamHandler {
 
     const currentConnections = this.wss.clients.size;
     if (currentConnections >= this.maxConnections) {
+      streamDebug(`Rejecting upgrade: too many connections (${currentConnections}/${this.maxConnections})`);
       this.rejectUpgrade(socket, 503, "Too many media stream connections");
       return;
     }
 
     this.wss.handleUpgrade(request, socket, head, (ws) => {
+      streamDebug(`WebSocket upgrade completed successfully`);
       this.wss?.emit("connection", ws, request);
     });
   }
 
   /**
-   * Handle new WebSocket connection from Twilio.
+   * Handle new WebSocket connection from telephony provider (Twilio or Telnyx).
    */
   private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
@@ -136,19 +149,26 @@ export class MediaStreamHandler {
 
     ws.on("message", async (data: Buffer) => {
       try {
-        const message = JSON.parse(data.toString()) as TwilioMediaMessage;
+        const raw = JSON.parse(data.toString());
+        const message = this.normalizeMediaMessage(raw);
 
         switch (message.event) {
           case "connected":
-            console.log("[MediaStream] Twilio connected");
+            streamDebug(`Provider connected (streamSid=${message.streamSid})`);
             break;
 
-          case "start":
+          case "start": {
+            const callId = message.start?.callSid || "unknown";
+            streamDebug(`Start event: callSid=${callId} streamSid=${message.streamSid} raw_keys=${Object.keys(raw.start || {}).join(",")}`);
             session = await this.handleStart(ws, message, streamToken);
             if (session) {
+              streamDebug(`Session created: callId=${session.callId} streamSid=${session.streamSid}`);
               this.clearPendingConnection(ws);
+            } else {
+              streamDebug(`Session creation FAILED for callSid=${callId}`);
             }
             break;
+          }
 
           case "media":
             if (session && message.media?.payload) {
@@ -159,13 +179,19 @@ export class MediaStreamHandler {
             break;
 
           case "stop":
+            streamDebug(`Stop event: streamSid=${message.streamSid}`);
             if (session) {
               this.handleStop(session);
               session = null;
             }
             break;
+
+          default:
+            streamDebug(`Unknown event: ${message.event} raw=${JSON.stringify(raw).slice(0, 200)}`);
+            break;
         }
       } catch (error) {
+        streamDebug(`Error processing message: ${error}`);
         console.error("[MediaStream] Error processing message:", error);
       }
     });
@@ -187,7 +213,7 @@ export class MediaStreamHandler {
    */
   private async handleStart(
     ws: WebSocket,
-    message: TwilioMediaMessage,
+    message: MediaStreamMessage,
     streamToken?: string,
   ): Promise<StreamSession | null> {
     const streamSid = message.streamSid || "";
@@ -198,9 +224,9 @@ export class MediaStreamHandler {
     // URLs but reliably delivers <Parameter> values in customParameters.
     const effectiveToken = message.start?.customParameters?.token ?? streamToken;
 
-    console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
+    streamDebug(`handleStart: streamSid=${streamSid} callSid=${callSid} token=${effectiveToken || "none"}`);
     if (!callSid) {
-      console.warn("[MediaStream] Missing callSid; closing stream");
+      streamDebug(`REJECTED: Missing callSid`);
       ws.close(1008, "Missing callSid");
       return null;
     }
@@ -208,7 +234,7 @@ export class MediaStreamHandler {
       this.config.shouldAcceptStream &&
       !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })
     ) {
-      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
+      streamDebug(`REJECTED: shouldAcceptStream returned false for callSid=${callSid}`);
       ws.close(1008, "Unknown call");
       return null;
     }
@@ -259,6 +285,65 @@ export class MediaStreamHandler {
     session.sttSession.close();
     this.sessions.delete(session.streamSid);
     this.config.onDisconnect?.(session.callId);
+  }
+
+  /**
+   * Normalize incoming WebSocket messages from either Twilio or Telnyx format
+   * into a common MediaStreamMessage shape.
+   *
+   * Telnyx differences:
+   *  - Uses `stream_id` instead of `streamSid`
+   *  - Uses `start.call_control_id` instead of `start.callSid`
+   *  - Uses `start.media_format` instead of `start.mediaFormat`
+   *  - May skip the `connected` event entirely
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private normalizeMediaMessage(raw: any): MediaStreamMessage {
+    // Normalize stream ID: Telnyx uses stream_id, Twilio uses streamSid
+    const streamSid = raw.streamSid ?? raw.stream_id ?? "";
+
+    const message: MediaStreamMessage = {
+      event: raw.event,
+      sequenceNumber: raw.sequenceNumber ?? raw.sequence_number,
+      streamSid,
+    };
+
+    if (raw.start) {
+      message.start = {
+        streamSid: raw.start.streamSid ?? raw.stream_id ?? streamSid,
+        // Telnyx: call_control_id; Twilio: callSid
+        callSid: raw.start.callSid ?? raw.start.call_control_id ?? "",
+        accountSid: raw.start.accountSid ?? raw.start.user_id ?? "",
+        tracks: raw.start.tracks ?? [],
+        customParameters: raw.start.customParameters ?? {},
+        mediaFormat: raw.start.mediaFormat ?? raw.start.media_format ?? {
+          encoding: "audio/x-mulaw",
+          sampleRate: 8000,
+          channels: 1,
+        },
+      };
+      // Telnyx may encode callId in client_state (base64)
+      if (!message.start.callSid && raw.start.client_state) {
+        try {
+          message.start.callSid = Buffer.from(raw.start.client_state, "base64").toString("utf-8");
+        } catch { /* ignore decode errors */ }
+      }
+    }
+
+    if (raw.media) {
+      message.media = {
+        track: raw.media.track,
+        chunk: raw.media.chunk,
+        timestamp: raw.media.timestamp,
+        payload: raw.media.payload,
+      };
+    }
+
+    if (raw.mark) {
+      message.mark = { name: raw.mark.name };
+    }
+
+    return message;
   }
 
   private getStreamToken(request: IncomingMessage): string | undefined {
@@ -497,9 +582,9 @@ export class MediaStreamHandler {
 }
 
 /**
- * Twilio Media Stream message format.
+ * Normalized media stream message format (supports both Twilio and Telnyx).
  */
-interface TwilioMediaMessage {
+interface MediaStreamMessage {
   event: "connected" | "start" | "media" | "stop" | "mark" | "clear";
   sequenceNumber?: string;
   streamSid?: string;

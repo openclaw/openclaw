@@ -29,6 +29,7 @@ import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
+  cartesiaTTS,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
@@ -54,9 +55,12 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
-const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
+const DEFAULT_EDGE_VOICE = "en-US-AndrewNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_CARTESIA_MODEL_ID = "sonic-3-2026-01-12";
+const DEFAULT_CARTESIA_VOICE_ID = ""; // Must be configured per-org
+const DEFAULT_CARTESIA_LANGUAGE = "en";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -85,6 +89,10 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  cartesia: {
+    format: { container: "raw", encoding: "pcm_s16le", sample_rate: 24000 },
+    sampleRate: 24000,
+  },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -130,6 +138,12 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  cartesia: {
+    apiKey?: string;
+    modelId: string;
+    voiceId: string;
+    language: string;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -318,6 +332,15 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    cartesia: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.cartesia?.apiKey,
+        path: "messages.tts.cartesia.apiKey",
+      }),
+      modelId: raw.cartesia?.modelId ?? DEFAULT_CARTESIA_MODEL_ID,
+      voiceId: raw.cartesia?.voiceId ?? DEFAULT_CARTESIA_VOICE_ID,
+      language: raw.cartesia?.language ?? DEFAULT_CARTESIA_LANGUAGE,
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -453,6 +476,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "openai")) {
     return "openai";
   }
+  if (resolveTtsApiKey(config, "cartesia")) {
+    return "cartesia";
+  }
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
@@ -523,10 +549,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "cartesia") {
+    return config.cartesia.apiKey || process.env.CARTESIA_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "cartesia", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -660,6 +689,7 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let providerOutputFormat: string;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -683,6 +713,22 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.elevenlabs;
+      } else if (provider === "cartesia") {
+        if (!config.cartesia.voiceId) {
+          errors.push("cartesia: no voiceId configured");
+          continue;
+        }
+        audioBuffer = await cartesiaTTS({
+          text: params.text,
+          apiKey,
+          modelId: config.cartesia.modelId,
+          voiceId: config.cartesia.voiceId,
+          outputFormat: { container: "mp3", encoding: "mp3", sample_rate: 44100 },
+          language: config.cartesia.language,
+          timeoutMs: config.timeoutMs,
+        });
+        providerOutputFormat = "mp3";
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -695,6 +741,7 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.openai;
       }
 
       const latencyMs = Date.now() - providerStart;
@@ -711,7 +758,7 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat: providerOutputFormat,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -778,6 +825,32 @@ export async function textToSpeechTelephony(params: {
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "cartesia") {
+        if (!config.cartesia.voiceId) {
+          errors.push("cartesia: no voiceId configured");
+          continue;
+        }
+        const output = TELEPHONY_OUTPUT.cartesia;
+        const audioBuffer = await cartesiaTTS({
+          text: params.text,
+          apiKey,
+          modelId: config.cartesia.modelId,
+          voiceId: config.cartesia.voiceId,
+          outputFormat: output.format,
+          language: config.cartesia.language,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "pcm_s16le",
           sampleRate: output.sampleRate,
         };
       }

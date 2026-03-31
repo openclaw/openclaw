@@ -31,6 +31,7 @@ export function createVoiceCallBaseConfig(params?: {
     streaming: {
       enabled: false,
       sttProvider: "openai-realtime",
+      deepgramModel: "nova-3",
       sttModel: "gpt-4o-transcribe",
       silenceDurationMs: 800,
       vadThreshold: 0.5,

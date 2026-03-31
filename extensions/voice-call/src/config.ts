@@ -209,9 +209,13 @@ export const VoiceCallStreamingConfigSchema = z
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
     /** STT provider for real-time transcription */
-    sttProvider: z.enum(["openai-realtime"]).default("openai-realtime"),
+    sttProvider: z.enum(["openai-realtime", "deepgram"]).default("openai-realtime"),
     /** OpenAI API key for Realtime API (uses OPENAI_API_KEY env if not set) */
     openaiApiKey: z.string().min(1).optional(),
+    /** Deepgram API key (uses DEEPGRAM_API_KEY env if not set) */
+    deepgramApiKey: z.string().min(1).optional(),
+    /** Deepgram STT model (default: nova-3) */
+    deepgramModel: z.string().min(1).default("nova-3"),
     /** OpenAI transcription model (default: gpt-4o-transcribe) */
     sttModel: z.string().min(1).default("gpt-4o-transcribe"),
     /** VAD silence duration in ms before considering speech ended */
@@ -236,6 +240,7 @@ export const VoiceCallStreamingConfigSchema = z
   .default({
     enabled: false,
     sttProvider: "openai-realtime",
+    deepgramModel: "nova-3",
     sttModel: "gpt-4o-transcribe",
     silenceDurationMs: 800,
     vadThreshold: 0.5,
@@ -347,6 +352,21 @@ export const VoiceCallConfigSchema = z
 
     /** Timeout for response generation in ms (default 30s) */
     responseTimeoutMs: z.number().int().positive().default(30000),
+
+    /** Fallback call forwarding configuration (used with [TRANSFER] signal) */
+    fallbackForward: z
+      .object({
+        /** Enable call forwarding */
+        enabled: z.boolean().default(false),
+        /** Phone number to forward to (E.164) */
+        number: E164Schema,
+        /** Caller ID number to show (E.164, defaults to fromNumber) */
+        callerIdNumber: E164Schema.optional(),
+        /** Message to speak before forwarding */
+        message: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -400,6 +420,14 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     streaming: { ...defaults.streaming, ...config.streaming },
     stt: { ...defaults.stt, ...config.stt },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
+    fallbackForward: config.fallbackForward
+      ? {
+          enabled: config.fallbackForward.enabled ?? false,
+          number: config.fallbackForward.number ?? "",
+          callerIdNumber: config.fallbackForward.callerIdNumber,
+          message: config.fallbackForward.message,
+        }
+      : defaults.fallbackForward,
   };
 }
 
@@ -431,6 +459,10 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
     resolved.plivo.authId = resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
     resolved.plivo.authToken = resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
   }
+
+  // Streaming STT — resolve Deepgram API key from env
+  resolved.streaming.deepgramApiKey =
+    resolved.streaming.deepgramApiKey ?? process.env.DEEPGRAM_API_KEY;
 
   // Tunnel Config
   resolved.tunnel = resolved.tunnel ?? {

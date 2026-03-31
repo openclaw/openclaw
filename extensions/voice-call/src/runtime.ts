@@ -206,32 +206,36 @@ export async function createVoiceCallRuntime(params: {
       (provider as TwilioProvider).setPublicUrl(publicUrl);
     }
 
-    if (provider.name === "twilio" && config.streaming?.enabled) {
-      const twilioProvider = provider as TwilioProvider;
-      if (ttsRuntime?.textToSpeechTelephony) {
-        try {
-          const ttsProvider = createTelephonyTtsProvider({
-            coreConfig,
-            ttsOverride: config.tts,
-            runtime: ttsRuntime,
-          });
-          twilioProvider.setTTSProvider(ttsProvider);
-          log.info("[voice-call] Telephony TTS provider configured");
-        } catch (err) {
-          log.warn(
-            `[voice-call] Failed to initialize telephony TTS: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+    if (config.streaming?.enabled && ttsRuntime?.textToSpeechTelephony) {
+      try {
+        const ttsProvider = createTelephonyTtsProvider({
+          coreConfig,
+          ttsOverride: config.tts,
+          runtime: ttsRuntime,
+        });
+
+        // Wire telephony TTS to webhook server for streaming audio via WebSocket
+        webhookServer.setTelephonyTtsProvider(ttsProvider);
+        log.info("[voice-call] Telephony TTS provider configured for streaming");
+
+        // Twilio-specific: also set on provider directly
+        if (provider.name === "twilio") {
+          (provider as TwilioProvider).setTTSProvider(ttsProvider);
         }
-      } else {
-        log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
+      } catch (err) {
+        log.warn(
+          `[voice-call] Failed to initialize telephony TTS: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
 
-      const mediaHandler = webhookServer.getMediaStreamHandler();
-      if (mediaHandler) {
-        twilioProvider.setMediaStreamHandler(mediaHandler);
-        log.info("[voice-call] Media stream handler wired to provider");
+      if (provider.name === "twilio") {
+        const mediaHandler = webhookServer.getMediaStreamHandler();
+        if (mediaHandler) {
+          (provider as TwilioProvider).setMediaStreamHandler(mediaHandler);
+          log.info("[voice-call] Media stream handler wired to Twilio provider");
+        }
       }
     }
 

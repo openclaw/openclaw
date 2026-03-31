@@ -86,13 +86,28 @@
       "label": "Enable Streaming",
       "advanced": true
     },
+    "streaming.sttProvider": {
+      "label": "Streaming STT Provider",
+      "help": "Choose openai-realtime or deepgram for real-time transcription.",
+      "advanced": true
+    },
     "streaming.openaiApiKey": {
       "label": "OpenAI Realtime API Key",
       "sensitive": true,
       "advanced": true
     },
+    "streaming.deepgramApiKey": {
+      "label": "Deepgram API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "streaming.deepgramModel": {
+      "label": "Deepgram STT Model",
+      "help": "e.g. nova-3, nova-2",
+      "advanced": true
+    },
     "streaming.sttModel": {
-      "label": "Realtime STT Model",
+      "label": "OpenAI Realtime STT Model",
       "advanced": true
     },
     "streaming.streamPath": {
@@ -115,6 +130,23 @@
     "tts.openai.apiKey": {
       "label": "OpenAI API Key",
       "sensitive": true,
+      "advanced": true
+    },
+    "tts.cartesia.apiKey": {
+      "label": "Cartesia API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tts.cartesia.modelId": {
+      "label": "Cartesia Model ID",
+      "advanced": true
+    },
+    "tts.cartesia.voiceId": {
+      "label": "Cartesia Voice ID",
+      "advanced": true
+    },
+    "tts.cartesia.language": {
+      "label": "Cartesia Language",
       "advanced": true
     },
     "tts.elevenlabs.modelId": {
@@ -156,6 +188,24 @@
     },
     "responseTimeoutMs": {
       "label": "Response Timeout (ms)",
+      "advanced": true
+    },
+    "fallbackForward.enabled": {
+      "label": "Enable Call Forwarding",
+      "advanced": true
+    },
+    "fallbackForward.number": {
+      "label": "Forward To Number",
+      "placeholder": "+15550001234",
+      "advanced": true
+    },
+    "fallbackForward.callerIdNumber": {
+      "label": "Forwarding Caller ID",
+      "placeholder": "+15550001234",
+      "advanced": true
+    },
+    "fallbackForward.message": {
+      "label": "Forwarding Transition Message",
       "advanced": true
     }
   },
@@ -347,9 +397,15 @@
           },
           "sttProvider": {
             "type": "string",
-            "enum": ["openai-realtime"]
+            "enum": ["openai-realtime", "deepgram"]
           },
           "openaiApiKey": {
+            "type": "string"
+          },
+          "deepgramApiKey": {
+            "type": "string"
+          },
+          "deepgramModel": {
             "type": "string"
           },
           "sttModel": {
@@ -421,7 +477,7 @@
           },
           "provider": {
             "type": "string",
-            "enum": ["openai", "elevenlabs", "edge"]
+            "enum": ["openai", "elevenlabs", "cartesia", "edge"]
           },
           "summaryModel": {
             "type": "string"
@@ -530,6 +586,24 @@
               }
             }
           },
+          "cartesia": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "modelId": {
+                "type": "string"
+              },
+              "voiceId": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              }
+            }
+          },
           "edge": {
             "type": "object",
             "additionalProperties": false,
@@ -594,6 +668,27 @@
       "responseTimeoutMs": {
         "type": "integer",
         "minimum": 1
+      },
+      "fallbackForward": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "number": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$"
+          },
+          "callerIdNumber": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["enabled", "number"]
       }
     }
   }

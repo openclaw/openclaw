@@ -151,7 +151,7 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge" || rawValue === "cartesia") {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -652,6 +652,53 @@ export async function openaiTTS(params: {
 
     if (!response.ok) {
       throw new Error(`OpenAI TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Cartesia TTS via HTTP bytes endpoint.
+ * Returns raw audio buffer (PCM or mp3 depending on outputFormat).
+ */
+export async function cartesiaTTS(params: {
+  text: string;
+  apiKey: string;
+  modelId: string;
+  voiceId: string;
+  outputFormat: { container: string; encoding: string; sample_rate: number };
+  language?: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, modelId, voiceId, outputFormat, language, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch("https://api.cartesia.ai/tts/bytes", {
+      method: "POST",
+      headers: {
+        "X-API-Key": apiKey,
+        "Cartesia-Version": "2024-06-10",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model_id: modelId,
+        transcript: text,
+        voice: { mode: "id", id: voiceId },
+        output_format: outputFormat,
+        ...(language ? { language } : {}),
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Cartesia TTS API error (${response.status}): ${body.slice(0, 200)}`);
     }
 
     return Buffer.from(await response.arrayBuffer());
