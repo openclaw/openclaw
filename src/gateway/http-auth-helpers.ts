@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logWarn } from "../logger.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+import { consumeGatewayTokenExpiryWarning } from "./token-expiry-state.js";
 
 const OPERATOR_SCOPES_HEADER = "x-openclaw-scopes";
 
@@ -27,6 +29,16 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   if (!authResult.ok) {
     sendGatewayAuthFailure(params.res, authResult);
     return false;
+  }
+  if (
+    authResult.method === "token" &&
+    params.auth.mode === "token" &&
+    params.auth.tokenExpiryHours !== undefined &&
+    consumeGatewayTokenExpiryWarning({ expiryHours: params.auth.tokenExpiryHours })
+  ) {
+    logWarn(
+      "gateway: shared token is past gateway.auth.tokenExpiryHours (expired per your policy). Fix: run `openclaw auth rotate`, or change/clear tokenExpiryHours in config. Non-blocking; this warning logs once per process until the token is re-issued.",
+    );
   }
   return true;
 }

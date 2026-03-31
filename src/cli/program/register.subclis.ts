@@ -110,6 +110,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "auth",
+    description: "Gateway authentication helpers",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../auth-cli.js");
+      mod.registerAuthCli(program);
+    },
+  },
+  {
     name: "nodes",
     description: "Manage gateway-owned node pairing and node commands",
     hasSubcommands: true,

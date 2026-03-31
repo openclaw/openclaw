@@ -10310,6 +10310,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 required: ["userHeader"],
                 additionalProperties: false,
               },
+              tokenExpiryHours: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
             },
             additionalProperties: false,
           },
@@ -12145,6 +12149,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
       tags: ["network", "performance"],
     },
+    "gateway.auth.tokenExpiryHours": {
+      label: "Gateway Token Expiry Warning (hours)",
+      help: "Optional lifetime in hours for an in-process gateway token issue timestamp. When set and the process recorded a token generation time, the gateway may log a non-blocking warning after this interval. Does not block requests or persist metadata.",
+      tags: ["security", "auth", "network"],
+    },
     "gateway.auth.trustedProxy": {
       label: "Gateway Trusted Proxy Auth",
       help: "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
@@ -13445,7 +13454,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.memorySearch.qmd.extraCollections.name": {
       label: "QMD Extra Collection Name",
-      help: "Use this to preserve a stable collection label for shared transcript roots; omit it only when you want the default agent-scoped name.",
+      help: "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.qmd.extraCollections.pattern": {
