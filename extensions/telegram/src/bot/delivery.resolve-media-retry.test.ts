@@ -1,5 +1,6 @@
 import type { Message } from "@grammyjs/types";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -32,8 +33,6 @@ vi.mock("../sticker-cache.js", () => ({
   getAllCachedStickers: () => [],
   describeStickerImage: async () => null,
 }));
-
-let resolveMedia: typeof import("./delivery.js").resolveMedia;
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -168,11 +167,6 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ resolveMedia } = await import("./delivery.js"));
-  });
-
   beforeEach(() => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();

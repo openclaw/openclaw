@@ -67,7 +67,7 @@
       "durationMs": 3200
     },
     "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
-      "durationMs": 18920
+      "durationMs": 15830
     },
     "extensions/telegram/src/webhook.test.ts": {
       "durationMs": 2900
