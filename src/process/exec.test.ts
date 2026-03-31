@@ -5,7 +5,12 @@ import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
-import { resolveCommandEnv, runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
+import {
+  resolveCommandEnv,
+  resolveProcessExitCode,
+  runCommandWithTimeout,
+  shouldSpawnWithShell,
+} from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
   beforeEach(() => {
@@ -51,6 +56,34 @@ describe("runCommandWithTimeout", () => {
 
     expect(resolved.NPM_CONFIG_FUND).toBe("false");
     expect(resolved.npm_config_fund).toBe("false");
+  });
+
+  it("infers success for shimmed Windows commands when exit codes are missing", () => {
+    expect(
+      resolveProcessExitCode({
+        explicitCode: null,
+        childExitCode: null,
+        resolvedSignal: null,
+        usesWindowsExitCodeShim: true,
+        timedOut: false,
+        noOutputTimedOut: false,
+        killIssuedByTimeout: false,
+      }),
+    ).toBe(0);
+  });
+
+  it("does not infer success when this process already issued a timeout kill", () => {
+    expect(
+      resolveProcessExitCode({
+        explicitCode: null,
+        childExitCode: null,
+        resolvedSignal: null,
+        usesWindowsExitCodeShim: true,
+        timedOut: true,
+        noOutputTimedOut: false,
+        killIssuedByTimeout: true,
+      }),
+    ).toBeNull();
   });
 
   it.runIf(process.platform !== "win32")(
