@@ -122,7 +122,7 @@ describe("monitorLineProvider lifecycle", () => {
       return monitor;
     });
 
-    await vi.waitFor(() => expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1));
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
     expect(registerPluginHttpRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({ auth: "plugin" }),
     );

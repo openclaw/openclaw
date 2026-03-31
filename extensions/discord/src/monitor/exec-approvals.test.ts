@@ -1,18 +1,18 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
 
-const STORE_PATH = path.join(os.tmpdir(), "openclaw-exec-approvals-test.json");
+const { STORE_PATH, mockSessionStoreEntries } = vi.hoisted(() => ({
+  STORE_PATH: "/tmp/openclaw-exec-approvals-test.json",
+  mockSessionStoreEntries: {
+    value: {} as Record<string, unknown>,
+  },
+}));
 
 const writeStore = (store: Record<string, unknown>) => {
-  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  // CI runners can have coarse mtime resolution; avoid returning stale cached stores.
-  clearSessionStoreCacheForTest();
+  mockSessionStoreEntries.value = JSON.parse(JSON.stringify(store)) as Record<string, unknown>;
 };
 
 beforeEach(() => {
@@ -46,7 +46,9 @@ const mockRestPatch = vi.hoisted(() => vi.fn());
 const mockRestDelete = vi.hoisted(() => vi.fn());
 const gatewayClientStarts = vi.hoisted(() => vi.fn());
 const gatewayClientStops = vi.hoisted(() => vi.fn());
-const gatewayClientRequests = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const gatewayClientRequests = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ ok: true })),
+);
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
@@ -67,68 +69,65 @@ vi.mock("../send.shared.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>();
-  type CreateOperatorApprovalsGatewayClientParams = Parameters<
-    typeof actual.createOperatorApprovalsGatewayClient
-  >[0];
-  class MockGatewayClient {
-    private params: Record<string, unknown>;
-    constructor(params: Record<string, unknown>) {
-      this.params = params;
-      gatewayClientParams.push(params);
-      mockGatewayClientCtor(params);
-    }
-    start() {
-      gatewayClientStarts();
-    }
-    stop() {
-      gatewayClientStops();
-    }
-    async request(...args: unknown[]) {
-      return gatewayClientRequests(...args);
-    }
-  }
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
-    GatewayClient: MockGatewayClient,
-    createOperatorApprovalsGatewayClient: async (
-      params: CreateOperatorApprovalsGatewayClientParams,
-    ) => {
-      mockCreateOperatorApprovalsGatewayClient(params);
-      const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
-      const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
-      const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
-      const auth = await mockResolveGatewayConnectionAuth({
-        config: params.config,
-        env: process.env,
-        ...(urlOverrideSource
-          ? {
-              urlOverride: gatewayUrl,
-              urlOverrideSource,
-            }
-          : {}),
-      });
-      return new MockGatewayClient({
-        url: gatewayUrl,
-        token: auth?.token,
-        password: auth?.password,
-        clientName: "gateway-client",
-        clientDisplayName: params.clientDisplayName,
-        mode: "backend",
-        scopes: ["operator.approvals"],
-        onEvent: params.onEvent,
-        onHelloOk: params.onHelloOk,
-        onConnectError: params.onConnectError,
-        onClose: params.onClose,
-      });
-    },
+    loadSessionStore: () => mockSessionStoreEntries.value,
+    resolveStorePath: () => STORE_PATH,
   };
 });
 
-vi.mock("../../../../src/gateway/operator-approvals-client.js", async () => {
-  class MockGatewayClient {
-    private params: Record<string, unknown>;
+vi.mock("../../../../src/gateway/operator-approvals-client.js", () => ({
+  createOperatorApprovalsGatewayClient: async (params: {
+    config?: unknown;
+    gatewayUrl?: string;
+    clientDisplayName?: string;
+    onEvent?: unknown;
+    onHelloOk?: unknown;
+    onConnectError?: unknown;
+    onClose?: unknown;
+  }) => {
+    mockCreateOperatorApprovalsGatewayClient(params);
+    const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+    const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
+    const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
+    const auth = await mockResolveGatewayConnectionAuth({
+      config: params.config,
+      env: process.env,
+      ...(urlOverrideSource
+        ? {
+            urlOverride: gatewayUrl,
+            urlOverrideSource,
+          }
+        : {}),
+    });
+    const clientParams = {
+      url: gatewayUrl,
+      token: auth?.token,
+      password: auth?.password,
+      clientName: "gateway-client",
+      clientDisplayName: params.clientDisplayName,
+      mode: "backend",
+      scopes: ["operator.approvals"],
+      onEvent: params.onEvent,
+      onHelloOk: params.onHelloOk,
+      onConnectError: params.onConnectError,
+      onClose: params.onClose,
+    };
+    gatewayClientParams.push(clientParams);
+    mockGatewayClientCtor(clientParams);
+    return {
+      start: gatewayClientStarts,
+      stop: gatewayClientStops,
+      request: gatewayClientRequests,
+    };
+  },
+}));
+
+vi.mock("../../../../src/gateway/client.js", () => ({
+  GatewayClient: class {
+    params: Record<string, unknown>;
     constructor(params: Record<string, unknown>) {
       this.params = params;
       gatewayClientParams.push(params);
@@ -143,55 +142,8 @@ vi.mock("../../../../src/gateway/operator-approvals-client.js", async () => {
     async request(...args: unknown[]) {
       return gatewayClientRequests(...args);
     }
-  }
-
-  return {
-    createOperatorApprovalsGatewayClient: async (params: {
-      config?: {
-        gateway?: {
-          auth?: {
-            token?: string;
-            password?: string;
-          };
-        };
-      };
-      gatewayUrl?: string;
-      clientDisplayName: string;
-      onEvent?: unknown;
-      onHelloOk?: () => void;
-      onConnectError?: (err: Error) => void;
-      onClose?: (code: number, reason: string) => void;
-    }) => {
-      mockCreateOperatorApprovalsGatewayClient(params);
-      const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
-      const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
-      const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
-      const auth = await mockResolveGatewayConnectionAuth({
-        config: params.config,
-        env: process.env,
-        ...(urlOverrideSource
-          ? {
-              urlOverride: gatewayUrl,
-              urlOverrideSource,
-            }
-          : {}),
-      });
-      return new MockGatewayClient({
-        url: gatewayUrl,
-        token: auth?.token,
-        password: auth?.password,
-        clientName: "gateway-client",
-        clientDisplayName: params.clientDisplayName,
-        mode: "backend",
-        scopes: ["operator.approvals"],
-        onEvent: params.onEvent,
-        onHelloOk: params.onHelloOk,
-        onConnectError: params.onConnectError,
-        onClose: params.onClose,
-      });
-    },
-  };
-});
+  },
+}));
 
 vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
@@ -955,9 +907,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.objectContaining({
         body: expect.objectContaining({
-          content: expect.stringContaining(
-            "I sent approval DMs to the approvers for this account",
-          ),
+          content: expect.stringContaining("I sent approval DMs to the approvers for this account"),
         }),
       }),
     );
@@ -986,6 +936,45 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.anything(),
     );
+  });
+
+  it("dedupes delivery when the origin route and approver DM resolve to the same Discord channel", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["999"],
+      target: "both",
+    });
+
+    mockRestPost.mockImplementation(async (route: string) => {
+      if (route === Routes.channelMessages("123")) {
+        return { id: "msg-1", channel_id: "123" };
+      }
+      if (route === Routes.userChannels()) {
+        return { id: "123" };
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+
+    await handler.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+      }),
+    );
+
+    expect(mockRestPost).toHaveBeenCalledTimes(2);
+    expect(mockRestPost).toHaveBeenNthCalledWith(
+      1,
+      Routes.channelMessages("123"),
+      expect.objectContaining({
+        body: expect.any(Object),
+      }),
+    );
+    expect(mockRestPost).toHaveBeenNthCalledWith(2, Routes.userChannels(), {
+      body: { recipient_id: "999" },
+    });
   });
 
   it("delivers plugin approvals through the shared runtime flow", async () => {
