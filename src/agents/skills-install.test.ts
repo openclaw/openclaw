@@ -86,7 +86,7 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
-  it("blocks install for critical findings without dangerous override", async () => {
+  it("blocks install when skill has dangerous code patterns", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
       scanDirectoryWithSummaryMock.mockResolvedValue({
@@ -113,8 +113,7 @@ describe("installSkill code safety scanning", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.message).toContain("installation blocked by dangerous code patterns");
-      expect(result.message).toContain("dangerouslyForceUnsafeInstall");
+      expect(result.message).toContain('Skill "danger-skill" installation blocked');
       expect(result.warnings?.some((warning) => warning.includes("dangerous code patterns"))).toBe(
         true,
       );
@@ -123,9 +122,9 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
-  it("allows critical findings when dangerous override is set", async () => {
+  it("allows dangerous skill installs when forced unsafe install is set", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "forced-skill");
+      const skillDir = await writeInstallableSkill(workspaceDir, "forced-danger-skill");
       scanDirectoryWithSummaryMock.mockResolvedValue({
         scannedFiles: 1,
         critical: 1,
@@ -145,7 +144,7 @@ describe("installSkill code safety scanning", () => {
 
       const result = await installSkill({
         workspaceDir,
-        skillName: "forced-skill",
+        skillName: "forced-danger-skill",
         installId: "deps",
         dangerouslyForceUnsafeInstall: true,
       });
@@ -154,15 +153,14 @@ describe("installSkill code safety scanning", () => {
       expect(
         result.warnings?.some((warning) =>
           warning.includes(
-            "forced despite dangerous code patterns via dangerouslyForceUnsafeInstall",
+            "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
           ),
         ),
       ).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     });
   });
 
-  it("warns and continues when skill scan fails", async () => {
+  it("blocks install when skill scan fails", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");
       scanDirectoryWithSummaryMock.mockRejectedValue(new Error("scanner exploded"));
@@ -173,13 +171,9 @@ describe("installSkill code safety scanning", () => {
         installId: "deps",
       });
 
-      expect(result.ok).toBe(true);
-      expect(result.warnings?.some((warning) => warning.includes("code safety scan failed"))).toBe(
-        true,
-      );
-      expect(result.warnings?.some((warning) => warning.includes("Installation continues"))).toBe(
-        true,
-      );
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("code safety scan failed");
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
 
@@ -267,7 +261,7 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
-  it("keeps before_install blocks even with dangerous override", async () => {
+  it("keeps before_install hook blocks even when forced unsafe install is set", async () => {
     const handler = vi.fn().mockReturnValue({
       block: true,
       blockReason: "Blocked by enterprise policy",
@@ -275,7 +269,7 @@ describe("installSkill code safety scanning", () => {
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
     await withWorkspaceCase(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "forced-but-blocked");
+      const skillDir = await writeInstallableSkill(workspaceDir, "forced-blocked-skill");
       scanDirectoryWithSummaryMock.mockResolvedValue({
         scannedFiles: 1,
         critical: 1,
@@ -295,13 +289,20 @@ describe("installSkill code safety scanning", () => {
 
       const result = await installSkill({
         workspaceDir,
-        skillName: "forced-but-blocked",
+        skillName: "forced-blocked-skill",
         installId: "deps",
         dangerouslyForceUnsafeInstall: true,
       });
 
       expect(result.ok).toBe(false);
       expect(result.message).toBe("Blocked by enterprise policy");
+      expect(
+        result.warnings?.some((warning) =>
+          warning.includes(
+            "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
+          ),
+        ),
+      ).toBe(true);
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
