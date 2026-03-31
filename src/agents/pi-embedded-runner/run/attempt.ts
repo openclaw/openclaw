@@ -1158,10 +1158,23 @@ export async function runEmbeddedAttempt(
             trigger: params.trigger,
             channelId: params.messageChannel ?? params.messageProvider ?? undefined,
           };
+          const runtimeModel = model as { id?: unknown; api?: unknown; provider?: unknown };
+          const runtimeModelId =
+            typeof runtimeModel.id === "string" && runtimeModel.id.length > 0
+              ? runtimeModel.id
+              : params.modelId;
+          const runtimeModelApi =
+            typeof runtimeModel.api === "string" && runtimeModel.api.length > 0
+              ? runtimeModel.api
+              : params.model.api;
+          const runtimeProvider =
+            typeof runtimeModel.provider === "string" && runtimeModel.provider.length > 0
+              ? runtimeModel.provider
+              : params.provider;
           const requestMessages = resolveBeforeModelCallRequestMessages({
             context,
             transcriptPolicy,
-            model: params.model,
+            model: model,
           });
           if (hookRunner?.hasHooks("before_model_call")) {
             hookRunner
@@ -1169,9 +1182,9 @@ export async function runEmbeddedAttempt(
                 buildBeforeModelCallEvent({
                   runId: params.runId,
                   sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  api: params.model.api,
+                  provider: runtimeProvider,
+                  model: runtimeModelId,
+                  api: runtimeModelApi,
                   callId,
                   systemPrompt: systemPromptText,
                   requestMessages,
@@ -1192,9 +1205,9 @@ export async function runEmbeddedAttempt(
                 {
                   runId: params.runId,
                   sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  api: params.model.api,
+                  provider: runtimeProvider,
+                  model: runtimeModelId,
+                  api: runtimeModelApi,
                   callId,
                   durationMs: Date.now() - startMs,
                   ...(error != null ? { error } : {}),
