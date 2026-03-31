@@ -76,6 +76,18 @@ export function resolveActiveErrorContext(params: {
   };
 }
 
+export function selectFinalAssistantForPayloads<T extends { role?: string }>(
+  messagesSnapshot: T[],
+): T | undefined {
+  const lastUserIndex = messagesSnapshot.findLastIndex((message) => message.role === "user");
+  const currentTurnMessages =
+    lastUserIndex >= 0 ? messagesSnapshot.slice(lastUserIndex + 1) : messagesSnapshot;
+  return currentTurnMessages
+    .slice()
+    .toReversed()
+    .find((message) => message.role === "assistant");
+}
+
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;

@@ -78,6 +78,7 @@ import {
   OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
   resolveMaxRunRetryIterations,
+  selectFinalAssistantForPayloads,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -1259,10 +1260,18 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 
+          const payloadUsesPostHookAssistant =
+            hookRunner?.hasHooks("before_message_write") === true;
+          const payloadLastAssistant = payloadUsesPostHookAssistant
+            ? (selectFinalAssistantForPayloads(
+                attempt.messagesSnapshot,
+              ) as typeof attempt.lastAssistant)
+            : attempt.lastAssistant;
+
           const payloads = buildEmbeddedRunPayloads({
-            assistantTexts: attempt.assistantTexts,
+            assistantTexts: payloadUsesPostHookAssistant ? [] : attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
-            lastAssistant: attempt.lastAssistant,
+            lastAssistant: payloadLastAssistant,
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
