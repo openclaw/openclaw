@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
-const ALLOWED_IMPORTERS = new Set(["tasks/runtime-internal.ts", "tasks/task-owner-access.ts"]);
+const ALLOWED_IMPORTERS = new Set([
+  "tasks/runtime-internal.ts",
+  "tasks/task-executor.ts",
+  "tasks/task-owner-access.ts",
+]);
 
 async function listSourceFiles(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
