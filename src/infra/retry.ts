@@ -1,4 +1,5 @@
 import { sleep } from "../utils.js";
+import { generateSecureFraction } from "./secure-random.js";
 
 export type RetryConfig = {
   attempts?: number;
@@ -63,7 +64,7 @@ function applyJitter(delayMs: number, jitter: number): number {
   if (jitter <= 0) {
     return delayMs;
   }
-  const offset = (Math.random() * 2 - 1) * jitter;
+  const offset = (generateSecureFraction() * 2 - 1) * jitter;
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 

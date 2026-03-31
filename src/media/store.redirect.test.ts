@@ -28,6 +28,57 @@ function createMockHttpExchange() {
   return { req, res };
 }
 
+function mockRedirectExchange(params: { location?: string }) {
+  const { req, res } = createMockHttpExchange();
+  res.statusCode = 302;
+  res.headers = params.location ? { location: params.location } : {};
+  return {
+    req,
+    send(cb: (value: unknown) => void) {
+      setImmediate(() => {
+        cb(res as unknown);
+        res.end();
+      });
+    },
+  };
+}
+
+function mockSuccessfulTextExchange(params: { text: string; contentType: string }) {
+  const { req, res } = createMockHttpExchange();
+  res.statusCode = 200;
+  res.headers = { "content-type": params.contentType };
+  return {
+    req,
+    send(cb: (value: unknown) => void) {
+      setImmediate(() => {
+        cb(res as unknown);
+        res.write(params.text);
+        res.end();
+      });
+    },
+  };
+}
+
+async function expectRedirectSaveResult(params: {
+  expectedText: string;
+  expectedContentType: string;
+  expectedExtension: string;
+}) {
+  const saved = await saveMediaSource("https://example.com/start");
+  expect(mockRequest).toHaveBeenCalledTimes(2);
+  expect(saved.contentType).toBe(params.expectedContentType);
+  expect(path.extname(saved.path)).toBe(params.expectedExtension);
+  expect(await fs.readFile(saved.path, "utf8")).toBe(params.expectedText);
+  const stat = await fs.stat(saved.path);
+  const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
+  expect(stat.mode & 0o777).toBe(expectedMode);
+}
+
+async function expectRedirectSaveFailure(expectedMessage: string) {
+  await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(expectedMessage);
+  expect(mockRequest).toHaveBeenCalledTimes(1);
+}
+
 describe("media store redirects", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -61,54 +112,33 @@ describe("media store redirects", () => {
     let call = 0;
     mockRequest.mockImplementation((_url, _opts, cb) => {
       call += 1;
-      const { req, res } = createMockHttpExchange();
-
       if (call === 1) {
-        res.statusCode = 302;
-        res.headers = { location: "https://example.com/final" };
-        setImmediate(() => {
-          cb(res as unknown);
-          res.end();
-        });
-      } else {
-        res.statusCode = 200;
-        res.headers = { "content-type": "text/plain" };
-        setImmediate(() => {
-          cb(res as unknown);
-          res.write("redirected");
-          res.end();
-        });
+        const exchange = mockRedirectExchange({ location: "https://example.com/final" });
+        exchange.send(cb);
+        return exchange.req;
       }
 
-      return req;
+      const exchange = mockSuccessfulTextExchange({
+        text: "redirected",
+        contentType: "text/plain",
+      });
+      exchange.send(cb);
+      return exchange.req;
     });
 
-    const saved = await saveMediaSource("https://example.com/start");
-
-    expect(mockRequest).toHaveBeenCalledTimes(2);
-    expect(saved.contentType).toBe("text/plain");
-    expect(path.extname(saved.path)).toBe(".txt");
-    expect(await fs.readFile(saved.path, "utf8")).toBe("redirected");
-    const stat = await fs.stat(saved.path);
-    const expectedMode = process.platform === "win32" ? 0o666 : 0o644;
-    expect(stat.mode & 0o777).toBe(expectedMode);
+    await expectRedirectSaveResult({
+      expectedText: "redirected",
+      expectedContentType: "text/plain",
+      expectedExtension: ".txt",
+    });
   });
 
   it("fails when redirect response omits location header", async () => {
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const { req, res } = createMockHttpExchange();
-      res.statusCode = 302;
-      res.headers = {};
-      setImmediate(() => {
-        cb(res as unknown);
-        res.end();
-      });
-      return req;
+      const exchange = mockRedirectExchange({});
+      exchange.send(cb);
+      return exchange.req;
     });
-
-    await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(
-      "Redirect loop or missing Location header",
-    );
-    expect(mockRequest).toHaveBeenCalledTimes(1);
+    await expectRedirectSaveFailure("Redirect loop or missing Location header");
   });
 });

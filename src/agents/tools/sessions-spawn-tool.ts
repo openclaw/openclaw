@@ -1,14 +1,25 @@
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
+import { spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import { registerSubagentRun } from "../subagent-registry.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./sessions-helpers.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+// Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
+const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -19,6 +30,46 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+
+function summarizeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return "error";
+}
+
+function resolveTrackedSpawnMode(params: {
+  requestedMode?: "run" | "session";
+  threadRequested: boolean;
+}): "run" | "session" {
+  if (params.requestedMode === "run" || params.requestedMode === "session") {
+    return params.requestedMode;
+  }
+  return params.threadRequested ? "session" : "run";
+}
+
+async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
+  const key = sessionKey.trim();
+  if (!key) {
+    return;
+  }
+  try {
+    await callGateway({
+      method: "sessions.delete",
+      params: {
+        key,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -41,7 +92,7 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -156,7 +207,7 @@ export function createSessionsSpawnTool(
             agentId: requestedAgentId,
             resumeSessionId,
             cwd,
-            mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+            mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
             sandbox,
             streamTo,
@@ -170,6 +221,65 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
           },
         );
+        const childSessionKey = result.childSessionKey?.trim();
+        const childRunId = result.runId?.trim();
+        const shouldTrackViaRegistry =
+          result.status === "accepted" &&
+          Boolean(childSessionKey) &&
+          Boolean(childRunId) &&
+          streamTo !== "parent";
+        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
+          const cfg = loadConfig();
+          const trackedSpawnMode = resolveTrackedSpawnMode({
+            requestedMode: result.mode,
+            threadRequested: thread,
+          });
+          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          const requesterInternalKey = opts?.agentSessionKey
+            ? resolveInternalSessionKey({
+                key: opts.agentSessionKey,
+                alias,
+                mainKey,
+              })
+            : alias;
+          const requesterDisplayKey = resolveDisplaySessionKey({
+            key: requesterInternalKey,
+            alias,
+            mainKey,
+          });
+          const requesterOrigin = normalizeDeliveryContext({
+            channel: opts?.agentChannel,
+            accountId: opts?.agentAccountId,
+            to: opts?.agentTo,
+            threadId: opts?.agentThreadId,
+          });
+          try {
+            registerSubagentRun({
+              runId: childRunId,
+              childSessionKey,
+              requesterSessionKey: requesterInternalKey,
+              requesterOrigin,
+              requesterDisplayKey,
+              task,
+              cleanup: trackedCleanup,
+              label: label || undefined,
+              runTimeoutSeconds,
+              expectsCompletionMessage: true,
+              spawnMode: trackedSpawnMode,
+            });
+          } catch (err) {
+            // Best-effort only: the ACP turn was already started above, so deleting the
+            // child session record here does not guarantee the in-flight run was aborted.
+            await cleanupUntrackedAcpSession(childSessionKey);
+            return jsonResult({
+              status: "error",
+              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
+              childSessionKey,
+              runId: childRunId,
+            });
+          }
+        }
         return jsonResult(result);
       }
 

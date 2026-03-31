@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -51,13 +50,15 @@ vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/retry-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/retry-runtime")>();
   return {
     ...actual,
     retryAsync: retryAsyncMock,
   };
 });
+
+let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
@@ -110,6 +111,10 @@ describe("deliverDiscordReply", () => {
     });
     return threadBindings;
   };
+
+  beforeAll(async () => {
+    ({ deliverDiscordReply } = await import("./reply-delivery.js"));
+  });
 
   beforeEach(() => {
     sendMessageDiscordMock.mockClear().mockResolvedValue({

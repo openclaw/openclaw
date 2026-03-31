@@ -182,6 +182,10 @@ export async function loadStatusScanModuleForTest(
     probeGateway: mocks.probeGateway,
   }));
   vi.doMock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
+  vi.doMock("../gateway/connection-details.js", () => ({
+    buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+    buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetails,
+  }));
   vi.doMock("../process/exec.js", () => createStatusExecModuleMock());
   vi.doMock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
   vi.doMock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
@@ -210,6 +214,27 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
+    tasks: {
+      total: 0,
+      active: 0,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
+    },
     sessions: {
       count: 0,
       paths: [],

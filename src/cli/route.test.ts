@@ -66,15 +66,10 @@ describe("tryRouteCli", () => {
     }
   });
 
-  it("passes suppressDoctorStdout=true for routed --json commands", async () => {
+  it("skips config guard for routed status --json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandPath: ["status"],
-        suppressDoctorStdout: true,
-      }),
-    );
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
+import { printDaemonStatus } from "./status.print.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
@@ -68,8 +69,6 @@ vi.mock("./status.gather.js", () => ({
   renderPortDiagnosticsForCli: () => [],
   resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
 }));
-
-const { printDaemonStatus } = await import("./status.print.js");
 
 describe("printDaemonStatus", () => {
   beforeEach(() => {

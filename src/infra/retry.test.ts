@@ -1,6 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
+const randomMocks = vi.hoisted(() => ({
+  generateSecureFraction: vi.fn(),
+}));
+
+vi.mock("./secure-random.js", () => ({
+  generateSecureFraction: randomMocks.generateSecureFraction,
+}));
+
+type NumberRetryCase = {
+  name: string;
+  fn: ReturnType<typeof vi.fn>;
+  attempts: number;
+  initialDelayMs: number;
+  expectedValue?: string;
+  expectedError?: string;
+  expectedCalls: number;
+};
+
 async function runRetryAfterCase(params: {
   minDelayMs: number;
   maxDelayMs: number;
@@ -28,15 +46,15 @@ async function runRetryAfterCase(params: {
   }
 }
 
-async function runRetryNumberCase<T>(
-  fn: ReturnType<typeof vi.fn<() => Promise<T>>>,
+async function runRetryNumberCase(
+  fn: ReturnType<typeof vi.fn>,
   attempts: number,
   initialDelayMs: number,
-): Promise<T> {
+): Promise<unknown> {
   vi.clearAllTimers();
   vi.useFakeTimers();
   try {
-    const promise = retryAsync(fn, attempts, initialDelayMs);
+    const promise = retryAsync(fn as () => Promise<unknown>, attempts, initialDelayMs);
     const settled = promise.then(
       (value) => ({ ok: true as const, value }),
       (error) => ({ ok: false as const, error }),
@@ -61,28 +79,47 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  randomMocks.generateSecureFraction.mockReset();
 });
 
 describe("retryAsync", () => {
-  it("returns on first success", async () => {
-    const fn = vi.fn().mockResolvedValue("ok");
-    const result = await retryAsync(fn, 3, 10);
-    expect(result).toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries then succeeds", async () => {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("fail1")).mockResolvedValueOnce("ok");
-    const result = await runRetryNumberCase(fn, 3, 1);
-    expect(result).toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(2);
-  });
-
-  it("propagates after exhausting retries", async () => {
-    const fn = vi.fn().mockRejectedValue(new Error("boom"));
-    await expect(runRetryNumberCase(fn, 2, 1)).rejects.toThrow("boom");
-    expect(fn).toHaveBeenCalledTimes(2);
-  });
+  it.each<NumberRetryCase>([
+    {
+      name: "returns on first success",
+      fn: vi.fn().mockResolvedValue("ok"),
+      attempts: 3,
+      initialDelayMs: 10,
+      expectedValue: "ok",
+      expectedCalls: 1,
+    },
+    {
+      name: "retries then succeeds",
+      fn: vi.fn().mockRejectedValueOnce(new Error("fail1")).mockResolvedValueOnce("ok"),
+      attempts: 3,
+      initialDelayMs: 1,
+      expectedValue: "ok",
+      expectedCalls: 2,
+    },
+    {
+      name: "propagates after exhausting retries",
+      fn: vi.fn().mockRejectedValue(new Error("boom")),
+      attempts: 2,
+      initialDelayMs: 1,
+      expectedError: "boom",
+      expectedCalls: 2,
+    },
+  ])(
+    "$name",
+    async ({ fn, attempts, initialDelayMs, expectedValue, expectedError, expectedCalls }) => {
+      const result = runRetryNumberCase(fn, attempts, initialDelayMs);
+      if (expectedError) {
+        await expect(result).rejects.toThrow(expectedError);
+      } else {
+        await expect(result).resolves.toBe(expectedValue);
+      }
+      expect(fn).toHaveBeenCalledTimes(expectedCalls);
+    },
+  );
 
   it("stops when shouldRetry returns false", async () => {
     const err = new Error("boom");
@@ -133,19 +170,49 @@ describe("retryAsync", () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("uses retryAfterMs when provided", async () => {
-    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 1000, retryAfterMs: 500 });
-    expect(delays[0]).toBe(500);
+  it.each([
+    {
+      name: "uses retryAfterMs when provided",
+      params: { minDelayMs: 0, maxDelayMs: 1000, retryAfterMs: 500 },
+      expectedDelay: 500,
+    },
+    {
+      name: "clamps retryAfterMs to maxDelayMs",
+      params: { minDelayMs: 0, maxDelayMs: 100, retryAfterMs: 500 },
+      expectedDelay: 100,
+    },
+    {
+      name: "clamps retryAfterMs to minDelayMs",
+      params: { minDelayMs: 250, maxDelayMs: 1000, retryAfterMs: 50 },
+      expectedDelay: 250,
+    },
+  ])("$name", async ({ params, expectedDelay }) => {
+    const delays = await runRetryAfterCase(params);
+    expect(delays[0]).toBe(expectedDelay);
   });
 
-  it("clamps retryAfterMs to maxDelayMs", async () => {
-    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 100, retryAfterMs: 500 });
-    expect(delays[0]).toBe(100);
-  });
+  it("uses secure jitter when configured", async () => {
+    vi.useFakeTimers();
+    randomMocks.generateSecureFraction.mockReturnValue(1);
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const delays: number[] = [];
 
-  it("clamps retryAfterMs to minDelayMs", async () => {
-    const delays = await runRetryAfterCase({ minDelayMs: 250, maxDelayMs: 1000, retryAfterMs: 50 });
-    expect(delays[0]).toBe(250);
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 100,
+        maxDelayMs: 200,
+        jitter: 0.5,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays).toEqual([150]);
+      expect(randomMocks.generateSecureFraction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 

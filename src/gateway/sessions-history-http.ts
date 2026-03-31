@@ -6,14 +6,18 @@ import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
 } from "./http-common.js";
-import { getHeader } from "./http-utils.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  getHeader,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessages,
@@ -23,7 +27,6 @@ import {
 } from "./session-utils.js";
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
-
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
@@ -155,7 +158,7 @@ export async function handleSessionHistoryHttpRequest(
   }
 
   const cfg = loadConfig();
-  const ok = await authorizeGatewayBearerRequestOrReply({
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -163,7 +166,22 @@ export async function handleSessionHistoryHttpRequest(
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!ok) {
+  if (!requestAuth) {
+    return true;
+  }
+
+  // HTTP callers must declare the same least-privilege operator scopes they
+  // intend to use over WS so both transport surfaces enforce the same gate.
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
     return true;
   }
 

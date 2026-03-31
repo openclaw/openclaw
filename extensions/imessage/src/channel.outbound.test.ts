@@ -21,6 +21,14 @@ function requireIMessageSendMedia() {
   return sendMedia;
 }
 
+function requireIMessageChunker() {
+  const chunker = imessagePlugin.outbound?.chunker;
+  if (!chunker) {
+    throw new Error("imessage outbound.chunker unavailable");
+  }
+  return chunker;
+}
+
 const requestMock = vi.fn();
 const stopMock = vi.fn();
 
@@ -55,6 +63,61 @@ function getSentParams() {
   return requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
 }
 
+async function expectDirectOutboundResult(params: {
+  invoke: () => Promise<{ channel: string; messageId: string }>;
+  sendIMessage: ReturnType<typeof vi.fn>;
+  to: string;
+  text: string;
+  expectedOptions: Record<string, unknown>;
+  expectedResult: { channel: string; messageId: string };
+}) {
+  const result = await params.invoke();
+  expect(params.sendIMessage).toHaveBeenCalledWith(
+    params.to,
+    params.text,
+    expect.objectContaining(params.expectedOptions),
+  );
+  expect(result).toEqual(params.expectedResult);
+}
+
+async function expectReplyToTextForwarding(params: {
+  invoke: () => Promise<{ channel: string; messageId: string }>;
+  sendIMessage: ReturnType<typeof vi.fn>;
+}) {
+  await expectDirectOutboundResult({
+    invoke: params.invoke,
+    sendIMessage: params.sendIMessage,
+    to: "chat_id:12",
+    text: "hello",
+    expectedOptions: {
+      accountId: "default",
+      replyToId: "reply-1",
+      maxBytes: 3 * 1024 * 1024,
+    },
+    expectedResult: { channel: "imessage", messageId: "m-text" },
+  });
+}
+
+async function expectMediaLocalRootsForwarding(params: {
+  invoke: () => Promise<{ channel: string; messageId: string }>;
+  sendIMessage: ReturnType<typeof vi.fn>;
+}) {
+  await expectDirectOutboundResult({
+    invoke: params.invoke,
+    sendIMessage: params.sendIMessage,
+    to: "chat_id:88",
+    text: "caption",
+    expectedOptions: {
+      mediaUrl: "/tmp/workspace/pic.png",
+      mediaLocalRoots: ["/tmp/workspace"],
+      accountId: "acct-1",
+      replyToId: "reply-2",
+      maxBytes: 3 * 1024 * 1024,
+    },
+    expectedResult: { channel: "imessage", messageId: "m-media-local" },
+  });
+}
+
 describe("imessagePlugin outbound", () => {
   const cfg = {
     channels: {
@@ -68,25 +131,18 @@ describe("imessagePlugin outbound", () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "m-text" });
     const sendText = requireIMessageSendText();
 
-    const result = await sendText({
-      cfg,
-      to: "chat_id:12",
-      text: "hello",
-      accountId: "default",
-      replyToId: "reply-1",
-      deps: { sendIMessage },
+    await expectReplyToTextForwarding({
+      invoke: async () =>
+        await sendText({
+          cfg,
+          to: "chat_id:12",
+          text: "hello",
+          accountId: "default",
+          replyToId: "reply-1",
+          deps: { sendIMessage },
+        }),
+      sendIMessage,
     });
-
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "chat_id:12",
-      "hello",
-      expect.objectContaining({
-        accountId: "default",
-        replyToId: "reply-1",
-        maxBytes: 3 * 1024 * 1024,
-      }),
-    );
-    expect(result).toEqual({ channel: "imessage", messageId: "m-text" });
   });
 
   it("forwards replyToId on direct sendMedia adapter path", async () => {
@@ -121,27 +177,27 @@ describe("imessagePlugin outbound", () => {
     const sendMedia = requireIMessageSendMedia();
     const mediaLocalRoots = ["/tmp/workspace"];
 
-    const result = await sendMedia({
-      cfg,
-      to: "chat_id:88",
-      text: "caption",
-      mediaUrl: "/tmp/workspace/pic.png",
-      mediaLocalRoots,
-      accountId: "acct-1",
-      deps: { sendIMessage },
+    await expectMediaLocalRootsForwarding({
+      invoke: async () =>
+        await sendMedia({
+          cfg,
+          to: "chat_id:88",
+          text: "caption",
+          mediaUrl: "/tmp/workspace/pic.png",
+          mediaLocalRoots,
+          accountId: "acct-1",
+          replyToId: "reply-2",
+          deps: { sendIMessage },
+        }),
+      sendIMessage,
     });
+  });
 
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "chat_id:88",
-      "caption",
-      expect.objectContaining({
-        mediaUrl: "/tmp/workspace/pic.png",
-        mediaLocalRoots,
-        accountId: "acct-1",
-        maxBytes: 3 * 1024 * 1024,
-      }),
-    );
-    expect(result).toEqual({ channel: "imessage", messageId: "m-media-local" });
+  it("chunks outbound text without requiring iMessage runtime initialization", () => {
+    const chunker = requireIMessageChunker();
+
+    expect(() => chunker("hello world", 5)).not.toThrow();
+    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 });
 
@@ -157,53 +213,37 @@ describe("imessageOutbound", () => {
   it("forwards replyToId on direct text sends", async () => {
     const sendIMessage = vi.fn().mockResolvedValueOnce({ messageId: "m-text" });
 
-    const result = await imessageOutbound.sendText!({
-      cfg,
-      to: "chat_id:12",
-      text: "hello",
-      accountId: "default",
-      replyToId: "reply-1",
-      deps: { sendIMessage },
+    await expectReplyToTextForwarding({
+      invoke: async () =>
+        await imessageOutbound.sendText!({
+          cfg,
+          to: "chat_id:12",
+          text: "hello",
+          accountId: "default",
+          replyToId: "reply-1",
+          deps: { sendIMessage },
+        }),
+      sendIMessage,
     });
-
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "chat_id:12",
-      "hello",
-      expect.objectContaining({
-        accountId: "default",
-        replyToId: "reply-1",
-        maxBytes: 3 * 1024 * 1024,
-      }),
-    );
-    expect(result).toEqual({ channel: "imessage", messageId: "m-text" });
   });
 
   it("forwards mediaLocalRoots on direct media sends", async () => {
     const sendIMessage = vi.fn().mockResolvedValueOnce({ messageId: "m-media-local" });
 
-    const result = await imessageOutbound.sendMedia!({
-      cfg,
-      to: "chat_id:88",
-      text: "caption",
-      mediaUrl: "/tmp/workspace/pic.png",
-      mediaLocalRoots: ["/tmp/workspace"],
-      accountId: "acct-1",
-      replyToId: "reply-2",
-      deps: { sendIMessage },
+    await expectMediaLocalRootsForwarding({
+      invoke: async () =>
+        await imessageOutbound.sendMedia!({
+          cfg,
+          to: "chat_id:88",
+          text: "caption",
+          mediaUrl: "/tmp/workspace/pic.png",
+          mediaLocalRoots: ["/tmp/workspace"],
+          accountId: "acct-1",
+          replyToId: "reply-2",
+          deps: { sendIMessage },
+        }),
+      sendIMessage,
     });
-
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "chat_id:88",
-      "caption",
-      expect.objectContaining({
-        mediaUrl: "/tmp/workspace/pic.png",
-        mediaLocalRoots: ["/tmp/workspace"],
-        accountId: "acct-1",
-        replyToId: "reply-2",
-        maxBytes: 3 * 1024 * 1024,
-      }),
-    );
-    expect(result).toEqual({ channel: "imessage", messageId: "m-media-local" });
   });
 });
 

@@ -1,13 +1,13 @@
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
+import { chunkTextForOutbound } from "../runtime-api.js";
 import { createMSTeamsPollStoreFs } from "./polls.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   pollMaxOptions: 12,

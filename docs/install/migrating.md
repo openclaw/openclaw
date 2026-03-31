@@ -91,7 +91,7 @@ Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_D
 
   <Accordion title="Remote mode">
     If your UI points at a **remote** gateway, the remote host owns sessions and workspace.
-    Migrate the gateway host itself, not your local laptop. See [FAQ](/help/faq#where-does-openclaw-store-its-data).
+    Migrate the gateway host itself, not your local laptop. See [FAQ](/help/faq#where-things-live-on-disk).
   </Accordion>
 
   <Accordion title="Secrets in backups">

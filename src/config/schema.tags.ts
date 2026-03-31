@@ -101,6 +101,18 @@ function normalizeTags(tags: ReadonlyArray<string>): ConfigTag[] {
   return [...out].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]);
 }
 
+function collectUnknownTags(tags: ReadonlyArray<string>): string[] {
+  const out = new Set<string>();
+  for (const tag of tags) {
+    const normalized = tag.trim().toLowerCase();
+    if (!normalized || normalizeTag(normalized)) {
+      continue;
+    }
+    out.add(normalized);
+  }
+  return [...out];
+}
+
 function patternToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+");
   return new RegExp(`^${escaped}$`, "i");
@@ -180,7 +192,10 @@ export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
   for (const [path, hint] of Object.entries(hints)) {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
     const derivedTags = deriveTagsForPath(path, hint);
-    const tags = normalizeTags([...derivedTags, ...existingTags]);
+    const tags = [
+      ...normalizeTags([...derivedTags, ...existingTags]),
+      ...collectUnknownTags(existingTags),
+    ];
     next[path] = { ...hint, tags };
   }
   return next;

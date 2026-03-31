@@ -1,3 +1,4 @@
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginAllowlistCompat,
@@ -6,6 +7,7 @@ import {
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
+  resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } from "./providers.js";
@@ -23,12 +25,20 @@ export function resolvePluginProviders(params: {
   onlyPluginIds?: string[];
   activate?: boolean;
   cache?: boolean;
+  pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const autoEnabledConfig =
+    params.config !== undefined
+      ? applyPluginAutoEnable({
+          config: params.config,
+          env,
+        }).config
+      : undefined;
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
       ? resolveBundledProviderCompatPluginIds({
-          config: params.config,
+          config: autoEnabledConfig,
           workspaceDir: params.workspaceDir,
           env,
           onlyPluginIds: params.onlyPluginIds,
@@ -36,29 +46,35 @@ export function resolvePluginProviders(params: {
       : [];
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledPluginAllowlistCompat({
-        config: params.config,
+        config: autoEnabledConfig,
         pluginIds: bundledProviderCompatPluginIds,
       })
-    : params.config;
-  const maybeVitestCompat = params.bundledProviderVitestCompat
-    ? withBundledProviderVitestCompat({
+    : autoEnabledConfig;
+  const allowlistCompatConfig = params.bundledProviderAllowlistCompat
+    ? withBundledPluginEnablementCompat({
         config: maybeAllowlistCompat,
         pluginIds: bundledProviderCompatPluginIds,
-        env: params.env,
       })
     : maybeAllowlistCompat;
-  const config =
-    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
-      ? withBundledPluginEnablementCompat({
-          config: maybeVitestCompat,
-          pluginIds: bundledProviderCompatPluginIds,
-        })
-      : maybeVitestCompat;
-  const registry = loadOpenClawPlugins({
+  const config = params.bundledProviderVitestCompat
+    ? withBundledProviderVitestCompat({
+        config: allowlistCompatConfig,
+        pluginIds: bundledProviderCompatPluginIds,
+        env,
+      })
+    : allowlistCompatConfig;
+  const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
+  });
+  const registry = loadOpenClawPlugins({
+    config,
+    workspaceDir: params.workspaceDir,
+    env,
+    onlyPluginIds: providerPluginIds,
+    pluginSdkResolution: params.pluginSdkResolution,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),

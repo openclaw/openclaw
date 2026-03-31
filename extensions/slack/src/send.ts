@@ -1,10 +1,7 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
@@ -13,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -51,6 +49,8 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   client?: WebClient;
   threadTs?: string;
@@ -230,6 +230,8 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   caption?: string;
   threadTs?: string;
@@ -239,11 +241,13 @@ async function uploadSlackFile(params: {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
+  const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
+  const uploadTitle = params.uploadTitle ?? uploadFileName;
   // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
   const uploadUrlResp = await params.client.files.getUploadURLExternal({
-    filename: fileName ?? "upload",
+    filename: uploadFileName,
     length: buffer.length,
   });
   if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
@@ -274,7 +278,7 @@ async function uploadSlackFile(params: {
 
   // Complete the upload and share to channel/thread
   const completeResp = await params.client.files.completeUploadExternal({
-    files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
+    files: [{ id: uploadUrlResp.file_id, title: uploadTitle }],
     channel_id: params.channelId,
     ...(params.caption ? { initial_comment: params.caption } : {}),
     ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
@@ -365,6 +369,8 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      uploadFileName: opts.uploadFileName,
+      uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
       caption: firstChunk,
       threadTs: opts.threadTs,

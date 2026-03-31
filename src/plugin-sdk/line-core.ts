@@ -1,5 +1,5 @@
 export type { OpenClawConfig } from "../config/config.js";
-export type { LineChannelData, LineConfig } from "../../extensions/line/api.js";
+export type { LineChannelData, LineConfig } from "./line-surface.js";
 export {
   createTopLevelChannelDmPolicy,
   DEFAULT_ACCOUNT_ID,
@@ -14,10 +14,10 @@ export {
   normalizeAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../../extensions/line/api.js";
-export { resolveExactLineGroupConfigKey } from "../../extensions/line/api.js";
-export type { ResolvedLineAccount } from "../../extensions/line/api.js";
-export { LineConfigSchema } from "../../extensions/line/api.js";
+} from "./line-surface.js";
+export { resolveExactLineGroupConfigKey } from "./line-surface.js";
+export type { ResolvedLineAccount } from "./line-surface.js";
+export { LineConfigSchema } from "./line-surface.js";
 export {
   createActionCard,
   createImageCard,
@@ -26,5 +26,5 @@ export {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "../../extensions/line/api.js";
-export { processLineMessage } from "../../extensions/line/api.js";
+} from "./line-surface.js";
+export { processLineMessage } from "./line-surface.js";

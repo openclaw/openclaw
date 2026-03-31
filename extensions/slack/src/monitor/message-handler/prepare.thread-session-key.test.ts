@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../../src/config/config.js";
 import type { SlackMessageEvent } from "../../types.js";
 
 type PrepareSlackMessage = typeof import("./prepare.js").prepareSlackMessage;

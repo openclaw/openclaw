@@ -15,11 +15,11 @@ import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
-  OPENAI_CODEX_DEFAULT_MODEL,
   type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
@@ -139,16 +139,11 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
-    const { getOAuthApiKey } = await import("./openai-codex-provider.runtime.js");
-    const refreshed = await getOAuthApiKey("openai-codex", {
-      "openai-codex": cred,
-    });
-    if (!refreshed) {
-      throw new Error("OpenAI Codex OAuth refresh returned no credentials.");
-    }
+    const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
+    const refreshed = await refreshOpenAICodexToken(cred.refresh);
     return {
       ...cred,
-      ...refreshed.newCredentials,
+      ...refreshed,
       type: "oauth" as const,
       provider: PROVIDER_ID,
       email: cred.email,
@@ -200,6 +195,13 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   });
 }
 
+function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
+  if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
+    return undefined;
+  }
+  return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
+}
+
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
@@ -238,6 +240,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       },
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
+    buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
     capabilities: {
       providerFamily: "openai",
     },

@@ -194,6 +194,27 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.ownerList).toEqual(["123"]);
   });
 
+  it("suppresses inherited owner status when the context forbids it", () => {
+    const cfg = {
+      channels: { telegram: { allowFrom: ["owner-123"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "exec-event",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        From: "owner-123",
+        To: "owner-123",
+        ForceSenderIsOwnerFalse: true,
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
   it("does not infer a provider from channel allowlists for webchat command contexts", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+15551234567"] } },
@@ -214,6 +235,28 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.providerId).toBeUndefined();
     expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("preserves external channel command auth in mixed webchat contexts", () => {
+    const cfg = {
+      commands: { allowFrom: { whatsapp: ["+15551234567"] } },
+      channels: { whatsapp: { allowFrom: ["+15551234567"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        From: "whatsapp:+19995551234",
+        SenderE164: "+19995551234",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("whatsapp");
+    expect(auth.isAuthorizedSender).toBe(false);
   });
 
   it("falls back to channel allowFrom when provider allowlist resolution throws", () => {

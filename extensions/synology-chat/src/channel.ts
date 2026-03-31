@@ -21,6 +21,7 @@ import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { listAccountIds, resolveAccount } from "./accounts.js";
+import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
@@ -224,6 +225,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       config: {
         ...synologyChatConfigAdapter,
       },
+      auth: synologyChatApprovalAuth,
       messaging: {
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();

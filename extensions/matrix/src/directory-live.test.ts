@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
-import { resolveMatrixAuth } from "./matrix/client.js";
 
-const { requestJsonMock } = vi.hoisted(() => ({
+const { matrixAuthedHttpClientCtorMock, requestJsonMock } = vi.hoisted(() => ({
+  matrixAuthedHttpClientCtorMock: vi.fn(),
   requestJsonMock: vi.fn(),
 }));
 
@@ -12,16 +11,28 @@ vi.mock("./matrix/client.js", () => ({
 
 vi.mock("./matrix/sdk/http-client.js", () => ({
   MatrixAuthedHttpClient: class {
+    constructor(params: unknown) {
+      matrixAuthedHttpClientCtorMock(params);
+    }
+
     requestJson(params: unknown) {
       return requestJsonMock(params);
     }
   },
 }));
 
+let listMatrixDirectoryGroupsLive: typeof import("./directory-live.js").listMatrixDirectoryGroupsLive;
+let listMatrixDirectoryPeersLive: typeof import("./directory-live.js").listMatrixDirectoryPeersLive;
+let resolveMatrixAuth: typeof import("./matrix/client.js").resolveMatrixAuth;
+
 describe("matrix directory live", () => {
   const cfg = { channels: { matrix: {} } };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
+      await import("./directory-live.js"));
+    ({ resolveMatrixAuth } = await import("./matrix/client.js"));
     vi.mocked(resolveMatrixAuth).mockReset();
     vi.mocked(resolveMatrixAuth).mockResolvedValue({
       accountId: "assistant",
@@ -29,6 +40,7 @@ describe("matrix directory live", () => {
       userId: "@bot:example.org",
       accessToken: "test-token",
     });
+    matrixAuthedHttpClientCtorMock.mockReset();
     requestJsonMock.mockReset();
     requestJsonMock.mockResolvedValue({ results: [] });
   });
@@ -48,11 +60,40 @@ describe("matrix directory live", () => {
     await listMatrixDirectoryGroupsLive({
       cfg,
       accountId: "assistant",
-      query: "!room:example.org",
+      query: "channel:#room:example.org",
       limit: 10,
     });
 
     expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
+  });
+
+  it("passes dispatcherPolicy through to the live directory client", async () => {
+    vi.mocked(resolveMatrixAuth).mockResolvedValue({
+      accountId: "assistant",
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "test-token",
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
+    });
+
+    await listMatrixDirectoryPeersLive({
+      cfg,
+      accountId: "assistant",
+      query: "alice",
+    });
+
+    expect(matrixAuthedHttpClientCtorMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      accessToken: "test-token",
+      ssrfPolicy: undefined,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
+    });
   });
 
   it("returns no peer results for empty query without resolving auth", async () => {

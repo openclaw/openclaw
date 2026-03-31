@@ -4,6 +4,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -28,20 +29,9 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
 
-  // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:
-  let threadId: string | undefined;
   const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:(\d+)$/);
-  const threadMatch = restJoined.match(/:thread:(\d+)$/);
-  const match = topicMatch || threadMatch;
-
-  if (match) {
-    threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
-  }
-
-  // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  const { baseSessionKey, threadId } = parseSessionThreadInfo(restJoined);
+  const id = (baseSessionKey ?? restJoined).trim();
 
   if (!id) {
     return null;

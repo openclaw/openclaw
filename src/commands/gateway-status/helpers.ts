@@ -3,6 +3,7 @@ import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
+import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
@@ -116,21 +117,34 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
+function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
+  if (target.kind === "localLoopback") {
+    return true;
+  }
+  try {
+    return isLoopbackHost(new URL(target.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function resolveProbeBudgetMs(
   overallMs: number,
-  target: Pick<GatewayStatusTarget, "kind" | "active">,
+  target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
 ): number {
-  switch (target.kind) {
-    case "localLoopback":
-      // Active loopback probes should honor the caller budget because local shells/containers
-      // can legitimately take longer to connect. Inactive loopback probes stay bounded so
-      // remote-mode status checks do not stall on an expected local miss.
-      return target.active ? overallMs : Math.min(800, overallMs);
-    case "sshTunnel":
-      return Math.min(2_000, overallMs);
-    default:
-      return Math.min(1_500, overallMs);
+  if (target.kind === "sshTunnel") {
+    return Math.min(2000, overallMs);
   }
+  if (!isLoopbackProbeTarget(target)) {
+    return Math.min(1500, overallMs);
+  }
+  if (target.kind === "localLoopback" && !target.active) {
+    return Math.min(800, overallMs);
+  }
+  // Active/discovered loopback probes and explicit loopback URLs should honor
+  // the caller budget because healthy local detail RPCs can legitimately take
+  // longer than the legacy short caps.
+  return overallMs;
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {

@@ -1,10 +1,10 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
+import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
-import { usesXaiToolSchemaProfile } from "./model-compat.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
-import { stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -97,14 +97,14 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const hasXaiSchemaProfile = usesXaiToolSchemaProfile(options?.modelCompat);
+  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (hasXaiSchemaProfile) {
-      return stripXaiUnsupportedKeywords(s);
+    if (unsupportedToolSchemaKeywords.size > 0) {
+      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords);
     }
     return s;
   }

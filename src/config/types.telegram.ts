@@ -61,7 +61,7 @@ export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 export type TelegramExecApprovalConfig = {
   /** Enable Telegram exec approvals for this account. Default: false. */
   enabled?: boolean;
-  /** Telegram user IDs allowed to approve exec requests. Required if enabled. */
+  /** Telegram user IDs allowed to approve exec requests. Optional: falls back to numeric owner IDs inferred from allowFrom/defaultTo when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -298,3 +298,9 @@ export type TelegramConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & TelegramAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    telegram?: TelegramConfig;
+  }
+}

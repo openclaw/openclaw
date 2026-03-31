@@ -31,7 +31,7 @@ describe("cron service store seam coverage", () => {
               sessionTarget: "current",
               wakeMode: "next-heartbeat",
               message: "legacy message-only payload",
-              provider: "telegram",
+              provider: "demo-channel",
               to: "123",
               deliver: true,
               state: {},
@@ -68,7 +68,7 @@ describe("cron service store seam coverage", () => {
     }
     expect(job?.delivery).toMatchObject({
       mode: "announce",
-      channel: "telegram",
+      channel: "demo-channel",
       to: "123",
     });
     expect(job?.state.nextRunAtMs).toBe(now);
@@ -87,7 +87,7 @@ describe("cron service store seam coverage", () => {
     });
     expect(persistedJob?.delivery).toMatchObject({
       mode: "announce",
-      channel: "telegram",
+      channel: "demo-channel",
       to: "123",
     });
 

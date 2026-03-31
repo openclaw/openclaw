@@ -1,8 +1,12 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import {
+  BUNDLED_PLUGIN_ROOT_DIR,
+  BUNDLED_PLUGIN_TEST_GLOB,
+} from "./scripts/lib/bundled-plugin-paths.mjs";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
 import {
   behaviorManifestPath,
   unitMemoryHotspotManifestPath,
@@ -10,10 +14,12 @@ import {
 } from "./scripts/test-runner-manifest.mjs";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
+export { resolveLocalVitestMaxWorkers };
+
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
-const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
+const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
 export default defineConfig({
   resolve: {
@@ -48,10 +54,15 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "test/setup.ts",
       "scripts/test-parallel.mjs",
+      "scripts/test-planner/catalog.mjs",
+      "scripts/test-planner/executor.mjs",
+      "scripts/test-planner/planner.mjs",
+      "scripts/test-planner/runtime-profile.mjs",
       "scripts/test-runner-manifest.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.config.ts",
+      "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
@@ -66,9 +77,11 @@ export default defineConfig({
     ],
     include: [
       "src/**/*.test.ts",
-      "extensions/**/*.test.ts",
+      BUNDLED_PLUGIN_TEST_GLOB,
+      "packages/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/app-chat.test.ts",
+      "ui/src/ui/chat/**/*.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
       "ui/src/ui/views/channels.test.ts",
       "ui/src/ui/views/chat.test.ts",
@@ -79,10 +92,12 @@ export default defineConfig({
       "ui/src/ui/controllers/sessions.test.ts",
       "ui/src/ui/views/sessions.test.ts",
       "ui/src/ui/app-gateway.sessions.node.test.ts",
+      "ui/src/ui/chat/slash-command-executor.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",
+      "test/fixtures/**",
       "apps/macos/**",
       "apps/macos/.build/**",
       "**/node_modules/**",
@@ -108,7 +123,7 @@ export default defineConfig({
       include: ["./src/**/*.ts"],
       exclude: [
         // Never count workspace packages/apps toward core coverage thresholds.
-        "extensions/**",
+        `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
         "apps/**",
         "ui/**",
         "test/**",

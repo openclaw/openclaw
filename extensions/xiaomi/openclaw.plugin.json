@@ -1,5 +1,6 @@
 {
   "id": "xiaomi",
+  "enabledByDefault": true,
   "providers": ["xiaomi"],
   "providerAuthEnvVars": {
     "xiaomi": ["XIAOMI_API_KEY"]
