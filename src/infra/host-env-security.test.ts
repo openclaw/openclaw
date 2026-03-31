@@ -174,6 +174,16 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(true);
+    expect(isDangerousHostEnvVarName("https_proxy")).toBe(true);
+    expect(isDangerousHostEnvVarName("ALL_PROXY")).toBe(true);
+    expect(isDangerousHostEnvVarName("no_proxy")).toBe(true);
+    expect(isDangerousHostEnvVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(true);
+    expect(isDangerousHostEnvVarName("node_extra_ca_certs")).toBe(true);
+    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(true);
+    expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(true);
+    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(true);
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
@@ -257,6 +267,9 @@ describe("sanitizeHostExecEnv", () => {
         SSL_CERT_DIR: "/tmp/evil-cert-dir",
         REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
         CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GIT_SSL_NO_VERIFY: "1",
+        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+        GIT_SSL_CAPATH: "/tmp/evil-git-ca-dir",
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
         GONOSUMDB: "example.invalid/*",
@@ -503,6 +516,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPATH: "/tmp/evil-go",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         VIRTUAL_ENV: "/tmp/evil-venv",
+        HTTPS_PROXY: "http://proxy.example.test:8080",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
         SAFE_KEY: "ok",
         "BAD-KEY": "bad",
       },
@@ -520,6 +535,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "DOCKER_CONTEXT",
       "DOCKER_HOST",
       "DOCKER_TLS_VERIFY",
+      "GIT_SSL_CAINFO",
+      "GIT_SSL_CAPATH",
+      "GIT_SSL_NO_VERIFY",
       "GOENV",
       "GONOPROXY",
       "GONOSUMCHECK",
@@ -527,8 +545,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "GOPATH",
       "GOPRIVATE",
       "GOPROXY",
+      "HTTPS_PROXY",
       "LIBRARY_PATH",
       "NODE_EXTRA_CA_CERTS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
       "OBJC_INCLUDE_PATH",
       "PATH",
       "PIP_CONFIG_FILE",
@@ -563,6 +583,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.UV_INDEX_URL).toBeUndefined();
     expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(result.env.UV_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.GIT_SSL_NO_VERIFY).toBeUndefined();
+    expect(result.env.GIT_SSL_CAINFO).toBeUndefined();
+    expect(result.env.GIT_SSL_CAPATH).toBeUndefined();
     expect(result.env.DOCKER_HOST).toBeUndefined();
     expect(result.env.DOCKER_TLS_VERIFY).toBeUndefined();
     expect(result.env.DOCKER_CERT_PATH).toBeUndefined();
@@ -584,6 +607,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GOPRIVATE).toBeUndefined();
     expect(result.env.GOENV).toBeUndefined();
     expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.HTTPS_PROXY).toBeUndefined();
+    expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
   });

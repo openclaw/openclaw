@@ -43,7 +43,20 @@ enum HostEnvSecurityPolicy {
         "MAVEN_OPTS",
         "SBT_OPTS",
         "GRADLE_OPTS",
-        "ANT_OPTS"
+        "ANT_OPTS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "DOCKER_HOST",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
