@@ -209,6 +209,54 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("does not rate limit an allowed sender while another authorization is still pending", async () => {
+    const onMessage = vi.fn(async () => {});
+    let resolveBlocked: ((value: "block") => void) | undefined;
+    const blockedPromise = new Promise<"block">((resolve) => {
+      resolveBlocked = resolve;
+    });
+    const authorizeSender = vi
+      .fn<(params: { senderPubkey: string }) => Promise<"allow" | "block" | "pairing">>()
+      .mockImplementationOnce(async () => await blockedPromise)
+      .mockResolvedValueOnce("allow");
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+      guardPolicy: {
+        rateLimit: {
+          windowMs: 60_000,
+          maxGlobalPerWindow: 1,
+          maxPerSenderPerWindow: 1,
+          maxTrackedSenderKeys: 32,
+        },
+      },
+    });
+
+    const blockedEventPromise = emitEvent(
+      createEvent({
+        id: "blocked-pending",
+        pubkey: `blocked${"a".repeat(57)}`,
+      }),
+    );
+    await emitEvent(
+      createEvent({
+        id: "allowed-during-pending-auth",
+        pubkey: `allowed${"b".repeat(57)}`,
+      }),
+    );
+    resolveBlocked?.("block");
+    await blockedEventPromise;
+
+    expect(authorizeSender).toHaveBeenCalledTimes(2);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(0);
+
+    bus.close();
+  });
+
   it("rejects far-future events before crypto", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startNostrBus({
