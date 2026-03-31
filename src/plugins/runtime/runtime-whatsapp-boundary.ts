@@ -1,4 +1,6 @@
 import { createJiti } from "jiti";
+type WhatsAppHeavyRuntimeModule = typeof import("@openclaw/whatsapp/runtime-api.js");
+type WhatsAppLightRuntimeModule = typeof import("@openclaw/whatsapp/light-runtime-api.js");
 import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
 import {
   getDefaultLocalRoots as getDefaultLocalRootsImpl,
@@ -11,10 +13,6 @@ import {
   resolvePluginRuntimeModulePath,
   resolvePluginRuntimeRecord,
 } from "./runtime-plugin-boundary.js";
-import type {
-  WhatsAppHeavyRuntimeModule,
-  WhatsAppLightRuntimeModule,
-} from "./runtime-whatsapp-surface.js";
 
 const WHATSAPP_PLUGIN_ID = "whatsapp";
 

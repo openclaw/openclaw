@@ -184,22 +184,6 @@ export type PluginRuntimeChannel = {
     monitorSignalProvider: typeof import("../../plugin-sdk/signal.js").monitorSignalProvider;
     messageActions: typeof import("../../plugin-sdk/signal.js").signalMessageActions;
   };
-  whatsapp: {
-    getActiveWebListener: typeof import("./runtime-whatsapp-boundary.js").getActiveWebListener;
-    getWebAuthAgeMs: typeof import("./runtime-whatsapp-boundary.js").getWebAuthAgeMs;
-    logoutWeb: typeof import("./runtime-whatsapp-boundary.js").logoutWeb;
-    logWebSelfId: typeof import("./runtime-whatsapp-boundary.js").logWebSelfId;
-    readWebSelfId: typeof import("./runtime-whatsapp-boundary.js").readWebSelfId;
-    webAuthExists: typeof import("./runtime-whatsapp-boundary.js").webAuthExists;
-    sendMessageWhatsApp: typeof import("./runtime-whatsapp-boundary.js").sendMessageWhatsApp;
-    sendPollWhatsApp: typeof import("./runtime-whatsapp-boundary.js").sendPollWhatsApp;
-    loginWeb: typeof import("./runtime-whatsapp-boundary.js").loginWeb;
-    startWebLoginWithQr: typeof import("./runtime-whatsapp-boundary.js").startWebLoginWithQr;
-    waitForWebLogin: typeof import("./runtime-whatsapp-boundary.js").waitForWebLogin;
-    monitorWebChannel: typeof import("./runtime-whatsapp-boundary.js").monitorWebChannel;
-    handleWhatsAppAction: typeof import("./runtime-whatsapp-boundary.js").handleWhatsAppAction;
-    createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
-  };
   line: {
     listLineAccountIds: typeof import("../../plugin-sdk/line.js").listLineAccountIds;
     resolveDefaultLineAccountId: typeof import("../../plugin-sdk/line.js").resolveDefaultLineAccountId;
