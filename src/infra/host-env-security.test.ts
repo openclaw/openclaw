@@ -174,16 +174,21 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
-    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(true);
-    expect(isDangerousHostEnvVarName("https_proxy")).toBe(true);
-    expect(isDangerousHostEnvVarName("ALL_PROXY")).toBe(true);
-    expect(isDangerousHostEnvVarName("no_proxy")).toBe(true);
-    expect(isDangerousHostEnvVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(true);
-    expect(isDangerousHostEnvVarName("node_extra_ca_certs")).toBe(true);
-    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(true);
-    expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(true);
-    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(true);
-    expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(true);
+    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("https_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("http_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("ALL_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("no_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(false);
+    expect(isDangerousHostEnvVarName("node_extra_ca_certs")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_DIR")).toBe(false);
+    expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(false);
+    expect(isDangerousHostEnvVarName("CURL_CA_BUNDLE")).toBe(false);
+    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(false);
+    expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(false);
+    expect(isDangerousHostEnvVarName("DOCKER_TLS_VERIFY")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
@@ -349,6 +354,54 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
+  });
+
+  it("keeps trusted inherited proxy, TLS, and Docker env while blocking overrides", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+        HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        SSL_CERT_DIR: "/etc/ssl/certs",
+        CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
+        DOCKER_TLS_VERIFY: "1",
+      },
+      overrides: {
+        HTTP_PROXY: "http://evil-proxy.example.test:8080",
+        NODE_TLS_REJECT_UNAUTHORIZED: "1",
+        DOCKER_TLS_VERIFY: "0",
+      },
+    });
+
+    expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      PATH: "/usr/bin:/bin",
+      HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+      HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      SSL_CERT_DIR: "/etc/ssl/certs",
+      CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
+      DOCKER_TLS_VERIFY: "1",
+    });
+  });
+
+  it("blocks proxy, TLS, and Docker override values explicitly", () => {
+    expect(isDangerousHostEnvOverrideVarName("HTTPS_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("https_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("HTTP_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("http_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("ALL_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("no_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("node_extra_ca_certs")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("SSL_CERT_FILE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("SSL_CERT_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("requests_ca_bundle")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CURL_CA_BUNDLE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("docker_cert_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_TLS_VERIFY")).toBe(true);
   });
 
   it("drops dangerous inherited shell trace keys", () => {
