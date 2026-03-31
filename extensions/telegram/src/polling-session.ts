@@ -152,9 +152,10 @@ export class TelegramPollingSession {
         }
 
         heartbeatConsecutiveFailures += 1;
-        if (heartbeatSuspended) {
-          this.#transportState.markDirty();
-        }
+        // Transport is already marked dirty when suspension starts (below);
+        // re-marking on every subsequent failure would rebuild a new undici
+        // transport each heartbeat interval without disposing the previous one,
+        // accumulating sockets/agents during prolonged outages.
         if (heartbeatConsecutiveFailures < HEARTBEAT_FAIL_THRESHOLD) {
           this.opts.log(
             `[telegram][diag] Heartbeat failed (${heartbeatConsecutiveFailures}/${HEARTBEAT_FAIL_THRESHOLD}).`,
@@ -619,6 +620,10 @@ export class TelegramPollingSession {
         headers: { "Content-Type": "application/json" },
         body: "{}",
         signal: controller.signal,
+        // Prevent redirect-based token exfiltration: the bot token is in the
+        // URL path, so following redirects to attacker infrastructure would
+        // disclose it.
+        redirect: "error",
       });
       const status = response.status;
       await response.body?.cancel().catch(() => {});

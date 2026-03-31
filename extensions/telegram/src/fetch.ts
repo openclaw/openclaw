@@ -593,8 +593,39 @@ export function resolveTelegramFetch(
 /**
  * Resolve the Telegram Bot API base URL from an optional `apiRoot` config value.
  * Returns a trimmed URL without trailing slash, or the standard default.
+ *
+ * Security: validates that custom roots use https and do not embed credentials,
+ * since callers append `/bot<TOKEN>/...` to this base. An unvalidated base would
+ * allow SSRF and bot-token exfiltration (CWE-918).
  */
 export function resolveTelegramApiBase(apiRoot?: string): string {
   const trimmed = apiRoot?.trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : `https://${TELEGRAM_API_HOSTNAME}`;
+  if (!trimmed) {
+    return `https://${TELEGRAM_API_HOSTNAME}`;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(
+      `Invalid Telegram apiRoot: not a valid URL (${trimmed}). ` +
+        "Custom Bot API servers must use a full https:// URL.",
+    );
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error(
+      `Invalid Telegram apiRoot: protocol must be https (got ${parsed.protocol}). ` +
+        "Bot token is embedded in the request path, so plaintext transport is not allowed.",
+    );
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "Invalid Telegram apiRoot: URL must not contain embedded credentials (userinfo).",
+    );
+  }
+
+  return parsed.origin + parsed.pathname.replace(/\/+$/, "");
 }
