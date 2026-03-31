@@ -803,6 +803,7 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

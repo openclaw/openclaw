@@ -98,7 +98,6 @@ describe("entry root version fast path", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await import("./entry.js");
-
     await vi.waitFor(() => {
       expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
       expect(exitSpy).toHaveBeenCalledWith(0);
@@ -112,7 +111,6 @@ describe("entry root version fast path", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await import("./entry.js");
-
     await vi.waitFor(() => {
       expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
       expect(exitSpy).toHaveBeenCalledWith(0);
@@ -126,7 +124,6 @@ describe("entry root version fast path", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await import("./entry.js");
-
     await vi.waitFor(() => {
       expect(runCliMock).toHaveBeenCalledWith(["node", "openclaw", "--version"]);
     });
@@ -142,7 +139,6 @@ describe("entry root version fast path", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await import("./entry.js");
-
     await vi.waitFor(() => {
       expect(runCliMock).toHaveBeenCalledWith(["node", "openclaw", "--version"]);
     });
