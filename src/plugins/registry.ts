@@ -66,6 +66,7 @@ import type {
   PluginOrigin,
   PluginKind,
   PluginRegistrationMode,
+  PluginHookLlmInputResult,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -289,6 +290,29 @@ const constrainLegacyPromptInjectionHook = (
       );
     }
     return stripPromptMutationFieldsFromLegacyHookResult(result);
+  };
+};
+
+/**
+ * Strip prompt/systemPrompt mutation fields from llm_input hook results
+ * while preserving block/blockReason so the plugin can still block calls.
+ */
+const constrainLlmInputPromptInjectionHook = (
+  handler: PluginHookHandlerMap["llm_input"],
+): PluginHookHandlerMap["llm_input"] => {
+  const strip = (result: PluginHookLlmInputResult | void): PluginHookLlmInputResult | void => {
+    if (!result || typeof result !== "object") {
+      return result;
+    }
+    const { prompt: _p, systemPrompt: _s, ...rest } = result;
+    return rest;
+  };
+  return (event, ctx) => {
+    const result = handler(event, ctx);
+    if (result && typeof result === "object" && "then" in result) {
+      return Promise.resolve(result).then(strip);
+    }
+    return strip(result);
   };
 };
 
@@ -940,6 +964,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         });
         effectiveHandler = constrainLegacyPromptInjectionHook(
           handler as PluginHookHandlerMap["before_agent_start"],
+        ) as PluginHookHandlerMap[K];
+      }
+      if (hookName === "llm_input") {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        });
+        effectiveHandler = constrainLlmInputPromptInjectionHook(
+          handler as PluginHookHandlerMap["llm_input"],
         ) as PluginHookHandlerMap[K];
       }
     }

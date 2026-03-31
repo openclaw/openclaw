@@ -785,6 +785,12 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
+                  // Plugin block decisions are not overflow errors — skip overflow
+                  // classification so the dedicated PluginBlockedError handler below
+                  // processes them correctly.
+                  if (promptError instanceof PluginBlockedError) {
+                    return null;
+                  }
                   const errorText = describeUnknownError(promptError);
                   if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
