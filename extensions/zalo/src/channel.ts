@@ -1,4 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -30,6 +30,7 @@ import {
   type ResolvedZaloAccount,
 } from "./accounts.js";
 import { zaloMessageActions } from "./actions.js";
+import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import {
@@ -172,14 +173,16 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         ...zaloConfigAdapter,
         isConfigured: (account) => Boolean(account.token?.trim()),
         describeAccount: (account): ChannelAccountSnapshot =>
-          describeAccountSnapshot({
+          describeWebhookAccountSnapshot({
             account,
             configured: Boolean(account.token?.trim()),
+            mode: account.config.webhookUrl ? "webhook" : "polling",
             extra: {
               tokenSource: account.tokenSource,
             },
           }),
       },
+      auth: zaloApprovalAuth,
       groups: {
         resolveRequireMention: () => true,
       },

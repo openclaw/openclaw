@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),

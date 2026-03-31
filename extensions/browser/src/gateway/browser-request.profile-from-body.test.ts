@@ -8,9 +8,13 @@ const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMoc
   }),
 );
 
-vi.mock("../../../../src/config/config.js", () => ({
-  loadConfig: loadConfigMock,
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+  };
+});
 
 vi.mock("../../../../src/gateway/node-command-policy.js", () => ({
   isNodeCommandAllowed: isNodeCommandAllowedMock,

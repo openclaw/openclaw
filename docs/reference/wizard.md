@@ -46,7 +46,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
     - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-    - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7` and `MiniMax-M2.5` stays available.
+    - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7`.
     - More detail: [MiniMax](/providers/minimax)
     - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
     - More detail: [Synthetic](/providers/synthetic)
@@ -209,7 +209,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (behavior details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
-- `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
+- `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
 - `skills.install.nodeManager`
 - `wizard.lastRunAt`

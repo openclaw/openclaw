@@ -195,6 +195,12 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
 
+## Agent delivery fallback
+
+- `agent` requests can include `deliver=true` to request outbound delivery.
+- `bestEffortDeliver=false` keeps strict behavior: unresolved or internal-only delivery targets return `INVALID_REQUEST`.
+- `bestEffortDeliver=true` allows fallback to session-only execution when no external deliverable route can be resolved (for example internal/webchat sessions or ambiguous multi-channel configs).
+
 ## Versioning
 
 - `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema.ts`.

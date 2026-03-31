@@ -330,15 +330,15 @@ export function tryGetRuntime() {
 
 Beyond `api.runtime`, the API object also provides:
 
-| Field                    | Type                      | Description                                               |
-| ------------------------ | ------------------------- | --------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                 |
-| `api.name`               | `string`                  | Plugin display name                                       |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                |
+| Field                    | Type                      | Description                                                      |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                        |
+| `api.name`               | `string`                  | Plugin display name                                              |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                       |
 
 ## Related
 

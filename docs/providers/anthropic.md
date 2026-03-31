@@ -47,7 +47,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Fast mode (Anthropic API)
 
-OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
+OpenClaw's shared `/fast` toggle also supports direct public Anthropic traffic, including API-key and OAuth-authenticated requests sent to `api.anthropic.com`.
 
 - `/fast on` maps to `service_tier: "auto"`
 - `/fast off` maps to `service_tier: "standard_only"`
@@ -69,8 +69,8 @@ OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
 
 Important limits:
 
-- This is **API-key only**. Anthropic setup-token / OAuth auth does not honor OpenClaw fast-mode tier injection.
 - OpenClaw only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
+- Explicit Anthropic `serviceTier` or `service_tier` model params override the `/fast` default when both are set.
 - Anthropic reports the effective tier on the response under `usage.service_tier`. On accounts without Priority Tier capacity, `service_tier: "auto"` may still resolve to `standard`.
 
 ## Prompt caching (Anthropic API)

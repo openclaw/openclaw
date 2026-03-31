@@ -174,7 +174,7 @@ What you set:
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
   <Accordion title="MiniMax">
-    Config is auto-written. Hosted default is `MiniMax-M2.7`; `MiniMax-M2.5` stays available.
+    Config is auto-written. Hosted default is `MiniMax-M2.7`.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
@@ -258,7 +258,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
-- `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
+- `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack, Discord, Matrix, Microsoft Teams) when you opt in during prompts (names resolve to IDs when possible)
 - `skills.install.nodeManager`
 - `wizard.lastRunAt`

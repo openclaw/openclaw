@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
@@ -116,6 +116,24 @@ describe("slackPlugin actions", () => {
     }
 
     expect(Type.Object(schema.properties).required).toBeUndefined();
+  });
+
+  it("treats interactive reply payloads as structured Slack payloads", () => {
+    const hasStructuredReplyPayload = slackPlugin.messaging?.hasStructuredReplyPayload;
+    if (!hasStructuredReplyPayload) {
+      throw new Error("slack messaging.hasStructuredReplyPayload unavailable");
+    }
+
+    expect(
+      hasStructuredReplyPayload({
+        payload: {
+          text: "Choose",
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("forwards read threadId to Slack action handler", async () => {

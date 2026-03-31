@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
 
 let capturedCtx: unknown;
 let capturedDispatchParams: unknown;
@@ -72,7 +72,7 @@ function createWhatsAppDirectStreamingArgs(params?: {
       channels: { whatsapp: { blockStreaming: true } },
       messages: {},
       session: { store: sessionStorePath },
-    } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+    } as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
     msg: {
       id: "msg1",
       from: "+1555",
@@ -228,7 +228,7 @@ describe("web processMessage inbound context", () => {
       },
       messages: {},
       session: { store: sessionStorePath },
-    } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>);
+    } as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>);
 
     expect(getDispatcherResponsePrefix()).toBe("[Mainbot]");
   });
@@ -237,7 +237,7 @@ describe("web processMessage inbound context", () => {
     await processSelfDirectMessage({
       messages: {},
       session: { store: sessionStorePath },
-    } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>);
+    } as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>);
 
     expect(getDispatcherResponsePrefix()).toBeUndefined();
   });
@@ -264,7 +264,7 @@ describe("web processMessage inbound context", () => {
         cfg: {
           messages: {},
           session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+        } as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
         msg: {
           id: "g1",
           from: "123@g.us",
@@ -399,7 +399,7 @@ describe("web processMessage inbound context", () => {
         },
         messages: {},
         session: { store: sessionStorePath, dmScope: "main" },
-      } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+      } as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
       msg: {
         id: params.messageId,
         from: params.from,

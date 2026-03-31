@@ -1,7 +1,10 @@
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { repoInstallSpec } from "../../../test/helpers/bundled-plugin-paths.js";
 import { loggingState } from "../../logging/state.js";
 import { setCommandJsonMode } from "./json-mode.js";
+
+const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -45,15 +48,6 @@ vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
-const mockedModuleIds = [
-  "../../globals.js",
-  "../../runtime.js",
-  "../banner.js",
-  "../cli-name.js",
-  "./config-guard.js",
-  "../plugin-registry.js",
-];
-
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
@@ -65,13 +59,6 @@ let originalForceStderr: boolean;
 
 beforeAll(async () => {
   ({ registerPreActionHooks } = await import("./preaction.js"));
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
-  vi.resetModules();
 });
 
 beforeEach(() => {
@@ -286,8 +273,8 @@ describe("registerPreActionHooks", () => {
 
     vi.clearAllMocks();
     await runPreAction({
-      parseArgv: ["plugins", "install", "./extensions/matrix"],
-      processArgv: ["node", "openclaw", "plugins", "install", "./extensions/matrix"],
+      parseArgv: ["plugins", "install", MATRIX_REPO_INSTALL_SPEC],
+      processArgv: ["node", "openclaw", "plugins", "install", MATRIX_REPO_INSTALL_SPEC],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({

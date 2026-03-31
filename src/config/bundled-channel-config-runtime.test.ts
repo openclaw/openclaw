@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("bundled channel config runtime", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../channels/plugins/bundled.js");
+  });
+
   afterEach(() => {
     vi.resetModules();
     vi.doUnmock("../channels/plugins/bundled.js");
@@ -8,9 +13,7 @@ describe("bundled channel config runtime", () => {
 
   it("tolerates an unavailable bundled channel list during import", async () => {
     vi.doMock("../channels/plugins/bundled.js", () => ({
-      get bundledChannelPlugins() {
-        return undefined;
-      },
+      listBundledChannelPlugins: () => undefined,
     }));
 
     const runtimeModule = await import("./bundled-channel-config-runtime.js");
@@ -22,14 +25,11 @@ describe("bundled channel config runtime", () => {
   it("falls back to static channel schemas when bundled plugin access hits a TDZ-style ReferenceError", async () => {
     vi.resetModules();
     vi.doMock("../channels/plugins/bundled.js", () => {
-      const mockModule = {} as { bundledChannelPlugins?: unknown };
-      Object.defineProperty(mockModule, "bundledChannelPlugins", {
-        enumerable: true,
-        get() {
+      return {
+        listBundledChannelPlugins() {
           throw new ReferenceError("Cannot access 'bundledChannelPlugins' before initialization.");
         },
-      });
-      return mockModule;
+      };
     });
 
     const runtime = await import("./bundled-channel-config-runtime.js");

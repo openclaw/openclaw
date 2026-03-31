@@ -352,7 +352,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       // Extract keywords for better FTS matching on conversational queries
       // e.g., "that thing we discussed about the API" → ["discussed", "API"]
-      const keywords = extractKeywords(cleaned);
+      const keywords = extractKeywords(cleaned, {
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+      });
       const searchTerms = keywords.length > 0 ? keywords : [cleaned];
 
       // Search with each keyword and merge results
@@ -371,12 +373,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
 
-      const merged = [...seenIds.values()]
-        .toSorted((a, b) => b.score - a.score)
-        .filter((entry) => entry.score >= minScore)
-        .slice(0, maxResults);
-
-      return merged;
+      const merged = [...seenIds.values()].toSorted((a, b) => b.score - a.score);
+      return this.selectScoredResults(merged, maxResults, minScore, 0);
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
@@ -418,13 +416,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
       ),
     );
-    return merged
-      .filter(
-        (entry) =>
-          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
-          entry.score >= relaxedMinScore,
-      )
-      .slice(0, maxResults);
+    return this.selectScoredResults(
+      merged.filter((entry) =>
+        keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
+      ),
+      maxResults,
+      minScore,
+      relaxedMinScore,
+    );
+  }
+
+  private selectScoredResults<T extends MemorySearchResult & { score: number }>(
+    results: T[],
+    maxResults: number,
+    minScore: number,
+    relaxedMinScore = minScore,
+  ): T[] {
+    const strict = results.filter((entry) => entry.score >= minScore);
+    if (strict.length > 0) {
+      return strict.slice(0, maxResults);
+    }
+    return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
   }
 
   private hasIndexedContent(): boolean {
@@ -488,6 +500,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ftsTable: FTS_TABLE,
       providerModel,
       query,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter,

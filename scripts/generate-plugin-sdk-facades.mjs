@@ -7,6 +7,8 @@ import { writeGeneratedOutput } from "./lib/generated-output-utils.mjs";
 import {
   GENERATED_PLUGIN_SDK_FACADES,
   GENERATED_PLUGIN_SDK_FACADES_LABEL,
+  GENERATED_PLUGIN_SDK_FACADE_TYPES_OUTPUT,
+  buildPluginSdkFacadeTypeMapModule,
   buildPluginSdkFacadeModule,
 } from "./lib/plugin-sdk-facades.mjs";
 
@@ -21,6 +23,23 @@ function parseArgs(argv) {
 
 export function generatePluginSdkFacades(params) {
   const results = [];
+  const typeMapOutputPath = GENERATED_PLUGIN_SDK_FACADE_TYPES_OUTPUT;
+  const typeMapNext = formatGeneratedModule(
+    buildPluginSdkFacadeTypeMapModule(GENERATED_PLUGIN_SDK_FACADES),
+    {
+      repoRoot: params.repoRoot,
+      outputPath: typeMapOutputPath,
+      errorLabel: `${GENERATED_PLUGIN_SDK_FACADES_LABEL}:type-map`,
+    },
+  );
+  results.push(
+    writeGeneratedOutput({
+      repoRoot: params.repoRoot,
+      outputPath: typeMapOutputPath,
+      next: typeMapNext,
+      check: params.check,
+    }),
+  );
   for (const entry of GENERATED_PLUGIN_SDK_FACADES) {
     const outputPath = `src/plugin-sdk/${entry.subpath}.ts`;
     const next = formatGeneratedModule(

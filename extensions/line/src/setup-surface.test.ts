@@ -1,15 +1,16 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/extensions/jiti-runtime-api.ts";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
+import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { clearLineRuntime, setLineRuntime } from "./runtime.js";
@@ -28,13 +29,14 @@ vi.mock("@line/bot-sdk", () => ({
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 let probeLineBot: typeof import("./probe.js").probeLineBot;
+const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
 
 function normalizeModuleSpecifier(specifier: string): string | null {
   if (specifier.startsWith("./src/")) {
     return specifier;
   }
-  if (specifier.startsWith("../../extensions/line/src/")) {
-    return `./src/${specifier.slice("../../extensions/line/src/".length)}`;
+  if (specifier.startsWith(LINE_SRC_PREFIX)) {
+    return `./src/${specifier.slice(LINE_SRC_PREFIX.length)}`;
   }
   return null;
 }
@@ -175,14 +177,16 @@ describe("line setup wizard", () => {
 });
 
 describe("probeLineBot", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ probeLineBot } = await import("./probe.js"));
+  });
+
+  beforeEach(() => {
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
     });
-    ({ probeLineBot } = await import("./probe.js"));
   });
 
   afterEach(() => {
@@ -231,10 +235,6 @@ describe("linePlugin status.probeAccount", () => {
       pictureUrl: "https://example.com/bot.png",
     });
 
-    const { linePlugin: freshLinePlugin } = await import("./channel.js");
-    const { clearLineRuntime: clearFreshLineRuntime } = await import("./runtime.js");
-    const { probeLineBot: directProbeLineBot } = await import("./probe.js");
-    clearFreshLineRuntime();
     const params = {
       cfg: {} as OpenClawConfig,
       account: {
@@ -247,8 +247,10 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    await expect(freshLinePlugin.status!.probeAccount!(params)).resolves.toEqual(
-      await directProbeLineBot("token", 50),
+    clearLineRuntime();
+
+    await expect(linePlugin.status!.probeAccount!(params)).resolves.toEqual(
+      await probeLineBot("token", 50),
     );
   });
 });

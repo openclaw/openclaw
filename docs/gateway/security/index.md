@@ -7,10 +7,13 @@ title: "Security"
 
 # Security
 
-> [!WARNING]
-> **Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
-> OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
-> If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+<Warning>
+**Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
+OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
+If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+</Warning>
+
+**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing--allowlist--open--disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
 
 ## Scope first: personal assistant security model
 
@@ -46,34 +49,17 @@ OpenClaw is both a product and an experiment: you’re wiring frontier-model beh
 
 Start with the smallest access that still works, then widen it as you gain confidence.
 
-## Deployment assumption (important)
+### Deployment and host trust
 
 OpenClaw assumes the host and config boundary are trusted:
 
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
-- OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.
 - Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
-- If multiple users want OpenClaw, use one VPS/host per user.
-
-### Practical consequence (operator trust boundary)
-
-Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
-
-- Operators with read/control-plane access can inspect gateway session metadata/history by design.
+- Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
 - Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
-- Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
-- If you need adversarial-user isolation, run separate gateways per trust boundary.
-- Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
-
-## Personal assistant model (not a multi-tenant bus)
-
-OpenClaw is designed as a personal assistant security model: one trusted operator boundary, potentially many agents.
-
-- If several people can message one tool-enabled agent, each of them can steer that same permission set.
-- Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
-- If users may be adversarial to each other, run separate gateways (or separate OS users/hosts) per trust boundary.
+- If several people can message one tool-enabled agent, each of them can steer that same permission set. Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
 
 ### Shared Slack workspace: real risk
 
@@ -181,7 +167,7 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
-### What the audit checks (high level)
+## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
@@ -191,7 +177,7 @@ If more than one person can DM your bot:
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
 - **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
-- **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
+- **Runtime expectation drift** (for example assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or explicitly setting `tools.exec.host="sandbox"` while sandbox mode is off).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -211,7 +197,7 @@ Use this when auditing access or deciding what to back up:
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
-## Security Audit Checklist
+## Security audit checklist
 
 When the audit prints findings, treat this as a priority order:
 
@@ -253,8 +239,8 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `logging.redact_off`                                          | warn          | Sensitive values leak to logs/status                                                 | `logging.redactSensitive`                                                                            | yes      |
 | `sandbox.docker_config_mode_off`                              | warn          | Sandbox Docker config present but inactive                                           | `agents.*.sandbox.mode`                                                                              | no       |
 | `sandbox.dangerous_network_mode`                              | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode              | `agents.*.sandbox.docker.network`                                                                    | no       |
-| `tools.exec.host_sandbox_no_sandbox_defaults`                 | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                        | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                    | no       |
-| `tools.exec.host_sandbox_no_sandbox_agents`                   | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off              | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                        | no       |
+| `tools.exec.host_sandbox_no_sandbox_defaults`                 | warn          | `exec host=sandbox` fails closed when sandbox is off                                 | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                    | no       |
+| `tools.exec.host_sandbox_no_sandbox_agents`                   | warn          | Per-agent `exec host=sandbox` fails closed when sandbox is off                       | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                        | no       |
 | `tools.exec.security_full_configured`                         | warn/critical | Host exec is running with `security="full"`                                          | `tools.exec.security`, `agents.list[].tools.exec.security`                                           | no       |
 | `tools.exec.auto_allow_skills_enabled`                        | warn          | Exec approvals trust skill bins implicitly                                           | `~/.openclaw/exec-approvals.json`                                                                    | no       |
 | `tools.exec.allowlist_interpreter_without_strict_inline_eval` | warn          | Interpreter allowlists permit inline eval without forced reapproval                  | `tools.exec.strictInlineEval`, `agents.list[].tools.exec.strictInlineEval`, exec approvals allowlist | no       |
@@ -459,7 +445,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
 - If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
-  - The install path is `~/.openclaw/extensions/<pluginId>/` (or `$OPENCLAW_STATE_DIR/extensions/<pluginId>/`).
+  - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
 
@@ -504,6 +490,7 @@ Treat the snippet above as **secure DM mode**:
 - Default: `session.dmScope: "main"` (all DMs share one session for continuity).
 - Local CLI onboarding default: writes `session.dmScope: "per-channel-peer"` when unset (keeps existing explicit values).
 - Secure DM mode: `session.dmScope: "per-channel-peer"` (each channel+sender pair gets an isolated DM context).
+- Cross-channel peer isolation: `session.dmScope: "per-peer"` (each sender gets one session across all channels of the same type).
 
 If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
 
@@ -534,7 +521,7 @@ Even with strong system prompts, **prompt injection is not solved**. System prom
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
-- Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
+- Note: sandboxing is opt-in. If sandbox mode is off, implicit `host=auto` resolves to the gateway host. Explicit `host=sandbox` still fails closed because no sandbox runtime is available. Set `host=gateway` if you want that behavior to be explicit in config.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - If you allowlist interpreters (`python`, `node`, `ruby`, `perl`, `php`, `lua`, `osascript`), enable `tools.exec.strictInlineEval` so inline eval forms still need explicit approval.
 - **Model choice matters:** older/smaller/legacy models are significantly less robust against prompt injection and tool misuse. For tool-enabled agents, use the strongest latest-generation, instruction-hardened model available.
@@ -601,6 +588,8 @@ Recommendations:
 - If you must use a smaller model, **reduce blast radius** (read-only tools, strong sandboxing, minimal filesystem access, strict allowlists).
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
 - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
+
+<a id="reasoning-verbose-output-in-groups"></a>
 
 ## Reasoning & verbose output in groups
 
@@ -859,7 +848,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
-- `extensions/**`: installed plugins (plus their `node_modules/`).
+- bundled plugin packages: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
 
 Hardening tips:
@@ -916,21 +905,19 @@ Details: [Logging](/gateway/logging)
 
 In group chats, only respond when explicitly mentioned.
 
-### 3. Separate Numbers
+### 3) Separate numbers (WhatsApp, Signal, Telegram)
 
-Consider running your AI on a separate phone number from your personal one:
+For phone-number-based channels, consider running your AI on a separate phone number from your personal one:
 
 - Personal number: Your conversations stay private
 - Bot number: AI handles these, with appropriate boundaries
 
-### 4. Read-Only Mode (Today, via sandbox + tools)
+### 4) Read-only mode (via sandbox + tools)
 
-You can already build a read-only profile by combining:
+You can build a read-only profile by combining:
 
 - `agents.defaults.sandbox.workspaceAccess: "ro"` (or `"none"` for no workspace access)
 - tool allow/deny lists that block `write`, `edit`, `apply_patch`, `exec`, `process`, etc.
-
-We may add a single `readOnlyMode` flag later to simplify this configuration.
 
 Additional hardening options:
 

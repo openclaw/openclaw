@@ -1,5 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/image-generation-core";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,

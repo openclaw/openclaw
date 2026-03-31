@@ -22,7 +22,7 @@ function createMockStream(): ReturnType<StreamFn> {
 }
 
 type RunExtraParamsCaseParams<
-  TApi extends "openai-completions" | "openai-responses",
+  TApi extends "openai-completions" | "openai-responses" | "azure-openai-responses",
   TPayload extends Record<string, unknown>,
 > = {
   applyModelId?: string;
@@ -36,7 +36,7 @@ type RunExtraParamsCaseParams<
 };
 
 export function runExtraParamsCase<
-  TApi extends "openai-completions" | "openai-responses",
+  TApi extends "openai-completions" | "openai-responses" | "azure-openai-responses",
   TPayload extends Record<string, unknown>,
 >(params: RunExtraParamsCaseParams<TApi, TPayload>): ExtraParamsCapture<TPayload> {
   const captured: ExtraParamsCapture<TPayload> = {

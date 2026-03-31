@@ -174,6 +174,51 @@ describe("extractKeywords", () => {
     const testCount = keywords.filter((k) => k === "test").length;
     expect(testCount).toBe(1);
   });
+
+  describe("with trigram tokenizer", () => {
+    const trigramOpts = { ftsTokenizer: "trigram" as const };
+
+    it("emits whole CJK block instead of unigrams in trigram mode", () => {
+      const defaultKeywords = extractKeywords("之前讨论的那个方案");
+      const trigramKeywords = extractKeywords("之前讨论的那个方案", trigramOpts);
+      // Default mode produces bigrams
+      expect(defaultKeywords).toContain("讨论");
+      expect(defaultKeywords).toContain("方案");
+      // Trigram mode emits the whole contiguous CJK block (FTS5 trigram
+      // requires >= 3 chars per term; individual characters return no results)
+      expect(trigramKeywords).toContain("之前讨论的那个方案");
+      expect(trigramKeywords).not.toContain("讨论");
+      expect(trigramKeywords).not.toContain("方案");
+    });
+
+    it("skips Japanese kanji bigrams in trigram mode", () => {
+      const defaultKeywords = extractKeywords("経済政策について");
+      const trigramKeywords = extractKeywords("経済政策について", trigramOpts);
+      // Default mode adds kanji bigrams: 経済, 済政, 政策
+      expect(defaultKeywords).toContain("経済");
+      expect(defaultKeywords).toContain("済政");
+      expect(defaultKeywords).toContain("政策");
+      // Trigram mode keeps the full kanji block but skips bigram splitting
+      expect(trigramKeywords).toContain("経済政策");
+      expect(trigramKeywords).not.toContain("済政");
+    });
+
+    it("still filters stop words in trigram mode", () => {
+      const keywords = extractKeywords("これ それ そして どう", trigramOpts);
+      expect(keywords).not.toContain("これ");
+      expect(keywords).not.toContain("それ");
+      expect(keywords).not.toContain("そして");
+      expect(keywords).not.toContain("どう");
+    });
+
+    it("does not affect English keyword extraction", () => {
+      const keywords = extractKeywords("that thing we discussed about the API", trigramOpts);
+      expect(keywords).toContain("discussed");
+      expect(keywords).toContain("api");
+      expect(keywords).not.toContain("that");
+      expect(keywords).not.toContain("the");
+    });
+  });
 });
 
 describe("expandQueryForFts", () => {

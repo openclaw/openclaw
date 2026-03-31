@@ -4247,7 +4247,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     pluginId: "googlechat",
     channelId: "googlechat",
     label: "Google Chat",
-    description: "Google Workspace Chat app via HTTP webhooks.",
+    description: "Google Workspace Chat app with HTTP webhook.",
     schema: {
       $schema: "http://json-schema.org/draft-07/schema#",
       type: "object",
@@ -6233,7 +6233,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     pluginId: "line",
     channelId: "line",
     label: "LINE",
-    description: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+    description: "LINE Messaging API webhook bot.",
     schema: {
       $schema: "http://json-schema.org/draft-07/schema#",
       type: "object",
@@ -6300,6 +6300,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         webhookPath: {
           type: "string",
+        },
+        threadBindings: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            idleHours: {
+              type: "number",
+            },
+            maxAgeHours: {
+              type: "number",
+            },
+            spawnSubagentSessions: {
+              type: "boolean",
+            },
+            spawnAcpSessions: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         accounts: {
           type: "object",
@@ -6371,6 +6392,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               webhookPath: {
                 type: "string",
+              },
+              threadBindings: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  idleHours: {
+                    type: "number",
+                  },
+                  maxAgeHours: {
+                    type: "number",
+                  },
+                  spawnSubagentSessions: {
+                    type: "boolean",
+                  },
+                  spawnAcpSessions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               groups: {
                 type: "object",
@@ -6510,7 +6552,70 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
         },
         accessToken: {
-          type: "string",
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
         },
         password: {
           anyOf: [
@@ -6611,6 +6716,17 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["open", "disabled", "allowlist"],
         },
+        streaming: {
+          anyOf: [
+            {
+              type: "string",
+              enum: ["partial", "off"],
+            },
+            {
+              type: "boolean",
+            },
+          ],
+        },
         replyToMode: {
           type: "string",
           enum: ["off", "first", "all"],
@@ -6672,6 +6788,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         mediaMaxMb: {
           type: "number",
+        },
+        historyLimit: {
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
         },
         autoJoin: {
           type: "string",
@@ -7647,6 +7768,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         chunkMode: {
           type: "string",
           enum: ["length", "newline"],
+        },
+        blockStreaming: {
+          type: "boolean",
         },
         blockStreamingCoalesce: {
           type: "object",

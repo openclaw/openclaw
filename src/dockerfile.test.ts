@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "../test/helpers/bundled-plugin-paths.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
@@ -41,7 +42,9 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("CI=true pnpm prune --prod");
-    expect(dockerfile).not.toContain('npm install --prefix "extensions/$ext" --omit=dev --silent');
+    expect(dockerfile).not.toContain(
+      `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
+    );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
@@ -49,12 +52,17 @@ describe("Dockerfile", () => {
 
   it("pins bundled plugin discovery to copied source extensions in runtime images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/extensions");
+    expect(dockerfile).toContain(`ARG OPENCLAW_BUNDLED_PLUGIN_DIR=${BUNDLED_PLUGIN_ROOT_DIR}`);
+    expect(dockerfile).toContain(
+      "ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/${OPENCLAW_BUNDLED_PLUGIN_DIR}",
+    );
   });
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("for dir in /app/extensions /app/.agent /app/.agents");
+    expect(dockerfile).toContain(
+      "RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \\",
+    );
     expect(dockerfile).toContain('find "$dir" -type d -exec chmod 755 {} +');
     expect(dockerfile).toContain('find "$dir" -type f -exec chmod 644 {} +');
   });

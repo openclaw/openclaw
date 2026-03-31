@@ -1,5 +1,5 @@
+import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_EMOJIS } from "../../../../src/channels/status-reactions.js";
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -464,9 +464,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    await vi.waitFor(() => {
-      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
-    });
+    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
   });
 });
 

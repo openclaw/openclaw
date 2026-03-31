@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -11,11 +11,6 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
 const { resolveBundledPluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
-
-const mockedModuleIds = [
-  "../plugins/web-search-providers.js",
-  "../plugins/web-search-providers.runtime.js",
-] as const;
 
 let bundledWebSearchProviders: typeof import("../plugins/web-search-providers.js");
 let runtimeWebSearchProviders: typeof import("../plugins/web-search-providers.runtime.js");
@@ -217,12 +212,6 @@ describe("runtime web tools resolution", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  afterAll(() => {
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
   });
 
   it("keeps web search disabled when search config is absent", async () => {
@@ -794,6 +783,59 @@ describe("runtime web tools resolution", () => {
         expect.objectContaining({
           code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
           path: "tools.web.fetch.firecrawl.apiKey",
+        }),
+      ]),
+    );
+  });
+
+  it("resolves x_search SecretRef and writes the resolved key into runtime config", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_REF: "x-search-runtime-key",
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("secretRef");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-runtime-key");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("uses env fallback for unresolved x_search SecretRef when active", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "MISSING_X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        XAI_API_KEY: "x-search-fallback-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-fallback-key");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          path: "tools.web.x_search.apiKey",
         }),
       ]),
     );

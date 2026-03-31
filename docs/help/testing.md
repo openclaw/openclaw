@@ -45,7 +45,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
 - Command: `pnpm test`
 - Config: `scripts/test-parallel.mjs` (runs `vitest.unit.config.ts`, `vitest.extensions.config.ts`, `vitest.gateway.config.ts`)
-- Files: `src/**/*.test.ts`, `extensions/**/*.test.ts`
+- Files: `src/**/*.test.ts`, bundled plugin `**/*.test.ts`
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -66,6 +66,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
   - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - CLI startup benchmarking now has distinct saved outputs: `pnpm test:startup:bench:smoke` writes the targeted smoke artifact at `.artifacts/cli-startup-bench-smoke.json`, `pnpm test:startup:bench:save` writes the full-suite artifact at `.artifacts/cli-startup-bench-all.json` with `runs=5` and `warmup=1`, and `pnpm test:startup:bench:update` refreshes the checked-in fixture at `test/fixtures/cli-startup-bench.json` with `runs=5` and `warmup=1`.
   - For surface-only local runs, unit, extension, and channel shared lanes can overlap their isolated hotspots instead of waiting behind one serial prefix.
   - For multi-surface local runs, the wrapper keeps the shared surface phases ordered, but batches inside the same shared phase now fan out together, deferred isolated work can overlap the next shared phase, and spare `unit-fast` headroom now starts that deferred work earlier instead of leaving those slots idle.
   - Refresh the timing snapshots with `pnpm test:perf:update-timings` and `pnpm test:perf:update-timings:extensions` after major suite shape changes.
@@ -151,7 +152,9 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Not CI-stable by design (real networks, real provider policies, quotas, outages)
   - Costs money / uses rate limits
   - Prefer running narrowed subsets instead of “everything”
-- Live runs will source `~/.profile` to pick up missing API keys
+- Live runs source `~/.profile` to pick up missing API keys.
+- By default, live runs still isolate `HOME` and copy config/auth material into a temp test home so unit fixtures cannot mutate your real `~/.openclaw`.
+- Set `OPENCLAW_LIVE_USE_REAL_HOME=1` only when you intentionally need live tests to use your real home directory.
 - `pnpm test:live` now defaults to a quieter mode: it keeps `[live] ...` progress output, but suppresses the extra `~/.profile` notice and mutes gateway bootstrap logs/Bonjour chatter. Set `OPENCLAW_LIVE_TEST_QUIET=0` if you want the full startup logs back.
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
 - Progress/heartbeat output:
@@ -452,6 +455,7 @@ Live tests discover credentials the same way the CLI does. Practical implication
 
 - Profile store: `~/.openclaw/credentials/` (preferred; what “profile keys” means in the tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
+- Live local runs copy the active config plus auth stores into a temp test home by default; `agents.*.workspace` / `agentDir` path overrides are stripped in that staged copy so probes stay off your real host workspace.
 
 If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
 

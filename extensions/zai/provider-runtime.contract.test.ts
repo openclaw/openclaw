@@ -1,3 +1,3 @@
-import { describeZAIProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+import { describeZAIProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
 describeZAIProviderRuntimeContract();

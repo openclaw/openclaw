@@ -56,6 +56,7 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
+  ftsTokenizer?: string;
 };
 
 type MemorySyncProgressState = {
@@ -362,6 +363,7 @@ export abstract class MemoryManagerSyncOps {
       cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
     });
     this.fts.available = result.ftsAvailable;
     if (result.ftsError) {
@@ -692,11 +694,6 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
     const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
@@ -710,9 +707,9 @@ export abstract class MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
         : null;
-    const deleteFtsRowsByPathSourceAndModel =
+    const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
     const files = await listMemoryFiles(
@@ -783,9 +780,9 @@ export abstract class MemoryManagerSyncOps {
         } catch {}
       }
       deleteChunksByPathAndSource.run(stale.path, "memory");
-      if (deleteFtsRowsByPathSourceAndModel) {
+      if (deleteFtsRowsByPathAndSource) {
         try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "memory", this.provider.model);
+          deleteFtsRowsByPathAndSource.run(stale.path, "memory");
         } catch {}
       }
     }
@@ -796,11 +793,6 @@ export abstract class MemoryManagerSyncOps {
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
     const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
     const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
@@ -930,7 +922,11 @@ export abstract class MemoryManagerSyncOps {
       deleteChunksByPathAndSource.run(stale.path, "sessions");
       if (deleteFtsRowsByPathSourceAndModel) {
         try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "sessions", this.provider.model);
+          deleteFtsRowsByPathSourceAndModel.run(
+            stale.path,
+            "sessions",
+            this.provider?.model ?? "fts-only",
+          );
         } catch {}
       }
     }
@@ -1021,14 +1017,16 @@ export abstract class MemoryManagerSyncOps {
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       !meta ||
-      (this.provider && meta.model !== this.provider.model) ||
-      (this.provider && meta.provider !== this.provider.id) ||
+      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+      (this.provider ? meta.model !== this.provider.model : meta.model !== "fts-only") ||
+      (this.provider ? meta.provider !== this.provider.id : meta.provider !== "none") ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
       meta.scopeHash !== configuredScopeHash ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
-      (vectorReady && !meta?.vectorDims);
+      (vectorReady && !meta?.vectorDims) ||
+      (meta.ftsTokenizer ?? "unicode61") !== this.settings.store.fts.tokenizer;
     try {
       if (needsFullReindex) {
         if (
@@ -1220,6 +1218,7 @@ export abstract class MemoryManagerSyncOps {
         scopeHash: this.resolveConfiguredScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
       };
       if (!nextMeta) {
         throw new Error("Failed to compute memory index metadata for reindexing.");
@@ -1292,6 +1291,7 @@ export abstract class MemoryManagerSyncOps {
       scopeHash: this.resolveConfiguredScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
     };
     if (this.vector.available && this.vector.dims) {
       nextMeta.vectorDims = this.vector.dims;
@@ -1306,9 +1306,10 @@ export abstract class MemoryManagerSyncOps {
     this.db.exec(`DELETE FROM chunks`);
     if (this.fts.enabled && this.fts.available) {
       try {
-        this.db.exec(`DELETE FROM ${FTS_TABLE}`);
+        this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
       } catch {}
     }
+    this.ensureSchema();
     this.dropVectorTable();
     this.vector.dims = undefined;
     this.sessionsDirtyFiles.clear();

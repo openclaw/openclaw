@@ -23,6 +23,9 @@ actor PortGuardian {
 
     private var records: [Record] = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "portguard")
+    #if DEBUG
+    private var testingDescriptors: [Int: Descriptor] = [:]
+    #endif
     private nonisolated static let appSupportDir: URL = {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("OpenClaw", isDirectory: true)
@@ -130,6 +133,11 @@ actor PortGuardian {
     }
 
     func describe(port: Int) async -> Descriptor? {
+        #if DEBUG
+        if let descriptor = self.testingDescriptors[port] {
+            return descriptor
+        }
+        #endif
         guard let listener = await self.listeners(on: port).first else { return nil }
         let path = Self.executablePath(for: listener.pid)
         return Descriptor(pid: listener.pid, command: listener.command, executablePath: path)
@@ -368,8 +376,12 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return true }
             return false
         case .local:
-            // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
-            if full.contains("gateway-daemon") { return true }
+            // Preserve both the legacy hidden alias and the current service process title.
+            if full.contains("gateway-daemon") || full.contains("openclaw-gateway")
+                || cmd.contains("openclaw-gateway")
+            {
+                return true
+            }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
@@ -401,6 +413,18 @@ actor PortGuardian {
         try? data.write(to: Self.recordPath, options: [.atomic])
     }
 }
+
+#if DEBUG
+extension PortGuardian {
+    func setTestingDescriptor(_ descriptor: Descriptor?, forPort port: Int) {
+        if let descriptor {
+            self.testingDescriptors[port] = descriptor
+        } else {
+            self.testingDescriptors.removeValue(forKey: port)
+        }
+    }
+}
+#endif
 
 #if DEBUG
 extension PortGuardian {

@@ -258,12 +258,16 @@ describe("linePlugin outbound.sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/img.jpg",
-      accountId: "default",
-      cfg,
-    });
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
+      "line:user:3",
+      "",
+      expect.objectContaining({
+        verbose: false,
+        mediaUrl: "https://example.com/img.jpg",
+        accountId: "default",
+        cfg,
+      }),
+    );
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
@@ -273,6 +277,63 @@ describe("linePlugin outbound.sendPayload", () => {
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
     expect(mediaOrder).toBeLessThan(quickReplyOrder);
+  });
+
+  it("keeps generic media payloads on the image-only send path", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:4",
+      text: "",
+      payload: {
+        mediaUrl: "https://example.com/video.mp4",
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:4", "", {
+      verbose: false,
+      mediaUrl: "https://example.com/video.mp4",
+      accountId: "default",
+      cfg,
+    });
+  });
+
+  it("uses LINE-specific media options for rich media payloads", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:5",
+      text: "",
+      payload: {
+        mediaUrl: "https://example.com/video.mp4",
+        channelData: {
+          line: {
+            mediaKind: "video",
+            previewImageUrl: "https://example.com/preview.jpg",
+            trackingId: "track-123",
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:5", "", {
+      verbose: false,
+      mediaUrl: "https://example.com/video.mp4",
+      mediaKind: "video",
+      previewImageUrl: "https://example.com/preview.jpg",
+      durationMs: undefined,
+      trackingId: "track-123",
+      accountId: "default",
+      cfg,
+    });
   });
 
   it("uses configured text chunk limit for payloads", async () => {
@@ -304,6 +365,114 @@ describe("linePlugin outbound.sendPayload", () => {
       fallbackLimit: 5000,
     });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
+  });
+
+  it("omits trackingId for non-user quick-reply inline video media", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const payload = {
+      text: "",
+      mediaUrl: "https://example.com/video.mp4",
+      channelData: {
+        line: {
+          quickReplies: ["One"],
+          mediaKind: "video" as const,
+          previewImageUrl: "https://example.com/preview.jpg",
+          trackingId: "track-group",
+        },
+      },
+    };
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:group:C123",
+      text: payload.text,
+      payload,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:group:C123",
+      [
+        {
+          type: "video",
+          originalContentUrl: "https://example.com/video.mp4",
+          previewImageUrl: "https://example.com/preview.jpg",
+          quickReply: { items: ["One"] },
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("keeps trackingId for user quick-reply inline video media", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const payload = {
+      text: "",
+      mediaUrl: "https://example.com/video.mp4",
+      channelData: {
+        line: {
+          quickReplies: ["One"],
+          mediaKind: "video" as const,
+          previewImageUrl: "https://example.com/preview.jpg",
+          trackingId: "track-user",
+        },
+      },
+    };
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:U123",
+      text: payload.text,
+      payload,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      [
+        {
+          type: "video",
+          originalContentUrl: "https://example.com/video.mp4",
+          previewImageUrl: "https://example.com/preview.jpg",
+          trackingId: "track-user",
+          quickReply: { items: ["One"] },
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("rejects quick-reply inline video media without previewImageUrl", async () => {
+    const { runtime } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const payload = {
+      text: "",
+      mediaUrl: "https://example.com/video.mp4",
+      channelData: {
+        line: {
+          quickReplies: ["One"],
+          mediaKind: "video" as const,
+        },
+      },
+    };
+
+    await expect(
+      linePlugin.outbound!.sendPayload!({
+        to: "line:user:U123",
+        text: payload.text,
+        payload,
+        accountId: "default",
+        cfg,
+      }),
+    ).rejects.toThrow(/require previewimageurl/i);
   });
 });
 

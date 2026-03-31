@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "../../test/helpers/bundled-plugin-paths.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
@@ -48,7 +53,6 @@ function createPluginSdkAliasFixture(params?: {
   distFile?: string;
   srcBody?: string;
   distBody?: string;
-  packageName?: string;
   packageExports?: Record<string, unknown>;
   trustedRootIndicators?: boolean;
   trustedRootIndicatorMode?: "bin+marker" | "cli-entry-only" | "none";
@@ -62,7 +66,7 @@ function createPluginSdkAliasFixture(params?: {
     params?.trustedRootIndicatorMode ??
     (params?.trustedRootIndicators === false ? "none" : "bin+marker");
   const packageJson: Record<string, unknown> = {
-    name: params?.packageName ?? "openclaw",
+    name: "openclaw",
     type: "module",
   };
   if (trustedRootIndicatorMode === "bin+marker") {
@@ -451,7 +455,7 @@ describe("plugin sdk alias helpers", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
-        "./plugin-sdk/telegram": { default: "./dist/plugin-sdk/telegram.js" },
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
         "./plugin-sdk/nested/value": { default: "./dist/plugin-sdk/nested/value.js" },
         "./plugin-sdk/..\\..\\evil": { default: "./dist/plugin-sdk/evil.js" },
         "./plugin-sdk/C:temp": { default: "./dist/plugin-sdk/drive.js" },
@@ -461,42 +465,14 @@ describe("plugin sdk alias helpers", () => {
     const subpaths = listPluginSdkExportedSubpaths({
       modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
     });
-    expect(subpaths).toEqual(["compat", "telegram"]);
-  });
-
-  it("derives plugin-sdk subpaths from nearest package exports even when package name is renamed", () => {
-    const fixture = createPluginSdkAliasFixture({
-      packageName: "moltbot",
-      packageExports: {
-        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-        "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
-      },
-    });
-    const subpaths = listPluginSdkExportedSubpaths({
-      modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
-    });
-    expect(subpaths).toEqual(["channel-runtime", "compat", "core"]);
+    expect(subpaths).toEqual(["compat", "core"]);
   });
 
   it.each([
     {
-      name: "derives plugin-sdk subpaths via cwd fallback when module path is a transpiler cache and package is renamed",
-      fixture: () =>
-        createPluginSdkAliasFixture({
-          packageName: "moltbot",
-          packageExports: {
-            "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-            "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-          },
-        }),
-      expected: ["channel-runtime", "core"],
-    },
-    {
       name: "does not derive plugin-sdk subpaths from cwd fallback when package root is not an OpenClaw root",
       fixture: () =>
         createPluginSdkAliasFixture({
-          packageName: "moltbot",
           trustedRootIndicators: false,
           packageExports: {
             "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -509,7 +485,6 @@ describe("plugin sdk alias helpers", () => {
       name: "derives plugin-sdk subpaths via cwd fallback when trusted root indicator is cli-entry export",
       fixture: () =>
         createPluginSdkAliasFixture({
-          packageName: "moltbot",
           trustedRootIndicatorMode: "cli-entry-only",
           packageExports: {
             "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -530,7 +505,10 @@ describe("plugin sdk alias helpers", () => {
 
   it("builds plugin-sdk aliases from the module being loaded, not the loader location", () => {
     const { fixture, sourceRootAlias, distRootAlias } = createPluginSdkAliasTargetFixture();
-    const sourcePluginEntry = writePluginEntry(fixture.root, "extensions/demo/src/index.ts");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
 
     const sourceAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry),
@@ -540,7 +518,10 @@ describe("plugin sdk alias helpers", () => {
       channelRuntimePath: path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts"),
     });
 
-    const distPluginEntry = writePluginEntry(fixture.root, "dist/extensions/demo/index.js");
+    const distPluginEntry = writePluginEntry(
+      fixture.root,
+      bundledDistPluginFile("demo", "index.js"),
+    );
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(distPluginEntry),
@@ -553,7 +534,10 @@ describe("plugin sdk alias helpers", () => {
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
     const { fixture, distRootAlias } = createPluginSdkAliasTargetFixture();
-    const sourcePluginEntry = writePluginEntry(fixture.root, "extensions/demo/src/index.ts");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
@@ -617,25 +601,11 @@ describe("plugin sdk alias helpers", () => {
 
   it.each([
     {
-      name: "resolves plugin-sdk alias files via cwd fallback when module path is a transpiler cache and package is renamed",
-      fixture: () =>
-        createPluginSdkAliasFixture({
-          srcFile: "channel-runtime.ts",
-          distFile: "channel-runtime.js",
-          packageName: "moltbot",
-          packageExports: {
-            "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-          },
-        }),
-      expected: "src" as const,
-    },
-    {
       name: "does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root",
       fixture: () =>
         createPluginSdkAliasFixture({
           srcFile: "channel-runtime.ts",
           distFile: "channel-runtime.js",
-          packageName: "moltbot",
           trustedRootIndicators: false,
           packageExports: {
             "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
@@ -663,7 +633,9 @@ describe("plugin sdk alias helpers", () => {
 
   it("uses transpiled Jiti loads for source TypeScript plugin entries", () => {
     expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
-    expect(shouldPreferNativeJiti("/repo/extensions/discord/src/channel.runtime.ts")).toBe(false);
+    expect(
+      shouldPreferNativeJiti(`/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`),
+    ).toBe(false);
   });
 
   it("disables native Jiti loads under Bun even for built JavaScript entries", () => {
@@ -678,7 +650,9 @@ describe("plugin sdk alias helpers", () => {
 
     try {
       expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
-      expect(shouldPreferNativeJiti("/repo/dist/extensions/browser/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
+        false,
+      );
     } finally {
       Object.defineProperty(process, "versions", {
         configurable: true,
@@ -688,7 +662,7 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
-    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "discord");
+    const copiedExtensionRoot = path.join(makeTempDir(), bundledPluginRoot("discord"));
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafeDir(copiedSourceDir);

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, resetConfigRuntimeState } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
 async function writeConfigForTest(home: string, config: unknown): Promise<void> {
@@ -32,6 +32,14 @@ function expectAnthropicPruningDefaults(
 }
 
 describe("config pruning defaults", () => {
+  beforeEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   it("does not enable contextPruning by default", async () => {
     await withEnvAsync({ ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" }, async () => {
       await withTempHome(async (home) => {

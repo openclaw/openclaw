@@ -34,6 +34,7 @@ import {
   isSafeToRetrySendError,
   isTelegramServerError,
 } from "./network-errors.js";
+import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
@@ -187,7 +188,7 @@ const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
 function asTelegramClientFetch(
   fetchImpl: typeof globalThis.fetch,
 ): NonNullable<ApiClientOptions["fetch"]> {
-  return fetchImpl as NonNullable<ApiClientOptions["fetch"]>;
+  return fetchImpl as unknown as NonNullable<ApiClientOptions["fetch"]>;
 }
 
 export function resetTelegramClientOptionsCacheForTests(): void {
@@ -416,8 +417,8 @@ function buildTelegramThreadReplyParams(params: {
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: TelegramThreadReplyParams = threadIdParams ? { ...threadIdParams } : {};
 
-  if (params.replyToMessageId != null) {
-    const replyToMessageId = Math.trunc(params.replyToMessageId);
+  const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
+  if (replyToMessageId != null) {
     if (params.quoteText?.trim()) {
       threadParams.reply_parameters = {
         message_id: replyToMessageId,

@@ -48,6 +48,10 @@
     "target": "快速开始"
   },
   {
+    "source": "Diffs",
+    "target": "Diffs"
+  },
+  {
     "source": "Capability Cookbook",
     "target": "能力扩展手册"
   },

@@ -6,7 +6,10 @@ import {
   buildBootstrapTruncationReportMeta,
   analyzeBootstrapBudget,
 } from "../bootstrap-budget.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  makeBootstrapWarn as makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+} from "../bootstrap-files.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
@@ -21,6 +24,15 @@ import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+
+const prepareDeps = {
+  makeBootstrapWarn: makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+};
+
+export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
+  Object.assign(prepareDeps, overrides);
+}
 
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
@@ -74,12 +86,15 @@ export async function prepareCliRunContext(
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+  const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => cliBackendLog.warn(message) }),
+    warn: prepareDeps.makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => cliBackendLog.warn(message),
+    }),
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
