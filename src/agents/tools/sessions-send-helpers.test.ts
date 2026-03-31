@@ -66,6 +66,7 @@ describe("resolveAnnounceTargetFromKey", () => {
             capabilities: { chatTypes: ["direct", "group", "thread"] },
             messaging: {
               normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
+              resolveSessionTarget: ({ id }: { id: string }) => id,
             },
             config: {
               listAccountIds: () => ["default"],

@@ -548,6 +548,7 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     messaging: {
       normalizeTarget: normalizeTelegramMessagingTarget,
+      resolveSessionTarget: ({ id }) => id,
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
       formatTargetDisplay: ({ target, display, kind }) => {
