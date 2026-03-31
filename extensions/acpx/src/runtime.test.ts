@@ -844,6 +844,42 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("updates unhealthy reason when doctor detects a new help-check failure", async () => {
+    const previousStdout = process.env.MOCK_ACPX_HELP_STDOUT;
+    const previousExitCode = process.env.MOCK_ACPX_HELP_EXIT_CODE;
+
+    try {
+      const { runtime } = await createMockRuntimeFixture({
+        expectedVersion: ACPX_PINNED_VERSION,
+      });
+      await runtime.probeAvailability();
+      expect(runtime.isHealthy()).toBe(true);
+      expect(runtime.getUnhealthyReason()).toBeUndefined();
+
+      process.env.MOCK_ACPX_HELP_STDOUT = "probe failed after startup";
+      process.env.MOCK_ACPX_HELP_EXIT_CODE = "1";
+
+      await expect(runtime.doctor()).resolves.toMatchObject({
+        ok: false,
+        code: "ACP_BACKEND_UNAVAILABLE",
+        message: expect.stringContaining("probe failed after startup"),
+      });
+      expect(runtime.isHealthy()).toBe(false);
+      expect(runtime.getUnhealthyReason()).toContain("probe failed after startup");
+    } finally {
+      if (previousStdout === undefined) {
+        delete process.env.MOCK_ACPX_HELP_STDOUT;
+      } else {
+        process.env.MOCK_ACPX_HELP_STDOUT = previousStdout;
+      }
+      if (previousExitCode === undefined) {
+        delete process.env.MOCK_ACPX_HELP_EXIT_CODE;
+      } else {
+        process.env.MOCK_ACPX_HELP_EXIT_CODE = previousExitCode;
+      }
+    }
+  });
+
   it("logs ACPX spawn resolution once per command policy", async () => {
     const { config } = await createMockRuntimeFixture();
     const debugLogs: string[] = [];

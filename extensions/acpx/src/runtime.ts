@@ -867,6 +867,7 @@ export class AcpxRuntime implements AcpRuntime {
     if (!result.ok && result.failure.kind === "version-check") {
       const { versionCheck } = result.failure;
       this.healthy = false;
+      this.healthError = this.resolveHealthFailureMessage(result);
       const details = [
         versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
         versionCheck.installedVersion ? `installed=${versionCheck.installedVersion}` : null,
@@ -883,6 +884,7 @@ export class AcpxRuntime implements AcpRuntime {
     if (!result.ok && result.failure.kind === "help-check") {
       const { result: helpResult } = result.failure;
       this.healthy = false;
+      this.healthError = this.resolveHealthFailureMessage(result);
       if (helpResult.error) {
         const spawnFailure = resolveSpawnFailure(helpResult.error, this.config.cwd);
         if (spawnFailure === "missing-command") {
@@ -921,6 +923,7 @@ export class AcpxRuntime implements AcpRuntime {
 
     if (!result.ok) {
       this.healthy = false;
+      this.healthError = this.resolveHealthFailureMessage(result);
       const failure = result.failure;
       return {
         ok: false,
@@ -935,6 +938,7 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     this.healthy = true;
+    this.healthError = undefined;
     return {
       ok: true,
       message: `acpx command available (${this.config.command}, version ${result.versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,

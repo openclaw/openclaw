@@ -104,7 +104,8 @@ function isNpmCachePermissionFailure(detail: string): boolean {
     return false;
   }
   return (
-    normalized.includes(".npm") ||
+    normalized.includes("/.npm/") ||
+    normalized.includes("\\.npm\\") ||
     normalized.includes("_cacache") ||
     normalized.includes("npm cache") ||
     normalized.includes("/npm/") ||
