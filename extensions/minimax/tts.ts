@@ -1,4 +1,4 @@
-export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com";
+export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
 export const MINIMAX_TTS_MODELS = ["speech-2.8-hd", "speech-01-240228"] as const;
 

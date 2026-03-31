@@ -56,7 +56,7 @@ describe("buildMinimaxSpeechProvider", () => {
       delete process.env.MINIMAX_TTS_MODEL;
       delete process.env.MINIMAX_TTS_VOICE_ID;
       const config = provider.resolveConfig!({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
-      expect(config.baseUrl).toBe("https://api.minimaxi.com");
+      expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-2.8-hd");
       expect(config.voiceId).toBe("English_expressive_narrator");
     });
