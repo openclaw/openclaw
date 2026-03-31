@@ -18,6 +18,7 @@ import type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "openclaw/plugin-sdk/config-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -544,7 +545,12 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   if (error.name === "AbortError") {
     return `${provider}: request timed out`;
   }
-  return `${provider}: ${error.message}`;
+  return `${provider}: ${redactSensitiveText(error.message)}`;
+}
+
+function sanitizeTtsErrorForLog(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return redactSensitiveText(raw).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
 function buildTtsFailureResult(
@@ -724,7 +730,7 @@ export async function synthesizeSpeech(params: {
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
       errors.push(errorMsg);
-      const rawError = err instanceof Error ? err.message : String(err);
+      const rawError = sanitizeTtsErrorForLog(err);
       if (provider === primaryProvider) {
         const hasFallbacks = providers.length > 1;
         logVerbose(
@@ -995,4 +1001,6 @@ export const _test = {
   resolveModelOverridePolicy,
   summarizeText,
   getResolvedSpeechProviderConfig,
+  formatTtsProviderError,
+  sanitizeTtsErrorForLog,
 };

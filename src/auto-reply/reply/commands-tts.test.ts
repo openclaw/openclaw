@@ -70,7 +70,7 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const result = await handleTtsCommands(buildTtsParams("/tts status"), true);
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Fallback: elevenlabs → microsoft");
+    expect(result?.reply?.text).toContain("Fallback: elevenlabs -> microsoft");
     expect(result?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
   });
 
@@ -114,7 +114,7 @@ describe("handleTtsCommands status fallback reporting", () => {
     const statusResult = await handleTtsCommands(buildTtsParams("/tts status"), true);
     expect(statusResult?.shouldContinue).toBe(false);
     expect(statusResult?.reply?.text).toContain("Provider: microsoft");
-    expect(statusResult?.reply?.text).toContain("Fallback: elevenlabs → microsoft");
+    expect(statusResult?.reply?.text).toContain("Fallback: elevenlabs -> microsoft");
     expect(statusResult?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
   });
 });

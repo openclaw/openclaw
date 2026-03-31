@@ -289,7 +289,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       if (last.success) {
         lines.push(`Provider: ${last.provider ?? "unknown"}`);
         if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
-          lines.push(`Fallback: ${last.fallbackFrom} → ${last.provider}`);
+          lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
         }
         if (last.attemptedProviders && last.attemptedProviders.length > 1) {
           lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);

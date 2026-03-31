@@ -179,6 +179,28 @@ describe("legacy migrate tts provider shape", () => {
       },
     });
   });
+
+  it("does not migrate legacy tts provider keys for unknown plugin ids", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        entries: {
+          "third-party-plugin": {
+            config: {
+              tts: {
+                provider: "openai",
+                openai: {
+                  model: "custom-tts",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+  });
 });
 
 describe("legacy migrate heartbeat config", () => {
