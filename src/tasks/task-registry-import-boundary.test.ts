@@ -11,8 +11,8 @@ const ALLOWED_IMPORTERS = new Set([
   "auto-reply/reply/commands-subagents/action-info.ts",
   "commands/doctor-workspace-status.ts",
   "commands/flows.ts",
+  "commands/tasks.ts",
   "tasks/flow-runtime.ts",
-  "tasks/operations-runtime.ts",
   "tasks/task-executor.ts",
   "tasks/task-registry.maintenance.ts",
 ]);

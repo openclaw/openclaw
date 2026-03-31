@@ -1,22 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
-  PluginOperationAuditFinding,
-  PluginOperationAuditQuery,
-  PluginOperationAuditSeverity,
-  PluginOperationAuditSummary,
-  PluginOperationDispatchEvent,
-  PluginOperationDispatchResult,
-  PluginOperationListQuery,
-  PluginOperationMaintenanceQuery,
-  PluginOperationMaintenanceSummary,
-  PluginOperationPatchEvent,
-  PluginOperationRecord,
-  PluginOperationSummary,
-  PluginOperationsCancelResult,
-  PluginOperationsRuntime,
-} from "../plugins/operations-state.js";
-import type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
@@ -112,20 +96,6 @@ export type {
   OpenClawPluginDefinition,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
-  PluginOperationAuditFinding,
-  PluginOperationAuditQuery,
-  PluginOperationAuditSeverity,
-  PluginOperationAuditSummary,
-  PluginOperationDispatchEvent,
-  PluginOperationDispatchResult,
-  PluginOperationListQuery,
-  PluginOperationMaintenanceQuery,
-  PluginOperationMaintenanceSummary,
-  PluginOperationPatchEvent,
-  PluginOperationRecord,
-  PluginOperationSummary,
-  PluginOperationsCancelResult,
-  PluginOperationsRuntime,
 };
 export type { OpenClawConfig };
 

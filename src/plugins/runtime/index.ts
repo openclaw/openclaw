@@ -6,10 +6,8 @@ import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "../../shared/lazy-runtime.js";
-import { defaultTaskOperationsRuntime } from "../../tasks/operations-runtime.js";
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import { getRegisteredOperationsRuntime } from "../operations-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -95,20 +93,6 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
         provider: params.provider,
         cfg: params.cfg,
       }),
-  };
-}
-
-function createRuntimeOperations(): PluginRuntime["operations"] {
-  const resolveRuntime = () => getRegisteredOperationsRuntime() ?? defaultTaskOperationsRuntime;
-  return {
-    dispatch: (event) => resolveRuntime().dispatch(event),
-    getById: (operationId) => resolveRuntime().getById(operationId),
-    findByRunId: (runId) => resolveRuntime().findByRunId(runId),
-    list: (query) => resolveRuntime().list(query),
-    summarize: (query) => resolveRuntime().summarize(query),
-    audit: (query) => resolveRuntime().audit(query),
-    maintenance: (query) => resolveRuntime().maintenance(query),
-    cancel: (params) => resolveRuntime().cancel(params),
   };
 }
 
@@ -219,7 +203,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
-    operations: createRuntimeOperations(),
   } satisfies Omit<
     PluginRuntime,
     "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"

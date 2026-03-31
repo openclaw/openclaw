@@ -54,7 +54,6 @@ import type {
 } from "../tts/provider-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { PluginOperationsRuntime } from "./operations-state.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -1768,8 +1767,6 @@ export type OpenClawPluginApi = {
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
-  /** Register the active operations runtime adapter (exclusive slot — only one active at a time). */
-  registerOperationsRuntime: (runtime: PluginOperationsRuntime) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

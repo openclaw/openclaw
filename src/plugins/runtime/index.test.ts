@@ -215,20 +215,6 @@ describe("plugin runtime command execution", () => {
         ]);
       },
     },
-    {
-      name: "exposes runtime.operations helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expect(runtime.operations).toBeDefined();
-        expectFunctionKeys(runtime.operations as Record<string, unknown>, [
-          "dispatch",
-          "getById",
-          "findByRunId",
-          "list",
-          "summarize",
-          "cancel",
-        ]);
-      },
-    },
   ] as const)("$name", ({ assert }) => {
     expectRuntimeShape(assert);
   });

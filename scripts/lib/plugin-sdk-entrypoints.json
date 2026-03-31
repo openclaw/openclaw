@@ -36,7 +36,6 @@
   "speech-runtime",
   "speech-core",
   "plugin-runtime",
-  "operations-default",
   "security-runtime",
   "gateway-runtime",
   "github-copilot-login",

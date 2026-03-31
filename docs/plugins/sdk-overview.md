@@ -140,15 +140,14 @@ methods:
 
 ### Infrastructure
 
-| Method                                         | What it registers          |
-| ---------------------------------------------- | -------------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook                 |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint      |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method         |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand             |
-| `api.registerService(service)`                 | Background service         |
-| `api.registerInteractiveHandler(registration)` | Interactive handler        |
-| `api.registerOperationsRuntime(runtime)`       | Durable operations runtime |
+| Method                                         | What it registers     |
+| ---------------------------------------------- | --------------------- |
+| `api.registerHook(events, handler, opts?)`     | Event hook            |
+| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint |
+| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method    |
+| `api.registerCli(registrar, opts?)`            | CLI subcommand        |
+| `api.registerService(service)`                 | Background service    |
+| `api.registerInteractiveHandler(registration)` | Interactive handler   |
 
 ### CLI registration metadata
 
