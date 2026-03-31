@@ -6,7 +6,12 @@ import type {
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech-core";
 import { requireInRange } from "openclaw/plugin-sdk/speech-core";
-import { DEFAULT_FISH_AUDIO_BASE_URL, fishAudioTTS, listFishAudioVoices, normalizeFishAudioBaseUrl } from "./tts.js";
+import {
+  DEFAULT_FISH_AUDIO_BASE_URL,
+  fishAudioTTS,
+  listFishAudioVoices,
+  normalizeFishAudioBaseUrl,
+} from "./tts.js";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 // No default voice — users must configure one. Fish Audio has no universal
@@ -76,8 +81,7 @@ function normalizeFishAudioProviderConfig(
   rawConfig: Record<string, unknown>,
 ): FishAudioProviderConfig {
   const providers = asObject(rawConfig.providers);
-  const raw =
-    asObject(providers?.["fish-audio"]) ?? asObject(rawConfig["fish-audio"]);
+  const raw = asObject(providers?.["fish-audio"]) ?? asObject(rawConfig["fish-audio"]);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -93,15 +97,11 @@ function normalizeFishAudioProviderConfig(
   };
 }
 
-function readFishAudioProviderConfig(
-  config: SpeechProviderConfig,
-): FishAudioProviderConfig {
+function readFishAudioProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
   const defaults = normalizeFishAudioProviderConfig({});
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeFishAudioBaseUrl(
-      trimToUndefined(config.baseUrl) ?? defaults.baseUrl,
-    ),
+    baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
     voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
     model: normalizeModel(config.model) || defaults.model,
     latency: normalizeLatency(config.latency),
@@ -174,7 +174,9 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         if (raw !== "normal" && raw !== "balanced" && raw !== "low") {
           return {
             handled: true,
-            warnings: [`invalid Fish Audio latency "${ctx.value}" (expected: normal, balanced, low)`],
+            warnings: [
+              `invalid Fish Audio latency "${ctx.value}" (expected: normal, balanced, low)`,
+            ],
           };
         }
         return {
@@ -238,8 +240,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     autoSelectOrder: 15,
     models: FISH_AUDIO_MODELS,
 
-    resolveConfig: ({ rawConfig }) =>
-      normalizeFishAudioProviderConfig(rawConfig),
+    resolveConfig: ({ rawConfig }) => normalizeFishAudioProviderConfig(rawConfig),
 
     parseDirectiveToken,
 
@@ -280,19 +281,14 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       ...(trimToUndefined(params.modelId) == null
         ? {}
         : { model: trimToUndefined(params.modelId) }),
-      ...(asNumber(params.speed) == null
-        ? {}
-        : { speed: asNumber(params.speed) }),
+      ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
     }),
 
     listVoices: async (req) => {
       const config = req.providerConfig
         ? readFishAudioProviderConfig(req.providerConfig)
         : undefined;
-      const apiKey =
-        req.apiKey ||
-        config?.apiKey ||
-        process.env.FISH_AUDIO_API_KEY;
+      const apiKey = req.apiKey || config?.apiKey || process.env.FISH_AUDIO_API_KEY;
       if (!apiKey) {
         throw new Error("Fish Audio API key missing");
       }
@@ -313,8 +309,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const config = readFishAudioProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey =
-        config.apiKey || process.env.FISH_AUDIO_API_KEY;
+      const apiKey = config.apiKey || process.env.FISH_AUDIO_API_KEY;
       if (!apiKey) {
         throw new Error("Fish Audio API key missing");
       }
@@ -342,9 +337,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         referenceId: voiceId,
         model: trimToUndefined(overrides.model) ?? config.model,
         format,
-        latency: overrides.latency != null
-          ? normalizeLatency(overrides.latency)
-          : config.latency,
+        latency: overrides.latency != null ? normalizeLatency(overrides.latency) : config.latency,
         speed,
         temperature: asNumber(overrides.temperature) ?? config.temperature,
         topP: asNumber(overrides.topP) ?? config.topP,
@@ -355,7 +348,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         audioBuffer,
         outputFormat: format,
         fileExtension: useOpus ? ".opus" : ".mp3",
-        voiceCompatible: true, // Fish Audio output works as voice note in both formats
+        voiceCompatible: useOpus, // Only voice-note targets (Telegram, WhatsApp, etc.) get voice-compatible output
       };
     },
   };
