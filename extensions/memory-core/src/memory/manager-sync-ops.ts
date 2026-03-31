@@ -85,6 +85,18 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 
+export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
+  const dir = path.dirname(dbPath);
+  ensureDir(dir);
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(dbPath, { allowExtension });
+  // busy_timeout is per-connection and resets to 0 on restart.
+  // Set it on every open so concurrent processes retry instead of
+  // failing immediately with SQLITE_BUSY.
+  db.exec("PRAGMA busy_timeout = 5000");
+  return db;
+}
+
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
@@ -259,19 +271,7 @@ export abstract class MemoryManagerSyncOps {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
-    return this.openDatabaseAtPath(dbPath);
-  }
-
-  private openDatabaseAtPath(dbPath: string): DatabaseSync {
-    const dir = path.dirname(dbPath);
-    ensureDir(dir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
-    // busy_timeout is per-connection and resets to 0 on restart.
-    // Set it on every open so concurrent processes retry instead of
-    // failing immediately with SQLITE_BUSY.
-    db.exec("PRAGMA busy_timeout = 5000");
-    return db;
+    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
@@ -1149,7 +1149,7 @@ export abstract class MemoryManagerSyncOps {
   }): Promise<void> {
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-    const tempDb = this.openDatabaseAtPath(tempDbPath);
+    const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
     let originalDbClosed = false;
@@ -1164,7 +1164,7 @@ export abstract class MemoryManagerSyncOps {
 
     const restoreOriginalState = () => {
       if (originalDbClosed) {
-        this.db = this.openDatabaseAtPath(dbPath);
+        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
       } else {
         this.db = originalDb;
       }
@@ -1237,7 +1237,7 @@ export abstract class MemoryManagerSyncOps {
 
       await this.swapIndexFiles(dbPath, tempDbPath);
 
-      this.db = this.openDatabaseAtPath(dbPath);
+      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
       this.vectorReady = null;
       this.vector.available = null;
       this.vector.loadError = undefined;

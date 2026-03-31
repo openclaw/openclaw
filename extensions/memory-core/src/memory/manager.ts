@@ -726,7 +726,54 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    await runMemorySyncWithReadonlyRecovery(this, params);
+    const thisManager = this;
+    const state: MemoryReadonlyRecoveryState = {
+      get closed() {
+        return thisManager.closed;
+      },
+      get db() {
+        return thisManager.db;
+      },
+      set db(value) {
+        thisManager.db = value;
+      },
+      get vectorReady() {
+        return thisManager.vectorReady;
+      },
+      set vectorReady(value) {
+        thisManager.vectorReady = value;
+      },
+      vector: this.vector,
+      get readonlyRecoveryAttempts() {
+        return thisManager.readonlyRecoveryAttempts;
+      },
+      set readonlyRecoveryAttempts(value) {
+        thisManager.readonlyRecoveryAttempts = value;
+      },
+      get readonlyRecoverySuccesses() {
+        return thisManager.readonlyRecoverySuccesses;
+      },
+      set readonlyRecoverySuccesses(value) {
+        thisManager.readonlyRecoverySuccesses = value;
+      },
+      get readonlyRecoveryFailures() {
+        return thisManager.readonlyRecoveryFailures;
+      },
+      set readonlyRecoveryFailures(value) {
+        thisManager.readonlyRecoveryFailures = value;
+      },
+      get readonlyRecoveryLastError() {
+        return thisManager.readonlyRecoveryLastError;
+      },
+      set readonlyRecoveryLastError(value) {
+        thisManager.readonlyRecoveryLastError = value;
+      },
+      runSync: (nextParams) => this.runSync(nextParams),
+      openDatabase: () => this.openDatabase(),
+      ensureSchema: () => this.ensureSchema(),
+      readMeta: () => this.readMeta() ?? undefined,
+    };
+    await runMemorySyncWithReadonlyRecovery(state, params);
   }
 
   async readFile(params: {
