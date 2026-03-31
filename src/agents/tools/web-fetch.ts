@@ -543,6 +543,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      // Direct web_fetch owns its transport selection. When an env proxy is
+      // configured, prefer the proxy-aware dispatcher but keep the strict SSRF
+      // guard path so pinned destination routing still applies.
       ...(usesEnvHttpProxy
         ? {
             dispatcherPolicy: {
