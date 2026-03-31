@@ -281,8 +281,15 @@ export const utopiaPlugin: ChannelPlugin<ResolvedUtopiaAccount> = {
         `[${account.accountId}] Utopia provider started (pubkey: ${bus.publicKey}, nick: ${bus.nick})`,
       );
 
-      // Stay pending until the abort signal fires (gateway stops the channel)
+      // Stay pending until the abort signal fires (gateway stops the channel).
+      // Important: resolve immediately if already aborted, because `abort` can fire
+      // before we reach this await while `startUtopiaBus()` is still awaiting startup.
       await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+
         ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
       });
 
