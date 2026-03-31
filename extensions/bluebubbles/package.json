@@ -4,7 +4,7 @@
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "openclaw": ">=2026.3.31"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.31"
