@@ -1,0 +1,12 @@
+--- a/dist/agent-loop.js	2026-03-08 04:37:22
++++ b/dist/agent-loop.js	2026-03-08 04:37:22
+@@ -210,7 +210,8 @@
+     let steeringMessages;
+     for (let index = 0; index < toolCalls.length; index++) {
+         const toolCall = toolCalls[index];
+-        const tool = tools?.find((t) => t.name === toolCall.name);
++        const toolCallName = toolCall.name.startsWith("mcp_") ? toolCall.name.slice(4) : toolCall.name;
++        const tool = tools?.find((t) => t.name === toolCallName);
+         stream.push({
+             type: "tool_execution_start",
+             toolCallId: toolCall.id,
