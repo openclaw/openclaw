@@ -58,6 +58,9 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["xargs", "-0"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["make", "test"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["sed", "-f", "script.sed", "input.txt"])).toBeNull();
+    expect(
+      detectInterpreterInlineEvalArgv(["sed", "-E", "-f", "script.sed", "input.txt"]),
+    ).toBeNull();
   });
 
   it("matches interpreter-like allowlist patterns", () => {

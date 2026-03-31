@@ -66,8 +66,9 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   },
   {
     names: ["sed", "gsed"],
-    exactFlags: new Set(["-e"]),
-    prefixFlags: [{ label: "-e", prefix: "-e" }],
+    exactFlags: new Set(),
+    rawExactFlags: new Map([["-e", "-e"]]),
+    rawPrefixFlags: [{ label: "-e", prefix: "-e" }],
   },
 ];
 
