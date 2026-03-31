@@ -568,6 +568,10 @@ export async function dispatchCronDelivery(
           runStartedAt: params.runStartedAt,
         });
       }
+      // If still no reply, fall back to the pre-wait completed descendant reply.
+      if (!finalReply && activeSubagentRuns === 0 && completedDescendantReply) {
+        finalReply = completedDescendantReply;
+      }
       if (finalReply && activeSubagentRuns === 0) {
         outputText = finalReply;
         summary = pickSummaryFromOutput(finalReply) ?? summary;

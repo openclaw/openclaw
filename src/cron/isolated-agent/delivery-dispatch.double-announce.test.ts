@@ -571,4 +571,30 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("uses pre-wait completed descendant reply if post-wait read fails", async () => {
+    // Arrange: interim message with subagent followup hint
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    // Pre-wait read returns child output, post-wait read returns undefined
+    vi.mocked(readDescendantSubagentFallbackReply)
+      .mockResolvedValueOnce("child result") // first call (pre-wait)
+      .mockResolvedValueOnce(undefined); // second call (post-wait)
+    // waitForDescendantSubagentSummary returns undefined (no parent synthesis)
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "On it, I spawned a subagent and it will auto-announce when done.",
+    });
+    await dispatchCronDelivery(params);
+
+    // The delivery should contain the pre-wait child result, proving the fallback worked
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "child result" }],
+      }),
+    );
+  });
 });
