@@ -162,4 +162,72 @@ describe("exa web search provider", () => {
       error: "invalid_date",
     });
   });
+
+  describe("resolveExaSearchEndpoint", () => {
+    const { resolveExaSearchEndpoint } = __testing;
+
+    it("returns the default endpoint for undefined", () => {
+      expect(resolveExaSearchEndpoint(undefined)).toBe("https://api.exa.ai/search");
+    });
+
+    it("returns the default endpoint for empty string", () => {
+      expect(resolveExaSearchEndpoint("")).toBe("https://api.exa.ai/search");
+    });
+
+    it("appends /search to a bare origin", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai")).toBe("https://api.exa.ai/search");
+    });
+
+    it("appends /search to a bare origin with trailing slash", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai/")).toBe("https://api.exa.ai/search");
+    });
+
+    it("appends /search to a path-prefixed baseUrl", () => {
+      expect(resolveExaSearchEndpoint("https://proxy.example.com/exa")).toBe(
+        "https://proxy.example.com/exa/search",
+      );
+    });
+
+    it("appends /search to a path-prefixed baseUrl with trailing slash", () => {
+      expect(resolveExaSearchEndpoint("https://proxy.example.com/exa/")).toBe(
+        "https://proxy.example.com/exa/search",
+      );
+    });
+
+    it("does not double-append when path already ends with /search", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai/search")).toBe(
+        "https://api.exa.ai/search",
+      );
+    });
+
+    it("does not double-append when path ends with /search/ (trailing slash)", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai/search/")).toBe(
+        "https://api.exa.ai/search",
+      );
+    });
+
+    it("does not double-append for a versioned /v1/search path", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai/v1/search")).toBe(
+        "https://api.exa.ai/v1/search",
+      );
+    });
+
+    it("correctly appends /search when hostname contains the word 'search'", () => {
+      expect(resolveExaSearchEndpoint("https://search.example.com/exa")).toBe(
+        "https://search.example.com/exa/search",
+      );
+    });
+
+    it("preserves query string", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai?version=2")).toBe(
+        "https://api.exa.ai/search?version=2",
+      );
+    });
+
+    it("preserves fragment", () => {
+      expect(resolveExaSearchEndpoint("https://api.exa.ai#section")).toBe(
+        "https://api.exa.ai/search#section",
+      );
+    });
+  });
 });

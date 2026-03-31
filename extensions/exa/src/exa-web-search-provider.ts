@@ -328,6 +328,22 @@ function resolveFreshnessStartDate(freshness: ExaFreshness): string {
   return now.toISOString();
 }
 
+function resolveExaSearchEndpoint(baseUrl?: string): string {
+  if (!baseUrl || !baseUrl.trim()) {
+    return EXA_SEARCH_ENDPOINT;
+  }
+  const parsed = new URL(baseUrl.trim());
+  // Strip trailing slash(es) from pathname
+  const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+  // If pathname already ends with /search, use as-is; otherwise append /search
+  if (pathname.endsWith("/search")) {
+    parsed.pathname = pathname;
+  } else {
+    parsed.pathname = pathname === "/" ? "/search" : `${pathname}/search`;
+  }
+  return parsed.toString();
+}
+
 async function runExaSearch(params: {
   apiKey: string;
   baseUrl?: string;
@@ -356,10 +372,7 @@ async function runExaSearch(params: {
     body.endPublishedDate = params.dateBefore;
   }
 
-  const endpoint =
-    typeof params.baseUrl === "string" && params.baseUrl.trim()
-      ? params.baseUrl.trim()
-      : EXA_SEARCH_ENDPOINT;
+  const endpoint = resolveExaSearchEndpoint(params.baseUrl);
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,
@@ -522,6 +535,7 @@ function createExaToolDefinition(
 
       const cacheKey = buildSearchCacheKey([
         "exa",
+        resolveExaSearchEndpoint(exaConfig.baseUrl),
         type,
         query,
         resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -635,5 +649,6 @@ export const __testing = {
   resolveExaConfig,
   resolveExaDescription,
   resolveExaSearchCount,
+  resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
 } as const;
