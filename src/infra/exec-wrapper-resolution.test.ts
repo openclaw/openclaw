@@ -227,6 +227,15 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
   });
 
+  test("blocks arch dispatch unwrapping outside macOS", () => {
+    expect(
+      unwrapKnownDispatchWrapperInvocation(["arch", "-arm64", "bash", "-lc", "echo hi"], "linux"),
+    ).toEqual({
+      kind: "blocked",
+      wrapper: "arch",
+    });
+  });
+
   test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
     "fails closed for blocked dispatch wrapper %s",
     (wrapper) => {
@@ -316,6 +325,21 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["nohup", "nice"],
       policyBlocked: false,
+    });
+  });
+
+  test("blocks arch trust unwrapping outside macOS", () => {
+    expect(
+      resolveDispatchWrapperTrustPlan(
+        ["arch", "-arm64", "bash", "-lc", "echo hi"],
+        undefined,
+        "linux",
+      ),
+    ).toEqual({
+      argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
+      wrappers: [],
+      policyBlocked: true,
+      blockedWrapper: "arch",
     });
   });
 
