@@ -4,6 +4,55 @@ import { normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("normalizeToolParameters", () => {
+  it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
+    const tool: AnyAgentTool = {
+      name: "list_regions",
+      label: "list_regions",
+      description: "List all AWS regions",
+      parameters: { type: "object" },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+  });
+
+  it("preserves existing properties on type:object schemas", () => {
+    const tool: AnyAgentTool = {
+      name: "query",
+      label: "query",
+      description: "Run a query",
+      parameters: { type: "object", properties: { q: { type: "string" } } },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({ q: { type: "string" } });
+  });
+
+  it("injects properties:{} for type:object with only additionalProperties", () => {
+    const tool: AnyAgentTool = {
+      name: "passthrough",
+      label: "passthrough",
+      description: "Accept any input",
+      parameters: { type: "object", additionalProperties: true },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+    expect(parameters.additionalProperties).toBe(true);
+  });
+
   it("strips compat-declared unsupported schema keywords without provider-specific branching", () => {
     const tool: AnyAgentTool = {
       name: "demo",

@@ -354,6 +354,35 @@ describe("convertTools", () => {
     const result = convertTools(tools as Parameters<typeof convertTools>[0]);
     expect(result[0]?.name).toBe("ping");
   });
+
+  it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
+    const tools = [
+      { name: "list_regions", description: "List AWS regions", parameters: { type: "object" } },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: "function",
+      name: "list_regions",
+      description: "List AWS regions",
+      parameters: { type: "object", properties: {} },
+    });
+  });
+
+  it("preserves existing properties on type:object schemas", () => {
+    const tools = [
+      {
+        name: "exec",
+        description: "Run a command",
+        parameters: { type: "object", properties: { cmd: { type: "string" } } },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: { cmd: { type: "string" } },
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
