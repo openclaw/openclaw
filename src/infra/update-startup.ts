@@ -453,13 +453,45 @@ export async function runGatewayUpdateCheck(params: {
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
           root: root ?? undefined,
         });
-        if (outcome.ok) {
+        const afterVersion = (() => {
+          try {
+            const lines = (outcome.stdout ?? "").split("\n");
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("{")) {
+                continue;
+              }
+              const parsed = JSON.parse(trimmed);
+              if (parsed && typeof parsed.afterVersion === "string") {
+                return parsed.afterVersion;
+              }
+            }
+          } catch {
+            // ignore parse errors
+          }
+          return null;
+        })();
+
+        if (
+          outcome.ok &&
+          afterVersion != null &&
+          afterVersion === resolved.version &&
+          afterVersion !== VERSION
+        ) {
           nextState.autoLastSuccessVersion = resolved.version;
           nextState.autoLastSuccessAt = new Date(now).toISOString();
           params.log.info("auto-update applied", {
             channel,
             version: resolved.version,
             tag,
+          });
+        } else if (outcome.ok) {
+          params.log.info("auto-update skipped (version mismatch or unchanged)", {
+            channel,
+            version: resolved.version,
+            tag,
+            afterVersion,
+            currentVersion: VERSION,
           });
         } else {
           params.log.info("auto-update attempt failed", {
