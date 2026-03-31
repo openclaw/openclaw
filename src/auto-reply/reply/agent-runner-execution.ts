@@ -31,6 +31,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -55,6 +56,12 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+// Maximum number of LiveSessionModelSwitchError retries before surfacing a
+// user-visible error. Prevents infinite ping-pong when the persisted session
+// selection keeps conflicting with fallback model choices.
+// See: https://github.com/openclaw/openclaw/issues/58348
+export const MAX_LIVE_SWITCH_RETRIES = 2;
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -180,7 +187,6 @@ export async function runAgentTurnWithFallback(params: {
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
-  const MAX_LIVE_SWITCH_RETRIES = 2;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -625,15 +631,18 @@ export async function runAgentTurnWithFallback(params: {
           // See: https://github.com/openclaw/openclaw/issues/58348
           defaultRuntime.error(
             `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
-              `(${err.provider}/${err.model}). The requested model may be unavailable.`,
+              `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
           );
+          const switchErrorText = shouldSurfaceToControlUi
+            ? "⚠️ Agent failed before reply: model switch could not be completed. " +
+              "The requested model may be temporarily unavailable.\n" +
+              "Logs: openclaw logs --follow"
+            : "⚠️ Agent failed before reply: model switch could not be completed. " +
+              "The requested model may be temporarily unavailable. Please try again shortly.";
           return {
             kind: "final",
             payload: {
-              text:
-                "⚠️ Agent failed before reply: model switch could not be completed. " +
-                "The requested model may be temporarily unavailable.\n" +
-                "Logs: openclaw logs --follow",
+              text: switchErrorText,
             },
           };
         }
