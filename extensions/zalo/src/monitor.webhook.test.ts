@@ -364,6 +364,39 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
+
+  it("does not throw when replay metadata is partially missing", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
+    const payload = {
+      event_name: "message.text.received",
+      message: {
+        message_id: "msg-replay-partial-1",
+        date: Math.floor(Date.now() / 1000),
+        text: "hello",
+      },
+    };
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-replay-partial`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
   it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
     const {
       core,
