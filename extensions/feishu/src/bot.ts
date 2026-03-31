@@ -1127,7 +1127,9 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
+        // Card update replies go via updateCardFeishu, not message reply.
+        // Suppress replyToMessageId to avoid typing indicator on synthetic card-action IDs.
+        replyToMessageId: cardUpdateContext ? undefined : replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,
         rootId: ctx.rootId,

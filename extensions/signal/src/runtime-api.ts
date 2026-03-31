@@ -19,15 +19,14 @@ export {
 export { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 export { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 export {
-  ChannelPlugin,
   PAIRING_APPROVED_MESSAGE,
-  SignalAccountConfig,
   SignalConfigSchema,
   looksLikeSignalTargetId,
   normalizeE164,
   normalizeSignalMessagingTarget,
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/signal-core";
+export type { ChannelPlugin, SignalAccountConfig } from "openclaw/plugin-sdk/signal-core";
 export { detectBinary, installSignalCli } from "openclaw/plugin-sdk/setup-tools";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

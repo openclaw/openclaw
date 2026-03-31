@@ -383,7 +383,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: async () => {
         deliveredFinalTexts.clear();
-        if (streamingEnabled && renderMode === "card") {
+        if (streamingEnabled && renderMode === "card" && !cardUpdate) {
           startStreaming();
         }
         await typingCallbacks?.onReplyStart?.();
@@ -417,13 +417,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
+        // Card update already completed — suppress any additional text replies.
+        // Only allow media through.
+        if (cardUpdate && cardUpdateCompleted) {
+          if (hasMedia) {
+            await sendMediaReplies(payload);
+          }
+          return;
+        }
+
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            // When cardUpdate is active, skip streaming — reply goes via card update path.
+            if (!(streamingEnabled && useCard) || cardUpdate) {
               return;
             }
             startStreaming();
@@ -432,7 +442,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
+          if (info?.kind === "final" && streamingEnabled && useCard && !cardUpdate) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;
@@ -524,26 +534,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming: true,
-      onPartialReply: streamingEnabled
-        ? (payload: ReplyPayload) => {
-            if (!payload.text) {
-              return;
+      onPartialReply:
+        streamingEnabled && !cardUpdate
+          ? (payload: ReplyPayload) => {
+              if (!payload.text) {
+                return;
+              }
+              queueStreamingUpdate(payload.text, {
+                dedupeWithLastPartial: true,
+                mode: "snapshot",
+              });
             }
-            queueStreamingUpdate(payload.text, {
-              dedupeWithLastPartial: true,
-              mode: "snapshot",
-            });
-          }
-        : undefined,
-      onReasoningStream: streamingEnabled
-        ? (payload: ReplyPayload) => {
-            if (!payload.text) {
-              return;
+          : undefined,
+      onReasoningStream:
+        streamingEnabled && !cardUpdate
+          ? (payload: ReplyPayload) => {
+              if (!payload.text) {
+                return;
+              }
+              startStreaming();
+              queueReasoningUpdate(payload.text);
             }
-            startStreaming();
-            queueReasoningUpdate(payload.text);
-          }
-        : undefined,
+          : undefined,
       onReasoningEnd: streamingEnabled ? () => {} : undefined,
     },
     markDispatchIdle,
