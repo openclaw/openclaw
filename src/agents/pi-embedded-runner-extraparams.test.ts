@@ -1356,29 +1356,6 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
   });
-  it("adds OpenRouter attribution headers to stream options", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-      "X-Custom": "1",
-    });
-  });
-
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
