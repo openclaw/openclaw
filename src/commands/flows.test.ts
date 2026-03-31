@@ -12,17 +12,11 @@ const mocks = vi.hoisted(() => ({
   loadConfigMock: vi.fn(() => ({ loaded: true })),
 }));
 
-vi.mock("../tasks/flow-registry.js", () => ({
+vi.mock("openclaw/plugin-sdk/tasks", () => ({
   listFlowRecords: (...args: unknown[]) => mocks.listFlowRecordsMock(...args),
   resolveFlowForLookupToken: (...args: unknown[]) => mocks.resolveFlowForLookupTokenMock(...args),
   getFlowById: (...args: unknown[]) => mocks.getFlowByIdMock(...args),
-}));
-
-vi.mock("../tasks/task-registry.js", () => ({
   listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowIdMock(...args),
-}));
-
-vi.mock("../tasks/task-executor.js", () => ({
   getFlowTaskSummary: (...args: unknown[]) => mocks.getFlowTaskSummaryMock(...args),
   cancelFlowById: (...args: unknown[]) => mocks.cancelFlowByIdMock(...args),
 }));
@@ -46,6 +40,10 @@ const flowFixture = {
   notifyPolicy: "done_only",
   goal: "Process related PRs",
   currentStep: "wait_for",
+  waitingOnTaskId: "task-12345678",
+  outputs: {
+    bucket: ["personal"],
+  },
   createdAt: Date.parse("2026-03-31T10:00:00.000Z"),
   updatedAt: Date.parse("2026-03-31T10:05:00.000Z"),
 } as const;
@@ -109,7 +107,7 @@ describe("flows commands", () => {
     await flowsListCommand({}, runtime);
 
     expect(runtimeLogs[0]).toContain("Flows: 1");
-    expect(runtimeLogs[1]).toContain("Flow pressure: 0 active · 0 blocked · 1 total");
+    expect(runtimeLogs[1]).toContain("Flow pressure: 1 active · 0 blocked · 1 total");
     expect(runtimeLogs.join("\n")).toContain("Process related PRs");
     expect(runtimeLogs.join("\n")).toContain("1 active/2 total");
   });
@@ -122,6 +120,8 @@ describe("flows commands", () => {
 
     expect(runtimeLogs.join("\n")).toContain("shape: linear");
     expect(runtimeLogs.join("\n")).toContain("currentStep: wait_for");
+    expect(runtimeLogs.join("\n")).toContain("waitingOnTaskId: task-12345678");
+    expect(runtimeLogs.join("\n")).toContain("outputKeys: bucket");
     expect(runtimeLogs.join("\n")).toContain("tasks: 2 total · 1 active · 0 issues");
     expect(runtimeLogs.join("\n")).toContain("task-12345678 running run-12345678 Review PR");
   });

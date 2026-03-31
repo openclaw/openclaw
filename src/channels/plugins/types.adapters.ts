@@ -138,6 +138,7 @@ export type ChannelOutboundContext = {
   mediaUrl?: string;
   audioAsVoice?: boolean;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */
   forceDocument?: boolean;

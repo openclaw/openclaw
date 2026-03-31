@@ -402,6 +402,7 @@ export const googlechatPlugin = createChatChannelPlugin({
         text,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         replyToId,
         threadId,
@@ -435,6 +436,8 @@ export const googlechatPlugin = createChatChannelPlugin({
           : await loadWebMedia(mediaUrl, {
               maxBytes: effectiveMaxBytes,
               localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+              readFile: mediaReadFile,
+              hostReadCapability: Boolean(mediaReadFile),
             });
         const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
           await loadGoogleChatChannelRuntime();

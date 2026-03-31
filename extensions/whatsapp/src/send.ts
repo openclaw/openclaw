@@ -22,6 +22,7 @@ export async function sendMessageWhatsApp(
     cfg?: OpenClawConfig;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
     accountId?: string;
   },
@@ -63,6 +64,8 @@ export async function sendMessageWhatsApp(
       const media = await loadWebMedia(options.mediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
         localRoots: options.mediaLocalRoots,
+        readFile: options.mediaReadFile,
+        hostReadCapability: Boolean(options.mediaReadFile),
       });
       const caption = text || undefined;
       mediaBuffer = media.buffer;

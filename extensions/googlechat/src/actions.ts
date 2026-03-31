@@ -54,6 +54,7 @@ async function loadGoogleChatActionMedia(params: {
   mediaUrl: string;
   maxBytes: number;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const runtime = getGoogleChatRuntime();
   return /^https?:\/\//i.test(params.mediaUrl)
@@ -64,6 +65,8 @@ async function loadGoogleChatActionMedia(params: {
     : await runtime.media.loadWebMedia(params.mediaUrl, {
         maxBytes: params.maxBytes,
         localRoots: params.mediaLocalRoots?.length ? params.mediaLocalRoots : undefined,
+        readFile: params.mediaReadFile,
+        hostReadCapability: Boolean(params.mediaReadFile),
       });
 }
 
@@ -85,7 +88,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots }) => {
+  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, mediaReadFile }) => {
     const account = resolveGoogleChatAccount({
       cfg: cfg,
       accountId,
@@ -118,6 +121,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           mediaUrl,
           maxBytes,
           mediaLocalRoots,
+          mediaReadFile,
         });
         const uploadFileName =
           readStringParam(params, "filename") ??

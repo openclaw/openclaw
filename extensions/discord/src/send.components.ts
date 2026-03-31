@@ -52,6 +52,7 @@ type DiscordComponentSendOpts = {
   agentId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;
 };
 
@@ -100,6 +101,8 @@ async function buildDiscordComponentPayload(params: {
   if (params.opts.mediaUrl) {
     const media = await loadWebMedia(params.opts.mediaUrl, {
       localRoots: params.opts.mediaLocalRoots,
+      readFile: params.opts.mediaReadFile,
+      hostReadCapability: Boolean(params.opts.mediaReadFile),
     });
     const filenameOverride = params.opts.filename?.trim();
     const fileName = filenameOverride || media.fileName || "upload";

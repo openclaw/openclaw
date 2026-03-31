@@ -51,4 +51,26 @@ describe("loadOutboundMediaFromUrl", () => {
       localRoots: undefined,
     });
   });
+
+  it("prefers host read capability over local roots when provided", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("x"));
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("x"),
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
+      maxBytes: 2048,
+      mediaLocalRoots: ["/tmp/workspace-agent"],
+      mediaReadFile,
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/Users/peter/Pictures/image.png", {
+      maxBytes: 2048,
+      localRoots: "any",
+      readFile: mediaReadFile,
+      hostReadCapability: true,
+    });
+  });
 });

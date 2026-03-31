@@ -1369,6 +1369,63 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
+  it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          strictInlineEval: true,
+        },
+      },
+    });
+    try {
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals(),
+        run: async () => {
+          const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-eval-awk-"));
+          try {
+            const executablePath = createTempExecutable({
+              dir: tempDir,
+              name: "awk",
+            });
+            const benign = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: [executablePath, "-F", ",", "-f", "script.awk", "data.csv"],
+              cwd: tempDir,
+              security: "allowlist",
+              ask: "on-miss",
+              approvalDecision: "allow-always",
+              approved: true,
+              runCommand: vi.fn(async () => createLocalRunResult("awk-ok")),
+            });
+
+            expect(benign.runCommand).toHaveBeenCalledTimes(1);
+            expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
+            expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([
+              expect.objectContaining({ pattern: executablePath }),
+            ]);
+
+            const malicious = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: [executablePath, 'BEGIN{system("id")}', "/dev/null"],
+              cwd: tempDir,
+              security: "allowlist",
+              ask: "on-miss",
+            });
+
+            expect(malicious.runCommand).not.toHaveBeenCalled();
+            expectInvokeErrorMessage(malicious.sendInvokeResult, {
+              message: "awk inline program requires explicit approval in strictInlineEval mode",
+            });
+          } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+          }
+        },
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("does not persist allow-always approvals for strict inline-eval make carriers", async () => {
     setRuntimeConfigSnapshot({
       tools: {

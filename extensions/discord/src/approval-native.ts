@@ -1,11 +1,14 @@
-import { createApproverRestrictedNativeApprovalAdapter, resolveExecApprovalSessionTarget } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  createApproverRestrictedNativeApprovalAdapter,
+  doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestSessionTarget,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalRequest,
   ExecApprovalSessionTarget,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   getDiscordExecApprovalApprovers,
@@ -34,29 +37,6 @@ function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "gro
   return match[1] as "channel" | "group" | "dm";
 }
 
-function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
-  }
-  return {
-    id: request.id,
-    request: {
-      command: request.request.title,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
-  };
-}
-
 function normalizeDiscordOriginChannelId(value?: string | null): string | null {
   if (!value) {
     return null;
@@ -76,15 +56,7 @@ function resolveRequestSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequest;
 }): ExecApprovalSessionTarget | null {
-  const execLikeRequest = toExecLikeRequest(params.request);
-  return resolveExecApprovalSessionTarget({
-    cfg: params.cfg,
-    request: execLikeRequest,
-    turnSourceChannel: execLikeRequest.request.turnSourceChannel ?? undefined,
-    turnSourceTo: execLikeRequest.request.turnSourceTo ?? undefined,
-    turnSourceAccountId: execLikeRequest.request.turnSourceAccountId ?? undefined,
-    turnSourceThreadId: execLikeRequest.request.turnSourceThreadId ?? undefined,
-  });
+  return resolveApprovalRequestSessionTarget(params);
 }
 
 function resolveDiscordOriginTarget(params: {
@@ -92,11 +64,21 @@ function resolveDiscordOriginTarget(params: {
   accountId?: string | null;
   request: ApprovalRequest;
 }) {
+  if (
+    !doesApprovalRequestMatchChannelAccount({
+      cfg: params.cfg,
+      request: params.request,
+      channel: "discord",
+      accountId: params.accountId,
+    })
+  ) {
+    return null;
+  }
+
   const sessionKind = extractDiscordSessionKind(params.request.request.sessionKey?.trim() || null);
   const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
   const rawTurnSourceTo = params.request.request.turnSourceTo?.trim() || "";
   const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
-  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || "";
   const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
   const turnSourceTarget =
     turnSourceChannel === "discord" &&
@@ -105,26 +87,10 @@ function resolveDiscordOriginTarget(params: {
     (hasExplicitOriginTarget || sessionKind === "channel" || sessionKind === "group")
       ? {
           to: turnSourceTo,
-          accountId: turnSourceAccountId || undefined,
         }
       : null;
-  if (
-    turnSourceTarget?.accountId &&
-    params.accountId &&
-    normalizeAccountId(turnSourceTarget.accountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return null;
-  }
 
   const sessionTarget = resolveRequestSessionTarget(params);
-  if (
-    sessionTarget?.channel === "discord" &&
-    sessionTarget.accountId &&
-    params.accountId &&
-    normalizeAccountId(sessionTarget.accountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return null;
-  }
   if (
     turnSourceTarget &&
     sessionTarget?.channel === "discord" &&

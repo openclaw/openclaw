@@ -1,10 +1,10 @@
+import { getFlowById, listFlowRecords, resolveFlowForLookupToken } from "openclaw/plugin-sdk/tasks";
+import type { FlowRecord, FlowStatus } from "openclaw/plugin-sdk/tasks";
+import { cancelFlowById, getFlowTaskSummary } from "openclaw/plugin-sdk/tasks";
+import { listTasksForFlowId } from "openclaw/plugin-sdk/tasks";
 import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getFlowById, listFlowRecords, resolveFlowForLookupToken } from "../tasks/flow-registry.js";
-import type { FlowRecord, FlowStatus } from "../tasks/flow-registry.types.js";
-import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
-import { listTasksForFlowId } from "../tasks/task-registry.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
@@ -78,7 +78,7 @@ function formatFlowRows(flows: FlowRecord[], rich: boolean) {
 
 function formatFlowListSummary(flows: FlowRecord[]) {
   const active = flows.filter(
-    (flow) => flow.status === "queued" || flow.status === "running",
+    (flow) => flow.status === "queued" || flow.status === "running" || flow.status === "waiting",
   ).length;
   const blocked = flows.filter((flow) => flow.status === "blocked").length;
   return `${active} active · ${blocked} blocked · ${flows.length} total`;
@@ -167,6 +167,10 @@ export async function flowsShowCommand(
     `ownerSessionKey: ${flow.ownerSessionKey}`,
     `goal: ${flow.goal}`,
     `currentStep: ${flow.currentStep ?? "n/a"}`,
+    `waitingOnTaskId: ${flow.waitingOnTaskId ?? "n/a"}`,
+    `outputKeys: ${
+      flow.outputs ? Object.keys(flow.outputs).toSorted().join(", ") || "n/a" : "n/a"
+    }`,
     `blockedTaskId: ${flow.blockedTaskId ?? "n/a"}`,
     `blockedSummary: ${flow.blockedSummary ?? "n/a"}`,
     `createdAt: ${new Date(flow.createdAt).toISOString()}`,
