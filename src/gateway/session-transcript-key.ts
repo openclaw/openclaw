@@ -126,12 +126,12 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
     const sortedResolvedMatches = [...resolvedMatches].toSorted(
       (a, b) => b.updatedAt - a.updatedAt,
     );
-    const [freshest, secondFreshest] = sortedResolvedMatches;
+    const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
     const resolvedKey =
       resolvedMatches.length === 1
-        ? freshest?.key
-        : (freshest?.updatedAt ?? 0) > (secondFreshest?.updatedAt ?? 0)
-          ? freshest?.key
+        ? freshestMatch?.key
+        : (freshestMatch?.updatedAt ?? 0) > (secondFreshestMatch?.updatedAt ?? 0)
+          ? freshestMatch?.key
           : undefined;
     if (resolvedKey) {
       TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
