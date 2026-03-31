@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { formatZonedTimestamp, type ChannelSetupInput } from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { withResolvedActionClient, withStartedActionClient } from "./matrix/actions/client.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -22,12 +24,15 @@ import {
   type MatrixDirectRoomCandidate,
 } from "./matrix/direct-management.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
-import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+
+export function resetMatrixCliStateForTests(): void {
+  matrixCliExitScheduled = false;
+}
 
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
@@ -158,6 +163,7 @@ async function addMatrixAccount(params: {
   name?: string;
   avatarUrl?: string;
   homeserver?: string;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -177,6 +183,7 @@ async function addMatrixAccount(params: {
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
     allowPrivateNetwork: params.allowPrivateNetwork,
+    proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,
     password: params.password,
@@ -675,6 +682,7 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--name <name>", "Optional display name for this account")
     .option("--avatar-url <url>", "Optional Matrix avatar URL (mxc:// or http(s) URL)")
     .option("--homeserver <url>", "Matrix homeserver URL")
+    .option("--proxy <url>", "Optional HTTP(S) proxy URL for Matrix requests")
     .option(
       "--allow-private-network",
       "Allow Matrix homeserver traffic to private/internal hosts for this account",
@@ -696,6 +704,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         name?: string;
         avatarUrl?: string;
         homeserver?: string;
+        proxy?: string;
         allowPrivateNetwork?: boolean;
         userId?: string;
         accessToken?: string;
@@ -715,6 +724,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               name: options.name,
               avatarUrl: options.avatarUrl,
               homeserver: options.homeserver,
+              proxy: options.proxy,
               allowPrivateNetwork: options.allowPrivateNetwork === true,
               userId: options.userId,
               accessToken: options.accessToken,

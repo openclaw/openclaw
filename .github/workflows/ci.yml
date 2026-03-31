@@ -302,11 +302,17 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
+          SHARD_COUNT: ${{ matrix.shard_count || '' }}
+          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
             extensions)
+              if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
+                export OPENCLAW_TEST_SHARDS="$SHARD_COUNT"
+                export OPENCLAW_TEST_SHARD_INDEX="$SHARD_INDEX"
+              fi
               pnpm test:extensions
               ;;
             contracts|contracts-protocol)
@@ -459,6 +465,8 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
       - name: Strict TS build smoke

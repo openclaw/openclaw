@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -115,6 +116,66 @@ describe("media understanding attachments SSRF", () => {
       await expect(
         cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
       ).rejects.toThrow(/has no path or URL/i);
+    });
+  });
+
+  it("enforces maxBytes after reading local attachments", async () => {
+    await withTempRoot("openclaw-media-cache-max-bytes-", async (base) => {
+      const allowedRoot = path.join(base, "allowed");
+      const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
+      await fs.mkdir(allowedRoot, { recursive: true });
+      await fs.writeFile(attachmentPath, "ok");
+      const canonicalAttachmentPath = await fs.realpath(attachmentPath).catch(() => attachmentPath);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
+        localPathRoots: [allowedRoot],
+      });
+      const originalOpen = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open");
+
+      openSpy.mockImplementation(async (filePath, flags) => {
+        const handle = await originalOpen(filePath, flags);
+        const candidatePath = await fs.realpath(String(filePath)).catch(() => String(filePath));
+        if (candidatePath !== canonicalAttachmentPath) {
+          return handle;
+        }
+        const mockedHandle = handle as typeof handle & {
+          readFile: typeof handle.readFile;
+        };
+        mockedHandle.readFile = (async () => Buffer.alloc(2048, 1)) as typeof handle.readFile;
+        return mockedHandle;
+      });
+
+      await expect(
+        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+      ).rejects.toThrow(/exceeds maxBytes 1024/i);
+    });
+  });
+
+  it("opens local attachments with nofollow on posix", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempRoot("openclaw-media-cache-flags-", async (base) => {
+      const allowedRoot = path.join(base, "allowed");
+      const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
+      await fs.mkdir(allowedRoot, { recursive: true });
+      await fs.writeFile(attachmentPath, "ok");
+      const canonicalAttachmentPath = await fs.realpath(attachmentPath).catch(() => attachmentPath);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
+        localPathRoots: [allowedRoot],
+      });
+      const openSpy = vi.spyOn(fs, "open");
+
+      await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+      expect(openSpy).toHaveBeenCalled();
+      const [openedPath, openedFlags] = openSpy.mock.calls[0] ?? [];
+      expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
+        canonicalAttachmentPath,
+      );
+      expect(openedFlags).toBe(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     });
   });
 });
