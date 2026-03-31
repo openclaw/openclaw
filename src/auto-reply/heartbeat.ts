@@ -152,15 +152,27 @@ export function stripHeartbeatToken(
   const strippedNormalized = stripTokenAtEdges(trimmedNormalized);
   const picked =
     strippedOriginal.didStrip && strippedOriginal.text ? strippedOriginal : strippedNormalized;
+  let strippedText: string | undefined;
   if (!picked.didStrip) {
-    return { shouldSkip: false, text: trimmed, didStrip: false };
+    if (mode !== "heartbeat") {
+      return { shouldSkip: false, text: trimmed, didStrip: false };
+    }
+    // heartbeat mode: token was not at an edge — remove it from wherever it
+    // appears and collapse any double-blank lines left behind.
+    strippedText = trimmed
+      .split(HEARTBEAT_TOKEN)
+      .join(" ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } else {
+    strippedText = picked.text;
   }
 
-  if (!picked.text) {
+  if (!strippedText) {
     return { shouldSkip: true, text: "", didStrip: true };
   }
 
-  const rest = picked.text.trim();
+  const rest = strippedText.trim();
   if (mode === "heartbeat") {
     if (rest.length <= maxAckChars) {
       return { shouldSkip: true, text: "", didStrip: true };
