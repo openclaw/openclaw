@@ -1367,4 +1367,59 @@ describe("runHeartbeatOnce", () => {
       replySpy.mockRestore();
     }
   });
+
+  // Regression: heartbeat error payloads must surface as "failed", not "ok-empty".
+  // See: https://github.com/openclaw/openclaw/issues/58409
+  it("returns failed status when agent reply has isError flag", async () => {
+    const tmpDir = await createCaseDir("hb-error-payload");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      // Simulate an error payload returned by the heartbeat guard
+      replySpy.mockResolvedValue({ text: "", isError: true });
+      const sendWhatsApp = vi
+        .fn<
+          (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(res.status).toBe("failed");
+      if (res.status === "failed") {
+        expect(res.reason).toContain("error payload");
+      }
+      // Must NOT have sent any message to the user
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
 });

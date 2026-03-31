@@ -737,6 +737,27 @@ export async function runHeartbeatOnce(opts: {
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
 
+    // Heartbeat failure: the agent layer returned an error payload (e.g. context
+    // overflow, compaction failure, session corruption) but intentionally skipped
+    // a destructive session reset.  Surface this as a proper "failed" event so
+    // monitoring / indicators reflect the real outcome instead of masking it as
+    // "ok-empty".  See: https://github.com/openclaw/openclaw/issues/58409
+    if (replyPayload?.isError) {
+      await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+      await pruneHeartbeatTranscript(transcriptState);
+      const reason = "heartbeat agent run returned an error payload";
+      emitHeartbeatEvent({
+        status: "failed",
+        reason,
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      });
+      log.error(`heartbeat failed: ${reason}`);
+      return { status: "failed", reason };
+    }
+
     if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
       await restoreHeartbeatUpdatedAt({
         storePath,
