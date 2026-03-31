@@ -63,7 +63,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
+import { applyBeforeToolsResolveHook, createOpenClawCodingTools } from "../pi-tools.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -430,6 +430,7 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+    const runtimeChannel = normalizeMessageChannel(resolvedMessageProvider);
     const { contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: effectiveWorkspace,
       config: params.config,
@@ -484,15 +485,22 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
-    const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsRaw : [],
-      provider,
-    });
+    const beforeToolsResolveCtx = {
+      agentId: resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+        .sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      channelId: runtimeChannel ?? undefined,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      requesterSenderId: params.senderId ?? undefined,
+      senderIsOwner: params.senderIsOwner,
+    };
+    const reservedCoreNames = toolsRaw.map((tool) => tool.name);
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
+          reservedToolNames: reservedCoreNames,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -500,20 +508,29 @@ export async function compactEmbeddedPiSessionDirect(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
+            ...reservedCoreNames,
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    const bundleMcpTools = bundleMcpRuntime?.tools ?? [];
+    const bundleLspTools = bundleLspRuntime?.tools ?? [];
+    const combinedForBeforeToolsResolve = [...toolsRaw, ...bundleMcpTools, ...bundleLspTools];
+    const mergedAfterHook = await applyBeforeToolsResolveHook(
+      combinedForBeforeToolsResolve,
+      beforeToolsResolveCtx,
+    );
+    const toolsAfterHook = mergedAfterHook.filter((t) => toolsRaw.some((r) => r === t));
+    const filteredBundledMcp = mergedAfterHook.filter((t) => bundleMcpTools.some((r) => r === t));
+    const filteredBundledLsp = mergedAfterHook.filter((t) => bundleLspTools.some((r) => r === t));
+    const tools = sanitizeToolsForGoogle({
+      tools: toolsEnabled ? toolsAfterHook : [],
+      provider,
+    });
+    const effectiveTools = [...tools, ...filteredBundledMcp, ...filteredBundledLsp];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
     const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,

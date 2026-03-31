@@ -75,7 +75,11 @@ import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  applyBeforeToolsResolveHook,
+  createOpenClawCodingTools,
+  resolveToolLoopDetectionConfig,
+} from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -95,6 +99,7 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -413,8 +418,11 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+    let clientToolDefsForSession: ReturnType<typeof toClientToolDefinitions> = [];
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const toolsEnabled = supportsModelTools(params.model);
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -475,12 +483,43 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
-    const toolsEnabled = supportsModelTools(params.model);
-    const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsRaw : [],
-      provider: params.provider,
-    });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    const clientToolLoopDetection = resolveToolLoopDetectionConfig({
+      cfg: params.config,
+      agentId: sessionAgentId,
+    });
+    const clientToolDefsPre =
+      toolsEnabled && clientTools
+        ? toClientToolDefinitions(
+            clientTools,
+            (toolName, toolParams) => {
+              clientToolCallDetected = { name: toolName, params: toolParams };
+            },
+            {
+              agentId: sessionAgentId,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
+              loopDetection: clientToolLoopDetection,
+            },
+          )
+        : [];
+    const providerChannel = normalizeMessageChannel(
+      params.messageChannel ?? params.messageProvider,
+    );
+    const beforeToolsResolveCtx = {
+      agentId: sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      channelId: providerChannel ?? undefined,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      requesterSenderId: params.senderId ?? undefined,
+      senderIsOwner: params.senderIsOwner,
+    };
+    const reservedCoreAndClientNames = [
+      ...toolsRaw.map((tool) => tool.name),
+      ...clientToolDefsPre.map((tool) => tool.name),
+    ];
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -492,10 +531,7 @@ export async function runEmbeddedAttempt(
     const bundleMcpRuntime = bundleMcpSessionRuntime
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
+          reservedToolNames: reservedCoreAndClientNames,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -503,20 +539,47 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...reservedCoreAndClientNames,
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
+    const bundleMcpTools = bundleMcpRuntime?.tools ?? [];
+    const bundleLspTools = bundleLspRuntime?.tools ?? [];
+    const combinedForBeforeToolsResolve = [
+      ...toolsRaw,
+      ...clientToolDefsPre,
+      ...bundleMcpTools,
+      ...bundleLspTools,
     ];
+    const mergedAfterHook = await applyBeforeToolsResolveHook(
+      combinedForBeforeToolsResolve,
+      beforeToolsResolveCtx,
+    );
+    const toolsAfterHook = mergedAfterHook.filter((t) =>
+      toolsRaw.some((r) => r === t),
+    ) as AnyAgentTool[];
+    clientToolDefsForSession = mergedAfterHook.filter((t) =>
+      clientToolDefsPre.some((r) => r === t),
+    ) as ReturnType<typeof toClientToolDefinitions>;
+    const filteredBundledMcp = mergedAfterHook.filter((t) =>
+      bundleMcpTools.some((r) => r === t),
+    ) as AnyAgentTool[];
+    const filteredBundledLsp = mergedAfterHook.filter((t) =>
+      bundleLspTools.some((r) => r === t),
+    ) as AnyAgentTool[];
+    const tools = sanitizeToolsForGoogle({
+      tools: toolsEnabled ? toolsAfterHook : [],
+      provider: params.provider,
+    });
+    const effectiveTools = [...tools, ...filteredBundledMcp, ...filteredBundledLsp];
+    const allowedClientToolNames = new Set(clientToolDefsForSession.map((t) => t.name));
+    const clientToolsForAllowlist = clientTools?.filter((ct) =>
+      allowedClientToolNames.has(ct.function.name),
+    );
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
-      clientTools,
+      clientTools: clientToolsForAllowlist,
     });
     logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
 
@@ -798,26 +861,7 @@ export async function runEmbeddedAttempt(
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
-      const clientToolLoopDetection = resolveToolLoopDetectionConfig({
-        cfg: params.config,
-        agentId: sessionAgentId,
-      });
-      const clientToolDefs = clientTools
-        ? toClientToolDefinitions(
-            clientTools,
-            (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
-            },
-            {
-              agentId: sessionAgentId,
-              sessionKey: sandboxSessionKey,
-              sessionId: params.sessionId,
-              runId: params.runId,
-              loopDetection: clientToolLoopDetection,
-            },
-          )
-        : [];
+      const clientToolDefs = clientToolDefsForSession;
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 

@@ -327,6 +327,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../pi-tools.js", () => ({
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
+    applyBeforeToolsResolveHook: vi.fn(async (tools: unknown[]) => tools),
   }));
 
   vi.doMock("./google.js", () => ({
