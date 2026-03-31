@@ -41,7 +41,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    allowRfc2544BenchmarkRange: false,
+    allowRfc2544BenchmarkRange: true,
   };
 }
 
