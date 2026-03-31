@@ -234,6 +234,21 @@ export {
   resolveEmbeddedAgentStreamFn,
 };
 
+/**
+ * Sentinel error thrown when a plugin's llm_input hook blocks an LLM call.
+ * Using a dedicated class prevents the failover/retry logic in run.ts from
+ * misclassifying plugin-authored blockReason text (e.g. containing "rate limit")
+ * as a transient provider failure and retrying with a different profile or model.
+ */
+export class PluginBlockedError extends Error {
+  readonly blockReason: string;
+  constructor(reason: string) {
+    super(`LLM call blocked by plugin: ${reason}`);
+    this.name = "PluginBlockedError";
+    this.blockReason = reason;
+  }
+}
+
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -1703,10 +1718,11 @@ export async function runEmbeddedAttempt(
               if (llmInputResult?.block) {
                 const reason = llmInputResult.blockReason ?? "Blocked by llm_input plugin hook";
                 log.warn(`llm_input hook blocked LLM call: ${reason}`);
-                // Throw to skip the LLM call. The outer catch records this as
-                // promptError so callers see a clear blocked status and the
-                // attempt result includes the error context.
-                throw new Error(`LLM call blocked by plugin: ${reason}`);
+                // Throw a sentinel error so the outer catch records it as
+                // promptError. Using PluginBlockedError prevents the failover
+                // logic from misclassifying plugin block reasons as transient
+                // provider failures and retrying the call.
+                throw new PluginBlockedError(reason);
               }
 
               if (llmInputResult?.prompt !== undefined) {
@@ -1727,6 +1743,7 @@ export async function runEmbeddedAttempt(
                   workspaceDir: effectiveWorkspace,
                   model: params.model,
                   existingImages: params.images,
+                  imageOrder: params.imageOrder,
                   maxBytes: MAX_IMAGE_BYTES,
                   maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
                   workspaceOnly: effectiveFsWorkspaceOnly,
@@ -1739,7 +1756,7 @@ export async function runEmbeddedAttempt(
             } catch (err) {
               // Re-throw block errors so the outer catch records them as promptError
               // and the LLM call is skipped. Only swallow non-block hook failures.
-              if (err instanceof Error && err.message.startsWith("LLM call blocked by plugin:")) {
+              if (err instanceof PluginBlockedError) {
                 throw err;
               }
               log.warn(`llm_input hook failed: ${String(err)}`);
@@ -2090,11 +2107,19 @@ export async function runEmbeddedAttempt(
 
           if (llmOutputResult?.assistantTexts !== undefined) {
             finalAssistantTexts = llmOutputResult.assistantTexts;
-            // Clear lastAssistant whenever a plugin overrides the response.
-            // This prevents downstream payload construction from leaking
-            // the original model output — including reasoning blocks
-            // extracted from lastAssistant in reasoning mode.
-            lastAssistant = undefined;
+            // Strip text/reasoning content from lastAssistant to prevent
+            // downstream payload construction from leaking the original
+            // model output (including reasoning blocks in reasoning mode).
+            // Preserve stopReason, errorMessage, and usage so that
+            // run.ts failover/retry logic can still detect auth, rate-limit,
+            // and billing errors on the original model response.
+            if (lastAssistant) {
+              lastAssistant = {
+                ...lastAssistant,
+                text: "",
+                content: [],
+              } as typeof lastAssistant;
+            }
           }
         } catch (err) {
           log.warn(`llm_output hook failed: ${String(err)}`);

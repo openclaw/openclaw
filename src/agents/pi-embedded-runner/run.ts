@@ -65,7 +65,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
+import { PluginBlockedError, runEmbeddedAttempt } from "./run/attempt.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
@@ -1017,6 +1017,33 @@ export async function runEmbeddedPiAgent(
           }
 
           if (promptError && !aborted) {
+            // Plugin-blocked calls are intentional policy decisions, not transient
+            // provider failures. Skip all failover/retry classification so the
+            // block reason text is not misinterpreted as auth/rate-limit/timeout.
+            if (promptError instanceof PluginBlockedError) {
+              return {
+                payloads: [
+                  {
+                    text: promptError.message,
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "plugin_blocked", message: promptError.message },
+                },
+              };
+            }
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
