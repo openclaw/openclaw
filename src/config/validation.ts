@@ -31,6 +31,7 @@ import {
 import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { ModelProviderSchema } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
@@ -358,13 +359,64 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 }
 
 /**
+ * Pre-validate each provider entry individually so that a single broken
+ * provider does not reject the entire config.  Invalid providers are
+ * stripped from the raw object and a warning is logged for each one.
+ */
+function sanitizeInvalidProviders(raw: unknown): unknown {
+  if (!isRecord(raw)) {
+    return raw;
+  }
+  const models = raw.models;
+  if (!isRecord(models)) {
+    return raw;
+  }
+  const providers = models.providers;
+  if (!isRecord(providers)) {
+    return raw;
+  }
+
+  const cleanProviders: Record<string, unknown> = {};
+  let dropped = false;
+
+  for (const [key, value] of Object.entries(providers)) {
+    const result = ModelProviderSchema.safeParse(value);
+    if (result.success) {
+      cleanProviders[key] = value;
+    } else {
+      dropped = true;
+      const reason = result.error.issues
+        .map((iss) => {
+          const p = Array.isArray(iss.path) ? iss.path.join(".") : "";
+          return p ? `${p}: ${iss.message}` : iss.message;
+        })
+        .join("; ");
+      console.warn(`[config] skipping invalid provider "models.providers.${key}": ${reason}`);
+    }
+  }
+
+  if (!dropped) {
+    return raw;
+  }
+
+  return {
+    ...raw,
+    models: {
+      ...models,
+      providers: Object.keys(cleanProviders).length > 0 ? cleanProviders : undefined,
+    },
+  };
+}
+
+/**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
+  const sanitizedRaw = sanitizeInvalidProviders(raw);
+  const normalizedRaw = normalizeLegacyWebSearchConfig(sanitizedRaw);
   const legacyIssues = findLegacyConfigIssues(normalizedRaw);
   if (legacyIssues.length > 0) {
     return {
