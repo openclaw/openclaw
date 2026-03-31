@@ -41,13 +41,13 @@ vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage: hoisted.sendMessageMock,
 }));
 
-vi.mock("../../../src/acp/control-plane/manager.js", () => ({
+vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
   }),
 }));
 
-vi.mock("../../../src/agents/subagent-control.js", () => ({
+vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 

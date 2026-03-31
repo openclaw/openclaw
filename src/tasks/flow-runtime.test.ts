@@ -24,25 +24,25 @@ vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage: (...args: unknown[]) => mocks.sendMessageMock(...args),
 }));
 
-vi.mock("../../../src/infra/system-events.js", () => ({
+vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => mocks.enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../../../src/infra/heartbeat-wake.js", () => ({
+vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => mocks.requestHeartbeatNowMock(...args),
 }));
 
-vi.mock("../../../src/infra/agent-events.js", () => ({
+vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: () => () => {},
 }));
 
-vi.mock("../../../src/acp/control-plane/manager.js", () => ({
+vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: vi.fn(),
   }),
 }));
 
-vi.mock("../../../src/agents/subagent-control.js", () => ({
+vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: vi.fn(),
 }));
 
