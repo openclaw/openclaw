@@ -1474,6 +1474,98 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
+  it("injects native Codex web_search for api-compatible Responses models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "gateway",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "live",
+                allowedDomains: ["example.com"],
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
+      payload: { tools: [{ type: "function", name: "read" }] },
+    });
+
+    expect(payload.tools).toEqual([
+      { type: "function", name: "read" },
+      {
+        type: "web_search",
+        external_web_access: true,
+        filters: { allowed_domains: ["example.com"] },
+      },
+    ]);
+  });
+
+  it("does not inject duplicate native Codex web_search tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "gateway",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
+      payload: { tools: [{ type: "web_search" }] },
+    });
+
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("keeps payload unchanged when Codex native search is inactive", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "read" }] },
+    });
+
+    expect(payload.tools).toEqual([{ type: "function", name: "read" }]);
+  });
+
   it("lets runtime options override OpenAI default transport", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -1917,6 +2009,42 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
+  });
+
+  it("strips disabled OpenAI reasoning payloads instead of sending effort:none", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5-mini",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
+  });
+
+  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5-mini",
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      } as unknown as Model<"azure-openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {

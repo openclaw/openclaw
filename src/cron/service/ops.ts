@@ -1,10 +1,10 @@
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
-} from "openclaw/plugin-sdk/tasks";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
+} from "../../tasks/task-executor.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -400,7 +400,8 @@ function tryCreateManualTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,
@@ -436,6 +437,7 @@ function tryFinishManualTaskRun(
     if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
       completeTaskRunByRunId({
         runId: params.taskRunId,
+        runtime: "cron",
         endedAt: params.endedAt,
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
@@ -444,6 +446,7 @@ function tryFinishManualTaskRun(
     }
     failTaskRunByRunId({
       runId: params.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
           ? "timed_out"

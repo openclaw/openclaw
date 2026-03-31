@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.31",
+  "version": "2026.3.31-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -27,6 +27,7 @@
     "README.md",
     "assets/",
     "dist/",
+    "!dist/**/*.map",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
@@ -184,18 +185,6 @@
     "./plugin-sdk/plugin-runtime": {
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
-    },
-    "./plugin-sdk/tasks": {
-      "types": "./dist/plugin-sdk/tasks.d.ts",
-      "default": "./dist/plugin-sdk/tasks.js"
-    },
-    "./plugin-sdk/tasks-summary": {
-      "types": "./dist/plugin-sdk/tasks-summary.d.ts",
-      "default": "./dist/plugin-sdk/tasks-summary.js"
-    },
-    "./plugin-sdk/tasks-empty-summary": {
-      "types": "./dist/plugin-sdk/tasks-empty-summary.d.ts",
-      "default": "./dist/plugin-sdk/tasks-empty-summary.js"
     },
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",

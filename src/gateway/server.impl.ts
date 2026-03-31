@@ -1,5 +1,4 @@
 import path from "node:path";
-import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks-summary";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -79,6 +78,10 @@ import {
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  getInspectableTaskRegistrySummary,
+  startTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -905,6 +908,7 @@ export async function startGatewayServer(
         });
 
     if (!minimalTestGateway) {
+      startTaskRegistryMaintenance();
       ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } =
         startGatewayMaintenanceTimers({
           broadcast,
