@@ -68,15 +68,22 @@ export async function listAzureVoices(params: {
     : [];
 }
 
-function buildAzureSSML(text: string, voice: string, lang?: string): string {
-  const escapedText = text
+function escapeXml(str: string | undefined): string {
+  if (!str) return "";
+  return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
 
-  return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang || "en-US"}'><voice name='${voice}'>${escapedText}</voice></speak>`;
+function buildAzureSSML(text: string, voice: string, lang?: string): string {
+  const escapedText = escapeXml(text);
+  const escapedVoice = escapeXml(voice);
+  const escapedLang = escapeXml(lang);
+
+  return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${escapedLang || "en-US"}'><voice name='${escapedVoice}'>${escapedText}</voice></speak>`;
 }
 
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
