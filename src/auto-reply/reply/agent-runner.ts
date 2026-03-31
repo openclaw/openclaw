@@ -608,6 +608,7 @@ export async function runReplyAgent(params: {
       const cacheWrite = usage.cacheWrite ?? 0;
       const promptTokens = input + cacheRead + cacheWrite;
       const totalTokens = usage.total ?? promptTokens + output;
+      const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
@@ -615,7 +616,6 @@ export async function runReplyAgent(params: {
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
-      const agentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey,
