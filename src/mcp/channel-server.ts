@@ -42,6 +42,7 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
   server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
     await bridge.handleClaudePermissionRequest({
       requestId: params.request_id,
+      sessionKey: params.session_key,
       toolName: params.tool_name,
       description: params.description,
       inputPreview: params.input_preview,
