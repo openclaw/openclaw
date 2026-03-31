@@ -7,7 +7,7 @@ import {
   markTaskTerminalByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
-} from "./task-registry.js";
+} from "./runtime-internal.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
