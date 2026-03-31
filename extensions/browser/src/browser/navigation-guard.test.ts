@@ -4,6 +4,9 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  type BrowserNavigationInterceptRequestLike,
+  type BrowserNavigationRouteInstallerLike,
+  type BrowserNavigationRouteLike,
   InvalidBrowserNavigationUrlError,
   requiresInspectableBrowserNavigationRedirects,
   withRequestTimeBrowserNavigationGuard,
@@ -22,6 +25,21 @@ const PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+
+type TestMainFrameRequest = BrowserNavigationInterceptRequestLike & {
+  isNavigationRequest: () => boolean;
+  frame: () => { parentFrame: () => null };
+};
+
+type TestChildFrameRequest = BrowserNavigationInterceptRequestLike & {
+  isNavigationRequest: () => boolean;
+  frame: () => { parentFrame: () => Record<string, unknown> };
+};
+
+type TestRouteHandler<TRequest extends BrowserNavigationInterceptRequestLike> = (
+  route: BrowserNavigationRouteLike,
+  request: TRequest,
+) => Promise<void> | void;
 
 describe("browser navigation guard", () => {
   beforeEach(() => {
@@ -221,22 +239,15 @@ describe("browser navigation guard", () => {
   });
 
   it("blocks private main-frame redirect requests before continuation", async () => {
-    let handler:
-      | ((
-          route: { abort: () => Promise<void>; continue: () => Promise<void> },
-          request: {
-            url: () => string;
-            isNavigationRequest: () => boolean;
-            frame: () => { parentFrame: () => null };
-          },
-        ) => Promise<void>)
-      | undefined;
+    let handler: TestRouteHandler<TestMainFrameRequest> | undefined;
     const routeContinue = vi.fn(async () => {});
     const routeAbort = vi.fn(async () => {});
-    const page = {
-      route: vi.fn(async (_matcher: string, nextHandler: typeof handler) => {
-        handler = nextHandler;
-      }),
+    const page: BrowserNavigationRouteInstallerLike = {
+      route: vi.fn(
+        async (_matcher: string, nextHandler: TestRouteHandler<TestMainFrameRequest>) => {
+          handler = nextHandler;
+        },
+      ),
       unroute: vi.fn(async () => {}),
     };
 
@@ -271,22 +282,15 @@ describe("browser navigation guard", () => {
   });
 
   it("ignores non-navigation requests in the request-time guard", async () => {
-    let handler:
-      | ((
-          route: { abort: () => Promise<void>; continue: () => Promise<void> },
-          request: {
-            url: () => string;
-            isNavigationRequest: () => boolean;
-            frame: () => { parentFrame: () => null };
-          },
-        ) => Promise<void>)
-      | undefined;
+    let handler: TestRouteHandler<TestMainFrameRequest> | undefined;
     const routeContinue = vi.fn(async () => {});
     const routeAbort = vi.fn(async () => {});
-    const page = {
-      route: vi.fn(async (_matcher: string, nextHandler: typeof handler) => {
-        handler = nextHandler;
-      }),
+    const page: BrowserNavigationRouteInstallerLike = {
+      route: vi.fn(
+        async (_matcher: string, nextHandler: TestRouteHandler<TestMainFrameRequest>) => {
+          handler = nextHandler;
+        },
+      ),
       unroute: vi.fn(async () => {}),
     };
 
@@ -311,22 +315,15 @@ describe("browser navigation guard", () => {
   });
 
   it("ignores child-frame navigation requests in the request-time guard", async () => {
-    let handler:
-      | ((
-          route: { abort: () => Promise<void>; continue: () => Promise<void> },
-          request: {
-            url: () => string;
-            isNavigationRequest: () => boolean;
-            frame: () => { parentFrame: () => Record<string, unknown> };
-          },
-        ) => Promise<void>)
-      | undefined;
+    let handler: TestRouteHandler<TestChildFrameRequest> | undefined;
     const routeContinue = vi.fn(async () => {});
     const routeAbort = vi.fn(async () => {});
-    const page = {
-      route: vi.fn(async (_matcher: string, nextHandler: typeof handler) => {
-        handler = nextHandler;
-      }),
+    const page: BrowserNavigationRouteInstallerLike = {
+      route: vi.fn(
+        async (_matcher: string, nextHandler: TestRouteHandler<TestChildFrameRequest>) => {
+          handler = nextHandler;
+        },
+      ),
       unroute: vi.fn(async () => {}),
     };
 
