@@ -1,64 +1,46 @@
 import { EventEmitter } from "node:events";
 import { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMaintenanceCommands } from "./register.maintenance.js";
 
-const doctorCommand = vi.fn();
-const dashboardCommand = vi.fn();
-const resetCommand = vi.fn();
-const uninstallCommand = vi.fn();
-const spawnMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  doctorCommand: vi.fn(),
+  dashboardCommand: vi.fn(),
+  resetCommand: vi.fn(),
+  uninstallCommand: vi.fn(),
+  spawn: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const { doctorCommand, dashboardCommand, resetCommand, uninstallCommand, runtime, spawn } = mocks;
 
 vi.mock("../../commands/doctor.js", () => ({
-  doctorCommand,
+  doctorCommand: mocks.doctorCommand,
 }));
 
 vi.mock("../../commands/dashboard.js", () => ({
-  dashboardCommand,
+  dashboardCommand: mocks.dashboardCommand,
 }));
 
 vi.mock("../../commands/reset.js", () => ({
-  resetCommand,
+  resetCommand: mocks.resetCommand,
 }));
 
 vi.mock("../../commands/uninstall.js", () => ({
-  uninstallCommand,
+  uninstallCommand: mocks.uninstallCommand,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
 
 vi.mock("node:child_process", () => ({
-  spawn: spawnMock,
+  spawn: mocks.spawn,
 }));
-
-const mockedModuleIds = [
-  "../../commands/doctor.js",
-  "../../commands/dashboard.js",
-  "../../commands/reset.js",
-  "../../commands/uninstall.js",
-  "../../runtime.js",
-];
-
-let registerMaintenanceCommands: typeof import("./register.maintenance.js").registerMaintenanceCommands;
-
-beforeAll(async () => {
-  ({ registerMaintenanceCommands } = await import("./register.maintenance.js"));
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
-  vi.resetModules();
-});
-
 describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
@@ -127,7 +109,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     child.kill = vi.fn();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    spawnMock.mockReturnValue(child);
+    spawn.mockReturnValue(child);
 
     try {
       const run = runMaintenanceCli(["doctor", "--non-interactive"]);
@@ -138,7 +120,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       await run;
 
-      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledTimes(1);
       expect(child.kill).toHaveBeenCalledTimes(1);
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("Last observed stage: providers.runtime:loadOpenClawPlugins:start."),
@@ -177,7 +159,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     child.kill = vi.fn();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    spawnMock.mockReturnValue(child);
+    spawn.mockReturnValue(child);
 
     try {
       const run = runMaintenanceCli(["doctor", "--non-interactive"]);

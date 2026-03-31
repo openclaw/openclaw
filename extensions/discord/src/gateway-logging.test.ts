@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -15,10 +15,13 @@ const makeRuntime = () => ({
 });
 
 describe("attachDiscordGatewayLogging", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ logVerbose } = await import("openclaw/plugin-sdk/runtime-env"));
     ({ attachDiscordGatewayLogging } = await import("./gateway-logging.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   afterEach(() => {

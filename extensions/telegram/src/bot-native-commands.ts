@@ -56,7 +56,7 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
-  syncTelegramMenuCommands,
+  syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
@@ -501,6 +501,8 @@ export const registerTelegramNativeCommands = ({
         `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );
   }
+  const syncTelegramMenuCommands =
+    telegramDeps.syncTelegramMenuCommands ?? syncTelegramMenuCommandsRuntime;
   // Telegram only limits the setMyCommands payload (menu entries).
   // Keep hidden commands callable by registering handlers for the full catalog.
   syncTelegramMenuCommands({

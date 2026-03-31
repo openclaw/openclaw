@@ -1477,6 +1477,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
+            imageOrder: params.imageOrder,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,

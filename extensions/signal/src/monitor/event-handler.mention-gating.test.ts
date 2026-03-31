@@ -101,7 +101,6 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 
 describe("signal mention gating", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
       await import("./event-handler.test-harness.js"));
     ({ createSignalEventHandler } = await import("./event-handler.js"));

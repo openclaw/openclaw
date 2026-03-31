@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
@@ -23,8 +24,6 @@ vi.mock("./config-cli.js", () => ({
   runConfigUnset: vi.fn(),
 }));
 
-const { buildProgram } = await import("./program.js");
-
 describe("cli program (smoke)", () => {
   let program = createProgram();
 
@@ -36,11 +35,8 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(argv, { from: "user" });
   }
 
-  beforeAll(() => {
-    program = createProgram();
-  });
-
   beforeEach(() => {
+    program = createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
     ensureConfigReady.mockResolvedValue(undefined);
