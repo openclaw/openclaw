@@ -1715,15 +1715,33 @@ export const chatHandlers: GatewayRequestHandlers = {
               const slash = primaryTrimmed.indexOf("/");
               imageModelProvider = primaryTrimmed.slice(0, slash).trim();
             } else {
-              // Primary is providerless - scan fallbacks for provider
-              for (const fb of imageModelConfigFallbacks) {
-                if (!fb?.trim()) {
-                  continue;
-                }
-                const slash = fb.indexOf("/");
-                if (slash > 0) {
-                  imageModelProvider = fb.slice(0, slash).trim();
-                  break;
+              // Primary is providerless - first try to resolve as alias to get provider
+              // This handles cases like primary: "vision" -> "openai/gpt-4o"
+              const tempAliasIndex = buildModelAliasIndex({
+                cfg,
+                defaultProvider: agentDefault.provider,
+              });
+              const primaryResolved = resolveModelRefFromString({
+                raw: primaryTrimmed,
+                defaultProvider: agentDefault.provider,
+                aliasIndex: tempAliasIndex,
+              });
+              // Only use resolved provider if primary is an alias
+              if (primaryResolved?.alias && primaryResolved.ref.provider) {
+                imageModelProvider = primaryResolved.ref.provider;
+              }
+
+              // If alias resolution didn't determine provider, scan fallbacks for provider
+              if (!imageModelProvider) {
+                for (const fb of imageModelConfigFallbacks) {
+                  if (!fb?.trim()) {
+                    continue;
+                  }
+                  const slash = fb.indexOf("/");
+                  if (slash > 0) {
+                    imageModelProvider = fb.slice(0, slash).trim();
+                    break;
+                  }
                 }
               }
             }
