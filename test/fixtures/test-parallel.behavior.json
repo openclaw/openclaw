@@ -139,12 +139,24 @@
         "reason": "Matrix sdk.test.ts hoists a matrix-js-sdk module mock; keep the sync-store persistence regression in its own forked lane so non-isolated extension workers stay deterministic."
       },
       {
+        "file": "extensions/matrix/src/matrix/client.test.ts",
+        "reason": "This Matrix client suite measured about 736.9 MiB RSS growth in the shared extensions lane during heapsnapshot tracing; keep it isolated so the shared Matrix extension worker can recycle instead of retaining Matrix runtime state."
+      },
+      {
+        "file": "extensions/matrix/src/matrix/monitor/startup.test.ts",
+        "reason": "This Matrix startup suite was missing from the extension timing snapshot and repeated heapsnapshots in the shared extensions lane retained large Vite SSR transform strings plus system / Context growth; keep it isolated so the shared Matrix extension worker can recycle immediately after startup coverage."
+      },
+      {
         "file": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
         "reason": "The replay-handling regression is green alone but can inherit disturbed global stream/Response state from the shared extensions lane, so keep it in its own forked lane for deterministic CI."
       },
       {
         "file": "extensions/duckduckgo/src/ddg-search-provider.test.ts",
         "reason": "This provider test hoists a client mock and imports the provider lazily; keep it in its own forked lane so shared extension workers do not reuse a previously cached module under test."
+      },
+      {
+        "file": "extensions/browser/src/browser/chrome.test.ts",
+        "reason": "This Chrome CDP helper suite opens mock WebSocket servers and stubs global fetch state; keep it isolated so shared extension workers do not inherit stale browser probe state from neighboring files."
       },
       {
         "file": "extensions/firecrawl/src/firecrawl-scrape-tool.test.ts",
@@ -157,6 +169,26 @@
       {
         "file": "extensions/firecrawl/src/firecrawl-search-tool.test.ts",
         "reason": "This tool suite hoists the Firecrawl client mock and imports lazily; keep it isolated so shared extension workers cannot leak cached implementations across files."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.acp-init-failure.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so ACP init-failure teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.bot-menu.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so bot-menu lifecycle teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.broadcast.reply-once.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so broadcast reply-once teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.card-action.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite shares the same reconnect helpers and module state; keep it isolated with the other Feishu lifecycle files so card-action runs do not inherit cross-file websocket state."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.reply-once.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so reply-once teardown stays deterministic."
       },
       {
         "file": "extensions/line/src/download.test.ts",

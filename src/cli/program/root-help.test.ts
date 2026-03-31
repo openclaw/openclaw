@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { renderRootHelpText } from "./root-help.js";
 
 vi.mock("./core-command-descriptors.js", () => ({
   getCoreCliCommandDescriptors: () => [
@@ -23,7 +24,7 @@ vi.mock("./subcli-descriptors.js", () => ({
 }));
 
 vi.mock("../../plugins/cli.js", () => ({
-  getPluginCliCommandDescriptors: () => [
+  getPluginCliCommandDescriptors: async () => [
     {
       name: "matrix",
       description: "Matrix channel utilities",
@@ -32,11 +33,9 @@ vi.mock("../../plugins/cli.js", () => ({
   ],
 }));
 
-const { renderRootHelpText } = await import("./root-help.js");
-
 describe("root help", () => {
-  it("includes plugin CLI descriptors alongside core and sub-CLI commands", () => {
-    const text = renderRootHelpText();
+  it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {
+    const text = await renderRootHelpText();
 
     expect(text).toContain("status");
     expect(text).toContain("config");

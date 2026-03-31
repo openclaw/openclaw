@@ -10,9 +10,10 @@ const SLACK_SIMPLE_OPTION_RE = /^[a-z0-9][a-z0-9 _+/-]{0,31}$/i;
 type SlackChoice = {
   label: string;
   value: string;
+  style?: "primary" | "secondary" | "success" | "danger";
 };
 
-function parseChoice(raw: string): SlackChoice | null {
+function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoice | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -25,17 +26,45 @@ function parseChoice(raw: string): SlackChoice | null {
     };
   }
   const label = trimmed.slice(0, delimiter).trim();
-  const value = trimmed.slice(delimiter + 1).trim();
+  let value = trimmed.slice(delimiter + 1).trim();
   if (!label || !value) {
     return null;
   }
-  return { label, value };
+  let style: SlackChoice["style"];
+  if (options?.allowStyle) {
+    // Trailing style keywords are reserved for Slack button styling, so button
+    // values that need to end with one of these tokens must use a different suffix.
+    const styleDelimiter = value.lastIndexOf(":");
+    if (styleDelimiter !== -1) {
+      const maybeStyle = value
+        .slice(styleDelimiter + 1)
+        .trim()
+        .toLowerCase();
+      if (
+        maybeStyle === "primary" ||
+        maybeStyle === "secondary" ||
+        maybeStyle === "success" ||
+        maybeStyle === "danger"
+      ) {
+        const unstyledValue = value.slice(0, styleDelimiter).trim();
+        if (unstyledValue) {
+          value = unstyledValue;
+          style = maybeStyle;
+        }
+      }
+    }
+  }
+  return style ? { label, value, style } : { label, value };
 }
 
-function parseChoices(raw: string, maxItems: number): SlackChoice[] {
+function parseChoices(
+  raw: string,
+  maxItems: number,
+  options?: { allowStyle?: boolean },
+): SlackChoice[] {
   return raw
     .split(",")
-    .map((entry) => parseChoice(entry))
+    .map((entry) => parseChoice(entry, options))
     .filter((entry): entry is SlackChoice => Boolean(entry))
     .slice(0, maxItems);
 }
@@ -53,7 +82,7 @@ function buildTextBlock(
 function buildButtonsBlock(
   raw: string,
 ): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
-  const choices = parseChoices(raw, SLACK_BUTTON_MAX_ITEMS);
+  const choices = parseChoices(raw, SLACK_BUTTON_MAX_ITEMS, { allowStyle: true });
   if (choices.length === 0) {
     return null;
   }
@@ -62,6 +91,7 @@ function buildButtonsBlock(
     buttons: choices.map((choice) => ({
       label: choice.label,
       value: choice.value,
+      ...(choice.style ? { style: choice.style } : {}),
     })),
   };
 }

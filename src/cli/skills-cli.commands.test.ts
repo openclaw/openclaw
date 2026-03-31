@@ -1,39 +1,75 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerSkillsCli } from "./skills-cli.js";
 
-const loadConfigMock = vi.fn(() => ({}));
-const resolveDefaultAgentIdMock = vi.fn(() => "main");
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
-const searchSkillsFromClawHubMock = vi.fn();
-const installSkillFromClawHubMock = vi.fn();
-const updateSkillsFromClawHubMock = vi.fn();
-const readTrackedClawHubSkillSlugsMock = vi.fn();
+const mocks = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return {
+    loadConfigMock: vi.fn(() => ({})),
+    resolveDefaultAgentIdMock: vi.fn(() => "main"),
+    resolveAgentWorkspaceDirMock: vi.fn(() => "/tmp/workspace"),
+    searchSkillsFromClawHubMock: vi.fn(),
+    installSkillFromClawHubMock: vi.fn(),
+    updateSkillsFromClawHubMock: vi.fn(),
+    readTrackedClawHubSkillSlugsMock: vi.fn(),
+    defaultRuntime,
+    runtimeLogs,
+    runtimeErrors,
+  };
+});
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const {
+  loadConfigMock,
+  resolveDefaultAgentIdMock,
+  resolveAgentWorkspaceDirMock,
+  searchSkillsFromClawHubMock,
+  installSkillFromClawHubMock,
+  updateSkillsFromClawHubMock,
+  readTrackedClawHubSkillSlugsMock,
+  defaultRuntime,
+  runtimeLogs,
+  runtimeErrors,
+} = mocks;
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
+  loadConfig: () => mocks.loadConfigMock(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
+  resolveDefaultAgentId: () => mocks.resolveDefaultAgentIdMock(),
+  resolveAgentWorkspaceDir: () => mocks.resolveAgentWorkspaceDirMock(),
 }));
 
 vi.mock("../agents/skills-clawhub.js", () => ({
-  searchSkillsFromClawHub: (...args: unknown[]) => searchSkillsFromClawHubMock(...args),
-  installSkillFromClawHub: (...args: unknown[]) => installSkillFromClawHubMock(...args),
-  updateSkillsFromClawHub: (...args: unknown[]) => updateSkillsFromClawHubMock(...args),
-  readTrackedClawHubSkillSlugs: (...args: unknown[]) => readTrackedClawHubSkillSlugsMock(...args),
+  searchSkillsFromClawHub: (...args: unknown[]) => mocks.searchSkillsFromClawHubMock(...args),
+  installSkillFromClawHub: (...args: unknown[]) => mocks.installSkillFromClawHubMock(...args),
+  updateSkillsFromClawHub: (...args: unknown[]) => mocks.updateSkillsFromClawHubMock(...args),
+  readTrackedClawHubSkillSlugs: (...args: unknown[]) =>
+    mocks.readTrackedClawHubSkillSlugsMock(...args),
 }));
-
-const { registerSkillsCli } = await import("./skills-cli.js");
 
 describe("skills cli commands", () => {
   const createProgram = () => {
@@ -46,7 +82,8 @@ describe("skills cli commands", () => {
   const runCommand = (argv: string[]) => createProgram().parseAsync(argv, { from: "user" });
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
@@ -65,6 +102,11 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
   });
 
   it("searches ClawHub skills from the native CLI", async () => {

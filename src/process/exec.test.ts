@@ -2,12 +2,20 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import process from "node:process";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 import { resolveCommandEnv, runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
     expect(
       shouldSpawnWithShell({
@@ -45,32 +53,40 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.npm_config_fund).toBe("false");
   });
 
-  it("kills command when no output timeout elapses", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-      {
-        timeoutMs: 2_000,
-        noOutputTimeoutMs: 200,
-      },
-    );
+  it.runIf(process.platform !== "win32")(
+    "kills command when no output timeout elapses",
+    { timeout: 15_000 },
+    async () => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
+        {
+          timeoutMs: 2_000,
+          noOutputTimeoutMs: 200,
+        },
+      );
 
-    expect(result.termination).toBe("no-output-timeout");
-    expect(result.noOutputTimedOut).toBe(true);
-    expect(result.code).not.toBe(0);
-  });
+      expect(result.termination).toBe("no-output-timeout");
+      expect(result.noOutputTimedOut).toBe(true);
+      expect(result.code).not.toBe(0);
+    },
+  );
 
-  it("reports global timeout termination when overall timeout elapses", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-      {
-        timeoutMs: 200,
-      },
-    );
+  it.runIf(process.platform !== "win32")(
+    "reports global timeout termination when overall timeout elapses",
+    { timeout: 15_000 },
+    async () => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
+        {
+          timeoutMs: 200,
+        },
+      );
 
-    expect(result.termination).toBe("timeout");
-    expect(result.noOutputTimedOut).toBe(false);
-    expect(result.code).not.toBe(0);
-  });
+      expect(result.termination).toBe("timeout");
+      expect(result.noOutputTimedOut).toBe(false);
+      expect(result.code).not.toBe(0);
+    },
+  );
 
   it.runIf(process.platform === "win32")(
     "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",

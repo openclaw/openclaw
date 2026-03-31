@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   projectConfigOntoRuntimeSourceSnapshot,
+  registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
@@ -47,6 +48,14 @@ function resetRuntimeConfigState(): void {
 }
 
 describe("runtime config snapshot writes", () => {
+  beforeEach(() => {
+    resetRuntimeConfigState();
+  });
+
+  afterEach(() => {
+    resetRuntimeConfigState();
+  });
+
   it("returns the source snapshot when runtime snapshot is active", async () => {
     await withTempHome("openclaw-config-runtime-source-", async () => {
       const sourceConfig = createSourceConfig();
@@ -245,6 +254,37 @@ describe("runtime config snapshot writes", () => {
         releaseRefresh();
         await writePromise;
       } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("notifies in-process write listeners with the refreshed runtime snapshot", async () => {
+    await withTempHome("openclaw-config-runtime-write-listener-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+
+      const seen: Array<{ configPath: string; runtimeConfig: OpenClawConfig }> = [];
+      const unsubscribe = registerConfigWriteListener((event) => {
+        seen.push({
+          configPath: event.configPath,
+          runtimeConfig: event.runtimeConfig,
+        });
+      });
+
+      try {
+        expect(loadConfig().gateway?.port).toBe(18789);
+        await writeConfigFile({
+          ...loadConfig(),
+          gateway: { port: 19003 },
+        });
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0]?.configPath).toBe(configPath);
+        expect(seen[0]?.runtimeConfig.gateway?.port).toBe(19003);
+      } finally {
+        unsubscribe();
         resetRuntimeConfigState();
       }
     });

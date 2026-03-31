@@ -599,6 +599,8 @@ Primary reference:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Troubleshooting](/channels/troubleshooting)
 - [Configuration](/gateway/configuration)

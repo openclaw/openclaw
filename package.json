@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.29",
+  "version": "2026.3.30",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -489,18 +489,6 @@
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
     },
-    "./plugin-sdk/imessage": {
-      "types": "./dist/plugin-sdk/imessage.d.ts",
-      "default": "./dist/plugin-sdk/imessage.js"
-    },
-    "./plugin-sdk/imessage-policy": {
-      "types": "./dist/plugin-sdk/imessage-policy.d.ts",
-      "default": "./dist/plugin-sdk/imessage-policy.js"
-    },
-    "./plugin-sdk/imessage-runtime": {
-      "types": "./dist/plugin-sdk/imessage-runtime.d.ts",
-      "default": "./dist/plugin-sdk/imessage-runtime.js"
-    },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
@@ -853,10 +841,6 @@
       "types": "./dist/plugin-sdk/synthetic.d.ts",
       "default": "./dist/plugin-sdk/synthetic.js"
     },
-    "./plugin-sdk/telegram": {
-      "types": "./dist/plugin-sdk/telegram.d.ts",
-      "default": "./dist/plugin-sdk/telegram.js"
-    },
     "./plugin-sdk/telegram-account": {
       "types": "./dist/plugin-sdk/telegram-account.d.ts",
       "default": "./dist/plugin-sdk/telegram-account.js"
@@ -868,14 +852,6 @@
     "./plugin-sdk/telegram-core": {
       "types": "./dist/plugin-sdk/telegram-core.d.ts",
       "default": "./dist/plugin-sdk/telegram-core.js"
-    },
-    "./plugin-sdk/telegram-runtime": {
-      "types": "./dist/plugin-sdk/telegram-runtime.d.ts",
-      "default": "./dist/plugin-sdk/telegram-runtime.js"
-    },
-    "./plugin-sdk/telegram-runtime-surface": {
-      "types": "./dist/plugin-sdk/telegram-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/telegram-runtime-surface.js"
     },
     "./plugin-sdk/telegram-surface": {
       "types": "./dist/plugin-sdk/telegram-surface.d.ts",
@@ -1154,6 +1130,11 @@
     "test:perf:update-timings:extensions": "node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "node scripts/test-parallel.mjs --profile serial",
+    "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
+    "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
+    "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
+    "test:startup:bench:smoke": "node --import tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --runs 1 --warmup 0 --output .artifacts/cli-startup-bench-smoke.json",
+    "test:startup:bench:update": "node scripts/test-update-cli-startup-bench.mjs",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",

@@ -1,10 +1,7 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createWhatsAppPollFixture, expectWhatsAppPollSent } from "openclaw/plugin-sdk/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import {
-  createWhatsAppPollFixture,
-  expectWhatsAppPollSent,
-} from "../../../src/test-helpers/whatsapp-outbound.js";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,

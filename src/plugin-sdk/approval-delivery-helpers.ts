@@ -1,8 +1,13 @@
+import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import { normalizeMessageChannel } from "./routing.js";
 
 type ApprovalKind = "exec" | "plugin";
 type NativeApprovalDeliveryMode = "dm" | "channel" | "both";
+type NativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type NativeApprovalTarget = { to: string; threadId?: string | number | null };
+type NativeApprovalSurface = "origin" | "approver-dm";
 
 type ApprovalAdapterParams = {
   cfg: OpenClawConfig;
@@ -30,39 +35,58 @@ export function createApproverRestrictedNativeApprovalAdapter(params: {
   }) => NativeApprovalDeliveryMode;
   requireMatchingTurnSourceChannel?: boolean;
   resolveSuppressionAccountId?: (params: DeliverySuppressionParams) => string | undefined;
+  resolveOriginTarget?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind: ApprovalKind;
+    request: NativeApprovalRequest;
+  }) => NativeApprovalTarget | null | Promise<NativeApprovalTarget | null>;
+  resolveApproverDmTargets?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind: ApprovalKind;
+    request: NativeApprovalRequest;
+  }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
+  notifyOriginWhenDmOnly?: boolean;
 }) {
   const pluginSenderAuth = params.isPluginAuthorizedSender ?? params.isExecAuthorizedSender;
+  const normalizePreferredSurface = (
+    mode: NativeApprovalDeliveryMode,
+  ): NativeApprovalSurface | "both" =>
+    mode === "channel" ? "origin" : mode === "dm" ? "approver-dm" : "both";
 
   return {
     auth: {
-      authorizeCommand: ({
+      authorizeActorAction: ({
         cfg,
         accountId,
         senderId,
-        kind,
+        approvalKind,
       }: {
         cfg: OpenClawConfig;
         accountId?: string | null;
         senderId?: string | null;
-        kind: ApprovalKind;
+        action: "approve";
+        approvalKind: ApprovalKind;
       }) => {
         const authorized =
-          kind === "plugin"
+          approvalKind === "plugin"
             ? pluginSenderAuth({ cfg, accountId, senderId })
             : params.isExecAuthorizedSender({ cfg, accountId, senderId });
         return authorized
           ? { authorized: true }
           : {
               authorized: false,
-              reason: `❌ You are not authorized to approve ${kind} requests on ${params.channelLabel}.`,
+              reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
             };
       },
-      getInitiatingSurfaceState: ({
+      getActionAvailabilityState: ({
         cfg,
         accountId,
       }: {
         cfg: OpenClawConfig;
         accountId?: string | null;
+        action: "approve";
       }) =>
         params.hasApprovers({ cfg, accountId })
           ? ({ kind: "enabled" } as const)
@@ -101,5 +125,31 @@ export function createApproverRestrictedNativeApprovalAdapter(params: {
         return params.isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
       },
     },
+    native:
+      params.resolveOriginTarget || params.resolveApproverDmTargets
+        ? {
+            describeDeliveryCapabilities: ({
+              cfg,
+              accountId,
+            }: {
+              cfg: OpenClawConfig;
+              accountId?: string | null;
+              approvalKind: ApprovalKind;
+              request: NativeApprovalRequest;
+            }) => ({
+              enabled:
+                params.hasApprovers({ cfg, accountId }) &&
+                params.isNativeDeliveryEnabled({ cfg, accountId }),
+              preferredSurface: normalizePreferredSurface(
+                params.resolveNativeDeliveryMode({ cfg, accountId }),
+              ),
+              supportsOriginSurface: Boolean(params.resolveOriginTarget),
+              supportsApproverDmSurface: Boolean(params.resolveApproverDmTargets),
+              notifyOriginWhenDmOnly: params.notifyOriginWhenDmOnly ?? false,
+            }),
+            resolveOriginTarget: params.resolveOriginTarget,
+            resolveApproverDmTargets: params.resolveApproverDmTargets,
+          }
+        : undefined,
   };
 }
