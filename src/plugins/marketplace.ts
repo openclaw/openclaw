@@ -9,6 +9,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -1030,15 +1031,17 @@ export async function resolveMarketplaceInstallShortcut(
   };
 }
 
-export async function installPluginFromMarketplace(params: {
-  marketplace: string;
-  plugin: string;
-  logger?: MarketplaceLogger;
-  timeoutMs?: number;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-}): Promise<MarketplaceInstallResult> {
+export async function installPluginFromMarketplace(
+  params: InstallSafetyOverrides & {
+    marketplace: string;
+    plugin: string;
+    logger?: MarketplaceLogger;
+    timeoutMs?: number;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+  },
+): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
     logger: params.logger,
@@ -1075,6 +1078,7 @@ export async function installPluginFromMarketplace(params: {
     installCleanup = resolved.cleanup;
 
     const result = await installPluginFromPath({
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       path: resolved.path,
       logger: params.logger,
       mode: params.mode,

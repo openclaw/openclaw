@@ -10,11 +10,12 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
+import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createExecApprovalChannelRuntime,
+  doesApprovalRequestMatchChannelAccount,
   type ExecApprovalChannelRuntime,
   resolveChannelNativeApprovalDeliveryPlan,
 } from "openclaw/plugin-sdk/infra-runtime";
@@ -29,13 +30,7 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  normalizeAccountId,
-  normalizeMessageChannel,
-  resolveAgentIdFromSessionKey,
-} from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordNativeApprovalAdapter } from "../approval-native.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
@@ -193,69 +188,6 @@ class ExecApprovalActionRow extends Row<Button> {
       ),
     ]);
   }
-}
-
-function resolveExecApprovalAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
-}): string | null {
-  const sessionKey = params.request.request.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  try {
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[sessionKey];
-    const channel = normalizeMessageChannel(entry?.origin?.provider ?? entry?.lastChannel);
-    if (channel && channel !== "discord") {
-      return null;
-    }
-    const accountId = entry?.origin?.accountId ?? entry?.lastAccountId;
-    return accountId?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-function resolvePluginApprovalAccountId(params: {
-  cfg: OpenClawConfig;
-  request: PluginApprovalRequest;
-}): string | null {
-  const fromSession = resolveExecApprovalAccountId({
-    cfg: params.cfg,
-    request: {
-      id: params.request.id,
-      request: {
-        command: params.request.request.title,
-        sessionKey: params.request.request.sessionKey ?? undefined,
-      },
-      createdAtMs: params.request.createdAtMs,
-      expiresAtMs: params.request.expiresAtMs,
-    },
-  });
-  if (fromSession) {
-    return fromSession;
-  }
-  return params.request.request.turnSourceAccountId?.trim() || null;
-}
-
-function resolveApprovalAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequest;
-}): string | null {
-  return isPluginApprovalRequest(params.request)
-    ? resolvePluginApprovalAccountId({ cfg: params.cfg, request: params.request })
-    : resolveExecApprovalAccountId({ cfg: params.cfg, request: params.request });
-}
-
-function resolveApprovalAgentId(request: ApprovalRequest): string | null {
-  return request.request.agentId?.trim() || null;
-}
-
-function resolveApprovalSessionKey(request: ApprovalRequest): string | null {
-  return request.request.sessionKey?.trim() || null;
 }
 
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
@@ -540,47 +472,22 @@ export class DiscordExecApprovalHandler {
       return false;
     }
 
-    const requestAccountId = resolveApprovalAccountId({
-      cfg: this.opts.cfg,
-      request,
+    if (
+      !doesApprovalRequestMatchChannelAccount({
+        cfg: this.opts.cfg,
+        request,
+        channel: "discord",
+        accountId: this.opts.accountId,
+      })
+    ) {
+      return false;
+    }
+
+    return matchesApprovalRequestFilters({
+      request: request.request,
+      agentFilter: config.agentFilter,
+      sessionFilter: config.sessionFilter,
     });
-    if (requestAccountId) {
-      const handlerAccountId = normalizeAccountId(this.opts.accountId);
-      if (normalizeAccountId(requestAccountId) !== handlerAccountId) {
-        return false;
-      }
-    }
-
-    // Check agent filter
-    if (config.agentFilter?.length) {
-      const agentId = resolveApprovalAgentId(request);
-      if (!agentId) {
-        return false;
-      }
-      if (!config.agentFilter.includes(agentId)) {
-        return false;
-      }
-    }
-
-    // Check session filter (substring match)
-    if (config.sessionFilter?.length) {
-      const session = resolveApprovalSessionKey(request);
-      if (!session) {
-        return false;
-      }
-      const matches = config.sessionFilter.some((p) => {
-        if (session.includes(p)) {
-          return true;
-        }
-        const regex = compileSafeRegex(p);
-        return regex ? testRegexWithBoundedInput(regex, session) : false;
-      });
-      if (!matches) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   async start(): Promise<void> {

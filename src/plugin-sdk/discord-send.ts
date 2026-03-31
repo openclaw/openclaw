@@ -10,6 +10,7 @@ type DiscordSendOptionInput = {
 type DiscordSendMediaOptionInput = DiscordSendOptionInput & {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 /** Build the common Discord send options from SDK-level reply payload fields. */
@@ -28,6 +29,7 @@ export function buildDiscordSendMediaOptions(input: DiscordSendMediaOptionInput)
     ...buildDiscordSendOptions(input),
     mediaUrl: input.mediaUrl,
     mediaLocalRoots: input.mediaLocalRoots,
+    mediaReadFile: input.mediaReadFile,
   };
 }
 

@@ -89,6 +89,7 @@ export type MatrixSendOpts = {
   cfg?: CoreConfig;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number | null;

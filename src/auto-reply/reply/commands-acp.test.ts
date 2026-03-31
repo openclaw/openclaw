@@ -114,8 +114,7 @@ const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
 const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
-const { createTaskRecord, resetTaskRegistryForTests } =
-  await import("../../tasks/task-registry.js");
+const { createTaskRecord, resetTaskRegistryForTests } = await import("openclaw/plugin-sdk/tasks");
 
 function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   const trimmed = raw?.trim().replace(/^telegram:/i, "");
