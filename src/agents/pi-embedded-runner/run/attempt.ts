@@ -1142,6 +1142,11 @@ export async function runEmbeddedAttempt(
         const innerForHooks = activeSession.agent.streamFn;
         let modelCallCounter = 0;
         activeSession.agent.streamFn = (model, context, options) => {
+          const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
+          if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
+            return innerForHooks(model, context, options);
+          }
+
           const callId = `${params.runId}-${++modelCallCounter}`;
           const hookCtxForCall = {
             runId: params.runId,
@@ -1178,83 +1183,90 @@ export async function runEmbeddedAttempt(
               });
           }
           const startMs = Date.now();
-          const result = innerForHooks(model, context, options);
-          // Wrap the stream to intercept .result() and capture the response
-          // message for the after_model_call hook. The stream is an async
-          // iterable with a .result() method that resolves to the full
-          // AssistantMessage once the stream is consumed.
-          if (hookRunner?.hasHooks("after_model_call")) {
-            const fireAfterModelCall = (responseMessage?: unknown, error?: string) => {
-              hookRunner
-                .runAfterModelCall(
-                  {
-                    runId: params.runId,
-                    sessionId: params.sessionId,
-                    provider: params.provider,
-                    model: params.modelId,
-                    api: params.model.api,
-                    callId,
-                    durationMs: Date.now() - startMs,
-                    ...(error != null ? { error } : {}),
-                    ...(responseMessage != null ? { responseMessage } : {}),
-                  },
-                  hookCtxForCall,
-                )
-                .catch((hookErr) => {
-                  log.warn(`after_model_call hook failed: ${String(hookErr)}`);
-                });
-            };
+          const fireAfterModelCall = (responseMessage?: unknown, error?: string) => {
+            if (!hookRunner?.hasHooks("after_model_call")) {
+              return;
+            }
+            hookRunner
+              .runAfterModelCall(
+                {
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  provider: params.provider,
+                  model: params.modelId,
+                  api: params.model.api,
+                  callId,
+                  durationMs: Date.now() - startMs,
+                  ...(error != null ? { error } : {}),
+                  ...(responseMessage != null ? { responseMessage } : {}),
+                },
+                hookCtxForCall,
+              )
+              .catch((hookErr) => {
+                log.warn(`after_model_call hook failed: ${String(hookErr)}`);
+              });
+          };
 
-            // Wrap the resolved stream to intercept .result() and capture
-            // the full assistant message for the after_model_call hook.
-            const wrapStreamForAfterHook = (stream: unknown) => {
+          try {
+            const result = innerForHooks(model, context, options);
+
+            // Wrap the stream to intercept .result() and capture the response
+            // message for the after_model_call hook. The stream is an async
+            // iterable with a .result() method that resolves to the full
+            // AssistantMessage once the stream is consumed.
+            if (hookRunner?.hasHooks("after_model_call")) {
+              const wrapStreamForAfterHook = (stream: unknown) => {
+                if (
+                  stream &&
+                  typeof stream === "object" &&
+                  "result" in stream &&
+                  typeof (stream as { result: unknown }).result === "function"
+                ) {
+                  const originalResult = (stream as { result: () => Promise<unknown> }).result.bind(
+                    stream,
+                  );
+                  (stream as { result: () => Promise<unknown> }).result = async () => {
+                    try {
+                      const message = await originalResult();
+                      fireAfterModelCall(message);
+                      return message;
+                    } catch (err) {
+                      fireAfterModelCall(undefined, String(err));
+                      throw err;
+                    }
+                  };
+                } else {
+                  // Fallback: no .result() method; fire without response
+                  Promise.resolve(stream).then(
+                    () => fireAfterModelCall(),
+                    (err) => fireAfterModelCall(undefined, String(err)),
+                  );
+                }
+                return stream;
+              };
+
+              // Handle both sync and async (Promise-wrapped) stream returns
               if (
-                stream &&
-                typeof stream === "object" &&
-                "result" in stream &&
-                typeof (stream as { result: unknown }).result === "function"
+                result &&
+                typeof result === "object" &&
+                "then" in result &&
+                typeof (result as { then: unknown }).then === "function"
               ) {
-                const originalResult = (stream as { result: () => Promise<unknown> }).result.bind(
-                  stream,
-                );
-                (stream as { result: () => Promise<unknown> }).result = async () => {
-                  try {
-                    const message = await originalResult();
-                    fireAfterModelCall(message);
-                    return message;
-                  } catch (err) {
+                return (result as Promise<unknown>).then(
+                  (resolved) => wrapStreamForAfterHook(resolved),
+                  (err) => {
                     fireAfterModelCall(undefined, String(err));
                     throw err;
-                  }
-                };
-              } else {
-                // Fallback: no .result() method; fire without response
-                Promise.resolve(stream).then(
-                  () => fireAfterModelCall(),
-                  (err) => fireAfterModelCall(undefined, String(err)),
-                );
+                  },
+                ) as typeof result;
               }
-              return stream;
-            };
-
-            // Handle both sync and async (Promise-wrapped) stream returns
-            if (
-              result &&
-              typeof result === "object" &&
-              "then" in result &&
-              typeof (result as { then: unknown }).then === "function"
-            ) {
-              return (result as Promise<unknown>).then(
-                (resolved) => wrapStreamForAfterHook(resolved),
-                (err) => {
-                  fireAfterModelCall(undefined, String(err));
-                  throw err;
-                },
-              ) as typeof result;
+              wrapStreamForAfterHook(result);
             }
-            wrapStreamForAfterHook(result);
+            return result;
+          } catch (err) {
+            fireAfterModelCall(undefined, String(err));
+            throw err;
           }
-          return result;
         };
       }
 
