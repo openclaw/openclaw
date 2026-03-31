@@ -740,6 +740,8 @@ async function agentCommandInternal(
     let result: Awaited<ReturnType<typeof runAgentAttempt>>;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    const MAX_LIVE_SWITCH_RETRIES = 5;
+    let liveSwitchRetries = 0;
     // Retry loop: when the embedded runner detects a live session model switch
     // (e.g. a subagent whose persisted session targets a different provider/model),
     // it throws LiveSessionModelSwitchError.  Catch it and restart the full
@@ -839,6 +841,54 @@ async function agentCommandInternal(
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
+          liveSwitchRetries++;
+          if (liveSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
+            log.error(
+              `Live session model switch in subagent run ${runId}: exceeded maximum retries (${MAX_LIVE_SWITCH_RETRIES})`,
+            );
+            if (!lifecycleEnded) {
+              emitAgentEvent({
+                runId,
+                stream: "lifecycle",
+                data: {
+                  phase: "error",
+                  startedAt,
+                  endedAt: Date.now(),
+                  error: "Agent run failed",
+                },
+              });
+            }
+            throw new Error(
+              `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`,
+              { cause: err },
+            );
+          }
+          // Validate the switched model against the agent allowlist before
+          // accepting the switch, matching the stored/explicit override paths.
+          const switchRef = normalizeModelRef(err.provider, err.model);
+          const switchKey = modelKey(switchRef.provider, switchRef.model);
+          if (!allowAnyModel && allowedModelKeys.size > 0 && !allowedModelKeys.has(switchKey)) {
+            log.info(
+              `Live session model switch in subagent run ${runId}: ` +
+                `rejected ${err.provider}/${err.model} (not in allowlist)`,
+            );
+            if (!lifecycleEnded) {
+              emitAgentEvent({
+                runId,
+                stream: "lifecycle",
+                data: {
+                  phase: "error",
+                  startedAt,
+                  endedAt: Date.now(),
+                  error: "Agent run failed",
+                },
+              });
+            }
+            throw new Error(
+              `Live model switch rejected: ${err.provider}/${err.model} is not in the agent allowlist`,
+              { cause: err },
+            );
+          }
           // Capture the pre-switch provider and model before mutating, so the
           // guard below can detect whether either actually changed.
           const previousProvider = provider;
@@ -887,7 +937,7 @@ async function agentCommandInternal(
               phase: "error",
               startedAt,
               endedAt: Date.now(),
-              error: String(err),
+              error: "Agent run failed",
             },
           });
         }
