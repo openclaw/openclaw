@@ -6,8 +6,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
+  resolveApprovalRequestAccountId,
   resolveChannelNativeApprovalDeliveryPlan,
-  resolveExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -42,60 +42,18 @@ type PendingMessage = {
   messageId: string;
 };
 
-function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
-  }
-  return {
-    id: request.id,
-    request: {
-      command: request.request.title,
-      agentId: request.request.agentId ?? undefined,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
-  };
-}
-
 function resolveBoundTelegramAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequest;
 }): string | null {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase();
-  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || undefined;
-  if (turnSourceChannel === "telegram") {
-    if (turnSourceAccountId) {
-      return turnSourceAccountId;
-    }
-  }
-  const allowSessionAccountFallback = turnSourceChannel === "telegram" && !turnSourceAccountId;
-  const sessionTarget = resolveExecApprovalSessionTarget({
+  return resolveApprovalRequestAccountId({
     cfg: params.cfg,
-    request: toExecLikeRequest(params.request),
-    turnSourceChannel: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceChannel ?? undefined),
-    turnSourceTo: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceTo ?? undefined),
-    turnSourceAccountId: allowSessionAccountFallback ? undefined : turnSourceAccountId,
-    turnSourceThreadId: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceThreadId ?? undefined),
+    request: params.request,
+    channel:
+      params.request.request.turnSourceChannel?.trim().toLowerCase() === "telegram"
+        ? null
+        : "telegram",
   });
-  if (!sessionTarget || sessionTarget.channel !== "telegram") {
-    return null;
-  }
-  return sessionTarget.accountId?.trim() || null;
 }
 
 export type TelegramExecApprovalHandlerOpts = {
