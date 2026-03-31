@@ -275,6 +275,7 @@ describe("chat view", () => {
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image).not.toBeNull();
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,QUJDRA==");
+    expect(image?.closest(".chat-tool-msg-collapse")).toBeNull();
   });
 
   it("renders image-only tool result messages inline", () => {
@@ -299,9 +300,10 @@ describe("chat view", () => {
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image).not.toBeNull();
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,Rk9PQg==");
+    expect(image?.closest(".chat-tool-msg-collapse")).toBeNull();
   });
 
-  it("renders nested tool result images inline", () => {
+  it("renders nested tool result images inline with their text", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -313,7 +315,10 @@ describe("chat view", () => {
                 {
                   type: "toolResult",
                   toolUseId: "tool-read-image-3",
-                  content: [{ type: "image", data: "SU1H", mimeType: "image/png" }],
+                  content: [
+                    { type: "text", text: "Recognized text from image" },
+                    { type: "image", data: "SU1H", mimeType: "image/png" },
+                  ],
                 },
               ],
               timestamp: 1000,
@@ -327,6 +332,7 @@ describe("chat view", () => {
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image).not.toBeNull();
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,SU1H");
+    expect(container.textContent).toContain("Recognized text from image");
   });
 
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {

@@ -724,6 +724,7 @@ function renderGroupedMessage(
       ${
         isToolMessage
           ? html`
+              ${renderMessageImages(images)}
             <details class="chat-tool-msg-collapse">
               <summary class="chat-tool-msg-summary">
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
@@ -737,7 +738,6 @@ function renderGroupedMessage(
                 }
               </summary>
               <div class="chat-tool-msg-body">
-                ${renderMessageImages(images)}
                 ${
                   reasoningMarkdown
                     ? html`<div class="chat-thinking">${unsafeHTML(

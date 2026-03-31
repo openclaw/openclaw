@@ -152,5 +152,30 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.content === "string") {
     return item.content;
   }
-  return undefined;
+  const parts: string[] = [];
+  collectToolTextParts(item.content, parts);
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function collectToolTextParts(content: unknown, parts: string[]) {
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) {
+      continue;
+    }
+    const item = block as Record<string, unknown>;
+    if (typeof item.text === "string" && item.text.trim()) {
+      parts.push(item.text);
+      continue;
+    }
+    if (typeof item.content === "string" && item.content.trim()) {
+      parts.push(item.content);
+      continue;
+    }
+    if (Array.isArray(item.content)) {
+      collectToolTextParts(item.content, parts);
+    }
+  }
 }
