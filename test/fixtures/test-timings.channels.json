@@ -400,7 +400,7 @@
       "durationMs": 42
     },
     "extensions/discord/src/monitor/monitor.test.ts": {
-      "durationMs": 40
+      "durationMs": 19800
     },
     "extensions/discord/src/monitor/provider.lifecycle.test.ts": {
       "durationMs": 39
