@@ -129,12 +129,19 @@ Defaults:
 
 - Billing backoff starts at **5 hours**, doubles per billing failure, and caps at **24 hours**.
 - Backoff counters reset if the profile hasn’t failed for **24 hours** (configurable).
+- Overloaded retries allow **1 same-provider profile rotation** before model fallback.
+- Overloaded retries use **0 ms backoff** by default.
 
 ## Model fallback
 
 If all profiles for a provider fail, OpenClaw moves to the next model in
 `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and
 timeouts that exhausted profile rotation (other errors do not advance fallback).
+
+Overloaded errors are handled more aggressively than billing cooldowns. By default,
+OpenClaw allows one same-provider auth-profile retry, then switches to the next
+configured model fallback without waiting. Tune this with
+`auth.cooldowns.overloadedProfileRotations` and `auth.cooldowns.overloadedBackoffMs`.
 
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
@@ -146,6 +153,7 @@ See [Gateway configuration](/gateway/configuration) for:
 - `auth.profiles` / `auth.order`
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
 - `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
+- `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 

@@ -7856,6 +7856,39 @@
       "hasChildren": false
     },
     {
+      "path": "auth.cooldowns.overloadedBackoffMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "reliability",
+        "storage"
+      ],
+      "label": "Overloaded Backoff (ms)",
+      "help": "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.overloadedProfileRotations",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "storage"
+      ],
+      "label": "Overloaded Profile Rotations",
+      "help": "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
+      "hasChildren": false
+    },
+    {
       "path": "auth.order",
       "kind": "core",
       "type": "object",

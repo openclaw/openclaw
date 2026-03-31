@@ -3029,6 +3029,8 @@ Notes:
       billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
       billingMaxHours: 24,
       failureWindowHours: 24,
+      overloadedProfileRotations: 1,
+      overloadedBackoffMs: 0,
     },
   },
 }
@@ -3038,6 +3040,8 @@ Notes:
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
+- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
+- `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
 
 ---
 
