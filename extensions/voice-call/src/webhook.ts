@@ -16,6 +16,7 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
@@ -534,22 +535,31 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
-      // Realtime mode: return TwiML <Connect><Stream> only for inbound calls that are
-      // ringing (i.e. Twilio asking what to do with the call). All other requests —
-      // including outbound call status callbacks (Direction=outbound-api) and any
-      // terminal-state callbacks — must fall through to provider.parseWebhookEvent()
-      // so call state is updated correctly through the normal pipeline.
-      // Replayed requests are intentionally excluded — a replayed ringing callback
-      // must not mint a new stream token or start a second realtime session.
+      // Realtime mode: short-circuit to <Connect><Stream> TwiML for inbound calls.
+      //
+      // This interception MUST happen before provider.parseWebhookEvent() because the
+      // Twilio provider's TwiML policy requires streamPath to generate a stream URL, and
+      // streamPath is only configured when streaming.enabled is true. Since realtime and
+      // streaming are mutually exclusive, parseWebhookEvent() would always return a
+      // <Pause> TwiML (canStream=false) for inbound calls in realtime mode — leaving
+      // the call in silence instead of opening /voice/stream/realtime.
+      //
+      // We intercept any inbound, non-terminal request that is not an explicit
+      // ?type=status callback. This covers both CallStatus=ringing (standard Twilio
+      // phone numbers) and CallStatus=in-progress (Voice SDK / SIP configurations that
+      // skip the ringing state). Terminal statuses and outbound calls always fall through
+      // to parseWebhookEvent() so call state transitions are recorded correctly.
+      // Replayed requests are excluded to prevent duplicate stream token minting.
       if (this.realtimeHandler && this.provider.name === "twilio" && !verification.isReplay) {
         const params = new URLSearchParams(ctx.rawBody);
         const callStatus = params.get("CallStatus");
         const direction = params.get("Direction");
-        // Only intercept inbound calls asking for TwiML instructions (ringing with no
-        // direction or explicit "inbound"). Outbound calls always use the normal pipeline.
-        const isInboundRinging =
-          callStatus === "ringing" && (!direction || direction === "inbound");
-        if (isInboundRinging) {
+        const isInbound = !direction || direction === "inbound";
+        const isTerminal = isProviderStatusTerminal(callStatus);
+        // ?type=status is appended by this plugin to outbound status callback URLs;
+        // inbound status callbacks from Twilio's phone number config do not carry it.
+        const isExplicitStatusCallback = ctx.query?.type === "status";
+        if (isInbound && !isTerminal && !isExplicitStatusCallback) {
           return this.realtimeHandler.buildTwiMLPayload(req, params);
         }
       }
