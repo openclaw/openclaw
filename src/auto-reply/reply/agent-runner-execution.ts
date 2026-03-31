@@ -179,6 +179,8 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let liveModelSwitchRetries = 0;
+  const MAX_LIVE_SWITCH_RETRIES = 2;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -614,6 +616,27 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
+        liveModelSwitchRetries += 1;
+        if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
+          // Prevent infinite loop when persisted session selection keeps
+          // conflicting with fallback model choices (e.g. overloaded primary
+          // triggers fallback, but session store keeps pulling back to the
+          // overloaded model). Surface the last error to the user instead.
+          // See: https://github.com/openclaw/openclaw/issues/58348
+          defaultRuntime.error(
+            `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
+              `(${err.provider}/${err.model}). The requested model may be unavailable.`,
+          );
+          return {
+            kind: "final",
+            payload: {
+              text:
+                "⚠️ Agent failed before reply: model switch could not be completed. " +
+                "The requested model may be temporarily unavailable.\n" +
+                "Logs: openclaw logs --follow",
+            },
+          };
+        }
         params.followupRun.run.provider = err.provider;
         params.followupRun.run.model = err.model;
         params.followupRun.run.authProfileId = err.authProfileId;
