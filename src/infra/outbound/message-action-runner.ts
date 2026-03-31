@@ -19,7 +19,7 @@ import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "../../media/local-roots.js";
-import { hasPollCreationParams } from "../../poll-params.js";
+import { hasPollCreationParams, stripPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -780,8 +780,11 @@ export async function runMessageAction(
     cfg,
   });
 
+  // LLMs frequently hallucinate poll-creation fields when the intended action
+  // is "send".  Instead of rejecting the call, silently strip the stray params
+  // so the send proceeds as the caller intended.  See #41199.
   if (action === "send" && hasPollCreationParams(params)) {
-    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+    stripPollCreationParams(params);
   }
 
   const gateway = resolveGateway(input);
