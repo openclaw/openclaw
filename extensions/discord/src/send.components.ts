@@ -7,7 +7,6 @@ import {
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -17,6 +16,7 @@ import {
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
@@ -51,6 +51,10 @@ type DiscordComponentSendOpts = {
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;
@@ -99,10 +103,10 @@ async function buildDiscordComponentPayload(params: {
   const expectedAttachmentName = uniqueAttachmentNames[0];
   let files: MessagePayloadFile[] | undefined;
   if (params.opts.mediaUrl) {
-    const media = await loadWebMedia(params.opts.mediaUrl, {
-      localRoots: params.opts.mediaLocalRoots,
-      readFile: params.opts.mediaReadFile,
-      hostReadCapability: Boolean(params.opts.mediaReadFile),
+    const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
+      mediaAccess: params.opts.mediaAccess,
+      mediaLocalRoots: params.opts.mediaLocalRoots,
+      mediaReadFile: params.opts.mediaReadFile,
     });
     const filenameOverride = params.opts.filename?.trim();
     const fileName = filenameOverride || media.fileName || "upload";

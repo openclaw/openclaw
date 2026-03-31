@@ -3,8 +3,8 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
-import { createAgentScopedHostMediaReadFile } from "../../media/read-capability.js";
+import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -28,7 +28,8 @@ export type OutboundSendContext = {
   params: Record<string, unknown>;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  mediaAccess?: OutboundMediaAccess;
+  mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -64,24 +65,21 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
-  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
     mediaSources: collectActionMediaSources(params.ctx.params),
+    mediaAccess: params.ctx.mediaAccess,
+    mediaReadFile: params.ctx.mediaReadFile,
   });
-  const mediaReadFile =
-    params.ctx.mediaReadFile ??
-    createAgentScopedHostMediaReadFile({
-      cfg: params.ctx.cfg,
-      agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
-    });
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
     action: params.action,
     cfg: params.ctx.cfg,
     params: params.ctx.params,
-    mediaLocalRoots,
-    mediaReadFile,
+    mediaAccess,
+    mediaLocalRoots: mediaAccess.localRoots,
+    mediaReadFile: mediaAccess.readFile,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,

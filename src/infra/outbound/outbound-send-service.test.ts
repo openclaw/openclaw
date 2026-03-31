@@ -1,15 +1,52 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
-const mocks = vi.hoisted(() => ({
-  getDefaultMediaLocalRoots: vi.fn(() => []),
-  dispatchChannelMessageAction: vi.fn(),
-  sendMessage: vi.fn(),
-  sendPoll: vi.fn(),
-  getAgentScopedMediaLocalRootsForSources: vi.fn(() => ["/tmp/agent-roots"]),
-  createAgentScopedHostMediaReadFile: vi.fn(() => async () => Buffer.from("capability")),
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
-}));
+const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
+const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
+const sendMessageMock = vi.hoisted(() => vi.fn());
+const sendPollMock = vi.hoisted(() => vi.fn());
+const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
+  vi.fn<(params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => string[]>(
+    () => ["/tmp/agent-roots"],
+  ),
+);
+const createAgentScopedHostMediaReadFileMock = vi.hoisted(() =>
+  vi.fn<(params: { cfg: unknown; agentId?: string }) => (filePath: string) => Promise<Buffer>>(
+    () => async () => Buffer.from("capability"),
+  ),
+);
+const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
+  vi.fn<
+    (params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => {
+      localRoots: string[];
+      readFile: (filePath: string) => Promise<Buffer>;
+    }
+  >((params) => ({
+    localRoots: getAgentScopedMediaLocalRootsForSourcesMock({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      mediaSources: params.mediaSources ?? [],
+    }),
+    readFile: createAgentScopedHostMediaReadFileMock({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }),
+  })),
+);
+const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+);
+
+const mocks = {
+  getDefaultMediaLocalRoots: getDefaultMediaLocalRootsMock,
+  dispatchChannelMessageAction: dispatchChannelMessageActionMock,
+  sendMessage: sendMessageMock,
+  sendPoll: sendPollMock,
+  getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
+  createAgentScopedHostMediaReadFile: createAgentScopedHostMediaReadFileMock,
+  resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
+  appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+};
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
@@ -22,6 +59,7 @@ vi.mock("./message.js", () => ({
 
 vi.mock("../../media/read-capability.js", () => ({
   createAgentScopedHostMediaReadFile: mocks.createAgentScopedHostMediaReadFile,
+  resolveAgentScopedOutboundMediaAccess: mocks.resolveAgentScopedOutboundMediaAccess,
 }));
 
 vi.mock("../../media/local-roots.js", async (importOriginal) => {
@@ -105,6 +143,7 @@ describe("executeSendAction", () => {
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
     mocks.createAgentScopedHostMediaReadFile.mockClear();
+    mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
