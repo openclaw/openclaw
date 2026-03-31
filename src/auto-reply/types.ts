@@ -36,7 +36,7 @@ export type GetReplyOptions = {
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
-/** Original inline/offloaded attachment order for inbound images. */
+  /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Model override for this run (e.g., image model when images detected). */
   modelOverride?: string;
