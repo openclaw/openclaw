@@ -1,11 +1,13 @@
 ---
-summary: "Agent runtime (embedded p-mono), workspace contract, and session bootstrap"
+summary: "Agent runtime, workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
+title: "Agent Runtime"
 ---
-# Agent Runtime 🤖
 
-OpenClaw runs a single embedded agent runtime derived from **p-mono**.
+# Agent Runtime
+
+OpenClaw runs a single embedded agent runtime.
 
 ## Workspace (required)
 
@@ -22,6 +24,7 @@ per-session workspaces under `agents.defaults.sandbox.workspaceRoot` (see
 ## Bootstrap files (injected)
 
 Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
+
 - `AGENTS.md` — operating instructions + “memory”
 - `SOUL.md` — persona, boundaries, tone
 - `TOOLS.md` — user-maintained tool notes (e.g. `imsg`, `sag`, conventions)
@@ -48,39 +51,40 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 Core tools (read/exec/edit/write and related system tools) are always available,
 subject to tool policy. `apply_patch` is optional and gated by
 `tools.exec.applyPatch`. `TOOLS.md` does **not** control which tools exist; it’s
-guidance for how *you* want them used.
+guidance for how _you_ want them used.
 
 ## Skills
 
 OpenClaw loads skills from three locations (workspace wins on name conflict):
+
 - Bundled (shipped with the install)
 - Managed/local: `~/.openclaw/skills`
 - Workspace: `<workspace>/skills`
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
-## p-mono integration
+## Runtime boundaries
 
-OpenClaw reuses pieces of the p-mono codebase (models/tools), but **session management, discovery, and tool wiring are OpenClaw-owned**.
-
-- No p-coding agent runtime.
-- No `~/.pi/agent` or `<workspace>/.pi` settings are consulted.
+The embedded agent runtime is built on the Pi agent core (models, tools, and
+prompt pipeline). Session management, discovery, tool wiring, and channel
+delivery are OpenClaw-owned layers on top of that core.
 
 ## Sessions
 
 Session transcripts are stored as JSONL at:
+
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by OpenClaw.
-Legacy Pi/Tau session folders are **not** read.
+Legacy session folders from other tools are not read.
 
 ## Steering while streaming
 
 When queue mode is `steer`, inbound messages are injected into the current run.
-The queue is checked **after each tool call**; if a queued message is present,
-remaining tool calls from the current assistant message are skipped (error tool
-results with "Skipped due to queued user message."), then the queued user
-message is injected before the next assistant response.
+Queued steering is delivered **after the current assistant turn finishes
+executing its tool calls**, before the next LLM call. Steering no longer skips
+remaining tool calls from the current assistant message; it injects the queued
+message at the next model boundary instead.
 
 When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
@@ -109,9 +113,10 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 ## Configuration (minimal)
 
 At minimum, set:
+
 - `agents.defaults.workspace`
 - `channels.whatsapp.allowFrom` (strongly recommended)
 
 ---
 
-*Next: [Group Chats](/concepts/group-messages)* 🦞
+_Next: [Group Chats](/channels/group-messages)_ 🦞

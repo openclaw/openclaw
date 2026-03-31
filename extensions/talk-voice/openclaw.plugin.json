@@ -1,0 +1,11 @@
+{
+  "id": "talk-voice",
+  "enabledByDefault": true,
+  "name": "Talk Voice",
+  "description": "Manage Talk voice selection (list/set).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

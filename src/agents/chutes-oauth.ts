@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 
 export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
@@ -39,23 +38,46 @@ export function parseOAuthCallbackInput(
   expectedState: string,
 ): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
-  if (!trimmed) return { error: "No input provided" };
-
-  try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code) return { error: "Missing 'code' parameter in URL" };
-    if (!state) {
-      return { error: "Missing 'state' parameter. Paste the full URL." };
-    }
-    return { code, state };
-  } catch {
-    if (!expectedState) {
-      return { error: "Paste the full redirect URL, not just the code." };
-    }
-    return { code: trimmed, state: expectedState };
+  if (!trimmed) {
+    return { error: "No input provided" };
   }
+
+  // Manual flow must validate CSRF state; require URL (or querystring) that includes `state`.
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    // Code-only paste (common) is no longer accepted because it defeats state validation.
+    if (
+      !/\s/.test(trimmed) &&
+      !trimmed.includes("://") &&
+      !trimmed.includes("?") &&
+      !trimmed.includes("=")
+    ) {
+      return { error: "Paste the full redirect URL (must include code + state)." };
+    }
+
+    // Users sometimes paste only the query string: `?code=...&state=...` or `code=...&state=...`
+    const qs = trimmed.startsWith("?") ? trimmed : `?${trimmed}`;
+    try {
+      url = new URL(`http://localhost/${qs}`);
+    } catch {
+      return { error: "Paste the full redirect URL (must include code + state)." };
+    }
+  }
+
+  const code = url.searchParams.get("code")?.trim();
+  const state = url.searchParams.get("state")?.trim();
+  if (!code) {
+    return { error: "Missing 'code' parameter in URL" };
+  }
+  if (!state) {
+    return { error: "Missing 'state' parameter. Paste the full redirect URL." };
+  }
+  if (state !== expectedState) {
+    return { error: "OAuth state mismatch - possible CSRF attack. Please retry login." };
+  }
+  return { code, state };
 }
 
 function coerceExpiresAt(expiresInSeconds: number, now: number): number {
@@ -71,9 +93,13 @@ export async function fetchChutesUserInfo(params: {
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    return null;
+  }
   const data = (await response.json()) as unknown;
-  if (!data || typeof data !== "object") return null;
+  if (!data || typeof data !== "object") {
+    return null;
+  }
   const typed = data as ChutesUserInfo;
   return typed;
 }
@@ -119,7 +145,9 @@ export async function exchangeChutesCodeForTokens(params: {
   const refresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access) throw new Error("Chutes token exchange returned no access_token");
+  if (!access) {
+    throw new Error("Chutes token exchange returned no access_token");
+  }
   if (!refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
@@ -160,7 +188,9 @@ export async function refreshChutesTokens(params: {
     client_id: clientId,
     refresh_token: refreshToken,
   });
-  if (clientSecret) body.set("client_secret", clientSecret);
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
 
   const response = await fetchFn(CHUTES_TOKEN_ENDPOINT, {
     method: "POST",
@@ -181,11 +211,14 @@ export async function refreshChutesTokens(params: {
   const newRefresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access) throw new Error("Chutes token refresh returned no access_token");
+  if (!access) {
+    throw new Error("Chutes token refresh returned no access_token");
+  }
 
   return {
     ...params.credential,
     access,
+    // RFC 6749 section 6: new refresh token is optional; if present, replace old.
     refresh: newRefresh || refreshToken,
     expires: coerceExpiresAt(expiresIn, now),
     clientId,

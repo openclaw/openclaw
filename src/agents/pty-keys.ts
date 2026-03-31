@@ -1,3 +1,5 @@
+import { escapeRegExp } from "../utils.js";
+
 const ESC = "\x1b";
 const CR = "\r";
 const TAB = "\t";
@@ -12,9 +14,15 @@ type Modifiers = {
   shift: boolean;
 };
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+/** SS3 sequences for DECCKM application cursor key mode (smkx). */
+const DECCKM_SS3_KEYS: Record<string, string> = {
+  up: `${ESC}OA`,
+  down: `${ESC}OB`,
+  right: `${ESC}OC`,
+  left: `${ESC}OD`,
+  home: `${ESC}OH`,
+  end: `${ESC}OF`,
+};
 
 const namedKeyMap = new Map<string, string>([
   ["enter", CR],
@@ -104,7 +112,26 @@ export type KeyEncodingResult = {
   warnings: string[];
 };
 
-export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResult {
+export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
+  return (
+    request.keys?.some((raw) => {
+      const token = raw.trim();
+      if (!token) {
+        return false;
+      }
+      const parsed = parseModifiers(token);
+      if (hasAnyModifier(parsed.mods)) {
+        return false;
+      }
+      return parsed.base.toLowerCase() in DECCKM_SS3_KEYS;
+    }) ?? false
+  );
+}
+
+export function encodeKeySequence(
+  request: KeyEncodingRequest,
+  cursorKeyMode?: "normal" | "application",
+): KeyEncodingResult {
   const warnings: string[] = [];
   let data = "";
 
@@ -125,7 +152,7 @@ export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResul
 
   if (request.keys?.length) {
     for (const token of request.keys) {
-      data += encodeKeyToken(token, warnings);
+      data += encodeKeyToken(token, warnings, cursorKeyMode);
     }
   }
 
@@ -133,17 +160,27 @@ export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResul
 }
 
 export function encodePaste(text: string, bracketed = true): string {
-  if (!bracketed) return text;
+  if (!bracketed) {
+    return text;
+  }
   return `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
 }
 
-function encodeKeyToken(raw: string, warnings: string[]): string {
+function encodeKeyToken(
+  raw: string,
+  warnings: string[],
+  cursorKeyMode?: "normal" | "application",
+): string {
   const token = raw.trim();
-  if (!token) return "";
+  if (!token) {
+    return "";
+  }
 
   if (token.length === 2 && token.startsWith("^")) {
     const ctrl = toCtrlChar(token[1]);
-    if (ctrl) return ctrl;
+    if (ctrl) {
+      return ctrl;
+    }
   }
 
   const parsed = parseModifiers(token);
@@ -152,6 +189,19 @@ function encodeKeyToken(raw: string, warnings: string[]): string {
 
   if (baseLower === "tab" && parsed.mods.shift) {
     return `${ESC}[Z`;
+  }
+
+  // Handle arrow keys specially based on cursor key mode.
+  // DECCKM only changes unmodified cursor keys; modified keys use xterm modifier scheme.
+  if (
+    modifiableNamedKeys.has(baseLower) &&
+    cursorKeyMode === "application" &&
+    !hasAnyModifier(parsed.mods)
+  ) {
+    const ss3Seq = DECCKM_SS3_KEYS[baseLower];
+    if (ss3Seq) {
+      return ss3Seq;
+    }
   }
 
   const baseSeq = namedKeyMap.get(baseLower);
@@ -190,10 +240,15 @@ function parseModifiers(token: string) {
 
   while (rest.length > 2 && rest[1] === "-") {
     const mod = rest[0].toLowerCase();
-    if (mod === "c") mods.ctrl = true;
-    else if (mod === "m") mods.alt = true;
-    else if (mod === "s") mods.shift = true;
-    else break;
+    if (mod === "c") {
+      mods.ctrl = true;
+    } else if (mod === "m") {
+      mods.alt = true;
+    } else if (mod === "s") {
+      mods.shift = true;
+    } else {
+      break;
+    }
     sawModifiers = true;
     rest = rest.slice(2);
   }
@@ -208,7 +263,9 @@ function applyCharModifiers(char: string, mods: Modifiers): string {
   }
   if (mods.ctrl) {
     const ctrl = toCtrlChar(value);
-    if (ctrl) value = ctrl;
+    if (ctrl) {
+      value = ctrl;
+    }
   }
   if (mods.alt) {
     value = `${ESC}${value}`;
@@ -217,8 +274,12 @@ function applyCharModifiers(char: string, mods: Modifiers): string {
 }
 
 function toCtrlChar(char: string): string | null {
-  if (char.length !== 1) return null;
-  if (char === "?") return "\x7f";
+  if (char.length !== 1) {
+    return null;
+  }
+  if (char === "?") {
+    return "\x7f";
+  }
   const code = char.toUpperCase().charCodeAt(0);
   if (code >= 64 && code <= 95) {
     return String.fromCharCode(code & 0x1f);
@@ -228,9 +289,15 @@ function toCtrlChar(char: string): string | null {
 
 function xtermModifier(mods: Modifiers): number {
   let mod = 1;
-  if (mods.shift) mod += 1;
-  if (mods.alt) mod += 2;
-  if (mods.ctrl) mod += 4;
+  if (mods.shift) {
+    mod += 1;
+  }
+  if (mods.alt) {
+    mod += 2;
+  }
+  if (mods.ctrl) {
+    mod += 4;
+  }
   return mod;
 }
 
@@ -259,8 +326,12 @@ function hasAnyModifier(mods: Modifiers): boolean {
 function parseHexByte(raw: string): number | null {
   const trimmed = raw.trim().toLowerCase();
   const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
-  if (!/^[0-9a-f]{1,2}$/.test(normalized)) return null;
+  if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
+    return null;
+  }
   const value = Number.parseInt(normalized, 16);
-  if (Number.isNaN(value) || value < 0 || value > 0xff) return null;
+  if (Number.isNaN(value) || value < 0 || value > 0xff) {
+    return null;
+  }
   return value;
 }

@@ -14,26 +14,105 @@ function cleanCandidate(raw: string) {
   return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
 }
 
-function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
-  if (!candidate) return false;
-  if (candidate.length > 4096) return false;
-  if (!opts?.allowSpaces && /\s/.test(candidate)) return false;
-  if (/^https?:\/\//i.test(candidate)) return true;
-  if (candidate.startsWith("/")) return true;
-  if (candidate.startsWith("./")) return true;
-  if (candidate.startsWith("../")) return true;
-  if (candidate.startsWith("~")) return true;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+const HAS_FILE_EXT = /\.\w{1,10}$/;
+
+// Matches ".." as a standalone path segment (start, middle, or end).
+const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
+
+function hasTraversalOrHomeDirPrefix(candidate: string): boolean {
+  return (
+    candidate.startsWith("../") ||
+    candidate === ".." ||
+    candidate.startsWith("~") ||
+    TRAVERSAL_SEGMENT_RE.test(candidate)
+  );
+}
+
+// Broad structural check: does this look like a local file path? Used only for
+// stripping MEDIA: lines from output text — never for media approval.
+function looksLikeLocalFilePath(candidate: string): boolean {
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../") ||
+    candidate.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
+// Recognize safe local file path patterns for media approval, rejecting
+// traversal and home-dir paths so they never reach downstream load/send logic.
+function isLikelyLocalPath(candidate: string): boolean {
+  if (hasTraversalOrHomeDirPrefix(candidate)) {
+    return false;
+  }
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
+function isValidMedia(
+  candidate: string,
+  opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
+) {
+  if (!candidate) {
+    return false;
+  }
+  if (candidate.length > 4096) {
+    return false;
+  }
+  if (!opts?.allowSpaces && /\s/.test(candidate)) {
+    return false;
+  }
+  if (/^https?:\/\//i.test(candidate)) {
+    return true;
+  }
+
+  if (isLikelyLocalPath(candidate)) {
+    return true;
+  }
+
+  // Hard reject traversal/home-dir patterns before the bare-filename fallback
+  // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
+  if (hasTraversalOrHomeDirPrefix(candidate)) {
+    return false;
+  }
+
+  // Accept bare filenames (e.g. "image.png") only when the caller opts in.
+  // This avoids treating space-split path fragments as separate media items.
+  if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
+    return true;
+  }
+
   return false;
 }
 
 function unwrapQuoted(value: string): string | undefined {
   const trimmed = value.trim();
-  if (trimmed.length < 2) return undefined;
+  if (trimmed.length < 2) {
+    return undefined;
+  }
   const first = trimmed[0];
   const last = trimmed[trimmed.length - 1];
-  if (first !== last) return undefined;
-  if (first !== `"` && first !== "'" && first !== "`") return undefined;
+  if (first !== last) {
+    return undefined;
+  }
+  if (first !== `"` && first !== "'" && first !== "`") {
+    return undefined;
+  }
   return trimmed.slice(1, -1).trim();
+}
+
+function mayContainFenceMarkers(input: string): boolean {
+  return input.includes("```") || input.includes("~~~");
 }
 
 // Check if a character offset is inside any fenced code block
@@ -50,13 +129,21 @@ export function splitMediaFromOutput(raw: string): {
   // KNOWN: Leading whitespace is semantically meaningful in Markdown (lists, indented fences).
   // We only trim the end; token cleanup below handles removing `MEDIA:` lines.
   const trimmedRaw = raw.trimEnd();
-  if (!trimmedRaw.trim()) return { text: "" };
+  if (!trimmedRaw.trim()) {
+    return { text: "" };
+  }
+  const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const mayContainAudioTag = trimmedRaw.includes("[[");
+  if (!mayContainMediaToken && !mayContainAudioTag) {
+    return { text: trimmedRaw };
+  }
 
   const media: string[] = [];
   let foundMediaToken = false;
 
   // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
-  const fenceSpans = parseFenceSpans(trimmedRaw);
+  const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
+  const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
 
   // Collect tokens line by line so we can strip them cleanly.
   const lines = trimmedRaw.split("\n");
@@ -65,7 +152,7 @@ export function splitMediaFromOutput(raw: string): {
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
     // Skip MEDIA extraction if this line is inside a fenced code block
-    if (isInsideFence(fenceSpans, lineOffset)) {
+    if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;
@@ -85,10 +172,8 @@ export function splitMediaFromOutput(raw: string): {
       continue;
     }
 
-    foundMediaToken = true;
     const pieces: string[] = [];
     let cursor = 0;
-    let hasValidMedia = false;
 
     for (const match of matches) {
       const start = match.index ?? 0;
@@ -101,11 +186,13 @@ export function splitMediaFromOutput(raw: string): {
       const mediaStartIndex = media.length;
       let validCount = 0;
       const invalidParts: string[] = [];
+      let hasValidMedia = false;
       for (const part of parts) {
         const candidate = normalizeMediaSource(cleanCandidate(part));
         if (isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)) {
           media.push(candidate);
           hasValidMedia = true;
+          foundMediaToken = true;
           validCount += 1;
         } else {
           invalidParts.push(part);
@@ -114,11 +201,7 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        trimmedPayload.startsWith("/") ||
-        trimmedPayload.startsWith("./") ||
-        trimmedPayload.startsWith("../") ||
-        trimmedPayload.startsWith("~") ||
-        trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&
@@ -130,6 +213,7 @@ export function splitMediaFromOutput(raw: string): {
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
+          foundMediaToken = true;
           validCount = 1;
           invalidParts.length = 0;
         }
@@ -137,15 +221,25 @@ export function splitMediaFromOutput(raw: string): {
 
       if (!hasValidMedia) {
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
-        if (isValidMedia(fallback, { allowSpaces: true })) {
+        if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;
+          foundMediaToken = true;
           invalidParts.length = 0;
         }
       }
 
-      if (hasValidMedia && invalidParts.length > 0) {
-        pieces.push(invalidParts.join(" "));
+      if (hasValidMedia) {
+        if (invalidParts.length > 0) {
+          pieces.push(invalidParts.join(" "));
+        }
+      } else if (looksLikeLocalPath) {
+        // Strip MEDIA: lines with local paths even when invalid (e.g. absolute paths
+        // from internal tools like TTS). They should never leak as visible text.
+        foundMediaToken = true;
+      } else {
+        // If no valid media was found in this match, keep the original token text.
+        pieces.push(match[0]);
       }
 
       cursor = start + match[0].length;
@@ -184,7 +278,9 @@ export function splitMediaFromOutput(raw: string): {
       // Return cleaned text if we found a media token OR audio tag, otherwise original
       text: foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw,
     };
-    if (hasAudioAsVoice) result.audioAsVoice = true;
+    if (hasAudioAsVoice) {
+      result.audioAsVoice = true;
+    }
     return result;
   }
 

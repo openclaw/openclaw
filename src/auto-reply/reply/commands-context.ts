@@ -26,6 +26,7 @@ export function buildCommandContext(params: {
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
     isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
+    { botUsername: ctx.BotUsername },
   );
 
   return {
@@ -33,6 +34,7 @@ export function buildCommandContext(params: {
     channel,
     channelId: auth.providerId,
     ownerList: auth.ownerList,
+    senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
     abortKey,

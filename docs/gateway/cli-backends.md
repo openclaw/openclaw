@@ -4,7 +4,9 @@ read_when:
   - You want a reliable fallback when API providers fail
   - You are running Claude Code CLI or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
+title: "CLI Backends"
 ---
+
 # CLI backends (fallback runtime)
 
 OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
@@ -20,16 +22,17 @@ want “always works” text responses without relying on external APIs.
 
 ## Beginner-friendly quick start
 
-You can use Claude Code CLI **without any config** (OpenClaw ships a built-in default):
+You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
+registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/opus-4.5
+openclaw agent --message "hi" --model claude-cli/opus-4.6
 ```
 
-Codex CLI also works out of the box:
+Codex CLI also works out of the box (via the bundled OpenAI plugin):
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
+openclaw agent --message "hi" --model codex-cli/gpt-5.4
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -41,15 +44,20 @@ command path:
     defaults: {
       cliBackends: {
         "claude-cli": {
-          command: "/opt/homebrew/bin/claude"
-        }
-      }
-    }
-  }
+          command: "/opt/homebrew/bin/claude",
+        },
+      },
+    },
+  },
 }
 ```
 
 That’s it. No keys, no extra auth config needed beyond the CLI itself.
+
+If you use a bundled CLI backend as the **primary message provider** on a
+gateway host, OpenClaw now auto-loads the owning bundled plugin when your config
+explicitly references that backend in a model ref or under
+`agents.defaults.cliBackends`.
 
 ## Using it as a fallback
 
@@ -60,21 +68,21 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
   agents: {
     defaults: {
       model: {
-        primary: "anthropic/claude-opus-4-5",
-        fallbacks: [
-          "claude-cli/opus-4.5"
-        ]
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["claude-cli/opus-4.6", "claude-cli/opus-4.5"],
       },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
-        "claude-cli/opus-4.5": {}
-      }
-    }
-  }
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
+        "claude-cli/opus-4.6": {},
+        "claude-cli/opus-4.5": {},
+      },
+    },
+  },
 }
 ```
 
 Notes:
+
 - If you use `agents.defaults.models` (allowlist), you must include `claude-cli/...`.
 - If the primary provider fails (auth, rate limits, timeouts), OpenClaw will
   try the CLI backend next.
@@ -102,7 +110,7 @@ The provider id becomes the left side of your model ref:
     defaults: {
       cliBackends: {
         "claude-cli": {
-          command: "/opt/homebrew/bin/claude"
+          command: "/opt/homebrew/bin/claude",
         },
         "my-cli": {
           command: "my-cli",
@@ -111,8 +119,8 @@ The provider id becomes the left side of your model ref:
           input: "arg",
           modelArg: "--model",
           modelAliases: {
-            "claude-opus-4-5": "opus",
-            "claude-sonnet-4-5": "sonnet"
+            "claude-opus-4-6": "opus",
+            "claude-sonnet-4-6": "sonnet",
           },
           sessionArg: "--session",
           sessionMode: "existing",
@@ -121,21 +129,21 @@ The provider id becomes the left side of your model ref:
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
-          serialize: true
-        }
-      }
-    }
-  }
+          serialize: true,
+        },
+      },
+    },
+  },
 }
 ```
 
 ## How it works
 
-1) **Selects a backend** based on the provider prefix (`claude-cli/...`).
-2) **Builds a system prompt** using the same OpenClaw prompt + workspace context.
-3) **Executes the CLI** with a session id (if supported) so history stays consistent.
-4) **Parses output** (JSON or plain text) and returns the final text.
-5) **Persists session ids** per backend, so follow-ups reuse the same CLI session.
+1. **Selects a backend** based on the provider prefix (`claude-cli/...`).
+2. **Builds a system prompt** using the same OpenClaw prompt + workspace context.
+3. **Executes the CLI** with a session id (if supported) so history stays consistent.
+4. **Parses output** (JSON or plain text) and returns the final text.
+5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
 ## Sessions
 
@@ -172,35 +180,55 @@ load local files from plain paths (Claude Code CLI behavior).
 - `output: "text"` treats stdout as the final response.
 
 Input modes:
+
 - `input: "arg"` (default) passes the prompt as the last CLI arg.
 - `input: "stdin"` sends the prompt via stdin.
 - If the prompt is very long and `maxPromptArgChars` is set, stdin is used.
 
-## Defaults (built-in)
+## Defaults (plugin-owned)
 
-OpenClaw ships a default for `claude-cli`:
+The bundled Anthropic plugin registers a default for `claude-cli`:
 
 - `command: "claude"`
-- `args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"]`
-- `resumeArgs: ["-p", "--output-format", "json", "--dangerously-skip-permissions", "--resume", "{sessionId}"]`
+- `args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"]`
+- `resumeArgs: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions", "--resume", "{sessionId}"]`
 - `modelArg: "--model"`
 - `systemPromptArg: "--append-system-prompt"`
 - `sessionArg: "--session-id"`
 - `systemPromptWhen: "first"`
 - `sessionMode: "always"`
 
-OpenClaw also ships a default for `codex-cli`:
+The bundled OpenAI plugin also registers a default for `codex-cli`:
 
 - `command: "codex"`
-- `args: ["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
-- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
+- `args: ["exec","--json","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
+- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
 - `output: "jsonl"`
 - `resumeOutput: "text"`
 - `modelArg: "--model"`
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
 
+The bundled Google plugin also registers a default for `google-gemini-cli`:
+
+- `command: "gemini"`
+- `args: ["--prompt", "--output-format", "json"]`
+- `resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"]`
+- `modelArg: "--model"`
+- `sessionMode: "existing"`
+- `sessionIdFields: ["session_id", "sessionId"]`
+
 Override only if needed (common: absolute `command` path).
+
+## Plugin-owned defaults
+
+CLI backend defaults are now part of the plugin surface:
+
+- Plugins register them with `api.registerCliBackend(...)`.
+- The backend `id` becomes the provider prefix in model refs.
+- User config in `agents.defaults.cliBackends.<id>` still overrides the plugin default.
+- Backend-specific config cleanup stays plugin-owned through the optional
+  `normalizeConfig` hook.
 
 ## Limitations
 

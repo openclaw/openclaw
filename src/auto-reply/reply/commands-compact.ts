@@ -5,7 +5,11 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
@@ -25,20 +29,60 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const lowered = trimmed.toLowerCase();
   const prefix = lowered.startsWith("/compact") ? "/compact" : null;
-  if (!prefix) return undefined;
+  if (!prefix) {
+    return undefined;
+  }
   let rest = trimmed.slice(prefix.length).trimStart();
-  if (rest.startsWith(":")) rest = rest.slice(1).trimStart();
+  if (rest.startsWith(":")) {
+    rest = rest.slice(1).trimStart();
+  }
   return rest.length ? rest : undefined;
+}
+
+function isCompactionSkipReason(reason?: string): boolean {
+  const text = reason?.trim().toLowerCase() ?? "";
+  return (
+    text.includes("nothing to compact") ||
+    text.includes("below threshold") ||
+    text.includes("already compacted") ||
+    text.includes("no real conversation messages")
+  );
+}
+
+function formatCompactionReason(reason?: string): string | undefined {
+  const text = reason?.trim();
+  if (!text) {
+    return undefined;
+  }
+
+  const lower = text.toLowerCase();
+  if (lower.includes("nothing to compact")) {
+    return "nothing compactable in this session yet";
+  }
+  if (lower.includes("below threshold")) {
+    return "context is below the compaction threshold";
+  }
+  if (lower.includes("already compacted")) {
+    return "session was already compacted recently";
+  }
+  if (lower.includes("no real conversation messages")) {
+    return "no real conversation messages yet";
+  }
+  return text;
 }
 
 export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
     params.command.commandBodyNormalized.startsWith("/compact ");
-  if (!compactRequested) return null;
+  if (!compactRequested) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -66,13 +110,22 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
+    allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     groupId: params.sessionEntry.groupId,
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(sessionId, params.sessionEntry),
+    sessionFile: resolveSessionFilePath(
+      sessionId,
+      params.sessionEntry,
+      resolveSessionFilePathOptions({
+        agentId: params.agentId,
+        storePath: params.storePath,
+      }),
+    ),
     workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
@@ -84,18 +137,21 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       defaultLevel: "off",
     },
     customInstructions,
+    trigger: "manual",
+    senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
-  const compactLabel = result.ok
-    ? result.compacted
-      ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-        ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
-        : result.result?.tokensBefore
-          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
-          : "Compacted"
-      : "Compaction skipped"
-    : "Compaction failed";
+  const compactLabel =
+    result.ok || isCompactionSkipReason(result.reason)
+      ? result.compacted
+        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+          : result.result?.tokensBefore
+            ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+            : "Compacted"
+        : "Compaction skipped"
+      : "Compaction failed";
   if (result.ok && result.compacted) {
     await incrementCompactionCount({
       sessionEntry: params.sessionEntry,
@@ -108,15 +164,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    tokensAfterCompaction ??
-    params.sessionEntry.totalTokens ??
-    (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
+  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
   const contextSummary = formatContextUsageShort(
-    totalTokens > 0 ? totalTokens : null,
+    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
-  const reason = result.reason?.trim();
+  const reason = formatCompactionReason(result.reason);
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;

@@ -1,5 +1,3 @@
-import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
-import { resolveGatewayService } from "./service.js";
 import {
   NODE_SERVICE_KIND,
   NODE_SERVICE_MARKER,
@@ -8,6 +6,8 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
+import { resolveGatewayService } from "./service.js";
 
 function withNodeServiceEnv(
   env: Record<string, string | undefined>,
@@ -45,6 +45,9 @@ export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService();
   return {
     ...base,
+    stage: async (args) => {
+      return base.stage(withNodeInstallEnv(args));
+    },
     install: async (args) => {
       return base.install(withNodeInstallEnv(args));
     },

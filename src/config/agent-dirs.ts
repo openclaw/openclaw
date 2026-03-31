@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
@@ -37,7 +38,9 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   ids.add(normalizeAgentId(defaultAgentId));
 
   for (const entry of agents) {
-    if (entry?.id) ids.add(normalizeAgentId(entry.id));
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
   }
 
   const bindings = cfg.bindings;
@@ -63,8 +66,14 @@ function resolveEffectiveAgentDir(
     ? cfg.agents?.list.find((agent) => normalizeAgentId(agent.id) === id)?.agentDir
     : undefined;
   const trimmed = configured?.trim();
-  if (trimmed) return resolveUserPath(trimmed);
-  const root = resolveStateDir(deps?.env ?? process.env, deps?.homedir ?? os.homedir);
+  if (trimmed) {
+    return resolveUserPath(trimmed);
+  }
+  const env = deps?.env ?? process.env;
+  const root = resolveStateDir(
+    env,
+    deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
+  );
   return path.join(root, "agents", id, "agent");
 }
 

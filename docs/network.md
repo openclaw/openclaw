@@ -4,13 +4,24 @@ read_when:
   - You need the network architecture + security overview
   - You are debugging local vs tailnet access or pairing
   - You want the canonical list of networking docs
+title: "Network"
 ---
+
 # Network hub
 
 This hub links the core docs for how OpenClaw connects, pairs, and secures
 devices across localhost, LAN, and tailnet.
 
 ## Core model
+
+Most operations flow through the Gateway (`openclaw gateway`), a single long-running process that owns channel connections and the WebSocket control plane.
+
+- **Loopback first**: the Gateway WS defaults to `ws://127.0.0.1:18789`. Tokens are required for non-loopback binds.
+- **One Gateway per host** is recommended. For isolation, run multiple gateways with isolated profiles and ports ([Multiple Gateways](/gateway/multiple-gateways)).
+- **Canvas host** is served on the same port as the Gateway (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`), protected by Gateway auth when bound beyond loopback.
+- **Remote access** is typically SSH tunnel or Tailscale VPN ([Remote Access](/gateway/remote)).
+
+Key references:
 
 - [Gateway architecture](/concepts/architecture)
 - [Gateway protocol](/gateway/protocol)
@@ -19,12 +30,13 @@ devices across localhost, LAN, and tailnet.
 
 ## Pairing + identity
 
-- [Pairing overview (DM + nodes)](/start/pairing)
+- [Pairing overview (DM + nodes)](/channels/pairing)
 - [Gateway-owned node pairing](/gateway/pairing)
 - [Devices CLI (pairing + token rotation)](/cli/devices)
 - [Pairing CLI (DM approvals)](/cli/pairing)
 
 Local trust:
+
 - Local connections (loopback or the gateway host’s own tailnet address) can be
   auto‑approved for pairing to keep same‑host UX smooth.
 - Non‑local tailnet/LAN clients still require explicit pairing approval.

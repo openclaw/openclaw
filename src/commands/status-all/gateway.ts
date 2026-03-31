@@ -2,20 +2,26 @@ import fs from "node:fs/promises";
 
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
-  if (!raw.trim()) return [];
+  if (!raw.trim()) {
+    return [];
+  }
   const lines = raw.replace(/\r/g, "").split("\n");
   const out = lines.slice(Math.max(0, lines.length - maxLines));
   return out.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
 }
 
 function countMatches(haystack: string, needle: string): number {
-  if (!haystack || !needle) return 0;
+  if (!haystack || !needle) {
+    return 0;
+  }
   return haystack.split(needle).length - 1;
 }
 
 function shorten(message: string, maxLen: number): string {
   const cleaned = message.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= maxLen) return cleaned;
+  if (cleaned.length <= maxLen) {
+    return cleaned;
+  }
   return `${cleaned.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
@@ -34,7 +40,9 @@ function consumeJsonBlock(
 ): { json: string; endIndex: number } | null {
   const startLine = lines[startIndex] ?? "";
   const braceAt = startLine.indexOf("{");
-  if (braceAt < 0) return null;
+  if (braceAt < 0) {
+    return null;
+  }
 
   const parts: string[] = [startLine.slice(braceAt)];
   let depth = countMatches(parts[0] ?? "", "{") - countMatches(parts[0] ?? "", "}");
@@ -66,7 +74,9 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
 
   const addLine = (line: string) => {
     const trimmed = line.trimEnd();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     out.push(trimmed);
   };
 
@@ -142,17 +152,23 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
   }
 
   for (const g of groups.values()) {
-    if (g.count <= 1) continue;
+    if (g.count <= 1) {
+      continue;
+    }
     out[g.index] = `${g.base} ×${g.count}`;
   }
 
   const deduped: string[] = [];
   for (const line of out) {
-    if (deduped[deduped.length - 1] === line) continue;
+    if (deduped[deduped.length - 1] === line) {
+      continue;
+    }
     deduped.push(line);
   }
 
-  if (deduped.length <= maxLines) return deduped;
+  if (deduped.length <= maxLines) {
+    return deduped;
+  }
 
   const head = Math.min(6, Math.floor(maxLines / 3));
   const tail = Math.max(1, maxLines - head - 1);
@@ -164,20 +180,4 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
   return kept;
 }
 
-export function pickGatewaySelfPresence(presence: unknown): {
-  host?: string;
-  ip?: string;
-  version?: string;
-  platform?: string;
-} | null {
-  if (!Array.isArray(presence)) return null;
-  const entries = presence as Array<Record<string, unknown>>;
-  const self = entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
-  if (!self) return null;
-  return {
-    host: typeof self.host === "string" ? self.host : undefined,
-    ip: typeof self.ip === "string" ? self.ip : undefined,
-    version: typeof self.version === "string" ? self.version : undefined,
-    platform: typeof self.platform === "string" ? self.platform : undefined,
-  };
-}
+export { pickGatewaySelfPresence } from "../gateway-presence.js";

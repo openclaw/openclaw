@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("telegram custom commands schema", () => {
@@ -13,14 +12,16 @@ describe("telegram custom commands schema", () => {
     });
 
     expect(res.success).toBe(true);
-    if (!res.success) return;
+    if (!res.success) {
+      return;
+    }
 
     expect(res.data.channels?.telegram?.customCommands).toEqual([
       { command: "backup", description: "Git backup" },
     ]);
   });
 
-  it("rejects custom commands with invalid names", () => {
+  it("normalizes hyphens in custom command names", () => {
     const res = OpenClawSchema.safeParse({
       channels: {
         telegram: {
@@ -29,15 +30,13 @@ describe("telegram custom commands schema", () => {
       },
     });
 
-    expect(res.success).toBe(false);
-    if (res.success) return;
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      return;
+    }
 
-    expect(
-      res.error.issues.some(
-        (issue) =>
-          issue.path.join(".") === "channels.telegram.customCommands.0.command" &&
-          issue.message.includes("invalid"),
-      ),
-    ).toBe(true);
+    expect(res.data.channels?.telegram?.customCommands).toEqual([
+      { command: "bad_name", description: "Override status" },
+    ]);
   });
 });

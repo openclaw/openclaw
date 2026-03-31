@@ -2,28 +2,29 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
-import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
-import { renderTable } from "../terminal/table.js";
+import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-
-const shortenText = (value: string, maxLen: number) => {
-  const chars = Array.from(value);
-  if (chars.length <= maxLen) return value;
-  return `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
-};
+import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
   getChannelPlugin(channel)?.meta.label ?? channel;
 
 function extractMessageId(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
   const direct = (payload as { messageId?: unknown }).messageId;
-  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
   const result = (payload as { result?: unknown }).result;
   if (result && typeof result === "object") {
     const nested = (result as { messageId?: unknown }).messageId;
-    if (typeof nested === "string" && nested.trim()) return nested.trim();
+    if (typeof nested === "string" && nested.trim()) {
+      return nested.trim();
+    }
   }
   return null;
 }
@@ -56,7 +57,9 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
   }
   const obj = payload as Record<string, unknown>;
   const keys = Object.keys(obj);
-  if (keys.length === 0) return [theme.muted("(empty)")];
+  if (keys.length === 0) {
+    return [theme.muted("(empty)")];
+  }
 
   const rows = keys.slice(0, 20).map((k) => {
     const v = obj[k];
@@ -145,23 +148,35 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
 }
 
 function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
-  if (!payload || typeof payload !== "object") return null;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
   const messages = (payload as { messages?: unknown }).messages;
-  if (!Array.isArray(messages)) return null;
+  if (!Array.isArray(messages)) {
+    return null;
+  }
   return renderMessageList(messages, opts, "No messages.");
 }
 
 function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
-  if (!payload || typeof payload !== "object") return null;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
   const pins = (payload as { pins?: unknown }).pins;
-  if (!Array.isArray(pins)) return null;
+  if (!Array.isArray(pins)) {
+    return null;
+  }
   return renderMessageList(pins, opts, "No pins.");
 }
 
 function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
-  if (!results || typeof results !== "object") return null;
+  if (!results || typeof results !== "object") {
+    return null;
+  }
   const raw = (results as { messages?: unknown }).messages;
-  if (!Array.isArray(raw)) return null;
+  if (!Array.isArray(raw)) {
+    return null;
+  }
   // Discord search returns messages as array-of-array; first element is the message.
   const flattened: unknown[] = [];
   for (const entry of raw) {
@@ -175,9 +190,13 @@ function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null
 }
 
 function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
-  if (!payload || typeof payload !== "object") return null;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
   const reactions = (payload as { reactions?: unknown }).reactions;
-  if (!Array.isArray(reactions)) return null;
+  if (!Array.isArray(reactions)) {
+    return null;
+  }
 
   const rows = reactions.slice(0, 50).map((r) => {
     const entry = r as Record<string, unknown>;
@@ -185,15 +204,19 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     const emoji =
       (typeof emojiObj?.raw === "string" && emojiObj.raw) ||
       (typeof entry.name === "string" && entry.name) ||
-      (typeof entry.emoji === "string" && (entry.emoji as string)) ||
+      (typeof entry.emoji === "string" && entry.emoji) ||
       "";
     const count = typeof entry.count === "number" ? String(entry.count) : "";
     const userList = Array.isArray(entry.users)
       ? (entry.users as unknown[])
           .slice(0, 8)
           .map((u) => {
-            if (typeof u === "string") return u;
-            if (!u || typeof u !== "object") return "";
+            if (typeof u === "string") {
+              return u;
+            }
+            if (!u || typeof u !== "object") {
+              return "";
+            }
             const user = u as Record<string, unknown>;
             return (
               (typeof user.tag === "string" && user.tag) ||
@@ -211,7 +234,9 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     };
   });
 
-  if (rows.length === 0) return [theme.muted("No reactions.")];
+  if (rows.length === 0) {
+    return [theme.muted("No reactions.")];
+  }
 
   return [
     renderTable({
@@ -232,7 +257,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
-  const width = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const width = getTerminalTableWidth();
   const opts: FormatOpts = { width };
 
   if (result.handledBy === "dry-run") {
@@ -304,7 +329,9 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
           }),
         ),
       ];
-      if (pollId) lines.push(ok(`Poll id: ${pollId}`));
+      if (pollId) {
+        lines.push(ok(`Poll id: ${pollId}`));
+      }
       return lines;
     }
 

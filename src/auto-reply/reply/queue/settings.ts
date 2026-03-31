@@ -13,13 +13,17 @@ function resolveChannelDebounce(
   byChannel: InboundDebounceByProvider | undefined,
   channelKey: string | undefined,
 ): number | undefined {
-  if (!channelKey || !byChannel) return undefined;
+  if (!channelKey || !byChannel) {
+    return undefined;
+  }
   const value = byChannel[channelKey];
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
 function resolvePluginDebounce(channelKey: string | undefined): number | undefined {
-  if (!channelKey) return undefined;
+  if (!channelKey) {
+    return undefined;
+  }
   const plugin = getChannelPlugin(channelKey);
   const value = plugin?.defaults?.queue?.debounceMs;
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;

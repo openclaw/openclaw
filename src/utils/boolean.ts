@@ -12,15 +12,25 @@ export function parseBooleanValue(
   value: unknown,
   options: BooleanParseOptions = {},
 ): boolean | undefined {
-  if (typeof value === "boolean") return value;
-  if (typeof value !== "string") return undefined;
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const normalized = value.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   const truthy = options.truthy ?? DEFAULT_TRUTHY;
   const falsy = options.falsy ?? DEFAULT_FALSY;
   const truthySet = truthy === DEFAULT_TRUTHY ? DEFAULT_TRUTHY_SET : new Set(truthy);
   const falsySet = falsy === DEFAULT_FALSY ? DEFAULT_FALSY_SET : new Set(falsy);
-  if (truthySet.has(normalized)) return true;
-  if (falsySet.has(normalized)) return false;
+  if (truthySet.has(normalized)) {
+    return true;
+  }
+  if (falsySet.has(normalized)) {
+    return false;
+  }
   return undefined;
 }

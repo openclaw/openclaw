@@ -1,102 +1,207 @@
-import { spawn } from "node:child_process";
-import os from "node:os";
+import {
+  createExecutionArtifacts,
+  executePlan,
+  formatExplanation,
+  formatPlanOutput,
+} from "./test-planner/executor.mjs";
+import {
+  buildCIExecutionManifest,
+  buildExecutionPlan,
+  explainExecutionTarget,
+} from "./test-planner/planner.mjs";
 
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const parseCliArgs = (args) => {
+  const wrapper = {
+    ciManifest: false,
+    failurePolicy: null,
+    plan: false,
+    explain: null,
+    mode: null,
+    profile: null,
+    surfaces: [],
+    files: [],
+    passthroughArgs: [],
+    showHelp: false,
+  };
+  let passthroughMode = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--collect-failures") {
+      wrapper.failurePolicy = "collect-all";
+      continue;
+    }
+    if (arg === "--failure-policy") {
+      const nextValue = args[index + 1] ?? "";
+      if (nextValue === "fail-fast" || nextValue === "collect-all") {
+        wrapper.failurePolicy = nextValue;
+        index += 1;
+        continue;
+      }
+      throw new Error(`Invalid --failure-policy value: ${String(nextValue || "<missing>")}`);
+    }
+    if (arg.startsWith("--failure-policy=")) {
+      const value = arg.slice("--failure-policy=".length);
+      if (value === "fail-fast" || value === "collect-all") {
+        wrapper.failurePolicy = value;
+        continue;
+      }
+      throw new Error(`Invalid --failure-policy value: ${String(value || "<missing>")}`);
+    }
+    if (passthroughMode) {
+      wrapper.passthroughArgs.push(arg);
+      continue;
+    }
+    if (arg === "--") {
+      passthroughMode = true;
+      continue;
+    }
+    if (arg === "--plan") {
+      wrapper.plan = true;
+      continue;
+    }
+    if (arg === "--ci-manifest") {
+      wrapper.ciManifest = true;
+      continue;
+    }
+    if (arg === "--help") {
+      wrapper.showHelp = true;
+      continue;
+    }
+    if (arg === "--mode") {
+      const nextValue = args[index + 1] ?? null;
+      if (nextValue === "ci" || nextValue === "local") {
+        wrapper.mode = nextValue;
+        index += 1;
+        continue;
+      }
+    }
+    if (arg === "--profile") {
+      const nextValue = args[index + 1] ?? "";
+      if (!nextValue || nextValue === "--" || nextValue.startsWith("-")) {
+        throw new Error(`Invalid --profile value: ${String(nextValue || "<missing>")}`);
+      }
+      wrapper.profile = nextValue;
+      index += 1;
+      continue;
+    }
+    if (arg === "--surface") {
+      const nextValue = args[index + 1] ?? "";
+      if (!nextValue || nextValue === "--" || nextValue.startsWith("-")) {
+        throw new Error(`Invalid --surface value: ${String(nextValue || "<missing>")}`);
+      }
+      wrapper.surfaces.push(nextValue);
+      index += 1;
+      continue;
+    }
+    if (arg === "--files") {
+      const nextValue = args[index + 1] ?? "";
+      if (!nextValue || nextValue === "--" || nextValue.startsWith("-")) {
+        throw new Error(`Invalid --files value: ${String(nextValue || "<missing>")}`);
+      }
+      wrapper.files.push(nextValue);
+      index += 1;
+      continue;
+    }
+    if (arg === "--explain") {
+      const nextValue = args[index + 1] ?? "";
+      if (!nextValue || nextValue === "--" || nextValue.startsWith("-")) {
+        throw new Error(`Invalid --explain value: ${String(nextValue || "<missing>")}`);
+      }
+      wrapper.explain = nextValue;
+      index += 1;
+      continue;
+    }
+    wrapper.passthroughArgs.push(arg);
+  }
+  return wrapper;
+};
 
-const runs = [
-  {
-    name: "unit",
-    args: ["vitest", "run", "--config", "vitest.unit.config.ts"],
-  },
-  {
-    name: "extensions",
-    args: ["vitest", "run", "--config", "vitest.extensions.config.ts"],
-  },
-  {
-    name: "gateway",
-    args: ["vitest", "run", "--config", "vitest.gateway.config.ts"],
-  },
-];
+const exitWithCleanup = (artifacts, code) => {
+  artifacts?.cleanupTempArtifacts?.();
+  process.exit(code);
+};
 
-const children = new Set();
-const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
-const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
-const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
-const isWindowsCi = isCI && isWindows;
-const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
-const shardCount = isWindowsCi ? (Number.isFinite(shardOverride) && shardOverride > 1 ? shardOverride : 2) : 1;
-const windowsCiArgs = isWindowsCi ? ["--no-file-parallelism", "--dangerouslyIgnoreUnhandledErrors"] : [];
-const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
-const resolvedOverride = Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-const parallelRuns = isWindowsCi ? [] : runs.filter((entry) => entry.name !== "gateway");
-const serialRuns = isWindowsCi ? runs : runs.filter((entry) => entry.name === "gateway");
-const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const parallelCount = Math.max(1, parallelRuns.length);
-const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelCount));
-const macCiWorkers = isCI && isMacOS ? 1 : perRunWorkers;
-// Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
-// In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
-const maxWorkers = resolvedOverride ?? (isCI && !isMacOS ? null : macCiWorkers);
+let rawCli;
+try {
+  rawCli = parseCliArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(`[test-parallel] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
+if (rawCli.showHelp) {
+  console.log(
+    [
+      "Usage: node scripts/test-parallel.mjs [wrapper flags] [-- vitest args]",
+      "",
+      "Runs the planner-backed OpenClaw test wrapper.",
+      "",
+      "Wrapper flags:",
+      "  --plan                 Print the resolved execution plan and exit",
+      "  --ci-manifest          Print the planner-backed CI execution manifest as JSON and exit",
+      "  --explain <file>       Explain how a file is classified and run, then exit",
+      "  --surface <name>       Select a surface: unit, extensions, channels, contracts, gateway",
+      "  --files <pattern>      Add targeted files or path patterns (repeatable)",
+      "  --mode <ci|local>      Override runtime mode",
+      "  --profile <name>       Override execution intent: normal, max, serial",
+      "  --failure-policy <name> Override execution failure policy: fail-fast, collect-all",
+      "  --collect-failures     Shortcut for --failure-policy collect-all",
+      "  --help                 Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-parallel.mjs",
+      "  node scripts/test-parallel.mjs --plan --surface unit --surface extensions",
+      "  node scripts/test-parallel.mjs --explain src/auto-reply/reply/followup-runner.test.ts",
+      "  node scripts/test-parallel.mjs --collect-failures --surface unit",
+      "  node scripts/test-parallel.mjs --files src/foo.test.ts -- --reporter=dot",
+      "",
+      "Environment:",
+      "  OPENCLAW_TEST_LIST_LANES=1          Print the resolved plan before execution",
+      "  OPENCLAW_TEST_SHOW_POOL_DECISION=1  Include thread/fork pool decisions in diagnostics",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
 
-const WARNING_SUPPRESSION_FLAGS = [
-  "--disable-warning=ExperimentalWarning",
-  "--disable-warning=DEP0040",
-  "--disable-warning=DEP0060",
-];
+const request = {
+  failurePolicy: rawCli.failurePolicy,
+  mode: rawCli.mode,
+  profile: rawCli.profile,
+  surfaces: rawCli.surfaces,
+  fileFilters: rawCli.files,
+  passthroughArgs: rawCli.passthroughArgs,
+};
 
-const runOnce = (entry, extraArgs = []) =>
-  new Promise((resolve) => {
-    const args = maxWorkers
-      ? [...entry.args, "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...extraArgs]
-      : [...entry.args, ...windowsCiArgs, ...extraArgs];
-    const nodeOptions = process.env.NODE_OPTIONS ?? "";
-    const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
-      (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
-      nodeOptions,
-    );
-    const child = spawn(pnpm, args, {
-      stdio: "inherit",
-      env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: nextNodeOptions },
-      shell: process.platform === "win32",
-    });
-    children.add(child);
-    child.on("exit", (code, signal) => {
-      children.delete(child);
-      resolve(code ?? (signal ? 1 : 0));
-    });
+if (rawCli.explain) {
+  const explanation = explainExecutionTarget(
+    { ...request, passthroughArgs: [], fileFilters: [rawCli.explain] },
+    { env: process.env },
+  );
+  console.log(formatExplanation(explanation));
+  process.exit(0);
+}
+
+if (rawCli.ciManifest) {
+  const manifest = buildCIExecutionManifest(undefined, { env: process.env });
+  console.log(`${JSON.stringify(manifest, null, 2)}\n`);
+  process.exit(0);
+}
+
+const artifacts = createExecutionArtifacts(process.env);
+let plan;
+try {
+  plan = buildExecutionPlan(request, {
+    env: process.env,
+    writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
   });
-
-const run = async (entry) => {
-  if (shardCount <= 1) return runOnce(entry);
-  for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`]);
-    if (code !== 0) return code;
-  }
-  return 0;
-};
-
-const shutdown = (signal) => {
-  for (const child of children) {
-    child.kill(signal);
-  }
-};
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-
-const parallelCodes = await Promise.all(parallelRuns.map(run));
-const failedParallel = parallelCodes.find((code) => code !== 0);
-if (failedParallel !== undefined) {
-  process.exit(failedParallel);
+} catch (error) {
+  console.error(`[test-parallel] ${error instanceof Error ? error.message : String(error)}`);
+  exitWithCleanup(artifacts, 2);
 }
 
-for (const entry of serialRuns) {
-  // eslint-disable-next-line no-await-in-loop
-  const code = await run(entry);
-  if (code !== 0) {
-    process.exit(code);
-  }
+if (process.env.OPENCLAW_TEST_LIST_LANES === "1" || rawCli.plan) {
+  console.log(formatPlanOutput(plan));
+  exitWithCleanup(artifacts, 0);
 }
 
-process.exit(0);
+const result = await executePlan(plan, { env: process.env, artifacts });
+process.exit(typeof result === "number" ? result : result.exitCode);

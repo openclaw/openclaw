@@ -1,4 +1,9 @@
-import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { isRecord } from "../utils.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+  parseFiniteNumber,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -148,17 +153,11 @@ const WINDOW_MINUTE_KEYS = [
   "minutes",
 ] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string") {
-      const parsed = Number.parseFloat(value);
-      if (Number.isFinite(parsed)) return parsed;
+    const parsed = parseFiniteNumber(record[key]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;
@@ -167,19 +166,25 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
 function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
   }
   return undefined;
 }
 
 function parseEpoch(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (value < 1e12) return Math.floor(value * 1000);
+    if (value < 1e12) {
+      return Math.floor(value * 1000);
+    }
     return Math.floor(value);
   }
   if (typeof value === "string" && value.trim()) {
     const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
   return undefined;
 }
@@ -190,11 +195,21 @@ function hasAny(record: Record<string, unknown>, keys: readonly string[]): boole
 
 function scoreUsageRecord(record: Record<string, unknown>): number {
   let score = 0;
-  if (hasAny(record, PERCENT_KEYS)) score += 4;
-  if (hasAny(record, TOTAL_KEYS)) score += 3;
-  if (hasAny(record, USED_KEYS) || hasAny(record, REMAINING_KEYS)) score += 2;
-  if (hasAny(record, RESET_KEYS)) score += 1;
-  if (hasAny(record, PLAN_KEYS)) score += 1;
+  if (hasAny(record, PERCENT_KEYS)) {
+    score += 4;
+  }
+  if (hasAny(record, TOTAL_KEYS)) {
+    score += 3;
+  }
+  if (hasAny(record, USED_KEYS) || hasAny(record, REMAINING_KEYS)) {
+    score += 2;
+  }
+  if (hasAny(record, RESET_KEYS)) {
+    score += 1;
+  }
+  if (hasAny(record, PLAN_KEYS)) {
+    score += 1;
+  }
   return score;
 }
 
@@ -207,16 +222,19 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
   let scanned = 0;
 
   while (queue.length && scanned < MAX_SCAN_NODES) {
-    const next = queue.shift();
-    if (!next) break;
+    const next = queue.shift() as { value: unknown; depth: number };
     scanned += 1;
     const { value, depth } = next;
 
     if (isRecord(value)) {
-      if (seen.has(value)) continue;
+      if (seen.has(value)) {
+        continue;
+      }
       seen.add(value);
       const score = scoreUsageRecord(value);
-      if (score > 0) candidates.push({ record: value, score, depth });
+      if (score > 0) {
+        candidates.push({ record: value, score, depth });
+      }
       if (depth < MAX_SCAN_DEPTH) {
         for (const nested of Object.values(value)) {
           if (isRecord(nested) || Array.isArray(nested)) {
@@ -242,9 +260,13 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
 
 function deriveWindowLabel(payload: Record<string, unknown>): string {
   const hours = pickNumber(payload, WINDOW_HOUR_KEYS);
-  if (hours && Number.isFinite(hours)) return `${hours}h`;
+  if (hours && Number.isFinite(hours)) {
+    return `${hours}h`;
+  }
   const minutes = pickNumber(payload, WINDOW_MINUTE_KEYS);
-  if (minutes && Number.isFinite(minutes)) return `${minutes}m`;
+  if (minutes && Number.isFinite(minutes)) {
+    return `${minutes}m`;
+  }
   return "5h";
 }
 
@@ -265,10 +287,7 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
   if (percentRaw !== undefined) {
     const normalized = clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
     if (fromCounts !== null) {
-      const inverted = clampPercent(100 - normalized);
-      if (Math.abs(normalized - fromCounts) <= 1 || Math.abs(inverted - fromCounts) <= 1) {
-        return fromCounts;
-      }
+      // Count-derived usage is more stable across provider percent field variations.
       return fromCounts;
     }
     return normalized;
@@ -297,12 +316,10 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
+      status: res.status,
+    });
   }
 
   const data = (await res.json().catch(() => null)) as MinimaxUsageResponse;
@@ -315,7 +332,7 @@ export async function fetchMinimaxUsage(
     };
   }
 
-  const baseResp = isRecord(data.base_resp) ? (data.base_resp as MinimaxBaseResp) : undefined;
+  const baseResp = isRecord(data.base_resp) ? data.base_resp : undefined;
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
       provider: "minimax",

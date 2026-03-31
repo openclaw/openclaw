@@ -1,8 +1,6 @@
 {
   "id": "msteams",
-  "channels": [
-    "msteams"
-  ],
+  "channels": ["msteams"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

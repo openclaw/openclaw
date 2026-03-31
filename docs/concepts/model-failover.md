@@ -3,13 +3,15 @@ summary: "How OpenClaw rotates auth profiles and falls back across models"
 read_when:
   - Diagnosing auth profile rotation, cooldowns, or model fallback behavior
   - Updating failover rules for auth profiles or models
+title: "Model Failover"
 ---
 
 # Model failover
 
 OpenClaw handles failures in two stages:
-1) **Auth profile rotation** within the current provider.
-2) **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
+
+1. **Auth profile rotation** within the current provider.
+2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
 This doc explains the runtime rules and the data that backs them.
 
@@ -24,12 +26,14 @@ OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 More detail: [/concepts/oauth](/concepts/oauth)
 
 Credential types:
+
 - `type: "api_key"` → `{ provider, key }`
 - `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` for some providers)
 
 ## Profile IDs
 
 OAuth logins create distinct profiles so multiple accounts can coexist.
+
 - Default: `provider:default` when no email is available.
 - OAuth with email: `provider:<email>` (for example `google-antigravity:user@gmail.com`).
 
@@ -39,11 +43,12 @@ Profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` under `
 
 When a provider has multiple profiles, OpenClaw chooses an order like this:
 
-1) **Explicit config**: `auth.order[provider]` (if set).
-2) **Configured profiles**: `auth.profiles` filtered by provider.
-3) **Stored profiles**: entries in `auth-profiles.json` for the provider.
+1. **Explicit config**: `auth.order[provider]` (if set).
+2. **Configured profiles**: `auth.profiles` filtered by provider.
+3. **Stored profiles**: entries in `auth-profiles.json` for the provider.
 
 If no explicit order is configured, OpenClaw uses a round‑robin order:
+
 - **Primary key:** profile type (**OAuth before API keys**).
 - **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
 - **Cooldown/disabled profiles** are moved to the end, ordered by soonest expiry.
@@ -52,6 +57,7 @@ If no explicit order is configured, OpenClaw uses a round‑robin order:
 
 OpenClaw **pins the chosen auth profile per session** to keep provider caches warm.
 It does **not** rotate on every request. The pinned profile is reused until:
+
 - the session is reset (`/new` / `/reset`)
 - a compaction completes (compaction count increments)
 - the profile is in cooldown/disabled
@@ -64,9 +70,10 @@ they are tried first, but OpenClaw may rotate to another profile on rate limits/
 User‑pinned profiles stay locked to that profile; if it fails and model fallbacks
 are configured, OpenClaw moves to the next model instead of switching profiles.
 
-### Why OAuth can “look lost”
+### Why OAuth can "look lost"
 
 If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
+
 - Pin with `auth.order[provider] = ["provider:profileId"]`, or
 - Use a per-session override via `/model …` with a profile override (when supported by your UI/chat surface).
 
@@ -76,8 +83,12 @@ When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 Format/invalid‑request errors (for example Cloud Code Assist tool call ID
 validation failures) are treated as failover‑worthy and use the same cooldowns.
+OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
+`stop reason: error`, and `reason: error` are classified as timeout/failover
+signals.
 
 Cooldowns use exponential backoff:
+
 - 1 minute
 - 5 minutes
 - 25 minutes
@@ -115,8 +126,11 @@ State is stored in `auth-profiles.json`:
 ```
 
 Defaults:
+
 - Billing backoff starts at **5 hours**, doubles per billing failure, and caps at **24 hours**.
 - Backoff counters reset if the profile hasn’t failed for **24 hours** (configurable).
+- Overloaded retries allow **1 same-provider profile rotation** before model fallback.
+- Overloaded retries use **0 ms backoff** by default.
 
 ## Model fallback
 
@@ -124,15 +138,22 @@ If all profiles for a provider fail, OpenClaw moves to the next model in
 `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and
 timeouts that exhausted profile rotation (other errors do not advance fallback).
 
+Overloaded errors are handled more aggressively than billing cooldowns. By default,
+OpenClaw allows one same-provider auth-profile retry, then switches to the next
+configured model fallback without waiting. Tune this with
+`auth.cooldowns.overloadedProfileRotations` and `auth.cooldowns.overloadedBackoffMs`.
+
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
 
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:
+
 - `auth.profiles` / `auth.order`
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
 - `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
+- `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 

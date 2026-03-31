@@ -1,6 +1,11 @@
 import type { Command } from "commander";
-
 import { danger } from "../globals.js";
+import {
+  type GmailRunOptions,
+  type GmailSetupOptions,
+  runGmailService,
+  runGmailSetup,
+} from "../hooks/gmail-ops.js";
 import {
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -11,12 +16,6 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
-import {
-  type GmailRunOptions,
-  type GmailSetupOptions,
-  runGmailService,
-  runGmailSetup,
-} from "../hooks/gmail-ops.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -108,33 +107,29 @@ export function registerWebhooksCli(program: Command) {
 function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
   const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
-  if (!account) throw new Error("--account is required");
+  if (!account) {
+    throw new Error("--account is required");
+  }
+  const common = parseGmailCommonOptions(raw);
   return {
     account,
     project: stringOption(raw.project),
-    topic: stringOption(raw.topic),
-    subscription: stringOption(raw.subscription),
-    label: stringOption(raw.label),
-    hookUrl: stringOption(raw.hookUrl),
-    hookToken: stringOption(raw.hookToken),
-    pushToken: stringOption(raw.pushToken),
-    bind: stringOption(raw.bind),
-    port: numberOption(raw.port),
-    path: stringOption(raw.path),
-    includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscale: stringOption(raw.tailscale) as GmailSetupOptions["tailscale"],
-    tailscalePath: stringOption(raw.tailscalePath),
-    tailscaleTarget: stringOption(raw.tailscaleTarget),
+    ...gmailOptionsFromCommon(common),
     pushEndpoint: stringOption(raw.pushEndpoint),
     json: Boolean(raw.json),
   };
 }
 
 function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
+  const common = parseGmailCommonOptions(raw);
   return {
     account: stringOption(raw.account),
+    ...gmailOptionsFromCommon(common),
+  };
+}
+
+function parseGmailCommonOptions(raw: Record<string, unknown>) {
+  return {
     topic: stringOption(raw.topic),
     subscription: stringOption(raw.subscription),
     label: stringOption(raw.label),
@@ -147,26 +142,56 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
     includeBody: booleanOption(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes),
     renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscale: stringOption(raw.tailscale) as GmailRunOptions["tailscale"],
+    tailscaleRaw: stringOption(raw.tailscale),
     tailscalePath: stringOption(raw.tailscalePath),
     tailscaleTarget: stringOption(raw.tailscaleTarget),
   };
 }
 
+function gmailOptionsFromCommon(
+  common: ReturnType<typeof parseGmailCommonOptions>,
+): Omit<GmailRunOptions, "account"> {
+  return {
+    topic: common.topic,
+    subscription: common.subscription,
+    label: common.label,
+    hookUrl: common.hookUrl,
+    hookToken: common.hookToken,
+    pushToken: common.pushToken,
+    bind: common.bind,
+    port: common.port,
+    path: common.path,
+    includeBody: common.includeBody,
+    maxBytes: common.maxBytes,
+    renewEveryMinutes: common.renewEveryMinutes,
+    tailscale: common.tailscaleRaw as GmailRunOptions["tailscale"],
+    tailscalePath: common.tailscalePath,
+    tailscaleTarget: common.tailscaleTarget,
+  };
+}
+
 function stringOption(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 
 function numberOption(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
+  if (!Number.isFinite(n) || n <= 0) {
+    return undefined;
+  }
   return Math.floor(n);
 }
 
 function booleanOption(value: unknown): boolean | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   return Boolean(value);
 }

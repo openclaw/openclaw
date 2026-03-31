@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-
+import { withEnvAsync } from "../test-utils/env.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {
-  return async () =>
-    new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+  return withFetchPreconnect(
+    async () =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  );
 }
 
 describe("scanOpenRouterModels", () => {
@@ -67,9 +70,7 @@ describe("scanOpenRouterModels", () => {
 
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
-    const previousKey = process.env.OPENROUTER_API_KEY;
-    try {
-      delete process.env.OPENROUTER_API_KEY;
+    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
       await expect(
         scanOpenRouterModels({
           fetchImpl,
@@ -77,12 +78,37 @@ describe("scanOpenRouterModels", () => {
           apiKey: "",
         }),
       ).rejects.toThrow(/Missing OpenRouter API key/);
-    } finally {
-      if (previousKey === undefined) {
-        delete process.env.OPENROUTER_API_KEY;
-      } else {
-        process.env.OPENROUTER_API_KEY = previousKey;
-      }
-    }
+    });
+  });
+
+  it("matches provider filters across canonical provider aliases", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "z.ai/glm-5",
+          name: "GLM-5",
+          context_length: 128_000,
+          supported_parameters: [],
+          modality: "text",
+          pricing: { prompt: "0", completion: "0" },
+        },
+        {
+          id: "openai/gpt-5",
+          name: "GPT-5",
+          context_length: 128_000,
+          supported_parameters: [],
+          modality: "text",
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const results = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+      providerFilter: "z-ai",
+    });
+
+    expect(results.map((entry) => entry.id)).toEqual(["z.ai/glm-5"]);
   });
 });

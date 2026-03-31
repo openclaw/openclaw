@@ -3,7 +3,9 @@ summary: "Agent workspace: location, layout, and backup strategy"
 read_when:
   - You need to explain the agent workspace or its file layout
   - You want to back up or migrate an agent workspace
+title: "Agent Workspace"
 ---
+
 # Agent workspace
 
 The workspace is the agent's home. It is the only working directory used for
@@ -29,13 +31,15 @@ inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspac
 ```json5
 {
   agent: {
-    workspace: "~/.openclaw/workspace"
-  }
+    workspace: "~/.openclaw/workspace",
+  },
 }
 ```
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the
 workspace and seed the bootstrap files if they are missing.
+Sandbox seed copies only accept regular in-workspace files; symlink/hardlink
+aliases that resolve outside the source workspace are ignored.
 
 If you already manage the workspace files yourself, you can disable bootstrap
 file creation:
@@ -114,7 +118,8 @@ See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 
 If any bootstrap file is missing, OpenClaw injects a "missing file" marker into
 the session and continues. Large bootstrap files are truncated when injected;
-adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
+adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and
+`agents.defaults.bootstrapTotalMaxChars` (default: 150000).
 `openclaw setup` can recreate missing defaults without overwriting existing
 files.
 
@@ -226,6 +231,13 @@ Suggested `.gitignore` starter:
 ## Advanced notes
 
 - Multi-agent routing can use different workspaces per agent. See
-  [Channel routing](/concepts/channel-routing) for routing configuration.
+  [Channel routing](/channels/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox
   workspaces under `agents.defaults.sandbox.workspaceRoot`.
+
+## Related
+
+- [Standing Orders](/automation/standing-orders) — persistent instructions in workspace files
+- [Heartbeat](/gateway/heartbeat) — HEARTBEAT.md workspace file
+- [Session](/concepts/session) — session storage paths
+- [Sandboxing](/gateway/sandboxing) — workspace access in sandboxed environments

@@ -1,12 +1,12 @@
-import type { ReplyPayload } from "../types.js";
-import type { LineChannelData } from "../../line/types.js";
 import {
+  createAgendaCard,
+  createAppleTvRemoteCard,
+  createDeviceControlCard,
   createMediaPlayerCard,
   createEventCard,
-  createAgendaCard,
-  createDeviceControlCard,
-  createAppleTvRemoteCard,
-} from "../../line/flex-templates.js";
+} from "../../plugin-sdk/line.js";
+import type { LineChannelData } from "../../plugin-sdk/line.js";
+import type { ReplyPayload } from "../types.js";
 
 /**
  * Parse LINE-specific directives from text and extract them into ReplyPayload fields.
@@ -26,7 +26,9 @@ import {
  */
 export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
   let text = payload.text;
-  if (!text) return payload;
+  if (!text) {
+    return payload;
+  }
 
   const result: ReplyPayload = { ...payload };
   const lineData: LineChannelData = {
@@ -121,9 +123,13 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
         // Find first colon delimiter, ignoring URLs without a label.
         const colonIndex = (() => {
           const index = trimmed.indexOf(":");
-          if (index === -1) return -1;
+          if (index === -1) {
+            return -1;
+          }
           const lower = trimmed.toLowerCase();
-          if (lower.startsWith("http://") || lower.startsWith("https://")) return -1;
+          if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            return -1;
+          }
           return index;
         })();
 

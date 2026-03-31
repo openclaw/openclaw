@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { parseIdentityMarkdown } from "./identity-file.js";
 
 describe("parseIdentityMarkdown", () => {

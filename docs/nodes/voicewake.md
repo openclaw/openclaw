@@ -3,14 +3,17 @@ summary: "Global voice wake words (Gateway-owned) and how they sync across nodes
 read_when:
   - Changing voice wake words behavior or defaults
   - Adding new node platforms that need wake word sync
+title: "Voice Wake"
 ---
+
 # Voice Wake (Global Wake Words)
 
 OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
 
 - There are **no per-node custom wake words**.
 - **Any node/app UI may edit** the list; changes are persisted by the Gateway and broadcast to everyone.
-- Each device still keeps its own **Voice Wake enabled/disabled** toggle (local UX + permissions differ).
+- macOS and iOS keep local **Voice Wake enabled/disabled** toggles (local UX + permissions differ).
+- Android currently keeps Voice Wake off and uses a manual mic flow in the Voice tab.
 
 ## Storage (Gateway host)
 
@@ -32,6 +35,7 @@ Shape:
 - `voicewake.set` with params `{ triggers: string[] }` → `{ triggers: string[] }`
 
 Notes:
+
 - Triggers are normalized (trimmed, empties dropped). Empty lists fall back to defaults.
 - Limits are enforced for safety (count/length caps).
 
@@ -40,6 +44,7 @@ Notes:
 - `voicewake.changed` payload `{ triggers: string[] }`
 
 Who receives it:
+
 - All WebSocket clients (macOS app, WebChat, etc.)
 - All connected nodes (iOS/Android), and also on node connect as an initial “current state” push.
 
@@ -57,5 +62,5 @@ Who receives it:
 
 ### Android node
 
-- Exposes a Wake Words editor in Settings.
-- Calls `voicewake.set` over the Gateway WS so edits sync everywhere.
+- Voice Wake is currently disabled in Android runtime/Settings.
+- Android voice uses manual mic capture in the Voice tab instead of wake-word triggers.

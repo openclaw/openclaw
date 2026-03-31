@@ -1,16 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import JSON5 from "json5";
-
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
+import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { runExec } from "../process/exec.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
 export type SecurityFixChmodAction = {
@@ -192,11 +189,15 @@ function setGroupPolicyAllowlist(params: {
   changes: string[];
   policyFlips: Set<string>;
 }): void {
-  if (!params.cfg.channels) return;
+  if (!params.cfg.channels) {
+    return;
+  }
   const section = params.cfg.channels[params.channel as keyof OpenClawConfig["channels"]] as
     | Record<string, unknown>
     | undefined;
-  if (!section || typeof section !== "object") return;
+  if (!section || typeof section !== "object") {
+    return;
+  }
 
   const topPolicy = section.groupPolicy;
   if (topPolicy === "open") {
@@ -206,10 +207,16 @@ function setGroupPolicyAllowlist(params: {
   }
 
   const accounts = section.accounts;
-  if (!accounts || typeof accounts !== "object") return;
+  if (!accounts || typeof accounts !== "object") {
+    return;
+  }
   for (const [accountId, accountValue] of Object.entries(accounts)) {
-    if (!accountId) continue;
-    if (!accountValue || typeof accountValue !== "object") continue;
+    if (!accountId) {
+      continue;
+    }
+    if (!accountValue || typeof accountValue !== "object") {
+      continue;
+    }
     const account = accountValue as Record<string, unknown>;
     if (account.groupPolicy === "open") {
       account.groupPolicy = "allowlist";
@@ -228,15 +235,25 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   policyFlips: Set<string>;
 }): void {
   const section = params.cfg.channels?.whatsapp as Record<string, unknown> | undefined;
-  if (!section || typeof section !== "object") return;
-  if (params.storeAllowFrom.length === 0) return;
+  if (!section || typeof section !== "object") {
+    return;
+  }
+  if (params.storeAllowFrom.length === 0) {
+    return;
+  }
 
   const maybeApply = (prefix: string, obj: Record<string, unknown>) => {
-    if (!params.policyFlips.has(prefix)) return;
+    if (!params.policyFlips.has(prefix)) {
+      return;
+    }
     const allowFrom = Array.isArray(obj.allowFrom) ? obj.allowFrom : [];
     const groupAllowFrom = Array.isArray(obj.groupAllowFrom) ? obj.groupAllowFrom : [];
-    if (allowFrom.length > 0) return;
-    if (groupAllowFrom.length > 0) return;
+    if (allowFrom.length > 0) {
+      return;
+    }
+    if (groupAllowFrom.length > 0) {
+      return;
+    }
     obj.groupAllowFrom = params.storeAllowFrom;
     params.changes.push(`${prefix}groupAllowFrom=pairing-store`);
   };
@@ -244,9 +261,13 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   maybeApply("channels.whatsapp.", section);
 
   const accounts = section.accounts;
-  if (!accounts || typeof accounts !== "object") return;
+  if (!accounts || typeof accounts !== "object") {
+    return;
+  }
   for (const [accountId, accountValue] of Object.entries(accounts)) {
-    if (!accountValue || typeof accountValue !== "object") continue;
+    if (!accountValue || typeof accountValue !== "object") {
+      continue;
+    }
     const account = accountValue as Record<string, unknown>;
     maybeApply(`channels.whatsapp.accounts.${accountId}.`, account);
   }
@@ -281,71 +302,6 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   return { cfg: next, changes, policyFlips };
 }
 
-function listDirectIncludes(parsed: unknown): string[] {
-  const out: string[] = [];
-  const visit = (value: unknown) => {
-    if (!value) return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    if (typeof value !== "object") return;
-    const rec = value as Record<string, unknown>;
-    const includeVal = rec[INCLUDE_KEY];
-    if (typeof includeVal === "string") out.push(includeVal);
-    else if (Array.isArray(includeVal)) {
-      for (const item of includeVal) {
-        if (typeof item === "string") out.push(item);
-      }
-    }
-    for (const v of Object.values(rec)) visit(v);
-  };
-  visit(parsed);
-  return out;
-}
-
-function resolveIncludePath(baseConfigPath: string, includePath: string): string {
-  return path.normalize(
-    path.isAbsolute(includePath)
-      ? includePath
-      : path.resolve(path.dirname(baseConfigPath), includePath),
-  );
-}
-
-async function collectIncludePathsRecursive(params: {
-  configPath: string;
-  parsed: unknown;
-}): Promise<string[]> {
-  const visited = new Set<string>();
-  const result: string[] = [];
-
-  const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
-    if (depth > MAX_INCLUDE_DEPTH) return;
-    for (const raw of listDirectIncludes(parsed)) {
-      const resolved = resolveIncludePath(basePath, raw);
-      if (visited.has(resolved)) continue;
-      visited.add(resolved);
-      result.push(resolved);
-      const rawText = await fs.readFile(resolved, "utf-8").catch(() => null);
-      if (!rawText) continue;
-      const nestedParsed = (() => {
-        try {
-          return JSON5.parse(rawText) as unknown;
-        } catch {
-          return null;
-        }
-      })();
-      if (nestedParsed) {
-        // eslint-disable-next-line no-await-in-loop
-        await walk(resolved, nestedParsed, depth + 1);
-      }
-    }
-  };
-
-  await walk(params.configPath, params.parsed, 0);
-  return result;
-}
-
 async function chmodCredentialsAndAgentState(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
@@ -362,8 +318,12 @@ async function chmodCredentialsAndAgentState(params: {
 
   const credsEntries = await fs.readdir(credsDir, { withFileTypes: true }).catch(() => []);
   for (const entry of credsEntries) {
-    if (!entry.isFile()) continue;
-    if (!entry.name.endsWith(".json")) continue;
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!entry.name.endsWith(".json")) {
+      continue;
+    }
     const p = path.join(credsDir, entry.name);
     // eslint-disable-next-line no-await-in-loop
     params.actions.push(await safeChmod({ path: p, mode: 0o600, require: "file" }));
@@ -373,10 +333,14 @@ async function chmodCredentialsAndAgentState(params: {
   ids.add(resolveDefaultAgentId(params.cfg));
   const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents?.list : [];
   for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") continue;
+    if (!agent || typeof agent !== "object") {
+      continue;
+    }
     const id =
       typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id.trim() : "";
-    if (id) ids.add(id);
+    if (id) {
+      ids.add(id);
+    }
   }
 
   for (const agentId of ids) {
@@ -402,6 +366,21 @@ async function chmodCredentialsAndAgentState(params: {
     const storePath = path.join(sessionsDir, "sessions.json");
     // eslint-disable-next-line no-await-in-loop
     params.actions.push(await params.applyPerms({ path: storePath, mode: 0o600, require: "file" }));
+
+    // Fix permissions on session transcript files (*.jsonl)
+    // eslint-disable-next-line no-await-in-loop
+    const sessionEntries = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of sessionEntries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const p = path.join(sessionsDir, entry.name);
+      // eslint-disable-next-line no-await-in-loop
+      params.actions.push(await params.applyPerms({ path: p, mode: 0o600, require: "file" }));
+    }
   }
 }
 
@@ -433,7 +412,11 @@ export async function fixSecurityFootguns(opts?: {
     const fixed = applyConfigFixes({ cfg: snap.config, env });
     changes = fixed.changes;
 
-    const whatsappStoreAllowFrom = await readChannelAllowFromStore("whatsapp", env).catch(() => []);
+    const whatsappStoreAllowFrom = await readChannelAllowFromStore(
+      "whatsapp",
+      env,
+      DEFAULT_ACCOUNT_ID,
+    ).catch(() => []);
     if (whatsappStoreAllowFrom.length > 0) {
       setWhatsAppGroupAllowFromFromStore({
         cfg: fixed.cfg,

@@ -1,10 +1,11 @@
 import { html, nothing } from "lit";
-
-import type { AppViewState } from "../app-view-state";
+import type { AppViewState } from "../app-view-state.ts";
 
 export function renderGatewayUrlConfirmation(state: AppViewState) {
   const { pendingGatewayUrl } = state;
-  if (!pendingGatewayUrl) return nothing;
+  if (!pendingGatewayUrl) {
+    return nothing;
+  }
 
   return html`
     <div class="exec-approval-overlay" role="dialog" aria-modal="true" aria-live="polite">
@@ -20,18 +21,10 @@ export function renderGatewayUrlConfirmation(state: AppViewState) {
           Only confirm if you trust this URL. Malicious URLs can compromise your system.
         </div>
         <div class="exec-approval-actions">
-          <button
-            class="btn primary"
-            @click=${() => state.handleGatewayUrlConfirm()}
-          >
+          <button class="btn primary" @click=${() => state.handleGatewayUrlConfirm()}>
             Confirm
           </button>
-          <button
-            class="btn"
-            @click=${() => state.handleGatewayUrlCancel()}
-          >
-            Cancel
-          </button>
+          <button class="btn" @click=${() => state.handleGatewayUrlCancel()}>Cancel</button>
         </div>
       </div>
     </div>
