@@ -1,10 +1,10 @@
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import type { PluginRuntime } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../accounts.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
+import type { PluginRuntime } from "./runtime-api.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
