@@ -17,7 +17,7 @@ export function registerMessagePermissionsCommand(message: Command, helpers: Mes
 export function registerMessageSearchCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(message.command("search").description("Search messages"))
-    .option("--guild-id <id>", "Guild id (Discord)")
+    .option("--guild-id <id>", "Guild id (required for Discord)")
     .requiredOption("--query <text>", "Search query")
     .option("--channel-id <id>", "Channel id")
     .option("--channel-ids <id>", "Channel id (repeat)", collectOption, [] as string[])
