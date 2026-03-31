@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - Auth/OpenAI Codex: persist plugin-refreshed OAuth credentials to `auth-profiles.json` before returning them, so rotated Codex refresh tokens survive restart and stop falling into `refresh_token_reused` loops. (#53082)
 - Discord/gateway: hand reconnect ownership back to Carbon, keep runtime status aligned with close/reconnect state, and force-stop sockets that open without reaching READY so Discord monitors recover promptly instead of waiting on stale health timeouts. (#59019) Thanks @obviyus
 - Config/Telegram: migrate removed `channels.telegram.groupMentionsOnly` into `channels.telegram.groups["*"].requireMention` on load so legacy configs no longer crash at startup. (#55336) thanks @jameslcowan.
+- Gateway/session reset: emit the typed `before_reset` hook for gateway `/new` and `/reset`, preserving reset-hook behavior even when the previous transcript has already been archived. (#53872) thanks @VACInc
 
 ## 2026.3.31
 
@@ -597,6 +598,7 @@ Docs: https://docs.openclaw.ai
 - Security/path resolution: prefer non-user-writable absolute helper binaries for OpenClaw CLI, ffmpeg, and OpenSSL resolution so PATH hijacks cannot replace trusted helpers with attacker-controlled executables.
 - Security/gateway command scopes: require `operator.admin` before Telegram target writeback and Talk Voice `/voice set` config writes persist through gateway message flows.
 - Security/OpenShell mirror: exclude workspace `hooks/` from mirror sync so untrusted sandbox files cannot become trusted host hooks on gateway startup.
+- Exec approvals/channels: unify Discord and Telegram exec approval runtime handling, move approval buttons onto the shared interactive reply model, and fix Telegram approval buttons and typed `/approve` commands so configured approvers can resolve requests reliably again. (#57516) Thanks @scoootscooob.
 
 ## 2026.3.24-beta.2
 
