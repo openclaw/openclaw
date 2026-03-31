@@ -307,6 +307,14 @@ type MessageSentEvent = {
   messageId?: string;
 };
 
+/**
+ * Drop or sanitize payloads whose text is whitespace-only after all prior
+ * transformations (including plain-text sanitization where `<br>` → `\n`).
+ *
+ * Must be called on the *sanitized* payload so that a lone `<br>` that
+ * sanitizeForPlainText converts to `"\n"` is correctly identified as empty
+ * and dropped rather than forwarded to the channel as a blank message.
+ */
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
