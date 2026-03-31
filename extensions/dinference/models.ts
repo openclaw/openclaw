@@ -45,7 +45,7 @@ export const DINFERENCE_MODEL_CATALOG: ModelDefinitionConfig[] = [
       cacheWrite: 0,
     },
   },
-] as const;
+];
 
 export function buildDinferenceModelDefinition(
   model: (typeof DINFERENCE_MODEL_CATALOG)[number],
