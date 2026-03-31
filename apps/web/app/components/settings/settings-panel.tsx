@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { SkillStorePanel } from "../skill-store/skill-store-panel";
 import { IntegrationsPanel } from "../integrations/integrations-panel";
+import { CloudSettingsPanel } from "./cloud-settings-panel";
 
 type SettingsTab = "skills" | "integrations" | "cloud";
 
@@ -61,21 +62,8 @@ export function SettingsPanel({ initialTab }: { initialTab?: string }) {
 
         {activeTab === "skills" && <SkillStorePanel embedded />}
         {activeTab === "integrations" && <IntegrationsPanel embedded />}
-        {activeTab === "cloud" && <CloudPlaceholder />}
+        {activeTab === "cloud" && <CloudSettingsPanel />}
       </div>
-    </div>
-  );
-}
-
-function CloudPlaceholder() {
-  return (
-    <div
-      className="rounded-xl border p-8 text-center"
-      style={{ borderColor: "var(--color-border)" }}
-    >
-      <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-        Dench Cloud settings will appear here.
-      </p>
     </div>
   );
 }
