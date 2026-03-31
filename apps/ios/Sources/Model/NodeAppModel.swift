@@ -1688,13 +1688,6 @@ extension NodeAppModel {
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
         let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
 
-        var scopedConnectOptions = connectOptions
-        scopedConnectOptions.gatewayStableID = effectiveStableID
-        scopedConnectOptions.allowLegacyUnscopedDeviceTokenFallback =
-            self.shouldAllowLegacyUnscopedDeviceTokenFallback(
-                role: connectOptions.role,
-                stableID: effectiveStableID)
-
         self.activeGatewayConnectConfig = GatewayConnectConfig(
             url: url,
             stableID: stableID,
@@ -1702,7 +1695,7 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: scopedConnectOptions)
+            nodeOptions: connectOptions)
         self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
         if self.shouldStartOperatorGatewayLoop(
             token: token,
@@ -1716,7 +1709,7 @@ extension NodeAppModel {
                 token: token,
                 bootstrapToken: bootstrapToken,
                 password: password,
-                nodeOptions: scopedConnectOptions,
+                nodeOptions: connectOptions,
                 sessionBox: sessionBox)
         } else {
             self.operatorGatewayTask = nil
@@ -1728,7 +1721,7 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: scopedConnectOptions,
+            nodeOptions: connectOptions,
             sessionBox: sessionBox)
     }
 
@@ -1806,45 +1799,18 @@ private extension NodeAppModel {
         token: String?,
         bootstrapToken: String?,
         password: String?,
-        stableID: String) -> Bool
+        stableID _: String) -> Bool
     {
         Self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator", stableID: stableID))
+            hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator"))
     }
 
-    func hasStoredGatewayRoleToken(_ role: String, stableID: String? = nil) -> Bool {
+    func hasStoredGatewayRoleToken(_ role: String) -> Bool {
         let identity = DeviceIdentityStore.loadOrCreate()
-        if DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: role,
-            gatewayStableID: stableID) != nil
-        {
-            return true
-        }
-        guard let stableID else { return false }
-        return self.shouldAllowLegacyUnscopedDeviceTokenFallback(role: role, stableID: stableID)
-    }
-
-    func shouldAllowLegacyUnscopedDeviceTokenFallback(role: String, stableID: String) -> Bool {
-        let trimmedStableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedStableID.isEmpty else { return false }
-        guard GatewaySettingsStore.loadLastGatewayConnection()?.stableID == trimmedStableID else {
-            return false
-        }
-        let identity = DeviceIdentityStore.loadOrCreate()
-        guard DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: role,
-            gatewayStableID: trimmedStableID) == nil
-        else {
-            return false
-        }
-        return DeviceAuthStore.loadLegacyUnscopedToken(
-            deviceId: identity.deviceId,
-            role: role) != nil
+        return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role) != nil
     }
 
     static func shouldStartOperatorGatewayLoop(
@@ -1960,10 +1926,9 @@ private extension NodeAppModel {
 
                 let effectiveClientId =
                     GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? nodeOptions.clientId
-                var operatorOptions = self.makeOperatorConnectOptions(
+                let operatorOptions = self.makeOperatorConnectOptions(
                     clientId: effectiveClientId,
                     displayName: nodeOptions.clientDisplayName)
-                operatorOptions.gatewayStableID = stableID
 
                 do {
                     let reconnectAuth = self.currentGatewayReconnectAuth(
@@ -3186,9 +3151,6 @@ extension NodeAppModel {
             hasStoredOperatorToken: hasStoredOperatorToken)
     }
 
-    func _test_shouldAllowLegacyUnscopedDeviceTokenFallback(role: String, stableID: String) -> Bool {
-        self.shouldAllowLegacyUnscopedDeviceTokenFallback(role: role, stableID: stableID)
-    }
 }
 #endif
 // swiftlint:enable type_body_length file_length

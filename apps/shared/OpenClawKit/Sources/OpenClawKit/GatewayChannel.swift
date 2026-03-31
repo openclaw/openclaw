@@ -81,12 +81,6 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
-    // When set, stored device tokens are scoped to this gateway identity so reconnects do not
-    // present a device token minted by a different gateway.
-    public var gatewayStableID: String?
-    // Allow one reconnect from a legacy unscoped token for this gateway so the next successful
-    // handshake can rewrite it under the scoped gatewayStableID key.
-    public var allowLegacyUnscopedDeviceTokenFallback: Bool
     // When false, the connection omits the signed device identity payload and cannot use
     // device-scoped auth (role/scope upgrades will require pairing). Keep this true for
     // role/scoped sessions such as operator UI clients.
@@ -101,8 +95,6 @@ public struct GatewayConnectOptions: Sendable {
         clientId: String,
         clientMode: String,
         clientDisplayName: String?,
-        gatewayStableID: String? = nil,
-        allowLegacyUnscopedDeviceTokenFallback: Bool = false,
         includeDeviceIdentity: Bool = true)
     {
         self.role = role
@@ -113,8 +105,6 @@ public struct GatewayConnectOptions: Sendable {
         self.clientId = clientId
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
-        self.gatewayStableID = gatewayStableID
-        self.allowLegacyUnscopedDeviceTokenFallback = allowLegacyUnscopedDeviceTokenFallback
         self.includeDeviceIdentity = includeDeviceIdentity
     }
 }
@@ -499,10 +489,7 @@ public actor GatewayChannelActor {
                 self.shouldClearStoredDeviceTokenAfterRetry(error)
             {
                 // Retry failed with an explicit device-token mismatch; clear stale local token.
-                DeviceAuthStore.clearToken(
-                    deviceId: identity.deviceId,
-                    role: role,
-                    gatewayStableID: self.connectOptions?.gatewayStableID)
+                DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
             }
             throw error
         }
@@ -517,22 +504,10 @@ public actor GatewayChannelActor {
         let explicitBootstrapToken =
             self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let storedToken: String? = {
-            guard includeDeviceIdentity, let deviceId else { return nil }
-            if let scopedToken = DeviceAuthStore.loadToken(
-                deviceId: deviceId,
-                role: role,
-                gatewayStableID: self.connectOptions?.gatewayStableID)?.token
-            {
-                return scopedToken
-            }
-            guard self.connectOptions?.allowLegacyUnscopedDeviceTokenFallback == true else {
-                return nil
-            }
-            return DeviceAuthStore.loadLegacyUnscopedToken(
-                deviceId: deviceId,
-                role: role)?.token
-        }()
+        let storedToken =
+            (includeDeviceIdentity && deviceId != nil)
+                ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)?.token
+                : nil
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
@@ -607,8 +582,7 @@ public actor GatewayChannelActor {
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
-                    scopes: scopes,
-                    gatewayStableID: self.connectOptions?.gatewayStableID)
+                    scopes: scopes)
             }
         }
         self.lastTick = Date()

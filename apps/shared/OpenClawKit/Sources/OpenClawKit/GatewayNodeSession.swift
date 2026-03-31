@@ -170,9 +170,6 @@ public actor GatewayNodeSession {
         let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let gatewayStableID = (options.gatewayStableID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let allowLegacyUnscopedDeviceTokenFallback =
-            options.allowLegacyUnscopedDeviceTokenFallback ? "1" : "0"
         let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
         let permissions = options.permissions
             .map { key, value in
@@ -190,8 +187,6 @@ public actor GatewayNodeSession {
             clientId,
             clientMode,
             clientDisplayName,
-            gatewayStableID,
-            allowLegacyUnscopedDeviceTokenFallback,
             includeDeviceIdentity,
             permissions,
         ].joined(separator: "|")

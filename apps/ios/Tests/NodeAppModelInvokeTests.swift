@@ -127,40 +127,6 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         )
     }
 
-    @Test @MainActor func allowsLegacyUnscopedTokenFallbackOnlyForLastGateway() {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            GatewaySettingsStore.clearLastGatewayConnection()
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
-        let identity = DeviceIdentityStore.loadOrCreate()
-        _ = DeviceAuthStore.storeToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            token: "legacy-operator-token")
-        GatewaySettingsStore.saveLastGatewayConnectionDiscovered(
-            stableID: "gateway-a",
-            useTLS: true)
-
-        let appModel = NodeAppModel()
-        #expect(appModel._test_shouldAllowLegacyUnscopedDeviceTokenFallback(
-            role: "operator",
-            stableID: "gateway-a"))
-        #expect(!appModel._test_shouldAllowLegacyUnscopedDeviceTokenFallback(
-            role: "operator",
-            stableID: "gateway-b"))
-    }
-
     @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {
         let config = GatewayConnectConfig(
             url: URL(string: "wss://gateway.example")!,
