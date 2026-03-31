@@ -209,6 +209,32 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("dedupes replayed verified events that authorization blocks", async () => {
+    const onMessage = vi.fn(async () => {});
+    const authorizeSender = vi.fn(async () => "block" as const);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+    });
+
+    const blockedEvent = createEvent({
+      id: "blocked-replay",
+      pubkey: `blocked${"a".repeat(57)}`,
+    });
+
+    await emitEvent(blockedEvent);
+    await emitEvent(blockedEvent);
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(authorizeSender).toHaveBeenCalledTimes(1);
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
   it("does not rate limit an allowed sender while another authorization is still pending", async () => {
     const onMessage = vi.fn(async () => {});
     let resolveBlocked: ((value: "block") => void) | undefined;

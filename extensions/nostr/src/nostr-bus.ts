@@ -571,6 +571,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return false;
       };
 
+      const markSeen = () => {
+        seen.add(event.id);
+        metrics.emit("memory.seen_tracker_size", seen.size());
+      };
+
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
         if (rejectIfRateLimited()) {
           return;
@@ -592,6 +597,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           reply: replyTo,
         });
         if (decision !== "allow") {
+          markSeen();
           return;
         }
       }
@@ -601,8 +607,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       // Mark seen AFTER verify (don't cache invalid IDs)
-      seen.add(event.id);
-      metrics.emit("memory.seen_tracker_size", seen.size());
+      markSeen();
 
       // Decrypt the message
       let plaintext: string;
