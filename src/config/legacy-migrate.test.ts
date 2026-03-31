@@ -120,6 +120,46 @@ describe("legacy migrate mention routing", () => {
         ?.groupMentionsOnly,
     ).toBeUndefined();
   });
+
+  it("does not overwrite invalid channels.telegram.groups when migrating groupMentionsOnly", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: [],
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
+  it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": false,
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
 });
 
 describe("legacy migrate tts provider shape", () => {

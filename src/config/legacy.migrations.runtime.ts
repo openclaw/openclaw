@@ -215,13 +215,21 @@ function migrateLegacyTtsConfig(
   }
 }
 
-function ensureDefaultGroupEntry(section: Record<string, unknown>): {
+function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
   groups: Record<string, unknown>;
   entry: Record<string, unknown>;
-} {
-  const groups = getRecord(section.groups) ?? {};
+} | null {
+  const existingGroups = section.groups;
+  if (existingGroups !== undefined && !getRecord(existingGroups)) {
+    return null;
+  }
+  const groups = getRecord(existingGroups) ?? {};
   const defaultKey = "*";
-  const entry = getRecord(groups[defaultKey]) ?? {};
+  const existingEntry = groups[defaultKey];
+  if (existingEntry !== undefined && !getRecord(existingEntry)) {
+    return null;
+  }
+  const entry = getRecord(existingEntry) ?? {};
   return { groups, entry };
 }
 
@@ -340,8 +348,17 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
       }
 
       const groupMentionsOnly = telegram.groupMentionsOnly;
-      const { groups, entry } = ensureDefaultGroupEntry(telegram);
+      const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(telegram);
       const defaultKey = "*";
+
+      if (!defaultGroupEntry) {
+        changes.push(
+          "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+        );
+        return;
+      }
+
+      const { groups, entry } = defaultGroupEntry;
 
       if (entry.requireMention === undefined) {
         entry.requireMention = groupMentionsOnly;
