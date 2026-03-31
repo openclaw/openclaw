@@ -266,7 +266,7 @@ importers:
   extensions/bluebubbles:
     devDependencies:
       openclaw:
-        specifier: '>=2026.3.31'
+        specifier: workspace:*
         version: link:../..
 
   extensions/brave: {}

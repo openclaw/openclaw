@@ -100,7 +100,7 @@ describe("resolveNpmPublishPlan", () => {
   });
 
   it("does not mirror beta when beta already points at a newer prerelease", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.31-beta.1")).toEqual({
+    expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: [],
@@ -122,7 +122,7 @@ describe("compareReleaseVersions", () => {
   });
 
   it("treats a newer beta day as newer than an older stable day", () => {
-    expect(compareReleaseVersions("2026.3.31-beta.1", "2026.3.29")).toBe(1);
+    expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
   });
 
   it("orders stable correction releases after the base stable release", () => {
