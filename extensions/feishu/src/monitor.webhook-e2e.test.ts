@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("Feishu webhook signed-request e2e", () => {
-  it("rejects invalid signatures with 401 instead of empty 200", async () => {
+  it("rejects invalid signatures on non-challenge events with 401", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
     await withRunningWebhookMonitor(
@@ -76,7 +76,11 @@ describe("Feishu webhook signed-request e2e", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const payload = {
+          schema: "2.0",
+          header: { event_type: "im.message.receive_v1" },
+          event: {},
+        };
         const rawBody = JSON.stringify(payload);
         const response = await fetch(url, {
           method: "POST",
@@ -92,7 +96,7 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
-  it("rejects missing signature headers with 401", async () => {
+  it("rejects missing signature headers on non-challenge events with 401", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
     await withRunningWebhookMonitor(
@@ -107,7 +111,11 @@ describe("Feishu webhook signed-request e2e", () => {
         const response = await fetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ type: "url_verification", challenge: "challenge-token" }),
+          body: JSON.stringify({
+            schema: "2.0",
+            header: { event_type: "im.message.receive_v1" },
+            event: {},
+          }),
         });
 
         expect(response.status).toBe(401);
@@ -128,7 +136,11 @@ describe("Feishu webhook signed-request e2e", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const payload = {
+          schema: "2.0",
+          header: { event_type: "im.message.receive_v1" },
+          event: {},
+        };
         const headers = signFeishuPayload({
           encryptKey: "encrypt_key",
           rawBody: JSON.stringify(payload),
@@ -147,7 +159,7 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
-  it("returns 401 for unsigned invalid json before parsing", async () => {
+  it("returns 400 for invalid json before signature check", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
     await withRunningWebhookMonitor(
@@ -165,8 +177,8 @@ describe("Feishu webhook signed-request e2e", () => {
           body: "{not-json",
         });
 
-        expect(response.status).toBe(401);
-        expect(await response.text()).toBe("Invalid signature");
+        expect(response.status).toBe(400);
+        expect(await response.text()).toBe("Invalid JSON");
       },
     );
   });
@@ -208,7 +220,11 @@ describe("Feishu webhook signed-request e2e", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const payload = {
+          type: "url_verification",
+          challenge: "challenge-token",
+          token: "verify_token",
+        };
         const response = await postSignedPayload(url, payload);
 
         expect(response.status).toBe(200);
@@ -258,6 +274,7 @@ describe("Feishu webhook signed-request e2e", () => {
           encrypt: encryptFeishuPayload("encrypt_key", {
             type: "url_verification",
             challenge: "encrypted-challenge-token",
+            token: "verify_token",
           }),
         };
         const response = await postSignedPayload(url, payload);
@@ -266,6 +283,158 @@ describe("Feishu webhook signed-request e2e", () => {
         await expect(response.json()).resolves.toEqual({
           challenge: "encrypted-challenge-token",
         });
+      },
+    );
+  });
+
+  it("accepts unsigned encrypted url_verification challenges (real Feishu behavior)", async () => {
+    // Feishu does not send X-Lark-Signature headers on url_verification
+    // challenge requests, even when Encrypt Key is configured.
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "unsigned-encrypted-challenge",
+        path: "/hook-e2e-unsigned-encrypted-challenge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          encrypt: encryptFeishuPayload("encrypt_key", {
+            type: "url_verification",
+            challenge: "unsigned-encrypted-challenge-token",
+            token: "verify_token",
+          }),
+        };
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          challenge: "unsigned-encrypted-challenge-token",
+        });
+      },
+    );
+  });
+
+  it("accepts unsigned plaintext url_verification challenges", async () => {
+    // When Encrypt Key is not used for the challenge body, Feishu sends
+    // a plaintext url_verification without signature headers.
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "unsigned-plaintext-challenge",
+        path: "/hook-e2e-unsigned-plaintext-challenge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          type: "url_verification",
+          challenge: "plaintext-challenge-token",
+          token: "verify_token",
+        };
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          challenge: "plaintext-challenge-token",
+        });
+      },
+    );
+  });
+
+  it("rejects malformed encrypted payloads via signature check", async () => {
+    // Malformed encrypt data fails to decrypt in resolveChallenge (returns
+    // null), so the request falls through to signature verification which
+    // rejects it with 401 because no signature headers are present.
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "malformed-encrypt",
+        path: "/hook-e2e-malformed-encrypt",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ encrypt: "not-valid-base64-ciphertext" }),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
+  });
+
+  it("rejects challenge with wrong verification token with 401", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "wrong-verify-token",
+        path: "/hook-e2e-wrong-verify-token",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          type: "url_verification",
+          challenge: "challenge-token",
+          token: "wrong_token",
+        };
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid verification token");
+      },
+    );
+  });
+
+  it("rejects challenge with missing verification token with 401", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "missing-verify-token",
+        path: "/hook-e2e-missing-verify-token",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          type: "url_verification",
+          challenge: "challenge-token",
+        };
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid verification token");
       },
     );
   });

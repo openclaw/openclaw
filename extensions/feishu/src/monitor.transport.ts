@@ -59,6 +59,41 @@ function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | n
   }
 }
 
+/**
+ * Resolve the inner challenge payload, decrypting if the outer body is
+ * `{ "encrypt": "..." }`.  Returns `null` when the payload is not a
+ * `url_verification` challenge or when decryption fails.
+ */
+function resolveChallenge(
+  payload: Record<string, unknown>,
+  encryptKey: string,
+): { challenge: string; token?: string } | null {
+  try {
+    let inner: Record<string, unknown>;
+    if (typeof payload["encrypt"] === "string" && encryptKey) {
+      const key = crypto.createHash("sha256").update(encryptKey).digest();
+      const buf = Buffer.from(payload["encrypt"] as string, "base64");
+      const iv = buf.subarray(0, 16);
+      const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+      const decrypted = decipher.update(buf.subarray(16)) + decipher.final("utf8");
+      const parsed: unknown = JSON.parse(decrypted);
+      if (!isFeishuWebhookPayload(parsed)) return null;
+      inner = parsed;
+    } else {
+      inner = payload;
+    }
+    if (inner["type"] !== "url_verification" || typeof inner["challenge"] !== "string") {
+      return null;
+    }
+    return {
+      challenge: inner["challenge"] as string,
+      token: typeof inner["token"] === "string" ? (inner["token"] as string) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isFeishuWebhookSignatureValid(params: {
   headers: http.IncomingHttpHeaders;
   rawBody: string;
@@ -204,7 +239,35 @@ export async function monitorWebhook({
           return;
         }
 
-        // Reject invalid signatures before any JSON parsing to keep the auth boundary strict.
+        const payload = parseFeishuWebhookPayload(rawBody);
+        if (!payload) {
+          respondText(res, 400, "Invalid JSON");
+          return;
+        }
+
+        // Feishu does not send signature headers on url_verification challenge
+        // requests, even when Encrypt Key is configured. Handle the challenge
+        // before signature verification so the initial URL setup succeeds.
+        // Validate the verification token embedded in the challenge payload to
+        // prevent unauthenticated callers from getting a successful response.
+        // See: https://open.larksuite.com/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case
+        const challengeResult = resolveChallenge(payload, account.encryptKey ?? "");
+        if (challengeResult) {
+          if (
+            account.verificationToken &&
+            (!challengeResult.token ||
+              !timingSafeEqualString(challengeResult.token, account.verificationToken))
+          ) {
+            respondText(res, 401, "Invalid verification token");
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ challenge: challengeResult.challenge }));
+          return;
+        }
+
+        // Verify signature for all non-challenge event pushes.
         if (
           !isFeishuWebhookSignatureValid({
             headers: req.headers,
@@ -213,22 +276,6 @@ export async function monitorWebhook({
           })
         ) {
           respondText(res, 401, "Invalid signature");
-          return;
-        }
-
-        const payload = parseFeishuWebhookPayload(rawBody);
-        if (!payload) {
-          respondText(res, 400, "Invalid JSON");
-          return;
-        }
-
-        const { isChallenge, challenge } = Lark.generateChallenge(payload, {
-          encryptKey: account.encryptKey ?? "",
-        });
-        if (isChallenge) {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(challenge));
           return;
         }
 
