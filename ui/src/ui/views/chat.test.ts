@@ -245,6 +245,84 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("renders inline images returned by tool result messages", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "toolResult",
+              toolCallId: "tool-read-image-1",
+              content: [
+                { type: "text", text: "Read image file [image/png]" },
+                { type: "image", data: "QUJDRA==", mimeType: "image/png" },
+              ],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,QUJDRA==");
+  });
+
+  it("renders image-only tool result messages inline", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "toolResult",
+              toolCallId: "tool-read-image-2",
+              toolName: "read_image",
+              content: [{ type: "image", data: "Rk9PQg==", mimeType: "image/png" }],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,Rk9PQg==");
+  });
+
+  it("renders nested tool result images inline", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "toolResult",
+                  toolUseId: "tool-read-image-3",
+                  content: [{ type: "image", data: "SU1H", mimeType: "image/png" }],
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,SU1H");
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(
