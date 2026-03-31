@@ -37,6 +37,7 @@ export type ResolveWindowsSpawnProgramParams = {
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   packageName?: string;
+  /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<
