@@ -297,14 +297,15 @@ describe("handleZaloWebhookRequest", () => {
   it("keeps replay dedupe isolated across different webhook paths", async () => {
     const sinkA = vi.fn();
     const sinkB = vi.fn();
+    const sharedSecret = "secret";
     const unregisterA = registerTarget({
       path: "/hook-replay-scope-a",
-      secret: "secret-a",
+      secret: sharedSecret,
       statusSink: sinkA,
     });
     const unregisterB = registerTarget({
       path: "/hook-replay-scope-b",
-      secret: "secret-b",
+      secret: sharedSecret,
       statusSink: sinkB,
     });
     const payload = createTextUpdate({
@@ -320,7 +321,7 @@ describe("handleZaloWebhookRequest", () => {
         const first = await fetch(`${baseUrl}/hook-replay-scope-a`, {
           method: "POST",
           headers: {
-            "x-bot-api-secret-token": "secret-a",
+            "x-bot-api-secret-token": sharedSecret,
             "content-type": "application/json",
           },
           body: JSON.stringify(payload),
@@ -328,7 +329,7 @@ describe("handleZaloWebhookRequest", () => {
         const second = await fetch(`${baseUrl}/hook-replay-scope-b`, {
           method: "POST",
           headers: {
-            "x-bot-api-secret-token": "secret-b",
+            "x-bot-api-secret-token": sharedSecret,
             "content-type": "application/json",
           },
           body: JSON.stringify(payload),
