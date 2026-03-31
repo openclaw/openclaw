@@ -1,3 +1,4 @@
+import { isMatrixNotFoundError } from "../errors.js";
 import type { MatrixClient } from "../sdk.js";
 
 export type MatrixRoomInfo = {
@@ -43,8 +44,10 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
       if (nameState && typeof nameState.name === "string") {
         name = nameState.name;
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      if (isMatrixNotFoundError(err)) {
+        nameResolved = true;
+      }
     }
     const info = { name, nameResolved };
     if (nameResolved) {
@@ -73,8 +76,10 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
       if (Array.isArray(rawAliases)) {
         altAliases = rawAliases.filter((entry): entry is string => typeof entry === "string");
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      if (isMatrixNotFoundError(err)) {
+        aliasesResolved = true;
+      }
     }
     const info = { canonicalAlias, altAliases, aliasesResolved };
     if (aliasesResolved) {

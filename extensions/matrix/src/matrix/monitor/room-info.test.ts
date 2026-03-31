@@ -105,6 +105,33 @@ describe("createMatrixRoomInfoResolver", () => {
     });
   });
 
+  it("treats missing room metadata as resolved-empty state", async () => {
+    const client = {
+      getRoomStateEvent: vi.fn(async (_roomId: string, eventType: string) => {
+        if (eventType === "m.room.name" || eventType === "m.room.canonical_alias") {
+          const err = new Error("M_NOT_FOUND");
+          Object.assign(err, {
+            statusCode: 404,
+            body: { errcode: "M_NOT_FOUND" },
+          });
+          throw err;
+        }
+        return {};
+      }),
+    } as unknown as MatrixClient & {
+      getRoomStateEvent: ReturnType<typeof vi.fn>;
+    };
+    const resolver = createMatrixRoomInfoResolver(client);
+
+    await expect(
+      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
+    ).resolves.toEqual({
+      altAliases: [],
+      aliasesResolved: true,
+      nameResolved: true,
+    });
+  });
+
   it("retries room metadata after a transient lookup failure", async () => {
     const client = {
       getRoomStateEvent: vi.fn(async (_roomId: string, eventType: string) => {
