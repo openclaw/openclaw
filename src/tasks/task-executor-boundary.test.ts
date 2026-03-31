@@ -14,6 +14,7 @@ const RAW_TASK_MUTATORS = [
 ] as const;
 
 const ALLOWED_CALLERS = new Set([
+  "tasks/operations-runtime.ts",
   "tasks/task-executor.ts",
   "tasks/task-registry.ts",
   "tasks/task-registry.maintenance.ts",

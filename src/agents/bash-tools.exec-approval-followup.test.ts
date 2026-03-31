@@ -11,9 +11,8 @@ let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup
 beforeEach(async () => {
   vi.resetModules();
   ({ callGatewayTool } = await import("./tools/gateway.js"));
-  ({ buildExecApprovalFollowupPrompt, sendExecApprovalFollowup } = await import(
-    "./bash-tools.exec-approval-followup.js"
-  ));
+  ({ buildExecApprovalFollowupPrompt, sendExecApprovalFollowup } =
+    await import("./bash-tools.exec-approval-followup.js"));
 });
 
 afterEach(() => {

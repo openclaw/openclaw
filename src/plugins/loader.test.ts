@@ -30,6 +30,10 @@ import {
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
+import {
+  getRegisteredOperationsRuntime,
+  registerOperationsRuntimeForOwner,
+} from "./operations-state.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -1459,6 +1463,181 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toEqual([]);
+  });
+
+  it("restores the active operations runtime during snapshot loads", () => {
+    const activeRuntime = {
+      async dispatch() {
+        return { matched: true, created: true, record: null };
+      },
+      async getById() {
+        return null;
+      },
+      async findByRunId() {
+        return null;
+      },
+      async list() {
+        return [];
+      },
+      async summarize() {
+        return {
+          total: 0,
+          active: 0,
+          terminal: 0,
+          failures: 0,
+          byNamespace: { active: 0 },
+          byKind: {},
+          byStatus: {},
+        };
+      },
+      async audit() {
+        return [];
+      },
+      async maintenance() {
+        return {
+          reconciled: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        };
+      },
+      async cancel() {
+        return { found: false, cancelled: false, reason: "active" };
+      },
+    };
+    registerOperationsRuntimeForOwner(activeRuntime, "active-operations");
+    const plugin = writePlugin({
+      id: "snapshot-operations",
+      filename: "snapshot-operations.cjs",
+      body: `module.exports = {
+        id: "snapshot-operations",
+        register(api) {
+          api.registerOperationsRuntime({
+            async dispatch() {
+              return { matched: true, created: true, record: null };
+            },
+            async getById() {
+              return null;
+            },
+            async findByRunId() {
+              return null;
+            },
+            async list() {
+              return [];
+            },
+            async summarize() {
+              return {
+                total: 1,
+                active: 1,
+                terminal: 0,
+                failures: 0,
+                byNamespace: { snapshot: 1 },
+                byKind: { snapshot: 1 },
+                byStatus: { queued: 1 },
+              };
+            },
+            async audit() {
+              return [];
+            },
+            async maintenance() {
+              return {
+                reconciled: 0,
+                cleanupStamped: 0,
+                pruned: 0,
+              };
+            },
+            async cancel() {
+              return { found: false, cancelled: false, reason: "snapshot" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-operations"],
+        },
+      },
+      onlyPluginIds: ["snapshot-operations"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-operations")?.status).toBe(
+      "loaded",
+    );
+    expect(getRegisteredOperationsRuntime()).toBe(activeRuntime);
+  });
+
+  it("clears newly-registered operations runtime when plugin register fails", () => {
+    const plugin = writePlugin({
+      id: "failing-operations",
+      filename: "failing-operations.cjs",
+      body: `module.exports = {
+        id: "failing-operations",
+        register(api) {
+          api.registerOperationsRuntime({
+            async dispatch() {
+              return { matched: true, created: true, record: null };
+            },
+            async getById() {
+              return null;
+            },
+            async findByRunId() {
+              return null;
+            },
+            async list() {
+              return [];
+            },
+            async summarize() {
+              return {
+                total: 1,
+                active: 1,
+                terminal: 0,
+                failures: 0,
+                byNamespace: { failing: 1 },
+                byKind: { failing: 1 },
+                byStatus: { queued: 1 },
+              };
+            },
+            async audit() {
+              return [];
+            },
+            async maintenance() {
+              return {
+                reconciled: 0,
+                cleanupStamped: 0,
+                pruned: 0,
+              };
+            },
+            async cancel() {
+              return { found: false, cancelled: false, reason: "failing" };
+            },
+          });
+          throw new Error("operations register failed");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-operations"],
+        },
+      },
+      onlyPluginIds: ["failing-operations"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-operations")?.status).toBe(
+      "error",
+    );
+    expect(getRegisteredOperationsRuntime()).toBeUndefined();
   });
 
   it("throws when activate:false is used without cache:false", () => {

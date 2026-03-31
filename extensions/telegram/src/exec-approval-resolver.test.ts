@@ -63,14 +63,10 @@ describe("resolveTelegramExecApproval", () => {
       id: "legacy-plugin-123",
       decision: "allow-always",
     });
-    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(
-      2,
-      "plugin.approval.resolve",
-      {
-        id: "legacy-plugin-123",
-        decision: "allow-always",
-      },
-    );
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "legacy-plugin-123",
+      decision: "allow-always",
+    });
   });
 
   it("falls back to plugin.approval.resolve for structured approval-not-found errors", async () => {
@@ -95,14 +91,10 @@ describe("resolveTelegramExecApproval", () => {
       id: "legacy-plugin-123",
       decision: "allow-always",
     });
-    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(
-      2,
-      "plugin.approval.resolve",
-      {
-        id: "legacy-plugin-123",
-        decision: "allow-always",
-      },
-    );
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "legacy-plugin-123",
+      decision: "allow-always",
+    });
   });
 
   it("does not fall back to plugin.approval.resolve without explicit permission", async () => {

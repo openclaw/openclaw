@@ -185,6 +185,10 @@
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
     },
+    "./plugin-sdk/operations-default": {
+      "types": "./dist/plugin-sdk/operations-default.d.ts",
+      "default": "./dist/plugin-sdk/operations-default.js"
+    },
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"

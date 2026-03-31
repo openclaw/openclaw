@@ -132,6 +132,36 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     stt: {
       transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
     },
+    operations: {
+      dispatch: vi.fn().mockResolvedValue({
+        matched: false,
+        record: null,
+      }) as unknown as PluginRuntime["operations"]["dispatch"],
+      getById: vi.fn().mockResolvedValue(null) as unknown as PluginRuntime["operations"]["getById"],
+      findByRunId: vi
+        .fn()
+        .mockResolvedValue(null) as unknown as PluginRuntime["operations"]["findByRunId"],
+      list: vi.fn().mockResolvedValue([]) as unknown as PluginRuntime["operations"]["list"],
+      summarize: vi.fn().mockResolvedValue({
+        total: 0,
+        active: 0,
+        terminal: 0,
+        failures: 0,
+        byNamespace: {},
+        byKind: {},
+        byStatus: {},
+      }) as unknown as PluginRuntime["operations"]["summarize"],
+      audit: vi.fn().mockResolvedValue([]) as unknown as PluginRuntime["operations"]["audit"],
+      maintenance: vi.fn().mockResolvedValue({
+        reconciled: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      }) as unknown as PluginRuntime["operations"]["maintenance"],
+      cancel: vi.fn().mockResolvedValue({
+        found: false,
+        cancelled: false,
+      }) as unknown as PluginRuntime["operations"]["cancel"],
+    },
     channel: {
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
