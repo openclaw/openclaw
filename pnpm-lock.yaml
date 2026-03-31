@@ -255,8 +255,8 @@ importers:
   extensions/aimlapi:
     dependencies:
       '@sinclair/typebox':
-        specifier: 0.34.48
-        version: 0.34.48
+        specifier: 0.34.49
+        version: 0.34.49
 
   extensions/amazon-bedrock:
     dependencies:
