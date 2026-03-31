@@ -56,9 +56,6 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
-  PluginHookBeforeInstallContext,
-  PluginHookBeforeInstallEvent,
-  PluginHookBeforeInstallResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -109,9 +106,6 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
-  PluginHookBeforeInstallContext,
-  PluginHookBeforeInstallEvent,
-  PluginHookBeforeInstallResult,
 };
 
 export type HookRunnerLogger = {
@@ -201,7 +195,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
-    systemPrompt: lastDefined(acc?.systemPrompt, next.systemPrompt),
+    // Keep the first defined system prompt so higher-priority hooks win.
+    systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
     prependContext: concatOptionalTextSegments({
       left: acc?.prependContext,
       right: next.prependContext,
@@ -984,41 +979,6 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
-  // Skill Install Hooks
-  // =========================================================================
-
-  /**
-   * Run before_install hook.
-   * Allows plugins to augment scan findings or block installs.
-   * Runs sequentially so higher-priority hooks can block before lower ones run.
-   */
-  async function runBeforeInstall(
-    event: PluginHookBeforeInstallEvent,
-    ctx: PluginHookBeforeInstallContext,
-  ): Promise<PluginHookBeforeInstallResult | undefined> {
-    return runModifyingHook<"before_install", PluginHookBeforeInstallResult>(
-      "before_install",
-      event,
-      ctx,
-      {
-        mergeResults: (acc, next) => {
-          if (acc?.block === true) {
-            return acc;
-          }
-          const mergedFindings = [...(acc?.findings ?? []), ...(next.findings ?? [])];
-          return {
-            findings: mergedFindings.length > 0 ? mergedFindings : undefined,
-            block: stickyTrue(acc?.block, next.block),
-            blockReason: lastDefined(acc?.blockReason, next.blockReason),
-          };
-        },
-        shouldStop: (result) => result.block === true,
-        terminalLabel: "block=true",
-      },
-    );
-  }
-
-  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -1071,8 +1031,6 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
-    // Install hooks
-    runBeforeInstall,
     // Utility
     hasHooks,
     getHookCount,

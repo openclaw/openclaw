@@ -187,6 +187,39 @@ describe("telegramPlugin groups", () => {
   });
 });
 
+describe("telegramPlugin messaging", () => {
+  it("owns topic session parsing and parent fallback candidates", () => {
+    expect(
+      telegramPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "-1001:topic:77",
+      }),
+    ).toEqual({
+      id: "-1001",
+      threadId: "77",
+      baseConversationId: "-1001",
+      parentConversationCandidates: ["-1001"],
+    });
+    expect(
+      telegramPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "-1001:Topic:77",
+      }),
+    ).toEqual({
+      id: "-1001",
+      threadId: "77",
+      baseConversationId: "-1001",
+      parentConversationCandidates: ["-1001"],
+    });
+    expect(
+      telegramPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "-1001",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("telegramPlugin duplicate token guard", () => {
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();

@@ -45,6 +45,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
+- [`flows`](/cli/flows)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
@@ -170,6 +171,10 @@ openclaw [--dev] [--profile <name>] <command>
     list
     show
     notify
+    cancel
+  flows
+    list
+    show
     cancel
   gateway
     call
@@ -809,6 +814,14 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
 
+### `flows`
+
+List and manage [ClawFlow](/automation/clawflow) jobs across agents.
+
+- `flows list` — show active and recent flows
+- `flows show <id>` — show details for a specific flow
+- `flows cancel <id>` — cancel a flow and its active child tasks
+
 ## Gateway
 
 ### `gateway`
@@ -905,12 +918,14 @@ Subcommands:
 
 Common RPCs:
 
+- `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge a partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
 `config.get` if a config already exists.
+Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
 
 ## Models
 
