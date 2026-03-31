@@ -1133,9 +1133,18 @@ export function createTaskRecord(params: {
     requesterSessionKey,
     ownerKey: params.ownerKey,
   });
+  assertTaskOwner({
+    ownerKey,
+    scopeKind,
+  });
   const existing = findExistingTaskForCreate({
-    ...params,
-    requesterSessionKey,
+    runtime: params.runtime,
+    ownerKey,
+    scopeKind,
+    childSessionKey: params.childSessionKey,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
   });
   if (existing) {
     return mergeExistingTaskForCreate(existing, params);
@@ -1143,11 +1152,17 @@ export function createTaskRecord(params: {
   const now = Date.now();
   const taskId = crypto.randomUUID();
   const status = normalizeTaskStatus(params.status);
-  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(requesterSessionKey);
+  const deliveryStatus =
+    params.deliveryStatus ??
+    ensureDeliveryStatus({
+      ownerKey,
+      scopeKind,
+    });
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus,
-    requesterSessionKey,
+    ownerKey,
+    scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
   const record: TaskRecord = {
