@@ -7,11 +7,29 @@ import { acquireWorkspaceLock, withWorkspaceLock } from "./workspace-lock-manage
 
 let fixtureRoot = "";
 let caseId = 0;
+let volumeIsCaseInsensitive = false;
 
 async function makeCaseDir(): Promise<string> {
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
   await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Probe whether the filesystem at `dir` is case-insensitive (e.g. default macOS
+ * APFS). Writes a temp file, then stats it with altered casing.
+ */
+async function probeIsCaseInsensitive(dir: string): Promise<boolean> {
+  const probe = path.join(dir, `case-probe-${process.pid}`);
+  await fs.writeFile(probe, "", { flag: "wx" });
+  try {
+    await fs.stat(probe.toUpperCase());
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await fs.rm(probe, { force: true }).catch(() => undefined);
+  }
 }
 
 async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promise<string> {
@@ -33,6 +51,7 @@ describe("workspace lock manager", () => {
     fixtureRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-locks-")),
     );
+    volumeIsCaseInsensitive = await probeIsCaseInsensitive(fixtureRoot);
   });
 
   afterAll(async () => {
@@ -439,7 +458,7 @@ describe("workspace lock manager", () => {
     await lockB.release();
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform === "win32" || volumeIsCaseInsensitive)(
     "preserves case-sensitive distinct missing-file lock targets",
     async () => {
       const dir = await makeCaseDir();
@@ -503,7 +522,7 @@ describe("workspace lock manager", () => {
     await lockB.release();
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform === "win32" || volumeIsCaseInsensitive)(
     "keeps mixed-case lock identity stable after materialization",
     async () => {
       const dir = await makeCaseDir();
@@ -860,7 +879,7 @@ describe("workspace lock manager", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform === "win32" || volumeIsCaseInsensitive)(
     "preserves distinct unresolved file-path casing on case-sensitive darwin volumes",
     async () => {
       const dir = await makeCaseDir();

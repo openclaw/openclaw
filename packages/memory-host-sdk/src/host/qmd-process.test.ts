@@ -30,7 +30,9 @@ const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 
 beforeEach(async () => {
-  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
+  // Resolve through realpath so macOS /tmp → /private/tmp doesn't cause path
+  // mismatches when the production code calls fs.realpathSync internally.
+  tempDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-")));
   platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 });
 
