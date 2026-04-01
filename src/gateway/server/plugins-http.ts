@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
+import { getAllRegistries, resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -61,7 +61,22 @@ export function createGatewayPluginRequestHandler(params: {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
     const registry = resolveActivePluginHttpRouteRegistry(params.registry);
-    const routes = registry.httpRoutes ?? [];
+    // Aggregate routes from all registries (fixes ESM/CJS module separation)
+    const allRegistries = getAllRegistries();
+    const allRoutes = new Set<(typeof registry.httpRoutes)[0]>();
+    // Add routes from the primary registry
+    for (const r of registry.httpRoutes ?? []) {
+      allRoutes.add(r);
+    }
+    // Add routes from all registries in the pool (for cross-module access)
+    for (const reg of allRegistries) {
+      if (reg.httpRoutes) {
+        for (const r of reg.httpRoutes) {
+          allRoutes.add(r);
+        }
+      }
+    }
+    const routes = Array.from(allRoutes);
     if (routes.length === 0) {
       return false;
     }
@@ -72,7 +87,7 @@ export function createGatewayPluginRequestHandler(params: {
         const url = new URL(req.url ?? "/", "http://localhost");
         return resolvePluginRoutePathContext(url.pathname);
       })();
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    const matchedRoutes = findMatchingPluginHttpRoutes({ httpRoutes: routes } as PluginRegistry, pathContext);
     if (matchedRoutes.length === 0) {
       return false;
     }

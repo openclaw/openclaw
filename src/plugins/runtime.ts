@@ -3,6 +3,17 @@ import type { PluginRegistry } from "./registry.js";
 
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
+// Global pool to track all registries (fixes ESM/CJS module separation issue)
+function getRegistryPool(): Map<string, PluginRegistry> {
+  const globalState = globalThis as typeof globalThis & {
+    __openclaw_registry_pool?: Map<string, PluginRegistry>;
+  };
+  if (!globalState.__openclaw_registry_pool) {
+    globalState.__openclaw_registry_pool = new Map();
+  }
+  return globalState.__openclaw_registry_pool;
+}
+
 type RegistrySurfaceState = {
   registry: PluginRegistry | null;
   pinned: boolean;
@@ -84,6 +95,10 @@ export function setActivePluginRegistry(
   syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  // Track in global pool for cross-module access
+  const pool = getRegistryPool();
+  const poolKey = cacheKey ?? "default";
+  pool.set(poolKey, registry);
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
@@ -188,6 +203,11 @@ export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "
 
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
+}
+
+/** Get all registries from the global pool (for aggregating httpRoutes across ESM/CJS modules) */
+export function getAllRegistries(): PluginRegistry[] {
+  return Array.from(getRegistryPool().values());
 }
 
 export function resetPluginRuntimeStateForTest(): void {
