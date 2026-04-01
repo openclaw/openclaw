@@ -13,7 +13,7 @@ import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -83,6 +83,7 @@ async function postCronWebhook(params: {
   blockedLog: string;
   failedLog: string;
   logger: CronLogger;
+  policy?: SsrFPolicy;
 }): Promise<void> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
@@ -98,6 +99,7 @@ async function postCronWebhook(params: {
         body: JSON.stringify(params.payload),
         signal: abortController.signal,
       },
+      policy: params.policy,
     });
     await result.release();
   } catch (err) {
@@ -130,6 +132,7 @@ export async function sendGatewayCronFailureAlert(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  webhookAllowPrivateNetwork?: unknown;
   job: CronJob;
   text: string;
   channel: CronMessageChannel;
@@ -139,6 +142,8 @@ export async function sendGatewayCronFailureAlert(params: {
 }): Promise<void> {
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
   const webhookToken = normalizeOptionalString(params.webhookToken);
+  const webhookPolicy: SsrFPolicy | undefined =
+    params.webhookAllowPrivateNetwork === true ? { allowPrivateNetwork: true } : undefined;
 
   if (params.mode === "webhook" && !params.to) {
     params.logger.warn(
@@ -163,6 +168,7 @@ export async function sendGatewayCronFailureAlert(params: {
         blockedLog: "cron: failure alert webhook blocked by SSRF guard",
         failedLog: "cron: failure alert webhook failed",
         logger: params.logger,
+        policy: webhookPolicy,
       });
     } else {
       params.logger.warn(
@@ -200,11 +206,14 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  webhookAllowPrivateNetwork?: unknown;
   legacyWebhook?: unknown;
   globalFailureDestination?: CronFailureDestinationConfig;
   warnedLegacyWebhookJobs: Set<string>;
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
+  const webhookPolicy: SsrFPolicy | undefined =
+    params.webhookAllowPrivateNetwork === true ? { allowPrivateNetwork: true } : undefined;
   const legacyWebhook = normalizeOptionalString(params.legacyWebhook);
   const legacyNotify = (params.job as { notify?: unknown } | undefined)?.notify === true;
   const webhookTarget = resolveCronWebhookTarget({
@@ -247,6 +256,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
         blockedLog: "cron: webhook delivery blocked by SSRF guard",
         failedLog: "cron: webhook delivery failed",
         logger: params.logger,
+        policy: webhookPolicy,
       });
     })();
   }
@@ -258,6 +268,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     logger: params.logger,
     resolveCronAgent: params.resolveCronAgent,
     webhookToken,
+    webhookPolicy,
     globalFailureDestination: params.globalFailureDestination,
   });
 }
@@ -269,6 +280,7 @@ function dispatchCronFailureDestinationNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: string;
+  webhookPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   if (params.evt.status !== "error" || !params.job || params.job.delivery?.bestEffort === true) {
@@ -303,6 +315,7 @@ function dispatchCronFailureDestinationNotifications(params: {
             blockedLog: "cron: failure destination webhook blocked by SSRF guard",
             failedLog: "cron: failure destination webhook failed",
             logger: params.logger,
+            policy: params.webhookPolicy,
           });
         })();
       } else {

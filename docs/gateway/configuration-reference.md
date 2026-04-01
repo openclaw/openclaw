@@ -1110,6 +1110,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
     maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
+    webhookAllowPrivateNetwork: false, // set true to allow delivery to loopback/private-network URLs
     sessionRetention: "24h", // duration string or false
     runLog: {
       maxBytes: "2mb", // default 2_000_000 bytes
@@ -1123,6 +1124,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookAllowPrivateNetwork`: allow cron webhook delivery to loopback and private-network URLs (default: `false`). Enable only when the webhook endpoint is intentionally on a private network.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
 ### `cron.retry`

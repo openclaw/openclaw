@@ -400,6 +400,7 @@ Model override note:
       retryOn: ["rate_limit", "overloaded", "network", "server_error"],
     },
     webhookToken: "replace-with-dedicated-webhook-token",
+    webhookAllowPrivateNetwork: false, // set true to allow delivery to loopback/private-network URLs
     sessionRetention: "24h",
     runLog: { maxBytes: "2mb", keepLines: 2000 },
   },
@@ -425,6 +426,8 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
     `cron.sessionRetention` (default `24h`) prunes isolated run-session entries. `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune run-log files.
   </Accordion>
 </AccordionGroup>
+
+**Webhook private network**: by default, webhook delivery to loopback and private-network URLs is blocked by the SSRF guard (hardened for CVE-2026-27488). Set `cron.webhookAllowPrivateNetwork: true` to allow delivery to internal endpoints. Applies to all cron webhook paths: per-job delivery, failure destination, failure alert, and the deprecated legacy `cron.webhook` fallback.
 
 ## Troubleshooting
 

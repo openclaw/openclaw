@@ -399,6 +399,58 @@ describe("buildGatewayCronService", () => {
           body: expect.stringContaining('"action":"finished"'),
           signal: expect.any(AbortSignal),
         },
+        policy: undefined,
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("passes allowPrivateNetwork policy when webhookAllowPrivateNetwork is true", async () => {
+    const cfg = createCronConfig("server-cron-ssrf-allowed");
+    const cfgWithAllowPrivate = {
+      ...cfg,
+      cron: {
+        ...cfg.cron,
+        webhookAllowPrivateNetwork: true,
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfgWithAllowPrivate);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
+
+    const state = buildGatewayCronService({
+      cfg: cfgWithAllowPrivate,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "ssrf-webhook-allowed",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+        delivery: {
+          mode: "webhook",
+          to: "http://127.0.0.1:8080/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+        url: "http://127.0.0.1:8080/cron-finished",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: expect.stringContaining('"action":"finished"'),
+          signal: expect.any(AbortSignal),
+        },
+        policy: { allowPrivateNetwork: true },
       });
     } finally {
       state.cron.stop();
