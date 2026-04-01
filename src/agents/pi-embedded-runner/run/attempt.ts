@@ -1971,7 +1971,11 @@ export async function runEmbeddedAttempt(
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
       try {
-        removeToolResultContextGuard?.();
+        try {
+          removeToolResultContextGuard?.();
+        } catch {
+          /* best-effort */
+        }
         try {
           await flushPendingToolResultsAfterIdle({
             agent: session?.agent,
