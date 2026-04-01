@@ -214,10 +214,12 @@ Generic media sends fall back to the existing image-only route when a LINE-speci
 
   ```bash
   DIST="$(dirname "$(which openclaw)")/../lib/node_modules/openclaw/dist"
-  ln -sf "$DIST/plugins/runtime/runtime-line.contract.js" "$DIST/runtime-line.contract.js"
+  # Linux global installs usually require elevated privileges.
+  sudo ln -sf "$DIST/plugins/runtime/runtime-line.contract.js" "$DIST/runtime-line.contract.js"
   ```
 
-  Then restart the gateway.
+  Then restart the gateway. Re-run the `ln -sf` command after each upgrade until
+  a patch release includes the fix.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
 
