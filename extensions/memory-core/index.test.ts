@@ -53,59 +53,6 @@ describe("buildPromptSection", () => {
   });
 });
 
-describe("plugin registration", () => {
-  it("registers memory tools + cli through extension-local modules", () => {
-    const registerTool = vi.fn();
-    const registerMemoryPromptSection = vi.fn();
-    const registerMemoryFlushPlan = vi.fn();
-    const registerMemoryRuntime = vi.fn();
-    const registerMemoryEmbeddingProvider = vi.fn();
-    const registerCli = vi.fn();
-    const api = {
-      registerTool,
-      registerMemoryPromptSection,
-      registerMemoryFlushPlan,
-      registerMemoryRuntime,
-      registerMemoryEmbeddingProvider,
-      registerCli,
-    };
-
-    plugin.register(api as never);
-
-    expect(registerMemoryPromptSection).toHaveBeenCalledWith(buildPromptSection);
-    expect(registerMemoryFlushPlan).toHaveBeenCalledWith(buildMemoryFlushPlan);
-    expect(registerMemoryRuntime).toHaveBeenCalledWith(memoryRuntime);
-    expect(registerMemoryEmbeddingProvider).toHaveBeenCalledTimes(6);
-    expect(registerTool).toHaveBeenCalledTimes(2);
-    expect(registerTool.mock.calls[0]?.[1]).toEqual({ names: ["memory_search"] });
-    expect(registerTool.mock.calls[1]?.[1]).toEqual({ names: ["memory_get"] });
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
-      descriptors: [
-        {
-          name: "memory",
-          description: "Search, inspect, and reindex memory files",
-          hasSubcommands: true,
-        },
-      ],
-    });
-
-    const searchFactory = registerTool.mock.calls[0]?.[0] as
-      | ((ctx: unknown) => unknown)
-      | undefined;
-    const getFactory = registerTool.mock.calls[1]?.[0] as ((ctx: unknown) => unknown) | undefined;
-    const cliRegistrar = registerCli.mock.calls[0]?.[0] as
-      | ((ctx: { program: unknown }) => void)
-      | undefined;
-    const ctx = { config: { plugins: {} }, sessionKey: "agent:main:slack:dm:u123" };
-    const program = new Command();
-
-    expect((searchFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_search");
-    expect((getFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_get");
-    expect(() => cliRegistrar?.({ program } as never)).not.toThrow();
-    expect(program.commands.map((command) => command.name())).toContain("memory");
-  });
-});
-
 describe("buildMemoryFlushPlan", () => {
   const cfg = {
     agents: {

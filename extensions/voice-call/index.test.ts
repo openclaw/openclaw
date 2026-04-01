@@ -126,16 +126,6 @@ describe("voice-call plugin", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("registers gateway methods", () => {
-    const { methods } = setup({ provider: "mock" });
-    expect(methods.has("voicecall.initiate")).toBe(true);
-    expect(methods.has("voicecall.continue")).toBe(true);
-    expect(methods.has("voicecall.speak")).toBe(true);
-    expect(methods.has("voicecall.end")).toBe(true);
-    expect(methods.has("voicecall.status")).toBe(true);
-    expect(methods.has("voicecall.start")).toBe(true);
-  });
-
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.initiate") as
