@@ -184,8 +184,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
             }
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-            })
-            .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
       return {
         images,
