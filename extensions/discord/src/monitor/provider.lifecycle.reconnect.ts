@@ -401,8 +401,11 @@ export function createDiscordGatewayReconnectController(params: {
     if (!params.gateway) {
       return;
     }
-    params.gateway.options.reconnect = { maxAttempts: 0 };
-    params.gateway.disconnect();
+    // Use the safe disconnect helper that strips close/error listeners first.
+    // Setting maxAttempts=0 then calling gateway.disconnect() directly causes
+    // the socket close handler to throw "Max reconnect attempts (0) reached",
+    // crashing the gateway process with an uncaught exception. (#56854)
+    void disconnectGatewaySocketWithoutAutoReconnect();
   };
   const ensureStartupReady = async () => {
     if (!params.gateway || params.gateway.isConnected || shouldStop()) {
