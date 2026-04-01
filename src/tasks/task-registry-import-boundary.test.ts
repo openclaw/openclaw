@@ -7,6 +7,7 @@ const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
 const ALLOWED_IMPORTERS = new Set([
   "auto-reply/reply/commands-status.ts",
+  "auto-reply/reply/commands-tasks.ts",
   "tasks/runtime-internal.ts",
   "tasks/task-owner-access.ts",
 ]);
