@@ -1295,7 +1295,21 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                  const targetIndex = ensureAgentIndex(agentId);
+                  if (targetIndex < 0) {
+                    return;
+                  }
+                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
+                    ?.agents?.list;
+                  if (Array.isArray(list)) {
+                    for (let i = 0; i < list.length; i++) {
+                      if (i === targetIndex) {
+                        updateConfigFormValue(state, ["agents", "list", i, "default"], true);
+                      } else {
+                        removeConfigFormValue(state, ["agents", "list", i, "default"]);
+                      }
+                    }
+                  }
                 },
               }),
             )
