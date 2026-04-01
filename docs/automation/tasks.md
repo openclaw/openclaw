@@ -172,6 +172,16 @@ Surfaces operational issues. Findings also appear in `openclaw status` when issu
 | `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
 | `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
 
+## Chat task board (`/tasks`)
+
+Use `/tasks` in any chat session to see background tasks linked to that session. The board shows
+active and recently completed tasks with runtime, status, timing, and progress or error detail.
+
+When the current session has no visible linked tasks, `/tasks` falls back to agent-local task counts
+so you still get an overview without leaking other-session details.
+
+For the full operator ledger, use the CLI: `openclaw tasks list`.
+
 ## Status integration (task pressure)
 
 `openclaw status` includes an at-a-glance task summary:
@@ -185,6 +195,10 @@ The summary reports:
 - **active** — count of `queued` + `running`
 - **failures** — count of `failed` + `timed_out` + `lost`
 - **byRuntime** — breakdown by `acp`, `subagent`, `cron`, `cli`
+
+Both `/status` and the `session_status` tool use a cleanup-aware task snapshot: active tasks are
+preferred, stale completed rows are hidden, and recent failures only surface when no active work
+remains. This keeps the status card focused on what matters right now.
 
 ## Storage and maintenance
 
@@ -210,6 +224,12 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ## How tasks relate to other systems
 
+### Tasks and older flow references
+
+Some older OpenClaw release notes and docs referred to task management as `ClawFlow` and documented an `openclaw flows` command surface.
+
+In the current codebase, the supported operator surface is `openclaw tasks`. See [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes that map those older references to the current task commands.
+
 ### Tasks and cron
 
 A cron job **definition** lives in `~/.openclaw/cron/jobs.json`. **Every** cron execution creates a task record — both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
@@ -233,7 +253,9 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 ## Related
 
 - [Automation Overview](/automation) — all automation mechanisms at a glance
+- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [CLI: flows](/cli/flows) — compatibility note for the mistaken command name
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference

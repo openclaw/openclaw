@@ -10,9 +10,13 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
+  threadReplies?: "off" | "inbound" | "always";
 };
 
 export type MatrixRoomConfig = {
+  /** Restrict this room entry to a specific Matrix account in multi-account setups. */
+  account?: string;
   /** If false, disable the bot in this room (alias for allow: false). */
   enabled?: boolean;
   /** Legacy room allow toggle; prefer enabled. */

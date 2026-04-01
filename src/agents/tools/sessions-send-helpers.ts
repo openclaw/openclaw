@@ -2,6 +2,7 @@ import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
+import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -18,51 +19,25 @@ export type AnnounceTarget = {
 };
 
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
-  const rawParts = sessionKey.split(":").filter(Boolean);
-  const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
-  if (parts.length < 3) {
+  const parsed = resolveSessionConversationRef(sessionKey);
+  if (!parsed) {
     return null;
   }
-  const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel") {
-    return null;
-  }
-
-  // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:
-  let threadId: string | undefined;
-  const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:([^:]+)$/);
-  const threadMatch = restJoined.match(/:thread:([^:]+)$/);
-  const match = topicMatch || threadMatch;
-
-  if (match) {
-    threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
-  }
-
-  // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):[^:]+$/, "") : restJoined.trim();
-
-  if (!id) {
-    return null;
-  }
-  if (!channelRaw) {
-    return null;
-  }
-  const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
-  const channel = normalizedChannel ?? channelRaw.toLowerCase();
+  const normalizedChannel =
+    normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);
+  const channel = normalizedChannel ?? parsed.channel;
   const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
-  const genericTarget = kind === "channel" ? `channel:${id}` : `group:${id}`;
+  const genericTarget = parsed.kind === "channel" ? `channel:${parsed.id}` : `group:${parsed.id}`;
   const normalized =
     plugin?.messaging?.resolveSessionTarget?.({
-      kind,
-      id,
-      threadId,
+      kind: parsed.kind,
+      id: parsed.id,
+      threadId: parsed.threadId,
     }) ?? plugin?.messaging?.normalizeTarget?.(genericTarget);
   return {
     channel,
-    to: normalized ?? (normalizedChannel ? genericTarget : id),
-    threadId,
+    to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
+    threadId: parsed.threadId,
   };
 }
 
