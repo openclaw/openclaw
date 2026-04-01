@@ -824,6 +824,15 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "steer", "/tell");
+  registerAlias(commands, "compact", "/c");
+  registerAlias(commands, "context", "/ctx");
+  registerAlias(commands, "status", "/s");
+  registerAlias(commands, "new", "/n");
+  registerAlias(commands, "model", "/m");
+  registerAlias(commands, "models", "/ms");
+  registerAlias(commands, "help", "/h");
+  registerAlias(commands, "fast", "/f");
+  registerAlias(commands, "usage", "/u");
 
   assertCommandRegistry(commands);
   return commands;
