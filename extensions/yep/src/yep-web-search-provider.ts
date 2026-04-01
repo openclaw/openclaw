@@ -59,7 +59,7 @@ function normalizeYepLanguage(value: string | undefined): string | undefined {
   }
   const trimmed = value.trim().toLowerCase();
   // Yep accepts ISO 639-1 codes (e.g. "en", "de", "fr").
-  return /^[a-z]{2,3}$/.test(trimmed) ? trimmed : undefined;
+  return /^[a-z]{2}$/.test(trimmed) ? trimmed : undefined;
 }
 
 async function runYepSearch(params: {
