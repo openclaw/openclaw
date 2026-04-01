@@ -76,7 +76,7 @@ For each section, apply the KEEP/DISCARD filter:
 - Relationship/people context that aids future interactions
 - Project status changes (launches, blockers, milestones)
 
-**DISCARD criteria** (all must apply):
+**DISCARD criteria** (any one = discard):
 - Routine operational logs (heartbeat OK, deploy succeeded)
 - Process narration ("I then checked...", "running command...")
 - Duplicate of information already in long-term memory
@@ -87,7 +87,7 @@ Extract KEEP items into a structured list grouped by project/topic.
 
 ## Phase 2 Instructions: REM Integrate
 
-Read the current MEMORY.md. For each extracted KEEP item:
+Read the current MEMORY.md (if it does not exist, create it with a `# MEMORY.md` header before proceeding). For each extracted KEEP item:
 
 1. **Already in MEMORY.md?** → Skip (avoid duplicates)
 2. **Updates existing entry?** → Edit in place with new info
