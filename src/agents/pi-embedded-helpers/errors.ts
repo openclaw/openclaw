@@ -235,7 +235,41 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     errorMessage.includes("上下文超出") ||
     errorMessage.includes("上下文长度超") ||
     errorMessage.includes("超出最大上下文") ||
-    errorMessage.includes("请压缩上下文")
+    errorMessage.includes("请压缩上下文") ||
+    // AWS Bedrock
+    (lower.includes("validationexception") &&
+      (lower.includes("input is too long") || lower.includes("max input token"))) ||
+    (lower.includes("modelstreamerrorexception") &&
+      (lower.includes("input is too long") || lower.includes("too many input tokens"))) ||
+    // Ollama / local models
+    (lower.includes("ollama") && lower.includes("context length")) ||
+    // Cohere
+    /total tokens?\s+exceeds?\s+(?:the\s+)?(?:model(?:'s)?\s+)?(?:max|limit)/i.test(errorMessage) ||
+    // Generic patterns missed by base checks
+    lower.includes("input is too long for model") ||
+    lower.includes("input too long for this model") ||
+    lower.includes("maximum number of input tokens")
+  );
+}
+
+/**
+ * High-confidence context overflow check for cases where we want to be sure
+ * before triggering compaction. Unlike `isContextOverflowError` which uses
+ * heuristic keyword matching, this only matches explicit, unambiguous patterns
+ * from known provider APIs.
+ *
+ * Not yet wired into the compaction/retry logic — exported for use by a
+ * follow-up change that adds automatic compaction triggering.
+ */
+export function isDefiniteContextOverflowError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  // Only match patterns that are unambiguously context overflow with HTTP 400.
+  // Use [_\s] for prose patterns (space or underscore); API error codes like
+  // request_too_large and context_window_exceeded are matched literally.
+  return /\b400\b.*(?:context[_\s]length[_\s]exceeded|prompt[_\s]is[_\s]too[_\s]long|request_too_large|context_window_exceeded)/i.test(
+    errorMessage,
   );
 }
 
