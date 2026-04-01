@@ -18,7 +18,6 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
-  clearSessionStoreCaches,
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
   isSessionStoreCacheEnabled,
@@ -26,6 +25,14 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreLockQueuesForTest,
+  getSessionStoreLockQueueSizeForTest,
+  LOCK_QUEUES,
+  type SessionStoreLockQueue,
+  type SessionStoreLockTask,
+} from "./store-lock-state.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
@@ -42,6 +49,12 @@ import {
   normalizeSessionRuntimeModelFields,
   type SessionEntry,
 } from "./types.js";
+
+export {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreLockQueuesForTest,
+  getSessionStoreLockQueueSizeForTest,
+} from "./store-lock-state.js";
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
@@ -157,16 +170,6 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   }
 }
 
-export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
-  for (const queue of LOCK_QUEUES.values()) {
-    for (const task of queue.pending) {
-      task.reject(new Error("session store queue cleared for test"));
-    }
-  }
-  LOCK_QUEUES.clear();
-}
-
 export function setSessionWriteLockAcquirerForTests(
   acquirer: typeof acquireSessionWriteLock | null,
 ): void {
@@ -175,31 +178,6 @@ export function setSessionWriteLockAcquirerForTests(
 
 export function resetSessionStoreLockRuntimeForTests(): void {
   sessionWriteLockAcquirerForTests = null;
-}
-
-export async function drainSessionStoreLockQueuesForTest(): Promise<void> {
-  while (LOCK_QUEUES.size > 0) {
-    const queues = [...LOCK_QUEUES.values()];
-    for (const queue of queues) {
-      for (const task of queue.pending) {
-        task.reject(new Error("session store queue cleared for test"));
-      }
-      queue.pending.length = 0;
-    }
-    const activeDrains = queues.flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    if (activeDrains.length === 0) {
-      LOCK_QUEUES.clear();
-      return;
-    }
-    await Promise.allSettled(activeDrains);
-  }
-}
-
-/** Expose lock queue size for tests. */
-export function getSessionStoreLockQueueSizeForTest(): number {
-  return LOCK_QUEUES.size;
 }
 
 export async function withSessionStoreLockForTest<T>(
@@ -632,22 +610,6 @@ type SessionStoreLockOptions = {
 
 const SESSION_STORE_LOCK_MIN_HOLD_MS = 5_000;
 const SESSION_STORE_LOCK_TIMEOUT_GRACE_MS = 5_000;
-
-type SessionStoreLockTask = {
-  fn: () => Promise<unknown>;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-  timeoutMs?: number;
-  staleMs: number;
-};
-
-type SessionStoreLockQueue = {
-  running: boolean;
-  pending: SessionStoreLockTask[];
-  drainPromise: Promise<void> | null;
-};
-
-const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
 
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
