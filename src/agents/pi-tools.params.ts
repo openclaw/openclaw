@@ -21,17 +21,7 @@ export const CLAUDE_PARAM_GROUPS = {
   ],
   edit: [
     { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
-    {
-      keys: ["oldText", "old_string", "old_text", "oldString"],
-      label: "oldText alias",
-      validator: hasValidEditReplacements,
-    },
-    {
-      keys: ["newText", "new_string", "new_text", "newString"],
-      label: "newText alias",
-      allowEmpty: true,
-      validator: hasValidEditReplacements,
-    },
+    { keys: ["edits"], label: "edits array" },
   ],
 } as const;
 
@@ -150,15 +140,6 @@ function normalizeEditReplacements(record: Record<string, unknown>) {
   }
 }
 
-function hasValidEditReplacements(record: Record<string, unknown>): boolean {
-  const edits = record.edits;
-  return (
-    Array.isArray(edits) &&
-    edits.length > 0 &&
-    edits.every((entry) => normalizeEditReplacement(entry) !== undefined)
-  );
-}
-
 function normalizeClaudeParamAliases(record: Record<string, unknown>) {
   for (const { original, alias } of CLAUDE_PARAM_ALIASES) {
     if (alias in record && !(original in record)) {
@@ -258,6 +239,10 @@ export function assertRequiredParams(
         }
         const value = record[key];
         if (typeof value !== "string") {
+          // For edit tool, 'edits' is an array, not a string
+          if (key === "edits" && Array.isArray(value) && value.length > 0) {
+            return true;
+          }
           return false;
         }
         if (group.allowEmpty) {
