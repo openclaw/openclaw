@@ -84,9 +84,8 @@ describe("suggestConfigPaths", () => {
 
   it("is case-insensitive", () => {
     const suggestions = suggestConfigPaths("GATEWAY.PORT");
-    // Should still find gateway.port even though input is uppercase.
-    // May return empty if distance is too large due to case, but should not crash.
-    expect(Array.isArray(suggestions)).toBe(true);
+    // Needle is lowercased before matching, so the exact path should always be found.
+    expect(suggestions).toContain("gateway.port");
   });
 
   it("handles segment-level matching for deep paths", () => {

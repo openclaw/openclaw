@@ -98,7 +98,7 @@ export function suggestConfigPaths(unknownPath: string): string[] {
 
   // --- Phase 1: prefix matches (input is a truncated known path) -----------
   const prefixMatches = knownPaths.filter((known) => known.toLowerCase().startsWith(needle + "."));
-  if (prefixMatches.length > 0 && prefixMatches.length <= MAX_SUGGESTIONS) {
+  if (prefixMatches.length > 0) {
     return prefixMatches.slice(0, MAX_SUGGESTIONS);
   }
 
@@ -128,6 +128,10 @@ export function suggestConfigPaths(unknownPath: string): string[] {
         continue;
       }
       const knownParts = knownLower.split(".");
+      // Restrict to same depth to avoid cross-level false positives (Codex review).
+      if (knownParts.length !== needleParts.length) {
+        continue;
+      }
       const knownTail = knownParts[knownParts.length - 1] ?? "";
       const tailDistance = editDistance(needleTail, knownTail);
       if (tailDistance > 0 && tailDistance <= MAX_DISTANCE) {
