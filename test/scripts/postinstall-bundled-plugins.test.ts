@@ -115,7 +115,7 @@ describe("bundled plugin postinstall", () => {
       "npm",
       ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.0"],
       {
-        cwd: packageRoot,
+        cwd: path.join(packageRoot, "dist", "extensions", "acpx"),
         encoding: "utf8",
         env: {
           HOME: "/tmp/home",
@@ -136,9 +136,11 @@ describe("bundled plugin postinstall", () => {
         acpx: "0.4.0",
       },
     });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "dist", "extensions", "acpx", "node_modules", "acpx"), {
+      recursive: true,
+    });
     await fs.writeFile(
-      path.join(packageRoot, "node_modules", "acpx", "package.json"),
+      path.join(packageRoot, "dist", "extensions", "acpx", "node_modules", "acpx", "package.json"),
       "{}\n",
       "utf8",
     );
@@ -169,18 +171,34 @@ describe("bundled plugin postinstall", () => {
 
     expect(discoverBundledPluginRuntimeDeps({ extensionsDir })).toEqual(
       expect.arrayContaining([
-        {
+        expect.objectContaining({
           name: "@slack/web-api",
           pluginIds: ["slack"],
-          sentinelPath: path.join("node_modules", "@slack", "web-api", "package.json"),
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "slack",
+            "node_modules",
+            "@slack",
+            "web-api",
+            "package.json",
+          ),
           version: "7.11.0",
-        },
-        {
+        }),
+        expect.objectContaining({
           name: "@aws-sdk/client-bedrock",
           pluginIds: ["amazon-bedrock"],
-          sentinelPath: path.join("node_modules", "@aws-sdk", "client-bedrock", "package.json"),
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "amazon-bedrock",
+            "node_modules",
+            "@aws-sdk",
+            "client-bedrock",
+            "package.json",
+          ),
           version: "3.1020.0",
-        },
+        }),
       ]),
     );
   });
@@ -200,12 +218,19 @@ describe("bundled plugin postinstall", () => {
 
     expect(discoverBundledPluginRuntimeDeps({ extensionsDir })).toEqual(
       expect.arrayContaining([
-        {
+        expect.objectContaining({
           name: "https-proxy-agent",
           pluginIds: ["feishu", "slack"],
-          sentinelPath: path.join("node_modules", "https-proxy-agent", "package.json"),
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "feishu",
+            "node_modules",
+            "https-proxy-agent",
+            "package.json",
+          ),
           version: "^8.0.0",
-        },
+        }),
       ]),
     );
   });
@@ -234,38 +259,40 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner([
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "@slack/web-api@7.11.0",
-        "grammy@1.38.4",
-      ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalledWith(
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      1,
       "npm",
-      [
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "@slack/web-api@7.11.0",
-        "grammy@1.38.4",
-      ],
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "@slack/web-api@7.11.0"],
       {
-        cwd: packageRoot,
+        cwd: path.join(packageRoot, "dist", "extensions", "slack"),
         encoding: "utf8",
         env: {
           HOME: "/tmp/home",
-          PATH: "/tmp/node/bin",
+          PATH: expect.any(String),
         },
-        shell: false,
+        shell: expect.anything(),
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
+        windowsVerbatimArguments: expect.anything(),
+      },
+    );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      2,
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "telegram"),
+        encoding: "utf8",
+        env: {
+          HOME: "/tmp/home",
+          PATH: expect.any(String),
+        },
+        shell: expect.anything(),
+        stdio: "pipe",
+        windowsVerbatimArguments: expect.anything(),
       },
     );
   });
@@ -283,11 +310,23 @@ describe("bundled plugin postinstall", () => {
         grammy: "1.38.4",
       },
     });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@slack", "web-api"), {
-      recursive: true,
-    });
+    await fs.mkdir(
+      path.join(packageRoot, "dist", "extensions", "slack", "node_modules", "@slack", "web-api"),
+      {
+        recursive: true,
+      },
+    );
     await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@slack", "web-api", "package.json"),
+      path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "slack",
+        "node_modules",
+        "@slack",
+        "web-api",
+        "package.json",
+      ),
       "{}\n",
     );
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
@@ -301,18 +340,23 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
       {
-        cwd: packageRoot,
+        cwd: path.join(packageRoot, "dist", "extensions", "telegram"),
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
+          PATH: expect.any(String),
         },
+        shell: expect.anything(),
         stdio: "pipe",
+        windowsVerbatimArguments: expect.anything(),
       },
     );
   });
@@ -325,7 +369,7 @@ describe("bundled plugin postinstall", () => {
         grammy: "1.38.4",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
@@ -350,7 +394,7 @@ describe("bundled plugin postinstall", () => {
       "npm",
       ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
       {
-        cwd: packageRoot,
+        cwd: path.join(packageRoot, "dist", "extensions", "telegram"),
         encoding: "utf8",
         env: {
           HOME: "/tmp/home",
@@ -359,6 +403,139 @@ describe("bundled plugin postinstall", () => {
         shell: false,
         stdio: "pipe",
         windowsVerbatimArguments: undefined,
+      },
+    );
+  });
+
+  it("installs shared runtime deps separately for each plugin directory when needed", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        "https-proxy-agent": "7.0.6",
+      },
+    });
+    await writePluginPackage(extensionsDir, "feishu", {
+      dependencies: {
+        "https-proxy-agent": "7.0.6",
+      },
+    });
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    runBundledPluginPostinstall({
+      env: { npm_config_global: "true", HOME: "/tmp/home" },
+      extensionsDir,
+      packageRoot,
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      1,
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "https-proxy-agent@7.0.6"],
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "discord"),
+        encoding: "utf8",
+        env: expect.objectContaining({ HOME: "/tmp/home" }),
+        shell: expect.anything(),
+        stdio: "pipe",
+        windowsVerbatimArguments: expect.anything(),
+      },
+    );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      2,
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "https-proxy-agent@7.0.6"],
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "feishu"),
+        encoding: "utf8",
+        env: expect.objectContaining({ HOME: "/tmp/home" }),
+        shell: expect.anything(),
+        stdio: "pipe",
+        windowsVerbatimArguments: expect.anything(),
+      },
+    );
+  });
+
+  it("keeps same package name with different versions as separate plugin installs", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        grammy: "1.38.4",
+      },
+    });
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.39.0",
+      },
+    });
+
+    expect(discoverBundledPluginRuntimeDeps({ extensionsDir })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "grammy",
+          version: "1.38.4",
+          pluginIds: ["discord"],
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "discord",
+            "node_modules",
+            "grammy",
+            "package.json",
+          ),
+        }),
+        expect.objectContaining({
+          name: "grammy",
+          version: "1.39.0",
+          pluginIds: ["telegram"],
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "telegram",
+            "node_modules",
+            "grammy",
+            "package.json",
+          ),
+        }),
+      ]),
+    );
+
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+    runBundledPluginPostinstall({
+      env: { npm_config_global: "true", HOME: "/tmp/home" },
+      extensionsDir,
+      packageRoot,
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      1,
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "discord"),
+        encoding: "utf8",
+        env: expect.objectContaining({ HOME: "/tmp/home" }),
+        shell: expect.anything(),
+        stdio: "pipe",
+        windowsVerbatimArguments: expect.anything(),
+      },
+    );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      2,
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.39.0"],
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "telegram"),
+        encoding: "utf8",
+        env: expect.objectContaining({ HOME: "/tmp/home" }),
+        shell: expect.anything(),
+        stdio: "pipe",
+        windowsVerbatimArguments: expect.anything(),
       },
     );
   });

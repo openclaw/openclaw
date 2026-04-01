@@ -12,6 +12,17 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
+function buildPluginSentinelPaths(pluginIds, depName) {
+  return pluginIds.toSorted((a, b) => a.localeCompare(b)).map((pluginId) => ({
+    pluginId,
+    sentinelPath: pluginDependencySentinelPath(pluginId, depName),
+  }));
+}
+
+function runtimeDepKey(name, version) {
+  return `${name}\u0000${version}`;
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
@@ -22,6 +33,10 @@ function readJson(filePath) {
 
 function dependencySentinelPath(depName) {
   return join("node_modules", ...depName.split("/"), "package.json");
+}
+
+function pluginDependencySentinelPath(pluginId, depName) {
+  return join("dist", "extensions", pluginId, dependencySentinelPath(depName));
 }
 
 function collectRuntimeDeps(packageJson) {
@@ -38,12 +53,13 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   const readJsonFile = params.readJson ?? readJson;
   const deps = new Map(
     BUNDLED_PLUGIN_INSTALL_TARGETS.map((target) => [
-      target.name,
+      runtimeDepKey(target.name, target.version),
       {
         name: target.name,
         version: target.version,
-        sentinelPath: dependencySentinelPath(target.name),
         pluginIds: [...(target.pluginIds ?? [])],
+        sentinelPath: dependencySentinelPath(target.name),
+        sentinelPaths: buildPluginSentinelPaths(target.pluginIds ?? [], target.name),
       },
     ]),
   );
@@ -64,20 +80,20 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
     try {
       const packageJson = readJsonFile(packageJsonPath);
       for (const [name, version] of Object.entries(collectRuntimeDeps(packageJson))) {
-        const existing = deps.get(name);
+        const key = runtimeDepKey(name, version);
+        const existing = deps.get(key);
         if (existing) {
-          if (existing.version !== version) {
-            continue;
-          }
           if (!existing.pluginIds.includes(pluginId)) {
             existing.pluginIds.push(pluginId);
+            existing.sentinelPaths = buildPluginSentinelPaths(existing.pluginIds, name);
           }
           continue;
         }
-        deps.set(name, {
+        deps.set(key, {
           name,
           version,
-          sentinelPath: dependencySentinelPath(name),
+          sentinelPath: pluginDependencySentinelPath(pluginId, name),
+          sentinelPaths: [{ pluginId, sentinelPath: pluginDependencySentinelPath(pluginId, name) }],
           pluginIds: [pluginId],
         });
       }
@@ -87,11 +103,18 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   }
 
   return [...deps.values()]
-    .map((dep) => ({
-      ...dep,
-      pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
-    }))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
+    .map((dep) => {
+      const pluginIds = [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b));
+      return {
+        ...dep,
+        pluginIds,
+        sentinelPath: pluginIds.length
+          ? pluginDependencySentinelPath(pluginIds[0], dep.name)
+          : dependencySentinelPath(dep.name),
+        sentinelPaths: buildPluginSentinelPaths(pluginIds, dep.name),
+      };
+    })
+    .toSorted((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
 export function createNestedNpmInstallEnv(env = process.env) {
@@ -125,42 +148,66 @@ export function runBundledPluginPostinstall(params = {}) {
   const runtimeDeps =
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
-  const missingSpecs = runtimeDeps
-    .filter((dep) => !pathExists(join(packageRoot, dep.sentinelPath)))
-    .map((dep) => `${dep.name}@${dep.version}`);
 
-  if (missingSpecs.length === 0) {
+  const installsByDir = new Map();
+  for (const dep of runtimeDeps) {
+    const pluginIds = dep.pluginIds?.length ? dep.pluginIds : [];
+    for (const pluginId of pluginIds) {
+      const sentinelPath = pluginDependencySentinelPath(pluginId, dep.name);
+      if (pathExists(join(packageRoot, sentinelPath))) {
+        continue;
+      }
+      const installDir = join(extensionsDir, pluginId);
+      const existing = installsByDir.get(installDir) ?? { pluginId, specs: [] };
+      existing.specs.push(`${dep.name}@${dep.version}`);
+      installsByDir.set(installDir, existing);
+    }
+  }
+
+  if (installsByDir.size === 0) {
     return;
   }
 
-  try {
-    const nestedEnv = createNestedNpmInstallEnv(env);
-    const npmRunner =
-      params.npmRunner ??
-      resolveNpmRunner({
-        env: nestedEnv,
-        execPath: params.execPath,
-        existsSync: pathExists,
-        platform: params.platform,
-        comSpec: params.comSpec,
-        npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
+  const nestedEnv = createNestedNpmInstallEnv(env);
+  for (const [installDir, install] of installsByDir) {
+    try {
+      const npmRunner =
+        params.npmRunner ??
+        resolveNpmRunner({
+          env: nestedEnv,
+          execPath: params.execPath,
+          existsSync: pathExists,
+          platform: params.platform,
+          comSpec: params.comSpec,
+          npmArgs: [
+            "install",
+            "--omit=dev",
+            "--no-save",
+            "--package-lock=false",
+            ...install.specs,
+          ],
+        });
+      const result = spawn(npmRunner.command, npmRunner.args, {
+        cwd: installDir,
+        encoding: "utf8",
+        env: npmRunner.env ?? nestedEnv,
+        stdio: "pipe",
+        shell: npmRunner.shell,
+        windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
       });
-    const result = spawn(npmRunner.command, npmRunner.args, {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: npmRunner.env ?? nestedEnv,
-      stdio: "pipe",
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
-    });
-    if (result.status !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      throw new Error(output || "npm install failed");
+      if (result.status !== 0) {
+        const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+        throw new Error(output || "npm install failed");
+      }
+      log.log(
+        `[postinstall] installed bundled plugin deps for ${install.pluginId}: ${install.specs.join(", ")}`,
+      );
+    } catch (e) {
+      // Non-fatal: gateway will surface the missing dep via doctor.
+      log.warn(
+        `[postinstall] could not install bundled plugin deps for ${install.pluginId}: ${String(e)}`,
+      );
     }
-    log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
-  } catch (e) {
-    // Non-fatal: gateway will surface the missing dep via doctor.
-    log.warn(`[postinstall] could not install bundled plugin deps: ${String(e)}`);
   }
 }
 
