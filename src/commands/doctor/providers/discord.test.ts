@@ -194,6 +194,26 @@ describe("doctor discord provider repairs", () => {
     expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
   });
 
+  it("returns repair warnings when unsafe numeric ids block doctor fix", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: [106232522769186816],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = maybeRepairDiscordNumericIds(cfg, {
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("could not be auto-repaired"),
+      expect.stringContaining('rerun "openclaw doctor --fix"'),
+    ]);
+  });
+
   it("formats numeric id warnings for safe entries", () => {
     const warnings = collectDiscordNumericIdWarnings({
       hits: [{ path: "channels.discord.allowFrom[0]", entry: 123, safe: true }],

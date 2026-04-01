@@ -168,9 +168,46 @@ export function collectDiscordNumericIdWarnings(params: {
   return lines;
 }
 
-export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
+function collectBlockedDiscordNumericIdRepairWarnings(params: {
+  hits: DiscordNumericIdHit[];
+  doctorFixCommand: string;
+}): string[] {
+  const hitsByListPath = new Map<string, DiscordNumericIdHit[]>();
+  for (const hit of params.hits) {
+    const listPath = hit.path.replace(/\[\d+\]$/, "");
+    const existing = hitsByListPath.get(listPath);
+    if (existing) {
+      existing.push(hit);
+      continue;
+    }
+    hitsByListPath.set(listPath, [hit]);
+  }
+
+  const blockedHits: DiscordNumericIdHit[] = [];
+  for (const hits of hitsByListPath.values()) {
+    if (hits.some((hit) => !hit.safe)) {
+      blockedHits.push(...hits);
+    }
+  }
+  if (blockedHits.length === 0) {
+    return [];
+  }
+
+  const sample = blockedHits[0];
+  const samplePath = sanitizeForLog(sample.path);
+  return [
+    `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that could not be auto-repaired (e.g. ${samplePath}).`,
+    `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
+  ];
+}
+
+export function maybeRepairDiscordNumericIds(
+  cfg: OpenClawConfig,
+  params?: { doctorFixCommand?: string },
+): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   const hits = scanDiscordNumericIdEntries(cfg);
   if (hits.length === 0) {
@@ -214,8 +251,16 @@ export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
     }
   }
 
-  if (changes.length === 0) {
+  const warnings =
+    params?.doctorFixCommand === undefined
+      ? []
+      : collectBlockedDiscordNumericIdRepairWarnings({
+          hits,
+          doctorFixCommand: params.doctorFixCommand,
+        });
+
+  if (changes.length === 0 && warnings.length === 0) {
     return { config: cfg, changes: [] };
   }
-  return { config: next, changes };
+  return { config: next, changes, warnings };
 }
