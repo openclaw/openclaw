@@ -67,7 +67,7 @@ export function buildExecApprovalCommandText(params: {
   approvalCommandId: string;
   decision: ExecApprovalReplyDecision;
 }): string {
-  return `/approve ${params.approvalCommandId} ${params.decision === "allow-always" ? "always" : params.decision}`;
+  return `/approve ${params.approvalCommandId} ${params.decision}`;
 }
 
 export function buildExecApprovalActionDescriptors(params: {
