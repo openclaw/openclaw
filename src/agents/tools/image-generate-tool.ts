@@ -560,18 +560,26 @@ export function createImageGenerateTool(options?: {
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
-      const resolution =
-        explicitResolution ??
-        (size
-          ? undefined
-          : inputImages.length > 0
-            ? await inferResolutionFromInputImages(inputImages)
-            : undefined);
       const selectedProvider = resolveSelectedImageGenerationProvider({
         config: effectiveCfg,
         imageGenerationModelConfig,
         modelOverride: model,
       });
+      // Only auto-infer resolution from input images if the provider supports it.
+      // MiniMax and other providers with supportsResolution=false cannot accept
+      // resolution overrides, so skip inference to avoid validation errors.
+      const isEdit = inputImages.length > 0;
+      const modeCaps = isEdit
+        ? selectedProvider?.capabilities.edit
+        : selectedProvider?.capabilities.generate;
+      const providerSupportsResolution = modeCaps?.supportsResolution !== false;
+      const resolution =
+        explicitResolution ??
+        (size
+          ? undefined
+          : inputImages.length > 0 && providerSupportsResolution
+            ? await inferResolutionFromInputImages(inputImages)
+            : undefined);
       validateImageGenerationCapabilities({
         provider: selectedProvider,
         count,
