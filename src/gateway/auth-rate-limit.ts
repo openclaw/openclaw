@@ -10,8 +10,9 @@
  * - Pure in-memory Map – no external dependencies; suitable for a single
  *   gateway process.  The Map is periodically pruned to avoid unbounded
  *   growth.
- * - Loopback addresses (127.0.0.1 / ::1) are exempt by default so that local
- *   CLI sessions are never locked out.
+ * - Loopback addresses are rate-limited by default so local same-host ingress
+ *   cannot silently bypass auth throttling. Callers can opt back into
+ *   loopback exemption for explicitly local-only workflows.
  * - The module is side-effect-free: callers create an instance via
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
@@ -29,7 +30,7 @@ export interface RateLimitConfig {
   windowMs?: number;
   /** Lockout duration in milliseconds after the limit is exceeded.  @default 300_000 (5 min) */
   lockoutMs?: number;
-  /** Exempt loopback (localhost) addresses from rate limiting.  @default true */
+  /** Exempt loopback (localhost) addresses from rate limiting.  @default false */
   exemptLoopback?: boolean;
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
@@ -96,7 +97,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
   const lockoutMs = config?.lockoutMs ?? DEFAULT_LOCKOUT_MS;
-  const exemptLoopback = config?.exemptLoopback ?? true;
+  const exemptLoopback = config?.exemptLoopback ?? false;
   const pruneIntervalMs = config?.pruneIntervalMs ?? PRUNE_INTERVAL_MS;
 
   const entries = new Map<string, RateLimitEntry>();

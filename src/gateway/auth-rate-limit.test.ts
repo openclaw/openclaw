@@ -156,13 +156,27 @@ describe("auth rate limiter", () => {
 
   // ---------- loopback exemption ----------
 
-  it.each(["127.0.0.1", "::1"])("exempts loopback address %s by default", (ip) => {
+  it.each(["127.0.0.1", "::1"])("rate-limits loopback address %s by default", (ip) => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure(ip);
-    expect(limiter.check(ip).allowed).toBe(true);
+    expect(limiter.check(ip).allowed).toBe(false);
   });
 
-  it("rate-limits loopback when exemptLoopback is false", () => {
+  it.each(["127.0.0.1", "::1"])(
+    "still exempts loopback address %s when exemptLoopback is true",
+    (ip) => {
+      limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: true,
+      });
+      limiter.recordFailure(ip);
+      expect(limiter.check(ip).allowed).toBe(true);
+    },
+  );
+
+  it("keeps loopback rate-limited when exemptLoopback is explicitly false", () => {
     limiter = createAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,

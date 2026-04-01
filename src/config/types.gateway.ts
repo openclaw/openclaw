@@ -172,7 +172,7 @@ export type GatewayAuthRateLimitConfig = {
   windowMs?: number;
   /** Lockout duration in milliseconds after the limit is exceeded.  @default 300000 (5 min) */
   lockoutMs?: number;
-  /** Exempt localhost/loopback addresses from auth rate limiting.  @default true */
+  /** Exempt localhost/loopback addresses from auth rate limiting.  @default false */
   exemptLoopback?: boolean;
 };
 

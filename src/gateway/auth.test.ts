@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
@@ -335,6 +335,40 @@ describe("gateway auth", () => {
     });
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
+  });
+
+  it("rate-limits same-host ingress auth failures by default when trusted proxies are unset", async () => {
+    const limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    try {
+      const req = {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-forwarded-for": "203.0.113.44" },
+      } as never;
+
+      const first = await authorizeGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: false },
+        connectAuth: { token: "wrong" },
+        req,
+        trustedProxies: [],
+        rateLimiter: limiter,
+      });
+      expect(first.ok).toBe(false);
+      expect(first.reason).toBe("token_mismatch");
+
+      const second = await authorizeGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: false },
+        connectAuth: { token: "wrong" },
+        req,
+        trustedProxies: [],
+        rateLimiter: limiter,
+      });
+      expect(second.ok).toBe(false);
+      expect(second.reason).toBe("rate_limited");
+      expect(second.rateLimited).toBe(true);
+      expect(second.retryAfterMs).toBeGreaterThan(0);
+    } finally {
+      limiter.dispose();
+    }
   });
 
   it("passes custom rate-limit scope to limiter operations", async () => {
