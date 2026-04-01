@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-// Runs after `npm i -g` to restore bundled extension runtime deps.
+// Runs after install to restore bundled extension runtime deps.
 // Installed builds can lazy-load bundled plugin code through root dist chunks,
 // so runtime dependencies declared in dist/extensions/*/package.json must also
-// resolve from the package root node_modules after a global install.
-// This script is a no-op outside of a global npm install context.
+// resolve from the package root node_modules. Skip source checkouts.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -15,6 +14,7 @@ export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
+const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -102,26 +102,45 @@ export function createNestedNpmInstallEnv(env = process.env) {
   return nextEnv;
 }
 
-function isGlobalNpmInstall(env) {
-  if (env.npm_config_global === "true") {
-    return true;
+function isSourceCheckoutRoot(params) {
+  const pathExists = params.existsSync ?? existsSync;
+  return (
+    pathExists(join(params.packageRoot, ".git")) &&
+    pathExists(join(params.packageRoot, "src")) &&
+    pathExists(join(params.packageRoot, "extensions"))
+  );
+}
+
+function shouldRunBundledPluginPostinstall(params) {
+  if (params.env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
+    return false;
   }
-  if (typeof env.npm_config_location === "string") {
-    return env.npm_config_location.toLowerCase() === "global";
+  if (!params.existsSync(params.extensionsDir)) {
+    return false;
   }
-  return false;
+  if (isSourceCheckoutRoot({ packageRoot: params.packageRoot, existsSync: params.existsSync })) {
+    return false;
+  }
+  return true;
 }
 
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
-  if (!isGlobalNpmInstall(env)) {
-    return;
-  }
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
+  if (
+    !shouldRunBundledPluginPostinstall({
+      env,
+      extensionsDir,
+      packageRoot,
+      existsSync: pathExists,
+    })
+  ) {
+    return;
+  }
   const runtimeDeps =
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });

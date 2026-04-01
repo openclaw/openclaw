@@ -63,8 +63,9 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("installs bundled plugin deps only during global installs", async () => {
+  it("installs bundled plugin deps outside of source checkouts", async () => {
     const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
         acpx: "0.4.0",
@@ -73,12 +74,21 @@ describe("bundled plugin postinstall", () => {
     const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
-      env: { npm_config_global: "false" },
+      env: { HOME: "/tmp/home" },
       extensionsDir,
+      packageRoot,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "acpx@0.4.0",
+      ]),
       spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).not.toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalled();
   });
 
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
@@ -294,25 +304,34 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
-        npm_config_global: "true",
-        npm_config_location: "global",
-        npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "grammy@1.38.4",
+      ]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
+          PATH: "/tmp/node/bin",
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -325,7 +344,7 @@ describe("bundled plugin postinstall", () => {
         grammy: "1.38.4",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
