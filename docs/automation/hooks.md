@@ -611,13 +611,13 @@ All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in p
 
 #### Model and prompt hooks
 
-| Hook                   | When                                         | Execution  | Returns                                                    |
-| ---------------------- | -------------------------------------------- | ---------- | ---------------------------------------------------------- |
-| `before_model_resolve` | Before model/provider lookup                 | Sequential | `{ modelOverride?, providerOverride? }`                    |
-| `before_prompt_build`  | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendSystemContext? }` |
-| `before_agent_start`   | Legacy combined hook (prefer the two above)  | Sequential | Union of both result shapes                                |
-| `llm_input`            | Immediately before the LLM API call          | Parallel   | `void`                                                     |
-| `llm_output`           | Immediately after LLM response received      | Parallel   | `void`                                                     |
+| Hook                   | When                                         | Execution  | Returns                                                                                                    |
+| ---------------------- | -------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve` | Before model/provider lookup                 | Sequential | `{ modelOverride?, providerOverride? }`                                                                    |
+| `before_prompt_build`  | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendContext?, prompt?, prependSystemContext?, appendSystemContext? }` |
+| `before_agent_start`   | Legacy combined hook (prefer the two above)  | Sequential | Union of both result shapes                                                                                |
+| `llm_input`            | Immediately before the LLM API call          | Parallel   | `void`                                                                                                     |
+| `llm_output`           | Immediately after LLM response received      | Parallel   | `void`                                                                                                     |
 
 #### Agent lifecycle hooks
 

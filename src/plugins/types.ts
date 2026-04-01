@@ -1911,6 +1911,16 @@ export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
   /**
+   * Appended after the user prompt. Symmetric to prependContext which prepends before it.
+   * Use this when plugin-injected context should follow the user message rather than precede it.
+   */
+  appendContext?: string;
+  /**
+   * Replaces the entire user prompt. When set, the original user prompt is discarded and
+   * this value is used instead. prependContext and appendContext still wrap the replaced prompt.
+   */
+  prompt?: string;
+  /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
@@ -1925,6 +1935,8 @@ export type PluginHookBeforePromptBuildResult = {
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
+  "appendContext",
+  "prompt",
   "prependSystemContext",
   "appendSystemContext",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];

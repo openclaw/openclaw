@@ -1422,10 +1422,22 @@ export async function runEmbeddedAttempt(
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
         {
+          if (typeof hookResult?.prompt === "string") {
+            effectivePrompt = hookResult.prompt;
+            log.debug(
+              `hooks: replaced prompt via hook (${hookResult.prompt.length} chars)`,
+            );
+          }
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+            );
+          }
+          if (hookResult?.appendContext) {
+            effectivePrompt = `${effectivePrompt}\n\n${hookResult.appendContext}`;
+            log.debug(
+              `hooks: appended context to prompt (${hookResult.appendContext.length} chars)`,
             );
           }
           const legacySystemPrompt =

@@ -70,6 +70,11 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
     ]),
+    appendContext: joinPresentTextSegments([
+      promptBuildResult?.appendContext,
+      legacyResult?.appendContext,
+    ]),
+    prompt: promptBuildResult?.prompt ?? legacyResult?.prompt,
     prependSystemContext: joinPresentTextSegments([
       promptBuildResult?.prependSystemContext,
       legacyResult?.prependSystemContext,

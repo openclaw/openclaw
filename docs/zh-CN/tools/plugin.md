@@ -1049,15 +1049,19 @@ export default function register(api) {
 `before_prompt_build` 结果字段：
 
 - `prependContext`：为本次运行在用户提示词前插入文本。最适合按轮次变化或动态内容。
+- `appendContext`：为本次运行在用户提示词后追加文本。与 `prependContext` 对称。
+- `prompt`：替换整个用户提示词。设置后原始提示词被丢弃，`prependContext` 和 `appendContext` 仍会包裹替换后的内容。
 - `systemPrompt`：完整的系统提示词覆盖。
 - `prependSystemContext`：在当前系统提示词前插入文本。
 - `appendSystemContext`：在当前系统提示词后追加文本。
 
 嵌入式运行时中的提示词构建顺序：
 
-1. 将 `prependContext` 应用到用户提示词。
-2. 如果提供了 `systemPrompt`，则应用其覆盖。
-3. 应用 `prependSystemContext + 当前系统提示词 + appendSystemContext`。
+1. 如果提供了 `prompt`，则用其替换用户提示词。
+2. 将 `prependContext` 应用到用户提示词前面。
+3. 将 `appendContext` 应用到用户提示词后面。
+4. 如果提供了 `systemPrompt`，则应用其覆盖。
+5. 应用 `prependSystemContext + 当前系统提示词 + appendSystemContext`。
 
 合并与优先级说明：
 
@@ -1069,6 +1073,8 @@ export default function register(api) {
 
 - 将静态指导从 `prependContext` 移到 `prependSystemContext`（或 `appendSystemContext`），这样 provider 就可以缓存稳定的系统前缀内容。
 - 将 `prependContext` 保留给每轮动态上下文，这类内容应继续与用户消息绑定。
+- 使用 `appendContext` 在用户消息之后追加上下文（例如脱敏后的补充信息）。
+- 使用 `prompt` 完全替换用户消息（例如将原始消息替换为脱敏版本）。
 
 ## Provider 插件（模型身份验证）
 

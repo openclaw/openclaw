@@ -201,6 +201,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       left: acc?.prependContext,
       right: next.prependContext,
     }),
+    appendContext: concatOptionalTextSegments({
+      left: acc?.appendContext,
+      right: next.appendContext,
+    }),
+    prompt: firstDefined(acc?.prompt, next.prompt),
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,
