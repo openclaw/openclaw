@@ -30,6 +30,7 @@ const clearPlannerShardEnv = (env) => {
   delete nextEnv.OPENCLAW_TEST_INCLUDE_EXTENSIONS;
   delete nextEnv.OPENCLAW_TEST_INCLUDE_CHANNELS;
   delete nextEnv.OPENCLAW_TEST_INCLUDE_GATEWAY;
+  delete nextEnv.OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS;
   return nextEnv;
 };
 
