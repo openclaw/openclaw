@@ -10199,10 +10199,7 @@
     {
       "path": "channels.discord.accounts.*.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10452,10 +10449,7 @@
     {
       "path": "channels.discord.accounts.*.dm.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10485,10 +10479,7 @@
     {
       "path": "channels.discord.accounts.*.dm.groupChannels.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10710,10 +10701,7 @@
     {
       "path": "channels.discord.accounts.*.execApprovals.approvers.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10937,10 +10925,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11140,10 +11125,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11199,10 +11181,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11382,10 +11361,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12625,10 +12601,7 @@
     {
       "path": "channels.discord.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12936,10 +12909,7 @@
     {
       "path": "channels.discord.dm.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12969,10 +12939,7 @@
     {
       "path": "channels.discord.dm.groupChannels.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13240,10 +13207,7 @@
     {
       "path": "channels.discord.execApprovals.approvers.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13467,10 +13431,7 @@
     {
       "path": "channels.discord.guilds.*.channels.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13670,10 +13631,7 @@
     {
       "path": "channels.discord.guilds.*.channels.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13729,10 +13687,7 @@
     {
       "path": "channels.discord.guilds.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13912,10 +13867,7 @@
     {
       "path": "channels.discord.guilds.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
