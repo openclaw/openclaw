@@ -1,6 +1,7 @@
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
   ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
@@ -97,6 +98,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   auth?: ChannelAuthAdapter;
+  approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
