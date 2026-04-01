@@ -108,7 +108,7 @@ await web_search({
 - Yep uses an independent web index for results.
 - Pricing: basic searches cost $0.004 per call; highlights cost ~$0.009 per 10 results. See [platform.yep.com](https://platform.yep.com/#pricing) for current pricing.
 - Rate limits: 60 requests/minute, 3,600/hour, 86,400/day per API key.
-- Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
+- Results are cached for 15 minutes by default.
 
 ## Related
 
