@@ -375,7 +375,7 @@ These override `messages.tts.*` for that host.
   - If the configured Microsoft output format fails, OpenClaw retries with MP3.
 
 OpenAI/ElevenLabs/Fish Audio output formats are fixed per channel (see above).
-Fish Audio output is `voiceCompatible` in both MP3 and Opus formats.
+Fish Audio Opus output (voice-note channels) is `voiceCompatible`; MP3 output (other channels) is not.
 
 ## Auto-TTS behavior
 
