@@ -27,7 +27,7 @@ export const slackChannelConfigUiHints = {
   },
   allowBots: {
     label: "Slack Allow Bot Messages",
-    help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+    help: "Allow bot-authored messages to trigger Slack replies (default: true). Set to false to ignore all bot messages.",
   },
   botToken: {
     label: "Slack Bot Token",

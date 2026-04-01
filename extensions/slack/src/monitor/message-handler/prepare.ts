@@ -151,7 +151,7 @@ async function resolveSlackConversationContext(params: {
     channelConfig?.allowBots ??
     account.config?.allowBots ??
     cfg.channels?.slack?.allowBots ??
-    false;
+    true;
 
   return {
     channelInfo,
