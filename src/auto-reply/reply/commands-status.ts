@@ -65,11 +65,16 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
     (task) => task.status === "queued" || task.status === "running",
   ).length;
   const headline = `${active} active · ${tasks.length} total`;
-  const title = latest.label?.trim() || latest.task.trim();
-  const detail =
+  const rawTitle = latest.label?.trim() || latest.task.trim();
+  const title = rawTitle.length > 80 ? rawTitle.slice(0, 77) + "..." : rawTitle;
+  const rawDetail =
     latest.status === "running" || latest.status === "queued"
       ? latest.progressSummary?.trim()
       : latest.error?.trim() || latest.terminalSummary?.trim();
+  const detail =
+    rawDetail && rawDetail.length > 120
+      ? rawDetail.slice(0, 117) + "..."
+      : rawDetail;
   const parts = [headline, latest.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
