@@ -182,20 +182,6 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
-
-      if (resumeSessionId && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
-
       if (runtime === "acp") {
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
