@@ -755,6 +755,14 @@ export async function runReplyAgent(params: {
 
       resetPressureTracking();
 
+      // --- FORK: reset totalTokens after compaction so pressure signal recalculates ---
+      if (sessionKey && sessionStore?.[sessionKey]) {
+        const se = sessionStore[sessionKey] as Record<string, unknown>;
+        se.totalTokensFresh = false;
+        delete se.totalTokens;
+      }
+      // --- END FORK ---
+
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
         const workspaceDir = process.cwd();

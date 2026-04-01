@@ -136,3 +136,45 @@ export async function streamKyutaiTts(text: string): Promise<KyutaiStreamResult>
 
   return { readable, sampleRate };
 }
+
+
+/**
+ * Stream TTS audio to a temp WAV file for discord.js playback.
+ * Returns the file path (discord.js handles WAV files natively via FFmpeg).
+ */
+export async function streamKyutaiTtsToFile(text: string): Promise<{ filePath: string; sampleRate: number }> {
+  const { readable, sampleRate } = await streamKyutaiTts(text);
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmpDir = os.tmpdir();
+  const filePath = path.join(tmpDir, `kyutai-stream-${Date.now()}.wav`);
+
+  // Collect all PCM chunks
+  const chunks: Buffer[] = [];
+  for await (const chunk of readable) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const pcmData = Buffer.concat(chunks);
+
+  // Write WAV file
+  const numSamples = pcmData.length / 2; // s16le = 2 bytes per sample
+  const dataSize = pcmData.length;
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16); // chunk size
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write("data", 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  fs.writeFileSync(filePath, Buffer.concat([header, pcmData]));
+  return { filePath, sampleRate };
+}
