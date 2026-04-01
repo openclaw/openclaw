@@ -35,17 +35,21 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     sessionKey: "agent:test:session",
     sessionFile: "/tmp/session.json",
     workspaceDir: "/tmp/workspace",
-    skillsSnapshot: [],
+    skillsSnapshot: { prompt: "", skills: [] },
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
     execOverrides: {},
-    bashElevated: false,
+    bashElevated: {
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+    },
     timeoutMs: 60_000,
     ...overrides,
-  } as unknown as FollowupRun["run"];
+  };
 }
 
 describe("agent-runner-utils", () => {

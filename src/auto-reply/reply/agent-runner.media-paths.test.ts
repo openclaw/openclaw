@@ -111,7 +111,7 @@ describe("runReplyAgent media path normalization", () => {
           messageProvider: "telegram",
           workspaceDir: "/tmp/workspace",
         },
-      }) as unknown as FollowupRun,
+      }),
       queueKey: "main",
       resolvedQueue: { mode: "interrupt" } as QueueSettings,
       shouldSteer: false,
