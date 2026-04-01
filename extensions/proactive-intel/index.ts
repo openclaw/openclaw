@@ -55,23 +55,32 @@ export default definePluginEntry({
 
     // Hook: learn from inbound messages (passive observation)
     api.on("message_received", (event, ctx) => {
-      const content = event?.content;
-      const channelId = ctx?.channelId ?? "unknown";
-      if (content && typeof content === "string" && content.length > 2) {
-        detector.recordInteraction({
-          message: content,
-          channelId,
-          agentId: "main",
-        });
+      try {
+        const content = event?.content;
+        const channelId = ctx?.channelId ?? "unknown";
+        if (content && typeof content === "string" && content.length > 2) {
+          detector.recordInteraction({
+            message: content,
+            channelId,
+            agentId: (ctx as any).agentId ?? "main",
+          });
+        }
+      } catch (err) {
+        // Passive observation should not crash the channel
+        api.logger.debug?.(`proactive-intel learn error: ${String(err)}`);
       }
     });
 
     // Hook: enrich agent context with proactive insights
     if (pluginConfig.contextEnrichment !== false) {
       api.on("before_prompt_build", (_event, _ctx) => {
-        const contextEnrichment = engine.getContextEnrichment();
-        if (contextEnrichment) {
-          return { appendSystemContext: contextEnrichment };
+        try {
+          const contextEnrichment = engine.getContextEnrichment();
+          if (contextEnrichment) {
+            return { appendSystemContext: contextEnrichment };
+          }
+        } catch (err) {
+          api.logger.warn(`proactive-intel context enrichment error: ${String(err)}`);
         }
         return {};
       });

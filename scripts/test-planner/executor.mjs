@@ -690,9 +690,9 @@ export async function executePlan(plan, options = {}) {
           );
         }
         if (source !== "close") {
-          laneLogStream.write(
-            `\n[test-parallel] finalize source=${source} after child exit without close\n`,
-          );
+          const warnMessage = `[test-parallel] finalize source=${source} after child exit without close for ${unit.id}`;
+          laneLogStream.write(`\n${warnMessage}\n`);
+          console.warn(warnMessage);
         }
         laneLogStream.write(
           `\n[test-parallel] done ${unit.id} code=${String(resolvedCode)} signal=${
@@ -807,7 +807,6 @@ export async function executePlan(plan, options = {}) {
           child.stderr?.destroy();
           finalizeRun(code, signal, "exit-timeout");
         }, closeGraceMs);
-        closeFallbackTimer?.unref?.();
       });
       child.on("close", (code, signal) => {
         finalizeRun(childExitState?.code ?? code, childExitState?.signal ?? signal, "close");
