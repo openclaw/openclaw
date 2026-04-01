@@ -101,9 +101,8 @@ export const createBrowserRuntimeState: FacadeModule["createBrowserRuntimeState"
   )) as FacadeModule["createBrowserRuntimeState"];
 export const createBrowserTool: FacadeModule["createBrowserTool"] = ((...args) =>
   loadFacadeModule()["createBrowserTool"](...args)) as FacadeModule["createBrowserTool"];
-export const definePluginEntry: FacadeModule["definePluginEntry"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()["definePluginEntry"] as object,
-) as FacadeModule["definePluginEntry"];
+export const definePluginEntry: FacadeModule["definePluginEntry"] = ((...args) =>
+  loadFacadeModule()["definePluginEntry"](...args)) as FacadeModule["definePluginEntry"];
 export const ensureBrowserControlAuth: FacadeModule["ensureBrowserControlAuth"] = ((...args) =>
   loadFacadeModule()["ensureBrowserControlAuth"](
     ...args,

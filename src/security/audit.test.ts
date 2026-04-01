@@ -917,10 +917,10 @@ description: test skill
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
+          allowlist: [{ pattern: "/usr/bin/python3" }, { pattern: "/usr/bin/awk" }],
         },
         ops: {
-          allowlist: [{ pattern: "/usr/local/bin/awk" }],
+          allowlist: [{ pattern: "/usr/local/bin/node" }, { pattern: "/usr/local/bin/find" }],
         },
       },
     });
@@ -942,7 +942,7 @@ description: test skill
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
+          allowlist: [{ pattern: "/usr/bin/python3" }, { pattern: "/usr/bin/xargs" }],
         },
       },
     });
@@ -1837,6 +1837,22 @@ description: test skill
           "hooks.mappings[0].allowUnsafeExternalContent=true",
           "tools.exec.applyPatch.workspaceOnly=false",
         ],
+      },
+      {
+        name: "acpx approve-all is treated as a dangerous break-glass flag",
+        cfg: {
+          plugins: {
+            entries: {
+              acpx: {
+                enabled: true,
+                config: {
+                  permissionMode: "approve-all",
+                },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        expectedDangerousDetails: ["plugins.entries.acpx.config.permissionMode=approve-all"],
       },
     ] as const;
 
