@@ -44,6 +44,12 @@ export type SlackMessageEvent = {
   blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackAttachment[];
+  /**
+   * Set by thread_ts resolver when parent_user_id is present but thread_ts
+   * could not be resolved via any API fallback. Downstream should not treat
+   * this as a genuine root message.
+   */
+  _ambiguousThreadReply?: boolean;
 };
 
 export type SlackAppMentionEvent = {

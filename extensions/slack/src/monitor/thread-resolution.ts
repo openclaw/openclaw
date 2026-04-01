@@ -17,6 +17,12 @@ const normalizeThreadTs = (threadTs?: string | null) => {
   return trimmed ? trimmed : undefined;
 };
 
+const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent =>
+  ({
+    ...message,
+    _ambiguousThreadReply: true,
+  }) as SlackMessageEvent;
+
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
   channelId: string;
@@ -87,7 +93,7 @@ export function createSlackThreadTsResolver(params: {
       const now = Date.now();
       const cached = getCached(cacheKey, now);
       if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : message;
+        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
       }
 
       if (shouldLogVerbose()) {
@@ -122,13 +128,12 @@ export function createSlackThreadTsResolver(params: {
         return { ...message, thread_ts: resolved };
       }
 
-      // Log at all verbosity levels: unresolved thread_ts with parent_user_id
-      // means this message will be treated as a root message instead of a
-      // thread reply.  This is a silent degradation that should be visible.
+      // History failed. Mark as ambiguous thread reply so downstream code can
+      // distinguish this from a genuine root message.
       logVerbose(
-        `slack inbound: WARN thread_ts resolution failed channel=${message.channel} ts=${message.ts} parent_user_id=${message.parent_user_id} — message will be treated as root`,
+        `slack inbound: WARN thread_ts resolution failed channel=${message.channel} ts=${message.ts} parent_user_id=${message.parent_user_id} — marking as ambiguous`,
       );
-      return message;
+      return markAmbiguousThreadReply(message);
     },
   };
 }

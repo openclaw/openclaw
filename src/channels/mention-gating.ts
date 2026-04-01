@@ -4,6 +4,14 @@ export type MentionGateParams = {
   canDetectMention: boolean;
   wasMentioned: boolean;
   implicitMention?: boolean;
+  /**
+   * True when the bot has previously participated in this thread (via
+   * persistent or cached state).  Separated from implicitMention so that
+   * root-message mention gating and thread-continuation gating can be
+   * distinguished in logs and logic.  When set, it contributes to
+   * effectiveWasMentioned independently of implicitMention.
+   */
+  threadContinuation?: boolean;
   shouldBypassMention?: boolean;
 };
 
@@ -20,6 +28,7 @@ export type MentionGateWithBypassParams = {
   canDetectMention: boolean;
   wasMentioned: boolean;
   implicitMention?: boolean;
+  threadContinuation?: boolean;
   hasAnyMention?: boolean;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
