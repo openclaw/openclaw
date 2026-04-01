@@ -350,7 +350,10 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_untrusted_source" };
   }
   if (isLoopbackAddress(remoteAddr)) {
-    return { reason: "trusted_proxy_loopback_source" };
+    const forwardedClientIp = resolveRequestClientIp(req, trustedProxies, false);
+    if (!forwardedClientIp || isLoopbackAddress(forwardedClientIp)) {
+      return { reason: "trusted_proxy_loopback_source" };
+    }
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];

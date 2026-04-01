@@ -858,6 +858,34 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
+    it("accepts same-host proxy identity headers when forwarded client IP is non-loopback", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            "x-forwarded-for": "203.0.113.10",
+          },
+        } as never,
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      expect(res.method).toBe("trusted-proxy");
+      expect(res.user).toBe("nick@example.com");
+    });
+
     it("fails closed when forwarded headers are present but the client chain resolves to loopback", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
