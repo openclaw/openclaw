@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
+import { resolveCacheRetention } from "./anthropic-stream-wrappers.js";
 
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
@@ -177,28 +178,8 @@ describe("cacheRetention default behavior", () => {
   });
 
   it("does not default to caching for custom provider without explicit config", () => {
-    const agent: { streamFn?: StreamFn } = {};
-
-    applyExtraParamsToAgent(
-      agent,
-      undefined, // cfg
-      "litellm",
-      "claude-sonnet-4-6",
-      undefined, // extraParamsOverride
-      undefined, // thinkingLevel
-      undefined, // agentId
-      undefined, // workspaceDir
-      {
-        api: "anthropic-messages",
-        provider: "litellm",
-        id: "claude-sonnet-4-6",
-      } as Model<"anthropic-messages">,
-    );
-
-    // Without explicit cacheRetention config, custom providers should NOT
-    // get caching — unlike direct Anthropic which defaults to "short".
-    // streamFn may still be wrapped by non-cacheRetention wrappers (e.g.
-    // anthropic tool payload compat), so we cannot assert it is undefined.
+    const result = resolveCacheRetention(undefined, "litellm", "anthropic-messages");
+    expect(result).toBeUndefined();
   });
 
   it("respects cacheRetention 'short' for custom anthropic-messages provider", () => {
