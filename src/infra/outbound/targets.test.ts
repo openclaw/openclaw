@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-shared.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -17,23 +16,9 @@ import {
   installResolveOutboundTargetPluginRegistryHooks,
   runResolveOutboundTargetCoreTests,
 } from "./targets.shared-test.js";
+import { telegramMessagingForTest } from "./targets.test-helpers.js";
 
 runResolveOutboundTargetCoreTests();
-
-const telegramMessaging = {
-  parseExplicitTarget: ({ raw }: { raw: string }) => {
-    const target = parseTelegramTarget(raw);
-    return {
-      to: target.chatId,
-      threadId: target.messageThreadId,
-      chatType: target.chatType === "unknown" ? undefined : target.chatType,
-    };
-  },
-  inferTargetChatType: ({ to }: { to: string }) => {
-    const target = parseTelegramTarget(to);
-    return target.chatType === "unknown" ? undefined : target.chatType;
-  },
-};
 
 const whatsappMessaging = {
   inferTargetChatType: ({ to }: { to: string }) => {
@@ -73,7 +58,7 @@ beforeEach(() => {
         plugin: createOutboundTestPlugin({
           id: "telegram",
           outbound: telegramOutbound,
-          messaging: telegramMessaging,
+          messaging: telegramMessagingForTest,
         }),
         source: "test",
       },
@@ -156,7 +141,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
       plugin: createOutboundTestPlugin({
         id: "telegram",
         outbound: telegramOutbound,
-        messaging: telegramMessaging,
+        messaging: telegramMessagingForTest,
       }),
       source: "test",
     });
@@ -789,6 +774,85 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.lastTo).toBeUndefined();
     expect(resolved.lastAccountId).toBeUndefined();
     expect(resolved.lastThreadId).toBeUndefined();
+  });
+
+  it("falls back to session lastThreadId when turnSourceChannel matches session channel and no explicit turnSourceThreadId", () => {
+    // Regression: Telegram forum topic replies were landing in the root chat instead of the topic
+    // thread because turnSourceThreadId was undefined (not explicitly passed), causing lastThreadId
+    // to be undefined even though the session had the correct lastThreadId from the inbound message.
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-forum-topic",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("does not fall back to session lastThreadId when turnSourceChannel differs from session channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-cross-channel-no-thread",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_SLACK",
+        lastThreadId: "1739142736.000100",
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
+  it("prefers explicit turnSourceThreadId over session lastThreadId on same channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-explicit-thread-override",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+      turnSourceThreadId: 9999,
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+    expect(resolved.threadId).toBe(9999);
+  });
+
+  it("drops session threadId when turnSourceTo differs from session to (shared-session race)", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-shared-race",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1009999999999",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1009999999999");
+    expect(resolved.threadId).toBeUndefined();
   });
 
   it("uses explicitTo even when turnSourceTo is omitted", () => {

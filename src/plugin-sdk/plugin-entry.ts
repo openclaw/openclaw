@@ -1,10 +1,52 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
+  AnyAgentTool,
+  MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
   PluginInteractiveTelegramHandlerContext,
+  PluginLogger,
+  ProviderAugmentModelCatalogContext,
+  ProviderAuthContext,
+  ProviderAuthDoctorHintContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthResult,
+  ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderCacheTtlEligibilityContext,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDefaultThinkingPolicyContext,
+  ProviderDiscoveryContext,
+  ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
+  ProviderNormalizeConfigContext,
+  ProviderNormalizeTransportContext,
+  ProviderResolveConfigApiKeyContext,
+  ProviderNormalizeModelIdContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderResolvedUsageAuth,
+  ProviderResolveDynamicModelContext,
+  ProviderResolveUsageAuthContext,
+  ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
+  ProviderWrapStreamFnContext,
+  SpeechProviderPlugin,
+  PluginCommandContext,
 } from "../plugins/types.js";
 
 export type {
@@ -27,6 +69,10 @@ export type {
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
+  ProviderNormalizeConfigContext,
+  ProviderNormalizeTransportContext,
+  ProviderResolveConfigApiKeyContext,
+  ProviderNormalizeModelIdContext,
   ProviderPreparedRuntimeAuth,
   ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
@@ -50,8 +96,8 @@ export type {
   OpenClawPluginDefinition,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
-} from "../plugins/types.js";
-export type { OpenClawConfig } from "../config/config.js";
+};
+export type { OpenClawConfig };
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 

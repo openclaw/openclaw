@@ -9,16 +9,20 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/agent-runtime";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULT_CONTEXT_TOKENS, normalizeProviderId } from "openclaw/plugin-sdk/provider-models";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
+  streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
@@ -129,20 +133,24 @@ export function shouldInjectOllamaCompatNumCtx(params: {
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
   const streamFn = baseFn ?? streamSimple;
   return (model, context, options) =>
-    streamFn(model, context, {
-      ...options,
-      onPayload: (payload: unknown) => {
-        if (!payload || typeof payload !== "object") {
-          return options?.onPayload?.(payload, model);
-        }
-        const payloadRecord = payload as Record<string, unknown>;
-        if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
-          payloadRecord.options = {};
-        }
-        (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        return options?.onPayload?.(payload, model);
-      },
+    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
+      if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+        payloadRecord.options = {};
+      }
+      (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
     });
+}
+
+function createOllamaThinkingOffWrapper(baseFn: StreamFn | undefined): StreamFn {
+  const streamFn = baseFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "ollama") {
+      return streamFn(model, context, options);
+    }
+    return streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
+      payloadRecord.think = false;
+    });
+  };
 }
 
 function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
@@ -154,11 +162,12 @@ function isOllamaCloudKimiModelRef(modelId: string): boolean {
   return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
 }
 
-export function createConfiguredOllamaCompatNumCtxWrapper(
+export function createConfiguredOllamaCompatStreamWrapper(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
   let streamFn = ctx.streamFn;
   const model = ctx.model;
+  let injectNumCtx = false;
 
   if (model) {
     const providerId =
@@ -172,8 +181,16 @@ export function createConfiguredOllamaCompatNumCtxWrapper(
         providerId,
       })
     ) {
-      streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaCompatNumCtx(model));
+      injectNumCtx = true;
     }
+  }
+
+  if (injectNumCtx && model) {
+    streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaCompatNumCtx(model));
+  }
+
+  if (ctx.thinkingLevel === "off") {
+    streamFn = createOllamaThinkingOffWrapper(streamFn);
   }
 
   if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
@@ -185,6 +202,26 @@ export function createConfiguredOllamaCompatNumCtxWrapper(
   }
 
   return streamFn;
+}
+
+// Backward-compatible alias for existing imports/tests while the broader
+// Ollama compat wrapper now owns more than num_ctx injection.
+export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
+
+export function buildOllamaChatRequest(params: {
+  modelId: string;
+  messages: OllamaChatMessage[];
+  tools?: OllamaTool[];
+  options?: Record<string, unknown>;
+  stream?: boolean;
+}): OllamaChatRequest {
+  return {
+    model: params.modelId,
+    messages: params.messages,
+    stream: params.stream ?? true,
+    ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
+    ...(params.options ? { options: params.options } : {}),
+  };
 }
 
 type StreamModelDescriptor = {
@@ -257,6 +294,7 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  think?: boolean;
 }
 
 interface OllamaChatMessage {
@@ -652,6 +690,14 @@ export function createOllamaStreamFn(
           ollamaOptions.num_predict = options.maxTokens;
         }
 
+        const body = buildOllamaChatRequest({
+          modelId: model.id,
+          messages: ollamaMessages,
+          stream: true,
+          tools: ollamaTools,
+          options: ollamaOptions,
+        });
+        options?.onPayload?.(body, model);
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           ...defaultHeaders,
@@ -667,13 +713,7 @@ export function createOllamaStreamFn(
         const response = await fetch(chatUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            model: model.id,
-            messages: ollamaMessages,
-            stream: true,
-            ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
-            options: ollamaOptions,
-          } satisfies OllamaChatRequest),
+          body: JSON.stringify(body),
           signal: options?.signal,
         });
 
@@ -689,12 +729,58 @@ export function createOllamaStreamFn(
         let accumulatedContent = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
+        const modelInfo = { api: model.api, provider: model.provider, id: model.id };
+        let streamStarted = false;
+        let textBlockClosed = false;
+
+        const closeTextBlock = () => {
+          if (!streamStarted || textBlockClosed) {
+            return;
+          }
+          textBlockClosed = true;
+          const partial = buildStreamAssistantMessage({
+            model: modelInfo,
+            content: [{ type: "text", text: accumulatedContent }],
+            stopReason: "stop",
+            usage: buildUsageWithNoCost({}),
+          });
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: accumulatedContent,
+            partial,
+          });
+        };
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
+            const delta = chunk.message.content;
+
+            if (!streamStarted) {
+              streamStarted = true;
+              // Emit start/text_start with an empty partial before accumulating
+              // the first delta, matching the Anthropic/OpenAI provider contract.
+              const emptyPartial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: [],
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({ type: "start", partial: emptyPartial });
+              stream.push({ type: "text_start", contentIndex: 0, partial: emptyPartial });
+            }
+
+            accumulatedContent += delta;
+            const partial = buildStreamAssistantMessage({
+              model: modelInfo,
+              content: [{ type: "text", text: accumulatedContent }],
+              stopReason: "stop",
+              usage: buildUsageWithNoCost({}),
+            });
+            stream.push({ type: "text_delta", contentIndex: 0, delta, partial });
           }
           if (chunk.message?.tool_calls) {
+            closeTextBlock();
             accumulatedToolCalls.push(...chunk.message.tool_calls);
           }
           if (chunk.done) {
@@ -712,11 +798,11 @@ export function createOllamaStreamFn(
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        });
+        const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
+
+        // Close the text block if we emitted any text_delta events.
+        closeTextBlock();
+
         stream.push({
           type: "done",
           reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",

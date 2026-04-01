@@ -1,13 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBlueBubblesMonitorTestRuntime,
-  EMPTY_DISPATCH_RESULT,
-  resetBlueBubblesMonitorTestState,
-  type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
+import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
 import {
@@ -28,6 +24,12 @@ import {
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import {
+  createBlueBubblesMonitorTestRuntime,
+  EMPTY_DISPATCH_RESULT,
+  resetBlueBubblesMonitorTestState,
+  type DispatchReplyParams,
+} from "./test-support/monitor-test-support.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -145,6 +147,76 @@ function getFirstDispatchCall(): DispatchReplyParams {
     throw new Error("expected dispatch call arguments");
   }
   return callArgs;
+}
+
+function installTimingAwareInboundDebouncer(core: PluginRuntime) {
+  // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
+  // oxlint-disable-next-line typescript/no-explicit-any
+  core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    type Item = any;
+    const buckets = new Map<
+      string,
+      { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
+    >();
+
+    const flush = async (key: string) => {
+      const bucket = buckets.get(key);
+      if (!bucket) {
+        return;
+      }
+      if (bucket.timer) {
+        clearTimeout(bucket.timer);
+        bucket.timer = null;
+      }
+      const items = bucket.items;
+      bucket.items = [];
+      if (items.length > 0) {
+        try {
+          await params.onFlush(items);
+        } catch (err) {
+          params.onError?.(err);
+          throw err;
+        }
+      }
+    };
+
+    return {
+      enqueue: async (item: Item) => {
+        if (params.shouldDebounce && !params.shouldDebounce(item)) {
+          await params.onFlush([item]);
+          return;
+        }
+
+        const key = params.buildKey(item);
+        const existing = buckets.get(key);
+        const bucket = existing ?? { items: [], timer: null };
+        bucket.items.push(item);
+        if (bucket.timer) {
+          clearTimeout(bucket.timer);
+        }
+        bucket.timer = setTimeout(async () => {
+          await flush(key);
+        }, params.debounceMs);
+        buckets.set(key, bucket);
+      },
+      flushKey: vi.fn(async (key: string) => {
+        await flush(key);
+      }),
+    };
+  }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+}
+
+function createDebounceTestMessage(
+  overrides: Partial<NormalizedWebhookMessage> = {},
+): NormalizedWebhookMessage {
+  return {
+    text: "hello",
+    senderId: "+15551234567",
+    senderIdExplicit: true,
+    isGroup: false,
+    ...overrides,
+  };
 }
 
 describe("BlueBubbles webhook monitor", () => {
@@ -724,62 +796,7 @@ describe("BlueBubbles webhook monitor", () => {
       vi.useFakeTimers();
       try {
         const core = createMockRuntime();
-
-        // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
-        // oxlint-disable-next-line typescript/no-explicit-any
-        core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
-          // oxlint-disable-next-line typescript/no-explicit-any
-          type Item = any;
-          const buckets = new Map<
-            string,
-            { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
-          >();
-
-          const flush = async (key: string) => {
-            const bucket = buckets.get(key);
-            if (!bucket) {
-              return;
-            }
-            if (bucket.timer) {
-              clearTimeout(bucket.timer);
-              bucket.timer = null;
-            }
-            const items = bucket.items;
-            bucket.items = [];
-            if (items.length > 0) {
-              try {
-                await params.onFlush(items);
-              } catch (err) {
-                params.onError?.(err);
-                throw err;
-              }
-            }
-          };
-
-          return {
-            enqueue: async (item: Item) => {
-              if (params.shouldDebounce && !params.shouldDebounce(item)) {
-                await params.onFlush([item]);
-                return;
-              }
-
-              const key = params.buildKey(item);
-              const existing = buckets.get(key);
-              const bucket = existing ?? { items: [], timer: null };
-              bucket.items.push(item);
-              if (bucket.timer) {
-                clearTimeout(bucket.timer);
-              }
-              bucket.timer = setTimeout(async () => {
-                await flush(key);
-              }, params.debounceMs);
-              buckets.set(key, bucket);
-            },
-            flushKey: vi.fn(async (key: string) => {
-              await flush(key);
-            }),
-          };
-        }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+        installTimingAwareInboundDebouncer(core);
 
         const registration = trackWebhookRegistrationForTest(
           setupWebhookTargetForTest({
@@ -828,6 +845,123 @@ describe("BlueBubbles webhook monitor", () => {
         const callArgs = getFirstDispatchCall();
         expect(callArgs.ctx.MediaPaths).toEqual(["/tmp/test-media.jpg"]);
         expect(callArgs.ctx.Body).toContain("hello");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("coalesces URL text with URL balloon webhook events by associatedMessageGuid", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const messageId = "url-msg-1";
+        const chatGuid = "iMessage;-;+15551234567";
+        const url = "https://github.com/bitfocus/companion/issues/4047";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId,
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId: "url-balloon-1",
+            balloonBundleId: "com.apple.messages.URLBalloonProvider",
+            associatedMessageGuid: messageId,
+          }),
+          target,
+        });
+
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: url,
+            messageId,
+            balloonBundleId: undefined,
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("skips null-text entries during flush and still delivers the valid message", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        await debouncer.enqueue({
+          message: {
+            ...createDebounceTestMessage({
+              messageId: "msg-null",
+              chatGuid: "iMessage;-;+15551234567",
+            }),
+            text: null,
+          } as unknown as NormalizedWebhookMessage,
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            text: "hello from valid entry",
+            messageId: "msg-null",
+            chatGuid: "iMessage;-;+15551234567",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: "hello from valid entry",
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -1218,7 +1352,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
-          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+          sessionKey: "agent:main:main",
         }),
       );
     });
@@ -1258,7 +1392,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
-          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+          sessionKey: "agent:main:main",
         }),
       );
     });
@@ -1297,7 +1431,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
-          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+          sessionKey: "agent:main:main",
         }),
       );
     });

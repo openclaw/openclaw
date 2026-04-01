@@ -1,33 +1,36 @@
 import type { Model } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 
+vi.mock("./anthropic-vertex-stream.js", () => ({
+  createAnthropicVertexStreamFnForModel,
+}));
+
+vi.mock("./custom-api-registry.js", () => ({
+  ensureCustomApiRegistered,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderStreamFn,
+}));
+
 let prepareModelForSimpleCompletion: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 
 describe("prepareModelForSimpleCompletion", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ prepareModelForSimpleCompletion } = await import("./simple-completion-transport.js"));
+  });
+
+  beforeEach(() => {
     createAnthropicVertexStreamFnForModel.mockReset();
     ensureCustomApiRegistered.mockReset();
     resolveProviderStreamFn.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
-
-    vi.doMock("./anthropic-vertex-stream.js", () => ({
-      createAnthropicVertexStreamFnForModel,
-    }));
-    vi.doMock("./custom-api-registry.js", () => ({
-      ensureCustomApiRegistered,
-    }));
-    vi.doMock("../plugins/provider-runtime.js", () => ({
-      resolveProviderStreamFn,
-    }));
-
-    ({ prepareModelForSimpleCompletion } = await import("./simple-completion-transport.js"));
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {

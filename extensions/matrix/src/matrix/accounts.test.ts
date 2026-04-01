@@ -70,6 +70,81 @@ describe("resolveMatrixAccount", () => {
     expect(account.configured).toBe(true);
   });
 
+  it("treats SecretRef access-token config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: { source: "file", provider: "matrix-file", id: "value" },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-token",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
+  it("treats accounts.default SecretRef access-token config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: { source: "file", provider: "matrix-file", id: "value" },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-token",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
+  it("treats accounts.default SecretRef password config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              password: { source: "file", provider: "matrix-file", id: "value" },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-password",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
   it("requires userId + password when no access token is set", () => {
     const cfg: CoreConfig = {
       channels: {
@@ -231,6 +306,27 @@ describe("resolveMatrixAccount", () => {
 
     expect(
       Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops" })).toSorted(),
+    ).toEqual(["@alerts:example.org", "@main:example.org"]);
+  });
+
+  it("honors injected env when detecting configured bot accounts", () => {
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_USER_ID: "@main:example.org",
+      MATRIX_ACCESS_TOKEN: "main-token",
+      MATRIX_ALERTS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_ALERTS_USER_ID: "@alerts:example.org",
+      MATRIX_ALERTS_ACCESS_TOKEN: "alerts-token",
+    } as NodeJS.ProcessEnv;
+
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {},
+      },
+    };
+
+    expect(
+      Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops", env })).toSorted(),
     ).toEqual(["@alerts:example.org", "@main:example.org"]);
   });
 

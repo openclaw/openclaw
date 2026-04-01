@@ -213,7 +213,7 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
-If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
+If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
 
 Default safe bins:
 
@@ -315,6 +315,15 @@ When approvals are required, the exec tool returns immediately with an approval 
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
 timeout, the request is treated as an approval timeout and surfaced as a denial reason.
 
+### Followup delivery behavior
+
+After an approved async exec finishes, OpenClaw sends a followup `agent` turn to the same session.
+
+- If a valid external delivery target exists (deliverable channel plus target `to`), followup delivery uses that channel.
+- In webchat-only or internal-session flows with no external target, followup delivery stays session-only (`deliver: false`).
+- If a caller explicitly requests strict external delivery with no resolvable external channel, the request fails with `INVALID_REQUEST`.
+- If `bestEffortDeliver` is enabled and no external channel can be resolved, delivery is downgraded to session-only instead of failing.
+
 The confirmation dialog includes:
 
 - command + args
@@ -361,21 +370,69 @@ Reply in chat:
 /approve <id> deny
 ```
 
-### Built-in chat approval clients
+The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals.
 
-Discord and Telegram can also act as explicit exec approval clients with channel-specific config.
+### Plugin approval forwarding
+
+Plugin approval forwarding uses the same delivery pipeline as exec approvals but has its own
+independent config under `approvals.plugin`. Enabling or disabling one does not affect the other.
+
+```json5
+{
+  approvals: {
+    plugin: {
+      enabled: true,
+      mode: "targets",
+      agentFilter: ["main"],
+      targets: [
+        { channel: "slack", to: "U12345678" },
+        { channel: "telegram", to: "123456789" },
+      ],
+    },
+  },
+}
+```
+
+The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilter`,
+`sessionFilter`, and `targets` work the same way.
+
+Channels that support shared interactive replies render the same approval buttons for both exec and
+plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`
+instructions.
+
+### Same-chat approvals on any channel
+
+When an exec or plugin approval request originates from a deliverable chat surface, the same chat
+can now approve it with `/approve` by default. This applies to channels such as Slack, Matrix, and
+Microsoft Teams in addition to the existing Web UI and terminal UI flows.
+
+This shared text-command path uses the normal channel auth model for that conversation. If the
+originating chat can already send commands and receive replies, approval requests no longer need a
+separate native delivery adapter just to stay pending.
+
+Discord and Telegram also support same-chat `/approve`, but those channels still use their
+resolved approver list for authorization even when native approval delivery is disabled.
+
+### Native approval delivery
+
+Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
-These clients are opt-in. If a channel does not have exec approvals enabled, OpenClaw does not treat
-that channel as an approval surface just because the conversation happened there.
+These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
+shared same-chat `/approve` flow and the shared approval buttons.
 
 Shared behavior:
 
-- only configured approvers can approve or deny
+- Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
+  for same-chat `/approve`
+- for Discord and Telegram, only resolved approvers can approve or deny
+- Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver
+- the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - when channel delivery is enabled, approval prompts include the command text
+- pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
 
 Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
@@ -384,8 +441,8 @@ topics, OpenClaw preserves the topic for the approval prompt and the post-approv
 
 See:
 
-- [Discord](/channels/discord#exec-approvals-in-discord)
-- [Telegram](/channels/telegram#exec-approvals-in-telegram)
+- [Discord](/channels/discord)
+- [Telegram](/channels/telegram)
 
 ### macOS IPC flow
 
@@ -414,6 +471,14 @@ These are posted to the agent’s session after the node reports the event.
 Gateway-host exec approvals emit the same lifecycle events when the command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these messages for easy correlation.
 
+## Denied approval behavior
+
+When an async exec approval is denied, OpenClaw prevents the agent from reusing
+output from any earlier run of the same command in the session. The denial reason
+is passed with explicit guidance that no command output is available, which stops
+the agent from claiming there is new output or repeating the denied command with
+stale results from a prior successful run.
+
 ## Implications
 
 - **full** is powerful; prefer allowlists when possible.
@@ -428,3 +493,10 @@ Related:
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Skills](/tools/skills)
+
+## Related
+
+- [Exec](/tools/exec) — shell command execution tool
+- [Sandboxing](/gateway/sandboxing) — sandbox modes and workspace access
+- [Security](/gateway/security) — security model and hardening
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — when to use each

@@ -69,16 +69,32 @@ describe("getChannelMessageAdapter", () => {
     ]);
   });
 
-  it("omits the message body block when the cross-context message is blank", () => {
-    const adapter = getChannelMessageAdapter("discord");
-    const components = adapter.buildCrossContextComponents?.({
-      originLabel: "Signal",
+  it.each([
+    {
+      message: "Hello from chat",
+      originLabel: "Telegram",
+      accountId: "primary",
+      expectedComponents: [expect.any(TextDisplay), expect.any(Separator), expect.any(TextDisplay)],
+    },
+    {
       message: "   ",
-      cfg: {} as never,
-    });
-    const container = components?.[0] as TestDiscordUiContainer | undefined;
+      originLabel: "Signal",
+      expectedComponents: [expect.any(TextDisplay)],
+    },
+  ])(
+    "builds cross-context components for %j",
+    ({ message, originLabel, accountId, expectedComponents }) => {
+      const adapter = getChannelMessageAdapter("discord");
+      const components = adapter.buildCrossContextComponents?.({
+        originLabel,
+        message,
+        cfg: {} as never,
+        ...(accountId ? { accountId } : {}),
+      });
+      const container = components?.[0] as TestDiscordUiContainer | undefined;
 
-    expect(components).toHaveLength(1);
-    expect(container?.components).toEqual([expect.any(TextDisplay)]);
-  });
+      expect(components).toHaveLength(1);
+      expect(container?.components).toEqual(expectedComponents);
+    },
+  );
 });

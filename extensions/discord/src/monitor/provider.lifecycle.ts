@@ -82,12 +82,13 @@ export async function runDiscordGatewayLifecycle(params: {
       if (decision !== "stop") {
         return "continue";
       }
-      // Don't throw for expected shutdown events — intentional disconnect
-      // (reconnect-exhausted with maxAttempts=0) and disallowed-intents are
-      // both handled without crashing the provider.
+      // Don't throw for expected shutdown events. `reconnect-exhausted` can be
+      // queued just before an abort-driven shutdown flips `lifecycleStopping`,
+      // so only suppress it when shutdown is already underway.
       if (
         event.type === "disallowed-intents" ||
-        (lifecycleStopping && event.type === "reconnect-exhausted")
+        (event.type === "reconnect-exhausted" &&
+          (lifecycleStopping || params.abortSignal?.aborted === true))
       ) {
         return "stop";
       }

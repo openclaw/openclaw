@@ -10,7 +10,7 @@ read_when:
 
 OpenClaw has three public release lanes:
 
-- stable: tagged releases that publish to npm `latest`
+- stable: tagged releases that publish to npm `latest` and mirror the same version onto `beta` unless `beta` already points at a newer prerelease
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
@@ -24,8 +24,8 @@ OpenClaw has three public release lanes:
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
 - `latest` means the current stable npm release
-- `beta` means the current prerelease npm release
-- Stable correction releases also publish to npm `latest`
+- `beta` means the current beta install target, which may point to either the active prerelease or the latest promoted stable build
+- Stable and stable correction releases publish to npm `latest` and also retag npm `beta` to that same non-beta version after promotion, unless `beta` already points at a newer prerelease
 - Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
@@ -37,8 +37,9 @@ OpenClaw has three public release lanes:
 
 ## Release preflight
 
-- Run `pnpm build` before `pnpm release:check` so the expected `dist/*` release
-  artifacts exist for the pack validation step
+- Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
+  `dist/*` release artifacts and Control UI bundle exist for the pack
+  validation step
 - Run `pnpm release:check` before every tagged release
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
@@ -46,6 +47,9 @@ OpenClaw has three public release lanes:
   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
   (or the matching beta/correction version) to verify the published registry
   install path in a fresh temp prefix
+- Maintainer workflows may reuse a successful preflight run for the real
+  publish so the publish step promotes prepared release artifacts instead of
+  rebuilding them again
 - For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
@@ -53,6 +57,10 @@ OpenClaw has three public release lanes:
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
+- If the release work touched CI planning, extension timing manifests, or fast
+  test matrices, regenerate and review the planner-owned `checks-fast-extensions`
+  shard plan via `node scripts/ci-write-manifest-outputs.mjs --workflow ci`
+  before approval so release notes do not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
   - `appcast.xml` on `main` must point at the new stable zip after publish

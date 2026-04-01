@@ -1,10 +1,12 @@
-import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "./defaults.js";
 import {
+  buildOllamaBaseUrlSsrFPolicy,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
@@ -14,6 +16,7 @@ import {
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
 const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.5:cloud", "glm-5:cloud"];
+const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 
 type OllamaMode = "remote" | "local";
 type OllamaSetupOptions = {
@@ -63,18 +66,27 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
 async function checkOllamaCloudAuth(baseUrl: string): Promise<OllamaCloudAuthResult> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const response = await fetch(`${apiBase}/api/me`, {
-      method: "POST",
-      signal: AbortSignal.timeout(5000),
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${apiBase}/api/me`,
+      init: {
+        method: "POST",
+        signal: AbortSignal.timeout(5000),
+      },
+      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+      auditContext: "ollama-setup.me",
     });
-    if (response.status === 401) {
-      const data = (await response.json()) as { signin_url?: string };
-      return { signedIn: false, signinUrl: data.signin_url };
+    try {
+      if (response.status === 401) {
+        const data = (await response.json()) as { signin_url?: string };
+        return { signedIn: false, signinUrl: data.signin_url };
+      }
+      if (!response.ok) {
+        return { signedIn: false };
+      }
+      return { signedIn: true };
+    } finally {
+      await release();
     }
-    if (!response.ok) {
-      return { signedIn: false };
-    }
-    return { signedIn: true };
   } catch {
     return { signedIn: false };
   }
@@ -97,82 +109,91 @@ async function pullOllamaModelCore(params: {
   const baseUrl = resolveOllamaApiBase(params.baseUrl);
   const modelName = normalizeOllamaModelName(params.modelName) ?? params.modelName.trim();
   try {
-    const response = await fetch(`${baseUrl}/api/pull`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: modelName }),
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${baseUrl}/api/pull`,
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: modelName }),
+      },
+      policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
+      auditContext: "ollama-setup.pull",
     });
-    if (!response.ok) {
-      return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
-    }
-    if (!response.body) {
-      return { ok: false, message: `Failed to download ${modelName} (no response body)` };
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const layers = new Map<string, { total: number; completed: number }>();
-
-    const parseLine = (line: string): OllamaPullResult => {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return { ok: true };
+    try {
+      if (!response.ok) {
+        return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
       }
-      try {
-        const chunk = JSON.parse(trimmed) as OllamaPullChunk;
-        if (chunk.error) {
-          return { ok: false, message: `Download failed: ${chunk.error}` };
-        }
-        if (!chunk.status) {
+      if (!response.body) {
+        return { ok: false, message: `Failed to download ${modelName} (no response body)` };
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const layers = new Map<string, { total: number; completed: number }>();
+
+      const parseLine = (line: string): OllamaPullResult => {
+        const trimmed = line.trim();
+        if (!trimmed) {
           return { ok: true };
         }
-        if (chunk.total && chunk.completed !== undefined) {
-          layers.set(chunk.status, { total: chunk.total, completed: chunk.completed });
-          let totalSum = 0;
-          let completedSum = 0;
-          for (const layer of layers.values()) {
-            totalSum += layer.total;
-            completedSum += layer.completed;
+        try {
+          const chunk = JSON.parse(trimmed) as OllamaPullChunk;
+          if (chunk.error) {
+            return { ok: false, message: `Download failed: ${chunk.error}` };
           }
-          params.onStatus?.(
-            chunk.status,
-            totalSum > 0 ? Math.round((completedSum / totalSum) * 100) : null,
-          );
-        } else {
-          params.onStatus?.(chunk.status, null);
+          if (!chunk.status) {
+            return { ok: true };
+          }
+          if (chunk.total && chunk.completed !== undefined) {
+            layers.set(chunk.status, { total: chunk.total, completed: chunk.completed });
+            let totalSum = 0;
+            let completedSum = 0;
+            for (const layer of layers.values()) {
+              totalSum += layer.total;
+              completedSum += layer.completed;
+            }
+            params.onStatus?.(
+              chunk.status,
+              totalSum > 0 ? Math.round((completedSum / totalSum) * 100) : null,
+            );
+          } else {
+            params.onStatus?.(chunk.status, null);
+          }
+        } catch {
+          // Ignore malformed streaming lines from Ollama.
         }
-      } catch {
-        // Ignore malformed streaming lines from Ollama.
-      }
-      return { ok: true };
-    };
+        return { ok: true };
+      };
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const parsed = parseLine(line);
+          if (!parsed.ok) {
+            return parsed;
+          }
+        }
       }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const parsed = parseLine(line);
+
+      const trailing = buffer.trim();
+      if (trailing) {
+        const parsed = parseLine(trailing);
         if (!parsed.ok) {
           return parsed;
         }
       }
-    }
 
-    const trailing = buffer.trim();
-    if (trailing) {
-      const parsed = parseLine(trailing);
-      if (!parsed.ok) {
-        return parsed;
-      }
+      return { ok: true };
+    } finally {
+      await release();
     }
-
-    return { ok: true };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, message: `Failed to download ${modelName}: ${reason}` };
@@ -264,11 +285,17 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
 
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
-  _opts?: { quiet?: boolean },
+  opts?: { quiet?: boolean },
 ): Promise<ProviderConfig> {
   const apiBase = resolveOllamaApiBase(configuredBaseUrl);
-  const { models } = await fetchOllamaModels(apiBase);
-  const discovered = await enrichOllamaModelsWithContext(apiBase, models.slice(0, 50));
+  const { reachable, models } = await fetchOllamaModels(apiBase);
+  if (!reachable && !opts?.quiet) {
+    console.warn(`Ollama could not be reached at ${apiBase}.`);
+  }
+  const discovered = await enrichOllamaModelsWithContext(
+    apiBase,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
   return {
     baseUrl: apiBase,
     api: "ollama",
@@ -308,7 +335,10 @@ export async function promptAndConfigureOllama(params: {
     throw new WizardCancelledError("Ollama not reachable");
   }
 
-  const enrichedModels = await enrichOllamaModelsWithContext(baseUrl, models.slice(0, 50));
+  const enrichedModels = await enrichOllamaModelsWithContext(
+    baseUrl,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
   const mode = (await params.prompter.select({
@@ -400,7 +430,10 @@ export async function configureOllamaNonInteractive(params: {
 
   await storeOllamaCredential(params.agentDir);
 
-  const enrichedModels = await enrichOllamaModelsWithContext(baseUrl, models.slice(0, 50));
+  const enrichedModels = await enrichOllamaModelsWithContext(
+    baseUrl,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
   const orderedModelNames = [

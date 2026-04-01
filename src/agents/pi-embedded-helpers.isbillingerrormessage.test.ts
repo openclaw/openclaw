@@ -558,6 +558,47 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
       ),
     ).toBe("overloaded");
   });
+
+  it("treats generic HTTP 410 responses as retryable timeouts", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(410, "No body response")).toBe("timeout");
+  });
+
+  it("treats session-specific HTTP 410 responses as session_expired", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "session not found")).toBe("session_expired");
+    expect(classifyFailoverReasonFromHttpStatus(410, "conversation expired")).toBe(
+      "session_expired",
+    );
+  });
+
+  it("preserves explicit billing and auth signals on HTTP 410", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReasonFromHttpStatus(410, "authentication failed")).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(410, "insufficient credits")).toBe("billing");
+  });
+});
+
+describe("classifyFailoverReason", () => {
+  it("treats generic 410 text as retryable timeout", () => {
+    expect(classifyFailoverReason("410")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410")).toBe("timeout");
+    expect(classifyFailoverReason("410 Gone")).toBe("timeout");
+    expect(classifyFailoverReason("410: No body")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410: No body")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410 Gone")).toBe("timeout");
+  });
+
+  it("keeps session-specific 410 text mapped to session_expired", () => {
+    expect(classifyFailoverReason("HTTP 410: session not found")).toBe("session_expired");
+    expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
+  });
+
+  it("keeps explicit billing and auth signals on 410 text", () => {
+    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
@@ -794,6 +835,11 @@ describe("classifyFailoverReason", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+      ),
+    ).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
@@ -868,6 +914,12 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
+      ),
+    ).toBe("timeout");
+    // Anthropic "unexpected error" variant (#57010)
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
       ),
     ).toBe("timeout");
   });

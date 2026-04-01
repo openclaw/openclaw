@@ -366,4 +366,19 @@ describe("lookupContextTokens", () => {
     });
     expect(result).toBe(1_048_576);
   });
+
+  it("resolveContextTokensForModel normalizes explicit provider aliases before config lookup", async () => {
+    mockDiscoveryDeps([]);
+
+    const cfg = createContextOverrideConfig("z.ai", "glm-5", 256_000);
+    const { resolveContextTokensForModel } = await import("./context.js");
+    await flushAsyncWarmup();
+
+    const result = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "z-ai",
+      model: "glm-5",
+    });
+    expect(result).toBe(256_000);
+  });
 });
