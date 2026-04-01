@@ -44,7 +44,6 @@ import {
   isExternalHookSession,
   resolveHookExternalContentSource,
 } from "../../security/external-content.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
@@ -172,6 +171,10 @@ function resolvePositiveContextTokens(value: unknown): number | undefined {
 
 async function loadCliRunnerRuntime() {
   return await import("../../agents/cli-runner.runtime.js");
+}
+
+async function loadUsageFormatRuntime() {
+  return await import("../../utils/usage-format.js");
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -727,6 +730,7 @@ export async function runCronIsolatedAgentTurn(params: {
       }
     }
     if (hasNonzeroUsage(usage)) {
+      const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const totalTokens = deriveSessionTotalTokens({
