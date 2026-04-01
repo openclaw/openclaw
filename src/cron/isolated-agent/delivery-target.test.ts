@@ -12,7 +12,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/store.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: vi.fn().mockReturnValue({}),
 }));
 
@@ -33,13 +33,13 @@ vi.mock("../../pairing/pairing-store.js", () => ({
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",
   "../../config/sessions/paths.js",
-  "../../config/sessions/store.js",
+  "../../config/sessions/store-load.js",
   "../../infra/outbound/channel-selection.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
 ];
 
-import { loadSessionStore } from "../../config/sessions/store.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
