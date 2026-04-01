@@ -106,6 +106,7 @@ describe("runReplyAgent media path normalization", () => {
       followupRun: createMockFollowupRun({
         execution: { visibility: "internal", agentPrompt: "generate" },
         run: {
+          ...createMockFollowupRun().run,
           agentId: "main",
           agentDir: "/tmp/agent",
           messageProvider: "telegram",
