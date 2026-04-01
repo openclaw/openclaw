@@ -53,11 +53,15 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   /** Optional capability tags for shared model lists. */
   capabilities?: MediaUnderstandingCapability[];
   /** Use a CLI command instead of provider API. */
-  type?: "provider" | "cli";
+  type?: "provider" | "cli" | "mcp";
   /** CLI binary (required when type=cli). */
   command?: string;
   /** CLI args (template-enabled). */
   args?: string[];
+  /** MCP server name (required when type=mcp). */
+  server?: string;
+  /** MCP tool name (required when type=mcp). */
+  tool?: string;
   /** Optional prompt override for this model entry. */
   prompt?: string;
   /** Optional max output characters for this model entry. */
@@ -112,6 +116,10 @@ export type LinkModelConfig = {
   command: string;
   /** CLI args (template-enabled). */
   args?: string[];
+  /** MCP server name (required when type=mcp). */
+  server?: string;
+  /** MCP tool name (required when type=mcp). */
+  tool?: string;
   /** Optional timeout override (seconds) for this model entry. */
   timeoutSeconds?: number;
 };

@@ -287,7 +287,7 @@ function resolveProviderQuery(params: {
 
 export function buildModelDecision(params: {
   entry: MediaUnderstandingModelConfig;
-  entryType: "provider" | "cli";
+  entryType: "provider" | "cli" | "mcp";
   outcome: MediaUnderstandingModelDecision["outcome"];
   reason?: string;
 }): MediaUnderstandingModelDecision {
@@ -663,3 +663,66 @@ export async function runCliEntry(params: {
     await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+// --- FORK: MCP-based media understanding ---
+export async function runMcpEntry(params: {
+  capability: MediaUnderstandingCapability;
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  attachmentIndex: number;
+  cache: MediaAttachmentCache;
+  config?: MediaUnderstandingConfig;
+}): Promise<MediaUnderstandingOutput | null> {
+  const { entry, capability } = params;
+  const serverName = entry.server?.trim();
+  const toolName = entry.tool?.trim();
+  if (!serverName || !toolName) {
+    throw new Error(`MCP entry missing server/tool for ${capability}`);
+  }
+  const { maxBytes, maxChars, timeoutMs } = resolveEntryRunOptions({
+    capability,
+    entry,
+    cfg: params.cfg,
+    config: params.config,
+  });
+  const pathResult = await params.cache.getPath({
+    attachmentIndex: params.attachmentIndex,
+    maxBytes,
+    timeoutMs,
+  });
+  if (capability === "audio") {
+    const stat = await fs.stat(pathResult.path);
+    assertMinAudioSize({ size: stat.size, attachmentIndex: params.attachmentIndex });
+  }
+  if (shouldLogVerbose()) {
+    logVerbose(`Media understanding via MCP: ${serverName}/${toolName} file=${pathResult.path}`);
+  }
+  const { getOrCreateSessionMcpRuntime } = await import("../agents/pi-bundle-mcp-runtime.js");
+  const runtime = await getOrCreateSessionMcpRuntime({
+    sessionId: `media-understanding-${serverName}`,
+    workspaceDir: process.cwd(),
+    cfg: params.cfg,
+  });
+  const toolInput: Record<string, unknown> = {
+    file_path: pathResult.path,
+    ...(entry.language ? { language: entry.language } : {}),
+  };
+  const result = await runtime.callTool(serverName, toolName, toolInput);
+  const text = (result.content as Array<{ type: string; text?: string }>)
+    ?.filter((c) => c.type === "text")
+    .map((c) => c.text ?? "")
+    .join("")
+    .trim();
+  if (!text) {
+    return null;
+  }
+  return {
+    kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
+    attachmentIndex: params.attachmentIndex,
+    text: trimOutput(text, maxChars),
+    provider: `mcp:${serverName}`,
+    model: toolName,
+  };
+}
+// --- END FORK ---
