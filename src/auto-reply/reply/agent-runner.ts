@@ -16,9 +16,11 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
 import {
   recordChiefTaskFailure,
+  recordChiefTaskProgress,
+  recordChiefTaskRecovery,
   recordChiefTaskResult,
   recordChiefTaskStart,
 } from "../../infra/chief-task-ledger.js";
@@ -70,6 +72,104 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const LONG_RUNNING_STATUS_DELAY_MS = 60_000;
+const LONG_RUNNING_STATUS_INTERVAL_MS = 5 * 60_000;
+
+type ChiefProgressHeartbeatSnapshot = {
+  phase: string;
+  currentOwner: string;
+  activeAgents: string[];
+  latestMilestone?: string;
+  nextStep?: string;
+  lastCompactionCause?: string;
+  lastError?: string;
+  releaseGateStatus?: "not_required" | "required" | "reviewing" | "passed" | "blocked";
+};
+
+function formatProgressTagLine(
+  tag: "WORKING" | "STATUS" | "DONE" | "NEXT" | "RISK",
+  value: string,
+): string {
+  return `\`[${tag}]: ${value.trim()}\``;
+}
+
+function formatLongRunningStatusMessage(params: {
+  elapsedMs: number;
+  snapshot: ChiefProgressHeartbeatSnapshot;
+}): string {
+  const elapsedSeconds = Math.max(1, Math.round(params.elapsedMs / 1_000));
+  const activeAgents =
+    params.snapshot.activeAgents.length > 0 ? params.snapshot.activeAgents.join(", ") : "chief";
+  const releaseGate =
+    params.snapshot.releaseGateStatus && params.snapshot.releaseGateStatus !== "passed"
+      ? `; release_gate=${params.snapshot.releaseGateStatus}`
+      : "";
+  const risk =
+    params.snapshot.lastError ??
+    (params.snapshot.releaseGateStatus === "blocked"
+      ? "release gate is blocked pending fixes or missing evidence"
+      : params.snapshot.releaseGateStatus === "reviewing"
+        ? "final review is still running"
+        : params.snapshot.lastCompactionCause
+          ? `context compaction was triggered by ${params.snapshot.lastCompactionCause}`
+          : "no active blocker; still waiting on long-running model/tool work");
+  return [
+    formatProgressTagLine(
+      "WORKING",
+      `still processing after ${String(elapsedSeconds)}s; model/tool work remains active`,
+    ),
+    formatProgressTagLine(
+      "STATUS",
+      `phase=${params.snapshot.phase}; owner=${params.snapshot.currentOwner}; active=${activeAgents}${releaseGate}`,
+    ),
+    formatProgressTagLine("DONE", params.snapshot.latestMilestone ?? "no new milestone yet"),
+    formatProgressTagLine(
+      "NEXT",
+      params.snapshot.nextStep ?? "continue current execution until a terminal result is ready",
+    ),
+    formatProgressTagLine("RISK", risk),
+  ].join("\n");
+}
+
+function describeChiefAgentEvent(evt: {
+  stream: string;
+  data?: Record<string, unknown> | null;
+}): { latestMilestone?: string; lastError?: string } {
+  if (evt.stream === "tool") {
+    const name = typeof evt.data?.name === "string" ? evt.data.name.trim() : "tool";
+    const phase = typeof evt.data?.phase === "string" ? evt.data.phase.trim() : "activity";
+    return {
+      latestMilestone: `Tool ${name} ${phase}.`,
+    };
+  }
+  if (evt.stream === "compaction") {
+    const trigger =
+      typeof evt.data?.trigger === "string"
+        ? evt.data.trigger.trim()
+        : typeof evt.data?.reason === "string"
+          ? evt.data.reason.trim()
+          : "runtime";
+    return {
+      latestMilestone: `Context compaction handled for ${trigger}.`,
+    };
+  }
+  if (evt.stream === "lifecycle" && typeof evt.data?.phase === "string") {
+    if (evt.data.phase === "error") {
+      const errorText =
+        typeof evt.data?.error === "string" ? evt.data.error.trim() : "Chief execution failed.";
+      return {
+        latestMilestone: "Chief execution hit a runtime error.",
+        lastError: errorText,
+      };
+    }
+    if (evt.data.phase === "start") {
+      return {
+        latestMilestone: "Chief execution started.",
+      };
+    }
+  }
+  return {};
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -191,6 +291,230 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const replyAgentStartedAt = Date.now();
+  let longRunningStatusTimer: NodeJS.Timeout | undefined;
+  let runCompleted = false;
+  const chiefProgressSnapshot: ChiefProgressHeartbeatSnapshot = {
+    phase: "executing",
+    currentOwner: "chief",
+    activeAgents: ["chief"],
+    latestMilestone: opts?.latestMilestone ?? opts?.intentSummary ?? opts?.currentGoal,
+    nextStep: "Continue execution until ready for final review or blocked.",
+    releaseGateStatus: opts?.releaseGateStatus,
+  };
+  const clearLongRunningStatusTimer = () => {
+    if (longRunningStatusTimer) {
+      clearTimeout(longRunningStatusTimer);
+      longRunningStatusTimer = undefined;
+    }
+  };
+
+  const scheduleLongRunningStatus = (delayMs: number) => {
+    if (runCompleted || isHeartbeat || !opts?.onBlockReply) {
+      return;
+    }
+    clearLongRunningStatusTimer();
+    longRunningStatusTimer = setTimeout(() => {
+      void sendLongRunningStatus();
+    }, delayMs);
+  };
+
+  const sendLongRunningStatus = async () => {
+    if (runCompleted || isHeartbeat || !opts?.onBlockReply) {
+      return;
+    }
+    const payload = applyReplyToMode({
+      text: formatLongRunningStatusMessage({
+        elapsedMs: Date.now() - replyAgentStartedAt,
+        snapshot: chiefProgressSnapshot,
+      }),
+      replyToId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    });
+    try {
+      await Promise.resolve(
+        opts.onBlockReply(payload, {
+          timeoutMs: blockReplyTimeoutMs,
+        }),
+      );
+      if (chiefTaskRecordId) {
+        await trackChiefTaskProgress({
+          cfg,
+          agentId: followupRun.run.agentId,
+          taskId: chiefTaskRecordId,
+          sessionKey: chiefTaskSessionKeyForProgress,
+          lastUserProgressReportAt: Date.now(),
+          latestMilestone: chiefProgressSnapshot.latestMilestone,
+          nextStep: chiefProgressSnapshot.nextStep,
+        });
+      }
+    } catch (error) {
+      defaultRuntime.log(`working status dispatch failed: ${String(error)}`);
+    }
+    scheduleLongRunningStatus(LONG_RUNNING_STATUS_INTERVAL_MS);
+  };
+
+  if (!isHeartbeat && opts?.onBlockReply) {
+    scheduleLongRunningStatus(LONG_RUNNING_STATUS_DELAY_MS);
+  }
+  let chiefTaskRecordId: string | undefined;
+  let chiefTaskSessionKeyForProgress = sessionKey ?? queueKey;
+  let disposeChiefEventProgressListener: (() => void) | undefined;
+  const runtimeOpts: GetReplyOptions = { ...(opts ?? {}) };
+  const shouldTrackChiefTask = (runtimeOpts.chiefTaskTrackingMode ?? "tracked") !== "skip";
+  const mergeChiefProgressSnapshot = (
+    args: Partial<{
+      phase: string;
+      activeAgents: string[];
+      currentOwner: string;
+      latestMilestone: string;
+      nextStep: string;
+      lastCompactionCause: string;
+      lastError: string;
+      releaseGateStatus: "not_required" | "required" | "reviewing" | "passed" | "blocked";
+    }>,
+  ) => {
+    if (args.phase) {
+      chiefProgressSnapshot.phase = args.phase;
+    }
+    if (args.activeAgents?.length) {
+      chiefProgressSnapshot.activeAgents = [...args.activeAgents];
+    }
+    if (args.currentOwner) {
+      chiefProgressSnapshot.currentOwner = args.currentOwner;
+    }
+    if (args.latestMilestone) {
+      chiefProgressSnapshot.latestMilestone = args.latestMilestone;
+    }
+    if (args.nextStep) {
+      chiefProgressSnapshot.nextStep = args.nextStep;
+    }
+    if (args.lastCompactionCause) {
+      chiefProgressSnapshot.lastCompactionCause = args.lastCompactionCause;
+    }
+    if (args.lastError) {
+      chiefProgressSnapshot.lastError = args.lastError;
+    }
+    if (args.releaseGateStatus) {
+      chiefProgressSnapshot.releaseGateStatus = args.releaseGateStatus;
+    }
+  };
+  const trackChiefTaskStart = async () =>
+    shouldTrackChiefTask
+      ? await recordChiefTaskStart({
+          cfg,
+          agentId: followupRun.run.agentId,
+          sessionKey: sessionKey ?? queueKey,
+          sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
+          prompt: commandBody,
+          sourceChannel: sessionCtx.OriginatingChannel ?? sessionCtx.Provider,
+          receiptId: sessionCtx.InboundReceiptId,
+          sourceMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+          matchedTaskId: runtimeOpts.matchedChiefTaskId,
+          paperclipIssueId: runtimeOpts.paperclipIssueId,
+          threadKey: runtimeOpts.threadKey,
+          openIntentKey: runtimeOpts.openIntentKey,
+          intentSummary: runtimeOpts.intentSummary,
+          currentGoal: runtimeOpts.currentGoal,
+          programId: runtimeOpts.programId,
+          parentTaskId: runtimeOpts.parentTaskId,
+          role: runtimeOpts.role,
+          successCriteria: runtimeOpts.successCriteria,
+          verificationEvidence: runtimeOpts.verificationEvidence,
+          riskLevel: runtimeOpts.riskLevel,
+          confidence: runtimeOpts.confidence,
+          latestMilestone: runtimeOpts.latestMilestone,
+          lastUserProgressReportAt: runtimeOpts.lastUserProgressReportAt,
+          releaseGateStatus: runtimeOpts.releaseGateStatus,
+          continuityDecision: runtimeOpts.continuityDecision,
+          createdByApproval: runtimeOpts.createdByApproval,
+        })
+      : null;
+  const trackChiefTaskProgress = async (
+    args: Parameters<typeof recordChiefTaskProgress>[0],
+  ): Promise<void> => {
+    if (!shouldTrackChiefTask) {
+      return;
+    }
+    mergeChiefProgressSnapshot({
+      phase: args.phase,
+      activeAgents: args.activeAgents,
+      currentOwner: args.currentOwner,
+      latestMilestone: args.latestMilestone,
+      nextStep: args.nextStep,
+      lastCompactionCause: args.lastCompactionCause,
+      lastError: undefined,
+      releaseGateStatus: args.releaseGateStatus,
+    });
+    await recordChiefTaskProgress(args);
+  };
+  const trackChiefTaskResult = async (
+    args: Parameters<typeof recordChiefTaskResult>[0],
+  ): Promise<void> => {
+    if (!shouldTrackChiefTask) {
+      return;
+    }
+    await recordChiefTaskResult(args);
+  };
+  const trackChiefTaskRecovery = async (
+    args: Parameters<typeof recordChiefTaskRecovery>[0],
+  ): Promise<void> => {
+    if (!shouldTrackChiefTask) {
+      return;
+    }
+    await recordChiefTaskRecovery(args);
+  };
+  const trackChiefTaskFailure = async (
+    args: Parameters<typeof recordChiefTaskFailure>[0],
+  ): Promise<void> => {
+    if (!shouldTrackChiefTask) {
+      return;
+    }
+    await recordChiefTaskFailure(args);
+  };
+  const previousOnAgentRunStart = runtimeOpts.onAgentRunStart;
+  runtimeOpts.onAgentRunStart = (runId) => {
+    if (chiefTaskRecordId && !disposeChiefEventProgressListener) {
+      disposeChiefEventProgressListener = onAgentEvent((evt) => {
+        if (evt.runId !== runId) {
+          return;
+        }
+        const phase =
+          evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
+            ? evt.data.phase === "error"
+              ? "blocked"
+              : "executing"
+            : evt.stream === "compaction"
+              ? "executing"
+              : evt.stream === "tool" || evt.stream === "assistant"
+                ? "executing"
+                : undefined;
+        const compactionCause =
+          evt.stream === "compaction"
+            ? typeof evt.data?.trigger === "string"
+              ? evt.data.trigger
+              : typeof evt.data?.reason === "string"
+                ? evt.data.reason
+                : undefined
+            : undefined;
+        const eventSummary = describeChiefAgentEvent(evt);
+        void trackChiefTaskProgress({
+          cfg,
+          agentId: followupRun.run.agentId,
+          taskId: chiefTaskRecordId,
+          sessionKey: chiefTaskSessionKeyForProgress,
+          phase,
+          activeAgents: ["chief"],
+          currentOwner: "chief",
+          lastCompactionCause: compactionCause,
+          latestMilestone: eventSummary.latestMilestone,
+        });
+        if (eventSummary.lastError) {
+          chiefProgressSnapshot.lastError = eventSummary.lastError;
+        }
+      });
+    }
+    previousOnAgentRunStart?.(runId);
+  };
   const touchActiveSessionEntry = async () => {
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
@@ -224,7 +548,7 @@ export async function runReplyAgent(params: {
   });
 
   const queuedRunFollowupTurn = createFollowupRunner({
-    opts,
+    opts: runtimeOpts,
     typing,
     typingMode,
     sessionEntry: activeSessionEntry,
@@ -261,27 +585,24 @@ export async function runReplyAgent(params: {
 
   await typingSignals.signalRunStart();
 
-  const chiefTaskRecord = await recordChiefTaskStart({
-    cfg,
-    agentId: followupRun.run.agentId,
-    sessionKey: sessionKey ?? queueKey,
-    prompt: commandBody,
-    sourceChannel: sessionCtx.OriginatingChannel ?? sessionCtx.Provider,
-    sourceMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-  });
-
-  activeSessionEntry = await runPreflightCompactionIfNeeded({
-    cfg,
-    followupRun,
-    promptForEstimate: followupRun.prompt,
-    defaultModel,
-    agentCfgContextTokens,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    isHeartbeat,
-  });
+  const chiefTaskRecord = await trackChiefTaskStart();
+  chiefTaskRecordId = chiefTaskRecord?.taskId;
+  chiefTaskSessionKeyForProgress = sessionKey ?? queueKey;
+  if (chiefTaskRecordId) {
+    await trackChiefTaskProgress({
+      cfg,
+      agentId: followupRun.run.agentId,
+      taskId: chiefTaskRecordId,
+      sessionKey: chiefTaskSessionKeyForProgress,
+      sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
+      phase: "executing",
+      activeAgents: ["chief"],
+      currentOwner: "chief",
+      latestMilestone: runtimeOpts.latestMilestone ?? "Intake completed; execution started.",
+      releaseGateStatus: runtimeOpts.releaseGateStatus ?? "required",
+      nextStep: "Continue execution until ready for final review or blocked.",
+    });
+  }
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
@@ -299,8 +620,21 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
+  activeSessionEntry = await runPreflightCompactionIfNeeded({
+    cfg,
+    followupRun,
+    promptForEstimate: followupRun.prompt,
+    defaultModel,
+    agentCfgContextTokens,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    isHeartbeat,
+  });
+
   const runFollowupTurn = createFollowupRunner({
-    opts,
+    opts: runtimeOpts,
     typing,
     typingMode,
     sessionEntry: activeSessionEntry,
@@ -406,6 +740,29 @@ export async function runReplyAgent(params: {
       failureLabel: "compaction failure",
       buildLogMessage: (nextSessionId) =>
         `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
+    }).then(async (didReset) => {
+      if (didReset && chiefTaskRecordId) {
+        await trackChiefTaskRecovery({
+          cfg,
+          agentId: followupRun.run.agentId,
+          taskId: chiefTaskRecordId,
+          fallbackStage: "session_rotate",
+          action: "compaction_session_rotate",
+          activeAgents: ["chief"],
+        });
+        await trackChiefTaskProgress({
+          cfg,
+          agentId: followupRun.run.agentId,
+          taskId: chiefTaskRecordId,
+          sessionKey: chiefTaskSessionKeyForProgress,
+          phase: "executing",
+          activeAgents: ["chief"],
+          currentOwner: "chief",
+          lastCompactionCause: reason,
+          nextStep: "Retry the task after rotating the session.",
+        });
+      }
+      return didReset;
     });
   const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
     resetSession({
@@ -413,6 +770,18 @@ export async function runReplyAgent(params: {
       buildLogMessage: (nextSessionId) =>
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
+    }).then(async (didReset) => {
+      if (didReset && chiefTaskRecordId) {
+        await trackChiefTaskRecovery({
+          cfg,
+          agentId: followupRun.run.agentId,
+          taskId: chiefTaskRecordId,
+          fallbackStage: "session_rotate",
+          action: "role_ordering_session_rotate",
+          activeAgents: ["chief"],
+        });
+      }
+      return didReset;
     });
   try {
     const runStartedAt = Date.now();
@@ -420,7 +789,7 @@ export async function runReplyAgent(params: {
       commandBody,
       followupRun,
       sessionCtx,
-      opts,
+      opts: runtimeOpts,
       typingSignals,
       blockReplyPipeline,
       blockStreamingEnabled,
@@ -441,7 +810,7 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
-      await recordChiefTaskResult({
+      await trackChiefTaskResult({
         cfg,
         agentId: followupRun.run.agentId,
         taskId: chiefTaskRecord?.taskId,
@@ -451,6 +820,10 @@ export async function runReplyAgent(params: {
           : runOutcome.payload
             ? [runOutcome.payload]
             : [],
+        deliveryConfirmed: false,
+        verificationEvidence: ["run_outcome_final"],
+        releaseGateStatus: chiefProgressSnapshot.releaseGateStatus,
+        latestMilestone: chiefProgressSnapshot.latestMilestone,
       });
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
@@ -458,6 +831,34 @@ export async function runReplyAgent(params: {
     const { runId, fallbackProvider, fallbackModel, fallbackAttempts, directlySentBlockKeys } =
       runOutcome;
     let runResult = runOutcome.runResult;
+    if (
+      chiefTaskRecordId &&
+      ((fallbackProvider && fallbackProvider !== followupRun.run.provider) ||
+        (fallbackModel && fallbackModel !== followupRun.run.model))
+    ) {
+      await trackChiefTaskRecovery({
+        cfg,
+        agentId: followupRun.run.agentId,
+        taskId: chiefTaskRecordId,
+        fallbackStage: "model_fallback",
+        action: "model_fallback",
+        activeAgents: ["chief"],
+      });
+    }
+    if (chiefTaskRecordId) {
+      await trackChiefTaskProgress({
+        cfg,
+        agentId: followupRun.run.agentId,
+        taskId: chiefTaskRecordId,
+        sessionKey: chiefTaskSessionKeyForProgress,
+        phase: "reviewing",
+        activeAgents: ["chief", "quality_guard"],
+        currentOwner: "chief",
+        latestMilestone: "Implementation pass completed; quality_guard review started.",
+        releaseGateStatus: "reviewing",
+        nextStep: "Run the mandatory final executive review before finalization.",
+      });
+    }
     const reviewed = await maybeApplyChiefQualityGuard({
       cfg,
       agentId: followupRun.run.agentId,
@@ -469,8 +870,38 @@ export async function runReplyAgent(params: {
       provider: fallbackProvider,
       model: fallbackModel,
       chiefSkillsSnapshot: followupRun.run.skillsSnapshot,
+      successCriteria: runtimeOpts.successCriteria ?? runtimeOpts.currentGoal,
+      evidenceSummary: [
+        `provider=${fallbackProvider ?? followupRun.run.provider}`,
+        `model=${fallbackModel ?? followupRun.run.model}`,
+        `payload_count=${String(runResult.payloads?.length ?? 0)}`,
+      ],
     });
     runResult = reviewed.result;
+    if (chiefTaskRecordId) {
+      await trackChiefTaskProgress({
+        cfg,
+        agentId: followupRun.run.agentId,
+        taskId: chiefTaskRecordId,
+        sessionKey: chiefTaskSessionKeyForProgress,
+        phase: "executing",
+        activeAgents: ["chief"],
+        currentOwner: "chief",
+        latestMilestone:
+          reviewed.verdict === "approve"
+            ? "Release gate passed; preparing final delivery."
+            : reviewed.verdict === "block"
+              ? "Release gate blocked the draft and returned a safe user-facing response."
+              : "Release gate requested revisions before final delivery.",
+        releaseGateStatus:
+          reviewed.verdict === "approve"
+            ? "passed"
+            : reviewed.verdict === "block"
+              ? "blocked"
+              : "reviewing",
+        nextStep: "Finalize the reviewed result and deliver it safely.",
+      });
+    }
     let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
 
     if (
@@ -550,6 +981,7 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
+
     const cliSessionBinding = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
@@ -579,12 +1011,16 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
-      await recordChiefTaskResult({
+      await trackChiefTaskResult({
         cfg,
         agentId: followupRun.run.agentId,
         taskId: chiefTaskRecord?.taskId,
         sessionKey: sessionKey ?? queueKey,
         payloads: [],
+        deliveryConfirmed: false,
+        verificationEvidence: ["payload_array_empty"],
+        releaseGateStatus: chiefProgressSnapshot.releaseGateStatus ?? "blocked",
+        latestMilestone: "Chief run ended without any user-facing payloads.",
       });
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
@@ -615,12 +1051,16 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
-      await recordChiefTaskResult({
+      await trackChiefTaskResult({
         cfg,
         agentId: followupRun.run.agentId,
         taskId: chiefTaskRecord?.taskId,
         sessionKey: sessionKey ?? queueKey,
         payloads: [],
+        deliveryConfirmed: false,
+        verificationEvidence: ["reply_payloads_empty_after_normalization"],
+        releaseGateStatus: chiefProgressSnapshot.releaseGateStatus ?? "blocked",
+        latestMilestone: "Reply payload normalization left no deliverable output.",
       });
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
@@ -776,6 +1216,19 @@ export async function runReplyAgent(params: {
     }
 
     if (autoCompactionCount > 0) {
+      if (chiefTaskRecordId) {
+        await trackChiefTaskProgress({
+          cfg,
+          agentId: followupRun.run.agentId,
+          taskId: chiefTaskRecordId,
+          sessionKey: chiefTaskSessionKeyForProgress,
+          phase: "executing",
+          activeAgents: ["chief"],
+          currentOwner: "chief",
+          lastCompactionCause: "runtime_auto_compaction",
+          nextStep: "Continue with the refreshed context after compaction.",
+        });
+      }
       const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -825,12 +1278,21 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    await recordChiefTaskResult({
+    await trackChiefTaskResult({
       cfg,
       agentId: followupRun.run.agentId,
       taskId: chiefTaskRecord?.taskId,
       sessionKey: sessionKey ?? queueKey,
       payloads: finalPayloads,
+      deliveryConfirmed: false,
+      verificationEvidence: [
+        `payload_count=${String(finalPayloads.length)}`,
+        chiefProgressSnapshot.releaseGateStatus === "passed"
+          ? "release_gate_passed"
+          : `release_gate_${chiefProgressSnapshot.releaseGateStatus ?? "unknown"}`,
+      ],
+      releaseGateStatus: chiefProgressSnapshot.releaseGateStatus,
+      latestMilestone: chiefProgressSnapshot.latestMilestone,
     });
 
     return finalizeWithFollowup(
@@ -839,7 +1301,10 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
   } catch (error) {
-    await recordChiefTaskFailure({
+    chiefProgressSnapshot.lastError = String(error);
+    chiefProgressSnapshot.releaseGateStatus = "blocked";
+    chiefProgressSnapshot.latestMilestone = "Chief execution failed and requires recovery.";
+    await trackChiefTaskFailure({
       cfg,
       agentId: followupRun.run.agentId,
       taskId: chiefTaskRecord?.taskId,
@@ -851,6 +1316,9 @@ export async function runReplyAgent(params: {
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    runCompleted = true;
+    clearLongRunningStatusTimer();
+    disposeChiefEventProgressListener?.();
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires

@@ -582,6 +582,53 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("emits recurring WORKING status heartbeats after 60 seconds and every 5 minutes after that", async () => {
+    vi.useFakeTimers();
+    const onBlockReply = vi.fn();
+    let resolveRun: (() => void) | undefined;
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          resolveRun = () => resolve({ payloads: [{ text: "final" }], meta: {} });
+        }),
+    );
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onBlockReply },
+    });
+    const runPromise = run();
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const [workingPayload, workingContext] = onBlockReply.mock.calls[0] ?? [];
+    expect(workingPayload).toMatchObject({
+      text: expect.stringContaining("[WORKING]:"),
+    });
+    expect(workingPayload.text).toContain("[STATUS]:");
+    expect(workingPayload.text).toContain("[DONE]:");
+    expect(workingPayload.text).toContain("[NEXT]:");
+    expect(workingPayload.text).toContain("[RISK]:");
+    expect(workingContext).toMatchObject({
+      timeoutMs: expect.any(Number),
+    });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    const [secondHeartbeatPayload] = onBlockReply.mock.calls[1] ?? [];
+    expect(secondHeartbeatPayload).toMatchObject({
+      text: expect.stringContaining("[WORKING]:"),
+    });
+
+    resolveRun?.();
+    await vi.runAllTimersAsync();
+    await runPromise;
+    vi.useRealTimers();
+  });
+
   it("handles typing for normal and silent tool results", async () => {
     const cases = [
       {
@@ -770,7 +817,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false },
+          data: { phase: "end", willRetry: false, completed: true },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       });
@@ -1712,6 +1759,15 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "codex-cli": {},
+              },
+            },
+          },
+        },
         runOverrides: { provider: "codex-cli" },
       });
 
@@ -1833,6 +1889,100 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 
+  it("runs preflight compaction when transcript bytes exceed threshold and truncation is enabled", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "oversized-preflight-session.jsonl";
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      const workspaceDir = path.dirname(storePath);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "x".repeat(4_096), "utf-8");
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        ["## Session Startup", "Read AGENTS.md before replying."].join("\n"),
+        "utf-8",
+      );
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 100,
+        totalTokensFresh: true,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      state.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 4_000,
+          tokensAfter: 800,
+        },
+      });
+      const calls: Array<{ prompt?: string; extraSystemPrompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({
+          prompt: params.prompt,
+          extraSystemPrompt: params.extraSystemPrompt,
+        });
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                truncateAfterCompaction: true,
+                forceCompactionTranscriptBytes: 256,
+                memoryFlush: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+        runOverrides: { sessionFile, workspaceDir },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+      const compactionCall = state.compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as
+        | {
+            sessionId?: string;
+            sessionKey?: string;
+            trigger?: string;
+            sessionFile?: string;
+          }
+        | undefined;
+      expect(compactionCall?.sessionId).toBe("session");
+      expect(compactionCall?.sessionKey).toBe(sessionKey);
+      expect(compactionCall?.trigger).toBe("budget");
+      expect(await normalizeComparablePath(compactionCall?.sessionFile ?? "")).toBe(
+        await normalizeComparablePath(transcriptPath),
+      );
+      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
+      expect(calls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
+    });
+  });
+
   it("uses configured prompts for memory flush runs", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
@@ -1840,6 +1990,7 @@ describe("runReplyAgent memory flush", () => {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 80_000,
+        totalTokensFresh: true,
         compactionCount: 1,
       };
 
@@ -1864,6 +2015,7 @@ describe("runReplyAgent memory flush", () => {
           agents: {
             defaults: {
               compaction: {
+                preflightSoftThresholdTokens: 16_000,
                 memoryFlush: {
                   prompt: "Write notes.",
                   systemPrompt: "Flush memory now.",
@@ -1892,7 +2044,7 @@ describe("runReplyAgent memory flush", () => {
       expect(flushCall?.extraSystemPrompt).toContain("extra system");
       expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
-      expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(flushCall?.extraSystemPrompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
     });
@@ -1953,6 +2105,15 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                preflightSoftThresholdTokens: 16_000,
+              },
+            },
+          },
+        },
       });
 
       await runReplyAgentWithBase({
@@ -1976,6 +2137,7 @@ describe("runReplyAgent memory flush", () => {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 80_000,
+        totalTokensFresh: true,
         compactionCount: 1,
       };
 
@@ -2015,6 +2177,15 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                preflightSoftThresholdTokens: 16_000,
+              },
+            },
+          },
+        },
       });
 
       await runReplyAgentWithBase({
@@ -2031,7 +2202,7 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[0]?.prompt).toContain("MEMORY.md");
       expect(calls[0]?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
-      expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(calls[0]?.extraSystemPrompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
       expect(calls[1]?.sessionId).toBe("session-rotated");
@@ -2047,8 +2218,10 @@ describe("runReplyAgent memory flush", () => {
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
+      expect(stored[sessionKey].lastMemoryFlushReason).toBe("budget");
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
       expect(stored[sessionKey].compactionCount).toBe(2);
+      expect(stored[sessionKey].lastCompactionReason).toBe("budget");
       expect(stored[sessionKey].sessionId).toBe("session-rotated");
       expect(await normalizeComparablePath(stored[sessionKey].sessionFile)).toBe(
         await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
@@ -2094,6 +2267,15 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                preflightSoftThresholdTokens: 16_000,
+              },
+            },
+          },
+        },
         runOverrides: { sessionFile },
       });
 
@@ -2175,6 +2357,9 @@ describe("runReplyAgent memory flush", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
       expect(calls[1]?.prompt).toBe("hello");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].lastMemoryFlushReason).toBe("transcript_bytes");
     });
   });
 
@@ -2185,6 +2370,7 @@ describe("runReplyAgent memory flush", () => {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 80_000,
+        totalTokensFresh: true,
         compactionCount: 1,
       };
 
@@ -2266,6 +2452,7 @@ describe("runReplyAgent memory flush", () => {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 80_000,
+        totalTokensFresh: true,
         compactionCount: 1,
       };
 
@@ -2275,7 +2462,7 @@ describe("runReplyAgent memory flush", () => {
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
           params.onAgentEvent?.({
             stream: "compaction",
-            data: { phase: "end", willRetry: false },
+            data: { phase: "end", willRetry: false, completed: true },
           });
           return { payloads: [], meta: {} };
         }
@@ -2288,6 +2475,15 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                preflightSoftThresholdTokens: 16_000,
+              },
+            },
+          },
+        },
       });
 
       await runReplyAgentWithBase({
@@ -2301,6 +2497,7 @@ describe("runReplyAgent memory flush", () => {
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].compactionCount).toBe(2);
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+      expect(stored[sessionKey].lastCompactionReason).toBe("budget");
     });
   });
 });

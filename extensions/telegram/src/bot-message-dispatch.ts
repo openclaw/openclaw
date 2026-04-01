@@ -14,6 +14,18 @@ import {
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
+  buildTelegramInboundReceiptId,
+  buildChiefNewTaskProposal,
+  evaluateChiefTaskContinuity,
+  recordChannelActivity,
+  recordChiefTaskResult,
+  recordInboundReceiptContinuity,
+  recordInboundReceiptAcked,
+  recordInboundReceiptError,
+  recordInboundReceiptReceived,
+  recordInboundReceiptStatus,
+} from "openclaw/plugin-sdk/channel-runtime";
+import {
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
@@ -54,13 +66,26 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
-import { editMessageTelegram } from "./send.js";
+import { buildInlineKeyboard, editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TASK_NEW_APPROVE_CALLBACK = "task:new:approve";
+const TASK_NEW_REUSE_CALLBACK = "task:new:reuse";
+const TASK_NEW_DEFER_CALLBACK = "task:new:defer";
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+export function buildNewTaskApprovalButtons(): TelegramInlineButtons {
+  return [
+    [
+      { text: "M\u1edf task m\u1edbi", callback_data: TASK_NEW_APPROVE_CALLBACK, style: "success" },
+      { text: "Ti\u1ebfp t\u1ee5c task c\u0169", callback_data: TASK_NEW_REUSE_CALLBACK, style: "primary" },
+    ],
+    [{ text: "\u0110\u1ec3 sau", callback_data: TASK_NEW_DEFER_CALLBACK, style: "danger" }],
+  ];
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -274,6 +299,11 @@ export const dispatchTelegramMessage = async ({
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let draftLaneEventQueue = Promise.resolve();
+  let inboundReceiptId: string | undefined;
+  let inboundThreadKey: string | undefined;
+  let continuityEvaluation:
+    | Awaited<ReturnType<typeof evaluateChiefTaskContinuity>>
+    | undefined;
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(task);
@@ -539,6 +569,8 @@ export const dispatchTelegramMessage = async ({
   });
 
   let queuedFinal = false;
+  const observedFinalPayloads: ReplyPayload[] = [];
+  const confirmedFinalPayloads: ReplyPayload[] = [];
   let hadErrorReplyFailureOrSkip = false;
 
   // Determine if this is the first turn in session (for auto-topic-label).
@@ -589,18 +621,168 @@ export const dispatchTelegramMessage = async ({
     },
   });
 
+  if (route.agentId.trim().toLowerCase() === "chief") {
+    const messageId =
+      (typeof ctxPayload.MessageSidFull === "string" && ctxPayload.MessageSidFull.trim()) ||
+      (typeof ctxPayload.MessageSid === "string" && ctxPayload.MessageSid.trim()) ||
+      (typeof msg.message_id === "number" ? String(msg.message_id) : "");
+    if (messageId) {
+      const threadKey =
+        (typeof ctxPayload.SessionKey === "string" && ctxPayload.SessionKey.trim()) ||
+        `${route.agentId}:${route.accountId}:${String(chatId)}:${String(ctxPayload.MessageThreadId ?? "main")}`;
+      const receipt = await recordInboundReceiptReceived({
+        cfg,
+        agentId: route.agentId,
+        sourceType: "telegram",
+        channel: "telegram",
+        accountId: route.accountId,
+        originatingTo: ctxPayload.OriginatingTo ?? String(chatId),
+        messageId,
+        sessionKey: ctxPayload.SessionKey,
+        bodyPreview: ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body,
+        messageThreadId: ctxPayload.MessageThreadId,
+        receiptId: buildTelegramInboundReceiptId({
+          accountId: route.accountId,
+          originatingTo: ctxPayload.OriginatingTo ?? String(chatId),
+          messageThreadId: ctxPayload.MessageThreadId,
+          messageId,
+          agentId: route.agentId,
+        }),
+        sourceMessageId: messageId,
+        bodyText: ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body,
+        threadKey,
+        senderId: ctxPayload.SenderId,
+        senderUsername: ctxPayload.SenderUsername,
+      });
+      inboundReceiptId = receipt?.receiptId;
+      inboundThreadKey = threadKey;
+      if (inboundReceiptId) {
+        ctxPayload.InboundReceiptId = inboundReceiptId;
+      }
+      if (inboundReceiptId) {
+        continuityEvaluation = await evaluateChiefTaskContinuity({
+          cfg,
+          agentId: route.agentId,
+          threadKey,
+          sessionKey: ctxPayload.SessionKey,
+          messageId,
+          replyToId:
+            (typeof ctxPayload.ReplyToIdFull === "string" && ctxPayload.ReplyToIdFull.trim()) ||
+            (typeof ctxPayload.ReplyToId === "string" && ctxPayload.ReplyToId.trim()) ||
+            (typeof (msg as { reply_to_message?: { message_id?: number } }).reply_to_message?.message_id ===
+            "number"
+              ? String((msg as { reply_to_message?: { message_id?: number } }).reply_to_message?.message_id)
+              : undefined),
+          bodyText: ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body,
+        });
+        await recordInboundReceiptContinuity({
+          cfg,
+          agentId: route.agentId,
+          receiptId: inboundReceiptId,
+          threadKey,
+          continuityDecision: continuityEvaluation.classification,
+          proposalStatus:
+            continuityEvaluation.classification === "new_task_candidate"
+              ? continuityEvaluation.requiresUserApproval
+                ? "pending_confirmation"
+                : "approved"
+              : "none",
+          proposedTaskIntentKey: continuityEvaluation.openIntentKey,
+          matchedTaskId: continuityEvaluation.matchedTaskId,
+          matchedPaperclipIssueId: continuityEvaluation.matchedPaperclipIssueId,
+          openIntentKey: continuityEvaluation.openIntentKey,
+          continuityReasonCodes: continuityEvaluation.reasonCodes,
+          continuityConfidence: continuityEvaluation.confidence,
+          bodyText: ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body,
+        });
+      }
+      if (inboundReceiptId && ackReactionPromise) {
+        void ackReactionPromise
+          .then(async (acked) => {
+            if (!acked) {
+              return;
+            }
+            await recordInboundReceiptAcked({
+              cfg,
+              agentId: route.agentId,
+              receiptId: inboundReceiptId!,
+            });
+          })
+          .catch(() => undefined);
+      }
+      if (
+        inboundReceiptId &&
+        continuityEvaluation?.classification === "new_task_candidate" &&
+        continuityEvaluation.requiresUserApproval
+      ) {
+        const proposalText = buildChiefNewTaskProposal({
+          messageText: ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body,
+          evaluation: continuityEvaluation,
+        });
+        const proposalButtons = buildNewTaskApprovalButtons();
+        const proposal = await bot.api.sendMessage(chatId, proposalText, {
+          ...(threadSpec.id != null ? { message_thread_id: threadSpec.id } : {}),
+          ...(replyToMode !== "off" && typeof msg.message_id === "number"
+            ? { reply_to_message_id: msg.message_id }
+            : {}),
+          reply_markup: buildInlineKeyboard(proposalButtons),
+        });
+        recordChannelActivity({
+          channel: "telegram",
+          accountId: route.accountId,
+          direction: "outbound",
+        });
+        await recordInboundReceiptContinuity({
+          cfg,
+          agentId: route.agentId,
+          receiptId: inboundReceiptId,
+          threadKey,
+          continuityDecision: continuityEvaluation.classification,
+          proposalStatus: "pending_confirmation",
+          proposedTaskIntentKey: continuityEvaluation.openIntentKey,
+          matchedTaskId: continuityEvaluation.matchedTaskId,
+          matchedPaperclipIssueId: continuityEvaluation.matchedPaperclipIssueId,
+          openIntentKey: continuityEvaluation.openIntentKey,
+          continuityReasonCodes: continuityEvaluation.reasonCodes,
+          continuityConfidence: continuityEvaluation.confidence,
+          bodyText: ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body,
+          proposalMessageId: String(proposal.message_id),
+          proposalPreview: proposalText,
+        });
+        await recordInboundReceiptStatus({
+          cfg,
+          agentId: route.agentId,
+          receiptId: inboundReceiptId,
+          status: "awaiting_input",
+          proposalStatus: "pending_confirmation",
+        });
+        return;
+      }
+    }
+  }
+
   let dispatchError: unknown;
   try {
-    ({ queuedFinal } = await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
+    const dispatchSummary = await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
         ...replyPipeline,
         deliver: async (payload, info) => {
+          let finalPayloadConfirmed = false;
+          const confirmFinalPayload = () => {
+            if (info.kind !== "final" || finalPayloadConfirmed) {
+              return;
+            }
+            queuedFinal = true;
+            confirmedFinalPayloads.push(payload);
+            finalPayloadConfirmed = true;
+          };
           if (payload.isError === true) {
             hadErrorReplyFailureOrSkip = true;
           }
           if (info.kind === "final") {
+            observedFinalPayloads.push(payload);
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
@@ -668,6 +850,9 @@ export const dispatchTelegramMessage = async ({
             });
             if (info.kind === "final") {
               emitPreviewFinalizedHook(result);
+              if (result.kind !== "skipped") {
+                confirmFinalPayload();
+              }
             }
             if (segment.lane === "reasoning") {
               if (result.kind !== "skipped") {
@@ -691,7 +876,10 @@ export const dispatchTelegramMessage = async ({
             if (reply.hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+              const delivered = await sendPayload(payloadWithoutSuppressedReasoning);
+              if (delivered) {
+                confirmFinalPayload();
+              }
             }
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
@@ -711,7 +899,10 @@ export const dispatchTelegramMessage = async ({
             }
             return;
           }
-          await sendPayload(payload);
+          const delivered = await sendPayload(payload);
+          if (delivered) {
+            confirmFinalPayload();
+          }
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
@@ -728,11 +919,46 @@ export const dispatchTelegramMessage = async ({
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
-      },
-      replyOptions: {
-        skillFilter,
-        disableBlockStreaming,
-        onPartialReply:
+        },
+        replyOptions: {
+          skillFilter,
+          chiefTaskTrackingMode: "tracked",
+          matchedChiefTaskId:
+            continuityEvaluation?.classification === "attach_existing_task"
+              ? continuityEvaluation.matchedTaskId
+            : undefined,
+          paperclipIssueId:
+            continuityEvaluation?.classification === "attach_existing_task"
+              ? continuityEvaluation.matchedPaperclipIssueId
+              : undefined,
+          threadKey: inboundThreadKey,
+          openIntentKey: continuityEvaluation?.openIntentKey,
+          intentSummary: continuityEvaluation?.intentSummary,
+          currentGoal: continuityEvaluation?.currentGoal,
+          programId:
+            continuityEvaluation?.openIntentKey && inboundThreadKey
+              ? `${inboundThreadKey}#${continuityEvaluation.openIntentKey}`
+              : inboundThreadKey,
+          role: "executive_owner",
+          successCriteria: continuityEvaluation?.currentGoal,
+          confidence: continuityEvaluation?.confidence,
+          latestMilestone:
+            continuityEvaluation?.classification === "new_task_candidate"
+              ? "New autonomous tracked work accepted and queued for execution."
+              : continuityEvaluation?.classification === "attach_existing_task"
+                ? "Matched to the active tracked task and resumed."
+                : "Classified as a direct answer turn.",
+          releaseGateStatus:
+            continuityEvaluation?.classification === "direct_answer" ? "required" : "required",
+          continuityDecision: continuityEvaluation?.classification,
+          extraSystemPrompt:
+            continuityEvaluation?.classification === "direct_answer"
+              ? "This inbound turn was classified as a short direct answer. Reply concisely, answer the question directly, and do not propose or create a new tracked task."
+              : continuityEvaluation?.classification === "attach_existing_task"
+                ? `This inbound turn was classified as a continuation of the existing tracked task${continuityEvaluation.matchedTaskId ? ` ${continuityEvaluation.matchedTaskId}` : ""}. Continue the same task, keep the same intent, and do not branch into a new tracked task.`
+                : "This inbound turn was classified as new autonomous tracked work. Chief owns the task end to end: analyze, plan, decompose, execute, test, debug, optimize, run the release gate, and finalize automatically. Only ask the user if essential input is truly missing.",
+          disableBlockStreaming,
+          onPartialReply:
           answerLane.stream || reasoningLane.stream
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
@@ -795,9 +1021,18 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onModelSelected,
       },
-    }));
+    });
+    queuedFinal = queuedFinal || dispatchSummary.queuedFinal;
   } catch (err) {
     dispatchError = err;
+    if (inboundReceiptId) {
+      await recordInboundReceiptError({
+        cfg,
+        agentId: route.agentId,
+        receiptId: inboundReceiptId,
+        error: err,
+      });
+    }
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
@@ -883,6 +1118,12 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
+  const finalizedChiefPayloads =
+    confirmedFinalPayloads.length > 0
+      ? confirmedFinalPayloads
+      : queuedFinal && deliverySummary.delivered
+        ? observedFinalPayloads
+        : [];
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
@@ -893,6 +1134,31 @@ export const dispatchTelegramMessage = async ({
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
+  }
+
+  if (inboundReceiptId && finalizedChiefPayloads.length > 0) {
+    const finalizedTask = await recordChiefTaskResult({
+      cfg,
+      agentId: route.agentId,
+      receiptId: inboundReceiptId,
+      sessionKey:
+        ctxPayload.SessionKey?.trim() ||
+        inboundThreadKey ||
+        `telegram:${route.accountId}:${String(chatId)}`,
+      payloads: finalizedChiefPayloads,
+      deliveryConfirmed: true,
+    });
+    if (
+      !finalizedTask &&
+      continuityEvaluation?.classification === "direct_answer"
+    ) {
+      await recordInboundReceiptStatus({
+        cfg,
+        agentId: route.agentId,
+        receiptId: inboundReceiptId,
+        status: "done",
+      });
+    }
   }
 
   // Fire-and-forget: auto-rename DM topic on first message.

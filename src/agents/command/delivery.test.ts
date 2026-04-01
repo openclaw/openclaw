@@ -27,13 +27,13 @@ const slackRegistry = createTestRegistry([
   },
 ]);
 
-function createResult(overrides: Partial<RunResult> = {}): RunResult {
+function createResult(overrides: Partial<RunResult> & Record<string, unknown> = {}): RunResult {
   return {
+    ...overrides,
     meta: {
       durationMs: 1,
       ...overrides.meta,
     },
-    ...(overrides.payloads ? { payloads: overrides.payloads } : {}),
   } as RunResult;
 }
 
@@ -137,8 +137,14 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
-    expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
+    expect(String(runtime.log.mock.calls[0]?.[0] ?? "")).toContain("Options: on, off.");
+    expect(String(runtime.log.mock.calls[0]?.[0] ?? "")).toContain("`[COMPLETE]:");
+    expect(delivered.payloads).toMatchObject([
+      {
+        text: expect.stringContaining("Options: on, off."),
+      },
+    ]);
+    expect(delivered.payloads[0]?.text ?? "").toContain("`[COMPLETE]:");
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {
@@ -165,13 +171,101 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(
+    expect(String(runtime.log.mock.calls[0]?.[0] ?? "")).toContain(
       "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
     );
+    expect(String(runtime.log.mock.calls[0]?.[0] ?? "")).toContain("`[COMPLETE]:");
     expect(delivered.payloads).toMatchObject([
       {
-        text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
+        text: expect.stringContaining(
+          "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
+        ),
       },
     ]);
+    expect(delivered.payloads[0]?.text ?? "").toContain("`[COMPLETE]:");
+  });
+
+  it("appends a terminal status tag to final replies", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        channel: "slack",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready." }],
+      result: createResult({
+        meta: {
+          durationMs: 65_000,
+        },
+      }),
+    });
+
+    expect(delivered.payloads[0]?.text ?? "").toContain("Ready.");
+    expect(delivered.payloads[0]?.text ?? "").toContain(
+      "`[COMPLETE]: completed after 65s of processing`",
+    );
+  });
+
+  it("synthesizes a tagged fallback when a run ends without payloads", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        channel: "slack",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [],
+      result: createResult({
+        meta: {
+          durationMs: 120_000,
+          stopReason: "stop",
+        },
+      }),
+    });
+
+    expect(delivered.deliveryConfirmed).toBe(true);
+    expect(delivered.payloads[0]?.text ?? "").toContain("did not produce a final reply");
+    expect(delivered.payloads[0]?.text ?? "").toContain("`[STOP]:");
+  });
+
+  it("treats empty payloads as delivered when a messaging tool already sent the reply", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        channel: "telegram",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [],
+      result: createResult({
+        didSendViaMessagingTool: true,
+      }),
+    });
+
+    expect(delivered.deliveryConfirmed).toBe(true);
+    expect(delivered.payloads).toEqual([]);
+    expect(runtime.log).toHaveBeenCalledWith("Reply already delivered by messaging tool.");
   });
 });

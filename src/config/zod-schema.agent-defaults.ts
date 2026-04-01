@@ -16,6 +16,13 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
+    autonomyMode: z.union([z.literal("standard"), z.literal("autonomous_executive")]).optional(),
+    newTaskPolicy: z.union([z.literal("require_approval"), z.literal("auto_create")]).optional(),
+    featureExpansionPolicy: z
+      .union([z.literal("bounded"), z.literal("value_driven")])
+      .optional(),
+    questionPolicy: z.union([z.literal("iterative"), z.literal("intake_batch_only")]).optional(),
+    releaseGateRequired: z.boolean().optional(),
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
@@ -106,9 +113,19 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
+        truncateAfterCompaction: z.boolean().optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
+        preflightSoftThresholdTokens: z.number().int().nonnegative().optional(),
+        forceCompactionTranscriptBytes: z
+          .union([
+            z.number().int().nonnegative(),
+            z
+              .string()
+              .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+          ])
+          .optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

@@ -71,6 +71,46 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Optional extra system guidance appended to the run prompt. */
+  extraSystemPrompt?: string;
+  /** Controls whether the chief should create/update tracked work for this turn. */
+  chiefTaskTrackingMode?: "tracked" | "skip";
+  /** Reuse an existing chief tracked task instead of creating a new one. */
+  matchedChiefTaskId?: string;
+  /** Explicit Paperclip issue binding for tracked work. */
+  paperclipIssueId?: string;
+  /** Stable thread key used by continuity evaluation. */
+  threadKey?: string;
+  /** Stable normalized intent key for tracked work continuity. */
+  openIntentKey?: string;
+  /** Short tracked-work intent summary. */
+  intentSummary?: string;
+  /** Short current goal summary for the tracked task. */
+  currentGoal?: string;
+  /** Stable parent program id for the tracked task graph. */
+  programId?: string;
+  /** Optional parent task id inside the tracked work graph. */
+  parentTaskId?: string;
+  /** Role that chief or a worker is fulfilling for this turn. */
+  role?: string;
+  /** Explicit success criteria for the tracked task. */
+  successCriteria?: string;
+  /** Evidence gathered for verification and release gating. */
+  verificationEvidence?: string[];
+  /** Risk level chief currently assigns to the task. */
+  riskLevel?: "low" | "medium" | "high" | "critical";
+  /** Confidence score from continuity/intake evaluation. */
+  confidence?: number;
+  /** Latest milestone summary for progress heartbeat reporting. */
+  latestMilestone?: string;
+  /** Timestamp of the last user-visible progress report. */
+  lastUserProgressReportAt?: number;
+  /** Current release gate state for this tracked task. */
+  releaseGateStatus?: "not_required" | "required" | "reviewing" | "passed" | "blocked";
+  /** Structured continuity decision for the current inbound turn. */
+  continuityDecision?: "direct_answer" | "attach_existing_task" | "new_task_candidate";
+  /** True when the tracked work was created only after explicit user approval. */
+  createdByApproval?: boolean;
 };
 
 export type ReplyPayload = {

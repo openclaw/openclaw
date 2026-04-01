@@ -118,6 +118,16 @@ export type CliBackendConfig = {
 };
 
 export type AgentDefaultsConfig = {
+  /** Chief autonomy policy mode for tracked work orchestration. */
+  autonomyMode?: "standard" | "autonomous_executive";
+  /** Whether new tracked work requires approval or can be created automatically. */
+  newTaskPolicy?: "require_approval" | "auto_create";
+  /** Whether chief may expand scope only conservatively or when value is clear. */
+  featureExpansionPolicy?: "bounded" | "value_driven";
+  /** How chief should ask questions when input is incomplete. */
+  questionPolicy?: "iterative" | "intake_batch_only";
+  /** Require a release gate before chief can terminalize tracked work. */
+  releaseGateRequired?: boolean;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
@@ -350,6 +360,18 @@ export type AgentCompactionConfig = {
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
+  /**
+   * Run preflight compaction when context is within this many tokens of the
+   * compaction boundary. When unset, falls back to memoryFlush.softThresholdTokens
+   * for backward compatibility.
+   */
+  preflightSoftThresholdTokens?: number;
+  /**
+   * Force preflight compaction when transcript size reaches this threshold
+   * (bytes, or byte-size string like "2mb"). Intended to be higher than the
+   * memory flush threshold so flush can persist memory before heavier compaction.
+   */
+  forceCompactionTranscriptBytes?: number | string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

@@ -26,8 +26,287 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type StatusTagName =
+  | "STOP"
+  | "WORKING"
+  | "WAITING"
+  | "CHECKING"
+  | "LEARNING"
+  | "FIXING"
+  | "COMPLETE"
+  | "BLOCKED";
+type AgentDeliveryResult = RunResult & {
+  didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
+};
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
+const TERMINAL_STATUS_TAG_RE =
+  /^\[(STOP|WORKING|WAITING|CHECKING|LEARNING|FIXING|COMPLETE|BLOCKED)\]:\s*(.+)$/;
+
+function extractLastNonEmptyLine(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.at(-1) ?? "";
+}
+
+function hasTerminalStatusTag(text: string | undefined): boolean {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const lastLine = extractLastNonEmptyLine(text);
+  if (!lastLine) {
+    return false;
+  }
+  const normalized =
+    lastLine.startsWith("`") && lastLine.endsWith("`") && lastLine.length > 2
+      ? lastLine.slice(1, -1).trim()
+      : lastLine;
+  return TERMINAL_STATUS_TAG_RE.test(normalized);
+}
+
+function formatStatusTagLine(tag: StatusTagName, reason: string): string {
+  return `\`[${tag}]: ${reason.trim()}\``;
+}
+
+function classifyTerminalPayloadState(payloads: ReplyPayload[]): "waiting" | "blocked" | "complete" {
+  const preview = payloads
+    .map((payload) => payload.text?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  if (
+    /\b(awaiting input|need more info|need more information|need clarification|please provide|can you clarify|could you clarify)\b/i.test(
+      preview,
+    ) ||
+    /\[\[?waiting\]?\]\s*:/i.test(preview)
+  ) {
+    return "waiting";
+  }
+  if (
+    /\b(blocked|cannot proceed|can't proceed|awaiting approval|dependency|missing permission)\b/i.test(
+      preview,
+    ) ||
+    /\[\[?blocked\]?\]\s*:/i.test(preview)
+  ) {
+    return "blocked";
+  }
+  return "complete";
+}
+
+function buildTerminalStatusAscii(params: {
+  result: AgentDeliveryResult;
+  payloads: ReplyPayload[];
+}): { tag: StatusTagName; reason: string } {
+  const stopReason =
+    typeof params.result.meta?.stopReason === "string" ? params.result.meta.stopReason : undefined;
+  const durationMs =
+    typeof params.result.meta?.durationMs === "number" ? params.result.meta.durationMs : undefined;
+  const hasErrorPayload = params.payloads.some((payload) => payload.isError === true);
+  if (stopReason === "tool_calls" || stopReason === "toolUse") {
+    return {
+      tag: "WORKING",
+      reason: "waiting for tool or continuation to finish",
+    };
+  }
+  if (stopReason === "length" || stopReason === "max_tokens") {
+    return {
+      tag: "STOP",
+      reason: "stopped after hitting the token limit",
+    };
+  }
+  if (hasErrorPayload || params.result.meta?.error || params.result.meta?.aborted) {
+    return {
+      tag: "STOP",
+      reason: stopReason ? `run stopped with status ${stopReason}` : "run stopped because of an error",
+    };
+  }
+  const payloadState = classifyTerminalPayloadState(params.payloads);
+  if (payloadState === "waiting") {
+    return {
+      tag: "WAITING",
+      reason: "waiting for required input before work can continue",
+    };
+  }
+  if (payloadState === "blocked") {
+    return {
+      tag: "BLOCKED",
+      reason: "work is blocked pending a dependency or manual intervention",
+    };
+  }
+  if (typeof durationMs === "number" && durationMs >= 60_000) {
+    return {
+      tag: "COMPLETE",
+      reason: `completed after ${Math.max(1, Math.round(durationMs / 1_000))}s of processing`,
+    };
+  }
+  return {
+    tag: "COMPLETE",
+    reason: "finished the current task",
+  };
+}
+
+function buildTerminalStatus(params: {
+  result: AgentDeliveryResult;
+  payloads: ReplyPayload[];
+}): { tag: StatusTagName; reason: string } {
+  return buildTerminalStatusAscii(params);
+  const stopReason =
+    typeof params.result.meta?.stopReason === "string" ? params.result.meta.stopReason : undefined;
+  const durationMs =
+    typeof params.result.meta?.durationMs === "number" ? params.result.meta.durationMs : undefined;
+  const hasErrorPayload = params.payloads.some((payload) => payload.isError === true);
+  if (stopReason === "tool_calls" || stopReason === "toolUse") {
+    return {
+      tag: "WORKING",
+      reason: "đang chờ tool hoặc continuation hoàn tất",
+    };
+  }
+  if (stopReason === "length" || stopReason === "max_tokens") {
+    return {
+      tag: "STOP",
+      reason: "đã dừng do chạm giới hạn token",
+    };
+  }
+  if (hasErrorPayload || params.result.meta?.error || params.result.meta?.aborted) {
+    return {
+      tag: "STOP",
+      reason: stopReason ? `run dừng với trạng thái ${stopReason}` : "run dừng do lỗi",
+    };
+  }
+  if (typeof durationMs === "number" && durationMs >= 60_000) {
+    return {
+      tag: "STOP",
+      reason: `đã hoàn tất sau ${Math.max(1, Math.round(durationMs / 1_000))}s xử lý`,
+    };
+  }
+  return {
+    tag: "STOP",
+    reason: "đã xử lý xong task hiện tại",
+  };
+}
+
+function buildNoReplyFallbackPayloadAscii(result: AgentDeliveryResult): ReplyPayload {
+  const stopReason =
+    typeof result.meta?.stopReason === "string" ? result.meta.stopReason : undefined;
+  const durationMs =
+    typeof result.meta?.durationMs === "number" ? result.meta.durationMs : undefined;
+  if (stopReason === "tool_calls" || stopReason === "toolUse") {
+    return {
+      text: [
+        "Still waiting for a tool or continuation to finish. No final reply is available yet.",
+        formatStatusTagLine("WORKING", "waiting for tool or continuation to finish"),
+      ].join("\n\n"),
+    };
+  }
+  if (result.meta?.error || result.meta?.aborted) {
+    return {
+      text: [
+        "The run ended with an error before it produced a final reply.",
+        formatStatusTagLine("STOP", "run stopped because of an error before a final reply"),
+      ].join("\n\n"),
+      isError: true,
+    };
+  }
+  if (typeof durationMs === "number" && durationMs >= 60_000) {
+    return {
+      text: [
+        `The run finished after ${Math.max(1, Math.round(durationMs / 1_000))}s but did not produce a final reply.`,
+        formatStatusTagLine(
+          "STOP",
+          `no final reply after ${Math.max(1, Math.round(durationMs / 1_000))}s of processing`,
+        ),
+      ].join("\n\n"),
+      isError: true,
+    };
+  }
+  return {
+    text: [
+      "The run finished but did not produce a final reply.",
+      formatStatusTagLine("STOP", "no final reply was produced"),
+    ].join("\n\n"),
+    isError: true,
+  };
+}
+
+function buildNoReplyFallbackPayload(result: AgentDeliveryResult): ReplyPayload {
+  return buildNoReplyFallbackPayloadAscii(result);
+  const stopReason =
+    typeof result.meta?.stopReason === "string" ? result.meta.stopReason : undefined;
+  const durationMs =
+    typeof result.meta?.durationMs === "number" ? result.meta.durationMs : undefined;
+  if (stopReason === "tool_calls" || stopReason === "toolUse") {
+    return {
+      text: [
+        "Đang chờ tool hoặc continuation hoàn tất, chưa có phản hồi cuối cùng.",
+        formatStatusTagLine("WORKING", "đang chờ tool hoặc continuation hoàn tất"),
+      ].join("\n\n"),
+    };
+  }
+  if (result.meta?.error || result.meta?.aborted) {
+    return {
+      text: [
+        "Run kết thúc với lỗi trước khi tạo phản hồi cuối cùng.",
+        formatStatusTagLine("STOP", "run dừng do lỗi trước khi tạo phản hồi cuối cùng"),
+      ].join("\n\n"),
+      isError: true,
+    };
+  }
+  if (typeof durationMs === "number" && durationMs >= 60_000) {
+    return {
+      text: [
+        `Run đã kết thúc sau ${Math.max(1, Math.round(durationMs / 1_000))}s nhưng không tạo phản hồi cuối cùng.`,
+        formatStatusTagLine(
+          "STOP",
+          `không tạo phản hồi cuối cùng sau ${Math.max(1, Math.round(durationMs / 1_000))}s xử lý`,
+        ),
+      ].join("\n\n"),
+      isError: true,
+    };
+  }
+  return {
+    text: [
+      "Run đã kết thúc nhưng không tạo phản hồi cuối cùng.",
+      formatStatusTagLine("STOP", "không tạo phản hồi cuối cùng"),
+    ].join("\n\n"),
+    isError: true,
+  };
+}
+
+function ensureTerminalStatusPayloads(params: {
+  payloads: ReplyPayload[];
+  result: AgentDeliveryResult;
+}): ReplyPayload[] {
+  const status = buildTerminalStatus(params);
+  const statusLine = formatStatusTagLine(status.tag, status.reason);
+  const payloads =
+    params.payloads.length > 0 ? [...params.payloads] : [buildNoReplyFallbackPayload(params.result)];
+  const lastTextIndex = (() => {
+    for (let index = payloads.length - 1; index >= 0; index -= 1) {
+      if (typeof payloads[index]?.text === "string") {
+        return index;
+      }
+    }
+    return -1;
+  })();
+
+  if (lastTextIndex >= 0) {
+    const lastPayload = payloads[lastTextIndex]!;
+    if (hasTerminalStatusTag(lastPayload.text)) {
+      return payloads;
+    }
+    payloads[lastTextIndex] = {
+      ...lastPayload,
+      text: [lastPayload.text?.trimEnd() ?? "", statusLine].filter(Boolean).join("\n\n"),
+    };
+    return payloads;
+  }
+
+  payloads.push({ text: statusLine });
+  return payloads;
+}
 
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
@@ -139,6 +418,7 @@ export async function deliverAgentCommandResult(params: {
   payloads: RunResult["payloads"];
 }) {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
+  const deliveryResult = result as AgentDeliveryResult;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
@@ -239,6 +519,19 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
+  if (
+    (!payloads || payloads.length === 0) &&
+    (deliveryResult.didSendViaMessagingTool === true ||
+      deliveryResult.didSendDeterministicApprovalPrompt === true)
+  ) {
+    runtime.log(
+      deliveryResult.didSendViaMessagingTool === true
+        ? "Reply already delivered by messaging tool."
+        : "Approval prompt already delivered.",
+    );
+    return { payloads: [], meta: result.meta, deliveryConfirmed: true };
+  }
+
   const normalizedReplyPayloads = normalizeAgentCommandReplyPayloads({
     cfg,
     opts,
@@ -249,7 +542,11 @@ export async function deliverAgentCommandResult(params: {
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(normalizedReplyPayloads);
+  const effectiveReplyPayloads = ensureTerminalStatusPayloads({
+    payloads: normalizedReplyPayloads,
+    result: deliveryResult,
+  });
+  const normalizedPayloads = normalizeOutboundPayloadsForJson(effectiveReplyPayloads);
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -262,16 +559,10 @@ export async function deliverAgentCommandResult(params: {
       ),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
+      return { payloads: normalizedPayloads, meta: result.meta, deliveryConfirmed: true };
     }
   }
-
-  if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
-    return { payloads: [], meta: result.meta };
-  }
-
-  const deliveryPayloads = normalizeOutboundPayloads(normalizedReplyPayloads);
+  const deliveryPayloads = normalizeOutboundPayloads(effectiveReplyPayloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -290,6 +581,7 @@ export async function deliverAgentCommandResult(params: {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
     }
+    return { payloads: normalizedPayloads, meta: result.meta, deliveryConfirmed: deliveryPayloads.length > 0 };
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
@@ -310,5 +602,9 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  return { payloads: normalizedPayloads, meta: result.meta };
+  return {
+    payloads: normalizedPayloads,
+    meta: result.meta,
+    deliveryConfirmed: deliveryPayloads.length > 0,
+  };
 }

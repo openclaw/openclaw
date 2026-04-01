@@ -22,7 +22,6 @@ const log = createSubsystemLogger("agents/quality-guard");
 export const CHIEF_AGENT_ID = "chief";
 export const QUALITY_GUARD_AGENT_ID = "quality_guard";
 const MAX_REVIEW_ROUNDS = 2;
-type QualityGuardLanguage = "vi" | "en";
 
 type QualityGuardVerdict = "approve" | "revise" | "block";
 type QualityGuardSeverity = "low" | "medium" | "high";
@@ -49,6 +48,8 @@ export type ChiefQualityGuardParams = {
   provider?: string;
   model?: string;
   chiefSkillsSnapshot?: SkillSnapshot;
+  successCriteria?: string;
+  evidenceSummary?: string[];
 };
 
 function toNormalizedTextArray(value: unknown): string[] {
@@ -159,24 +160,42 @@ function collectVisibleMediaUrls(payloads?: ReplyPayload[]): string[] {
   return Array.from(urls);
 }
 
-const VIETNAMESE_TEXT_RE =
-  /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
-const VIETNAMESE_COMMON_WORD_RE =
-  /\b(anh|chị|em|mình|bạn|giúp|giùm|được|không|cần|làm|rồi|đang|chưa|này|và|với|cho|nếu|vì|tại|sao|để|việc|phản hồi|trả lời|tiến hành|kiểm tra|cấu hình|triển khai)\b/i;
+const INTERNAL_REVIEW_LEAK_PATTERNS = [
+  /\bquality_guard\b/i,
+  /\bfinal review gate\b/i,
+  /\binternal review\b/i,
+  /\breview round\b/i,
+  /\brevision round\b/i,
+  /\bpaperclip_update_safe\b/i,
+  /\bcan_finalize\b/i,
+  /\bscope_or_logic_issues\b/i,
+  /\brequired_revisions\b/i,
+  /^\s*what still needs to be addressed\b/i,
+  /^\s*i can'?t finalize this safely yet\b/i,
+  /^\s*the draft\b/i,
+  /^\s*the candidate\b/i,
+  /^\s*candidate\b/i,
+];
 
-function isLikelyVietnameseText(value: string): boolean {
+const USER_SAFE_BLOCK_FALLBACK_BULLETS = [
+  "- Mình cần thêm bằng chứng hoặc xác minh trực tiếp trước khi có thể chốt an toàn.",
+  "- Câu trả lời hiện tại vẫn chưa đủ chắc để gửi ra như kết luận cuối.",
+];
+
+function containsInternalReviewLeak(value: string): boolean {
   const normalized = value.trim();
   if (!normalized) {
     return false;
   }
-  return VIETNAMESE_TEXT_RE.test(normalized) || VIETNAMESE_COMMON_WORD_RE.test(normalized);
+  return INTERNAL_REVIEW_LEAK_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function detectQualityGuardLanguage(params: {
-  originalPrompt: string;
-  candidateText: string;
-}): QualityGuardLanguage {
-  return isLikelyVietnameseText(`${params.originalPrompt}\n${params.candidateText}`) ? "vi" : "en";
+function sanitizeUserFacingBlockedReasons(values: string[]): string[] {
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value) => !containsInternalReviewLeak(value))
+    .slice(0, 5);
 }
 
 const TRIVIAL_REPLY_PATTERNS = [
@@ -249,13 +268,14 @@ export function shouldRequireChiefQualityGuardReview(params: {
 function buildQualityGuardPrompt(params: {
   originalPrompt: string;
   candidateText: string;
+  successCriteria?: string;
+  evidenceSummary?: string[];
   round: number;
-  language: QualityGuardLanguage;
 }): string {
-  const languageInstruction =
-    params.language === "vi"
-      ? "Write every human-readable string field in Vietnamese because the original request is in Vietnamese."
-      : "Write every human-readable string field in English unless the original request clearly uses another language.";
+  const evidenceLines =
+    Array.isArray(params.evidenceSummary) && params.evidenceSummary.length > 0
+      ? params.evidenceSummary.map((item) => `- ${item}`).join("\n")
+      : "- No explicit evidence summary was provided.";
   return [
     "You are quality_guard, the mandatory final executive skeptic for chief.",
     "Review the candidate final response and return ONLY one JSON object.",
@@ -263,12 +283,21 @@ function buildQualityGuardPrompt(params: {
     "Approve only when the candidate is internally consistent, evidence-sufficient for the request, within scope, and safe to finalize.",
     "Use revise when the draft is repairable in one more pass. Use block when the draft is materially incomplete, contradictory, overclaiming, unsafe, or not ready to finalize.",
     "For trivial receipt-only or clarification-only replies, approve with empty arrays.",
-    languageInstruction,
+    "Use the same end-user language as the original request.",
+    "Do not include internal role names, gate names, JSON field names, or hidden workflow wording inside the human-readable arrays.",
     `Review round: ${String(params.round)}`,
     "",
     "<original_request>",
     params.originalPrompt.trim(),
     "</original_request>",
+    "",
+    "<success_criteria>",
+    (params.successCriteria?.trim() || "(same as the original request and current goal)").trim(),
+    "</success_criteria>",
+    "",
+    "<evidence_summary>",
+    evidenceLines,
+    "</evidence_summary>",
     "",
     "<candidate_final_response>",
     params.candidateText.trim(),
@@ -281,7 +310,6 @@ function buildChiefRevisionPrompt(params: {
   candidateText: string;
   review: QualityGuardReviewContract;
   round: number;
-  language: QualityGuardLanguage;
 }): string {
   const required = [
     ...params.review.findings,
@@ -297,9 +325,7 @@ function buildChiefRevisionPrompt(params: {
     "Revise the candidate final response so it passes the mandatory final review gate.",
     "Return ONLY the revised final response for the end user.",
     "Do not mention quality_guard, internal review, hidden process, or the fact that this is a revision.",
-    params.language === "vi"
-      ? "Write the revised final response in Vietnamese."
-      : "Write the revised final response in English.",
+    "Keep the same end-user language as the original request.",
     `Revision round: ${String(params.round)}`,
     "",
     "<original_request>",
@@ -318,40 +344,21 @@ function buildChiefRevisionPrompt(params: {
 
 export function buildBlockedFinalizationMessage(params: {
   review: QualityGuardReviewContract;
-  language: QualityGuardLanguage;
 }): string {
-  const reasons = [
+  const reasons = sanitizeUserFacingBlockedReasons([
     ...params.review.findings,
     ...params.review.missing_evidence,
     ...params.review.scope_or_logic_issues,
     ...params.review.required_revisions,
-  ]
-    .filter(Boolean)
-    .slice(0, 5);
-  if (params.language === "vi") {
-    const localizedReasons = reasons.filter((entry) => isLikelyVietnameseText(entry));
-    const bullets =
-      localizedReasons.length > 0
-        ? localizedReasons.map((entry) => `- ${entry}`).join("\n")
-        : [
-            "- Mình cần thêm bằng chứng hoặc làm rõ thêm trước khi có thể chốt an toàn.",
-            "- Bản trả lời hiện tại vẫn chưa đủ chắc để gửi ra như kết luận cuối.",
-          ].join("\n");
-    return [
-      "Mình chưa thể chốt an toàn ở thời điểm này.",
-      "",
-      "Những gì còn cần xử lý:",
-      bullets,
-    ].join("\n");
-  }
+  ]);
   const bullets =
     reasons.length > 0
       ? reasons.map((entry) => `- ${entry}`).join("\n")
-      : "- I still need more evidence or clarification before I can finalize this safely.";
+      : USER_SAFE_BLOCK_FALLBACK_BULLETS.join("\n");
   return [
-    "I can't finalize this safely yet.",
+    "Mình chưa thể chốt an toàn ở thời điểm này.",
     "",
-    "What still needs to be addressed:",
+    "Những gì còn cần xử lý:",
     bullets,
   ].join("\n");
 }
@@ -360,10 +367,11 @@ async function runQualityGuardReview(params: {
   cfg: OpenClawConfig;
   originalPrompt: string;
   candidateText: string;
+  successCriteria?: string;
+  evidenceSummary?: string[];
   timeoutMs: number;
   runId: string;
   round: number;
-  language: QualityGuardLanguage;
 }): Promise<QualityGuardReviewContract> {
   const sessionId = crypto.randomUUID();
   const sessionKey = `agent:${QUALITY_GUARD_AGENT_ID}:review-${sessionId}`;
@@ -392,8 +400,9 @@ async function runQualityGuardReview(params: {
     prompt: buildQualityGuardPrompt({
       originalPrompt: params.originalPrompt,
       candidateText: params.candidateText,
+      successCriteria: params.successCriteria,
+      evidenceSummary: params.evidenceSummary,
       round: params.round,
-      language: params.language,
     }),
     trigger: "manual",
     disableTools: true,
@@ -421,7 +430,6 @@ async function runChiefRevision(params: {
   provider?: string;
   model?: string;
   chiefSkillsSnapshot?: SkillSnapshot;
-  language: QualityGuardLanguage;
 }): Promise<string> {
   const sessionId = crypto.randomUUID();
   const sessionKey = `agent:${CHIEF_AGENT_ID}:revision-${sessionId}`;
@@ -453,7 +461,6 @@ async function runChiefRevision(params: {
       candidateText: params.candidateText,
       review: params.review,
       round: params.round,
-      language: params.language,
     }),
     trigger: "manual",
     disableTools: true,
@@ -508,20 +515,17 @@ export async function maybeApplyChiefQualityGuard(params: ChiefQualityGuardParam
   }
 
   let currentText = replyText;
-  const language = detectQualityGuardLanguage({
-    originalPrompt: params.originalPrompt,
-    candidateText: replyText,
-  });
   let lastReview: QualityGuardReviewContract | undefined;
   for (let round = 1; round <= MAX_REVIEW_ROUNDS; round += 1) {
     const review = await runQualityGuardReview({
       cfg: params.cfg,
       originalPrompt: params.originalPrompt,
       candidateText: currentText,
+      successCriteria: params.successCriteria,
+      evidenceSummary: params.evidenceSummary,
       timeoutMs: params.timeoutMs,
       runId: params.runId,
       round,
-      language,
     });
     lastReview = review;
     if (review.verdict === "approve" && review.can_finalize) {
@@ -563,7 +567,7 @@ export async function maybeApplyChiefQualityGuard(params: ChiefQualityGuardParam
       };
     }
     if (review.verdict === "block" || round >= MAX_REVIEW_ROUNDS) {
-      const blockedText = buildBlockedFinalizationMessage({ review, language });
+      const blockedText = buildBlockedFinalizationMessage({ review });
       return {
         applied: true,
         verdict: review.verdict,
@@ -596,7 +600,6 @@ export async function maybeApplyChiefQualityGuard(params: ChiefQualityGuardParam
       provider: params.provider,
       model: params.model,
       chiefSkillsSnapshot: params.chiefSkillsSnapshot,
-      language,
     });
   }
 
@@ -630,7 +633,6 @@ export async function maybeApplyChiefQualityGuard(params: ChiefQualityGuardParam
                 paperclip_update_safe: false,
                 can_finalize: false,
               },
-            language,
           },
         ),
         originalPayloads: params.result.payloads,

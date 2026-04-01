@@ -29,6 +29,8 @@ import {
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import {
   recordChiefTaskFailure,
+  recordChiefTaskProgress,
+  recordChiefTaskRecovery,
   recordChiefTaskResult,
   recordChiefTaskStart,
 } from "../infra/chief-task-ledger.js";
@@ -733,13 +735,91 @@ async function agentCommandInternal(
 
     const startedAt = Date.now();
     let lifecycleEnded = false;
-    const chiefTaskRecord = await recordChiefTaskStart({
-      cfg,
-      agentId: sessionAgentId,
-      sessionKey: sessionKey ?? sessionId,
-      prompt: body,
-      sourceChannel: opts.replyChannel ?? opts.channel ?? opts.messageChannel,
-    });
+    const shouldTrackChiefTask = (opts.chiefTaskTrackingMode ?? "tracked") !== "skip";
+    const trackChiefTaskStart = async () =>
+      shouldTrackChiefTask
+        ? await recordChiefTaskStart({
+            cfg,
+            agentId: sessionAgentId,
+            sessionKey: sessionKey ?? sessionId,
+            sessionId,
+            prompt: body,
+            sourceChannel:
+              opts.replyChannel ??
+              opts.channel ??
+              opts.messageChannel ??
+              (opts.inboundReceiptId?.startsWith("telegram|") ? "telegram" : undefined) ??
+              (opts.inboundReceiptId?.startsWith("paperclip|") ? "paperclip" : undefined),
+            sourceMessageId: opts.sourceMessageId,
+            receiptId: opts.inboundReceiptId,
+            matchedTaskId: opts.matchedTaskId,
+            paperclipIssueId: opts.paperclipIssueId,
+            threadKey: opts.threadKey,
+            openIntentKey: opts.openIntentKey,
+            intentSummary: opts.intentSummary,
+            currentGoal: opts.currentGoal,
+            programId: opts.programId,
+            parentTaskId: opts.parentTaskId,
+            role: opts.role,
+            successCriteria: opts.successCriteria,
+            verificationEvidence: opts.verificationEvidence,
+            riskLevel: opts.riskLevel,
+            confidence: opts.confidence,
+            latestMilestone: opts.latestMilestone,
+            lastUserProgressReportAt: opts.lastUserProgressReportAt,
+            releaseGateStatus: opts.releaseGateStatus,
+            continuityDecision: opts.continuityDecision,
+            createdByApproval: opts.createdByApproval,
+          })
+        : null;
+    const trackChiefTaskProgress = async (
+      args: Parameters<typeof recordChiefTaskProgress>[0],
+    ): Promise<void> => {
+      if (!shouldTrackChiefTask) {
+        return;
+      }
+      await recordChiefTaskProgress(args);
+    };
+    const trackChiefTaskResult = async (
+      args: Parameters<typeof recordChiefTaskResult>[0],
+    ): Promise<void> => {
+      if (!shouldTrackChiefTask) {
+        return;
+      }
+      await recordChiefTaskResult(args);
+    };
+    const trackChiefTaskRecovery = async (
+      args: Parameters<typeof recordChiefTaskRecovery>[0],
+    ): Promise<void> => {
+      if (!shouldTrackChiefTask) {
+        return;
+      }
+      await recordChiefTaskRecovery(args);
+    };
+    const trackChiefTaskFailure = async (
+      args: Parameters<typeof recordChiefTaskFailure>[0],
+    ): Promise<void> => {
+      if (!shouldTrackChiefTask) {
+        return;
+      }
+      await recordChiefTaskFailure(args);
+    };
+    const chiefTaskRecord = await trackChiefTaskStart();
+    if (chiefTaskRecord?.taskId) {
+      await trackChiefTaskProgress({
+        cfg,
+        agentId: sessionAgentId,
+        taskId: chiefTaskRecord.taskId,
+        sessionKey: sessionKey ?? sessionId,
+        sessionId,
+        phase: "executing",
+        activeAgents: ["chief"],
+        currentOwner: "chief",
+        latestMilestone: opts.latestMilestone ?? "Intake completed; execution started.",
+        releaseGateStatus: opts.releaseGateStatus ?? "required",
+        nextStep: "Continue execution until the result is ready for final review or blocked.",
+      });
+    }
 
     let result: Awaited<ReturnType<typeof runAgentAttempt>>;
     let fallbackProvider = provider;
@@ -807,6 +887,27 @@ async function agentCommandInternal(
               ) {
                 lifecycleEnded = true;
               }
+              if (chiefTaskRecord?.taskId) {
+                const compactionCause =
+                  evt.stream === "compaction"
+                    ? typeof evt.data?.trigger === "string"
+                      ? evt.data.trigger
+                      : typeof evt.data?.reason === "string"
+                        ? evt.data.reason
+                        : undefined
+                    : undefined;
+                void trackChiefTaskProgress({
+                  cfg,
+                  agentId: sessionAgentId,
+                  taskId: chiefTaskRecord.taskId,
+                  sessionKey: sessionKey ?? sessionId,
+                  sessionId,
+                  phase: evt.stream === "lifecycle" && evt.data?.phase === "error" ? "blocked" : "executing",
+                  activeAgents: ["chief"],
+                  currentOwner: "chief",
+                  lastCompactionCause: compactionCause,
+                });
+              }
             },
           });
         },
@@ -814,6 +915,34 @@ async function agentCommandInternal(
       result = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      if (
+        chiefTaskRecord?.taskId &&
+        ((fallbackProvider && fallbackProvider !== provider) || (fallbackModel && fallbackModel !== model))
+      ) {
+        await trackChiefTaskRecovery({
+          cfg,
+          agentId: sessionAgentId,
+          taskId: chiefTaskRecord.taskId,
+          fallbackStage: "model_fallback",
+          action: "model_fallback",
+          activeAgents: ["chief"],
+        });
+      }
+      if (chiefTaskRecord?.taskId) {
+        await trackChiefTaskProgress({
+          cfg,
+          agentId: sessionAgentId,
+          taskId: chiefTaskRecord.taskId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionId,
+          phase: "reviewing",
+          activeAgents: ["chief", "quality_guard"],
+          currentOwner: "chief",
+          latestMilestone: "Implementation pass completed; quality_guard review started.",
+          releaseGateStatus: "reviewing",
+          nextStep: "Run the mandatory final executive review before finalization.",
+        });
+      }
       const reviewed = await maybeApplyChiefQualityGuard({
         cfg,
         agentId: sessionAgentId,
@@ -825,8 +954,39 @@ async function agentCommandInternal(
         provider: fallbackProvider,
         model: fallbackModel,
         chiefSkillsSnapshot: skillsSnapshot,
+        successCriteria: opts.successCriteria ?? opts.currentGoal,
+        evidenceSummary: [
+          `provider=${fallbackProvider ?? provider}`,
+          `model=${fallbackModel ?? model}`,
+          `payload_count=${String(result.payloads?.length ?? 0)}`,
+        ],
       });
       result = reviewed.result;
+      if (chiefTaskRecord?.taskId) {
+        await trackChiefTaskProgress({
+          cfg,
+          agentId: sessionAgentId,
+          taskId: chiefTaskRecord.taskId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionId,
+          phase: "executing",
+          activeAgents: ["chief"],
+          currentOwner: "chief",
+          latestMilestone:
+            reviewed.verdict === "approve"
+              ? "Release gate passed; preparing final delivery."
+              : reviewed.verdict === "block"
+                ? "Release gate blocked the draft and returned a safe fallback."
+                : "Release gate requested another revision cycle.",
+          releaseGateStatus:
+            reviewed.verdict === "approve"
+              ? "passed"
+              : reviewed.verdict === "block"
+                ? "blocked"
+                : "reviewing",
+          nextStep: "Finalize the reviewed result and deliver it safely.",
+        });
+      }
       if (!lifecycleEnded) {
         const stopReason = result.meta.stopReason;
         if (stopReason && stopReason !== "end_turn") {
@@ -845,7 +1005,7 @@ async function agentCommandInternal(
         });
       }
     } catch (err) {
-      await recordChiefTaskFailure({
+      await trackChiefTaskFailure({
         cfg,
         agentId: sessionAgentId,
         taskId: chiefTaskRecord?.taskId,
@@ -885,14 +1045,7 @@ async function agentCommandInternal(
     }
 
     const payloads = result.payloads ?? [];
-    await recordChiefTaskResult({
-      cfg,
-      agentId: sessionAgentId,
-      taskId: chiefTaskRecord?.taskId,
-      sessionKey: sessionKey ?? sessionId,
-      payloads,
-    });
-    return await deliverAgentCommandResult({
+    const deliveryResult = await deliverAgentCommandResult({
       cfg,
       deps,
       runtime,
@@ -902,6 +1055,20 @@ async function agentCommandInternal(
       result,
       payloads,
     });
+    await trackChiefTaskResult({
+      cfg,
+      agentId: sessionAgentId,
+      taskId: chiefTaskRecord?.taskId,
+      receiptId: opts.inboundReceiptId,
+      sessionKey: sessionKey ?? sessionId,
+      payloads: deliveryResult.payloads,
+      deliveryConfirmed: deliveryResult.deliveryConfirmed,
+      verificationEvidence: [
+        `payload_count=${String(deliveryResult.payloads.length)}`,
+        deliveryResult.deliveryConfirmed ? "delivery_confirmed" : "delivery_pending",
+      ],
+    });
+    return deliveryResult;
   } finally {
     clearAgentRunContext(runId);
   }

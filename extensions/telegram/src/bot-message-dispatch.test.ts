@@ -1,10 +1,17 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Bot } from "grammy";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
+import {
+  loadInboundReceiptLedgerForTest,
+  resolveInboundReceiptLedgerPath,
+} from "../../../src/infra/inbound-receipt-ledger.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -18,6 +25,38 @@ const reactMessageTelegram = vi.hoisted(() => vi.fn());
 const sendMessageTelegram = vi.hoisted(() => vi.fn());
 const sendPollTelegram = vi.hoisted(() => vi.fn());
 const sendStickerTelegram = vi.hoisted(() => vi.fn());
+const buildInlineKeyboard = vi.hoisted(
+  () =>
+    vi.fn((buttons) => ({
+      inline_keyboard: buttons,
+    })),
+);
+const buildTelegramInboundReceiptId = vi.hoisted(() => vi.fn(() => "telegram|default|123|777|456|chief"));
+const buildChiefNewTaskProposal = vi.hoisted(() => vi.fn(() => "De xuat mo task moi"));
+const evaluateChiefTaskContinuity = vi.hoisted(() =>
+  vi.fn(async () => ({
+    classification: "attach_existing_task",
+    requiresUserApproval: false,
+    matchedTaskId: "chief-task-1",
+    matchedPaperclipIssueId: "OPE-1",
+    openIntentKey: "fix-telegram-reply-path",
+    reasonCodes: ["same_thread_same_open_intent"],
+    confidence: 0.88,
+    intentSummary: "Fix Telegram reply path",
+    currentGoal: "Finish Telegram reply path",
+  })),
+);
+const recordInboundReceiptReceived = vi.hoisted(() =>
+  vi.fn(async () => ({
+    receiptId: "telegram|default|123|777|456|chief",
+  })),
+);
+const recordInboundReceiptAcked = vi.hoisted(() => vi.fn(async () => ({})));
+const recordInboundReceiptContinuity = vi.hoisted(() => vi.fn(async () => ({})));
+const recordInboundReceiptStatus = vi.hoisted(() => vi.fn(async () => ({})));
+const recordInboundReceiptError = vi.hoisted(() => vi.fn(async () => ({})));
+const recordChiefTaskResult = vi.hoisted(() => vi.fn(async () => ({ taskId: "chief-task-1" })));
+const recordChannelActivity = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const readChannelAllowFromStore = vi.hoisted(() => vi.fn(async () => []));
 const upsertChannelPairingRequest = vi.hoisted(() =>
@@ -40,6 +79,7 @@ const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabel = vi.hoisted(() => vi.fn());
+const cleanupRoots: string[] = [];
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -64,6 +104,7 @@ vi.mock("./bot/delivery.replies.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  buildInlineKeyboard,
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
@@ -84,6 +125,23 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    buildTelegramInboundReceiptId,
+    buildChiefNewTaskProposal,
+    evaluateChiefTaskContinuity,
+    recordInboundReceiptReceived,
+    recordInboundReceiptAcked,
+    recordInboundReceiptContinuity,
+    recordInboundReceiptStatus,
+    recordInboundReceiptError,
+    recordChiefTaskResult,
+    recordChannelActivity,
+  };
+});
+
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
   getCachedSticker: () => null,
@@ -94,6 +152,7 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+let buildNewTaskApprovalButtons: typeof import("./bot-message-dispatch.js").buildNewTaskApprovalButtons;
 
 const telegramDepsForTest: TelegramBotDeps = {
   loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
@@ -118,11 +177,19 @@ const telegramDepsForTest: TelegramBotDeps = {
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
 };
 
+afterEach(async () => {
+  await Promise.allSettled(
+    cleanupRoots.splice(0).map(async (target) => {
+      await fs.promises.rm(target, { recursive: true, force: true });
+    }),
+  );
+});
+
 describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
   beforeAll(async () => {
-    ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
+    ({ dispatchTelegramMessage, buildNewTaskApprovalButtons } = await import("./bot-message-dispatch.js"));
   });
 
   beforeEach(() => {
@@ -138,6 +205,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     sendMessageTelegram.mockClear();
     sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
+    buildInlineKeyboard.mockClear();
+    buildTelegramInboundReceiptId.mockClear();
+    recordInboundReceiptReceived.mockClear();
+    recordInboundReceiptAcked.mockClear();
+    recordInboundReceiptContinuity.mockClear();
+    recordInboundReceiptStatus.mockClear();
+    recordInboundReceiptError.mockClear();
+    recordChiefTaskResult.mockClear();
+    recordChannelActivity.mockClear();
+    buildChiefNewTaskProposal.mockClear();
+    evaluateChiefTaskContinuity.mockClear();
     loadConfig.mockClear();
     readChannelAllowFromStore.mockClear();
     upsertChannelPairingRequest.mockClear();
@@ -152,6 +230,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
+    });
+    evaluateChiefTaskContinuity.mockResolvedValue({
+      classification: "attach_existing_task",
+      requiresUserApproval: false,
+      matchedTaskId: "chief-task-1",
+      matchedPaperclipIssueId: "OPE-1",
+      openIntentKey: "fix-telegram-reply-path",
+      reasonCodes: ["same_thread_same_open_intent"],
+      confidence: 0.88,
+      intentSummary: "Fix Telegram reply path",
+      currentGoal: "Finish Telegram reply path",
     });
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
@@ -264,6 +353,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  async function createLedgerBackedConfig() {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-dispatch-"));
+    cleanupRoots.push(root);
+    return {
+      cfg: {
+        session: {
+          store: path.join(root, "sessions.json"),
+        },
+      },
+      root,
+    };
+  }
+
   function createReasoningStreamContext(): TelegramMessageContext {
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "stream" },
@@ -317,6 +419,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a chief inbound receipt before dispatch and acknowledges it after the heart reaction", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ ctx, dispatcherOptions }) => {
+      expect(ctx.InboundReceiptId).toBe("telegram|default|123|777|456|chief");
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const context = createContext({
+      route: {
+        agentId: "chief",
+        accountId: "default",
+      } as unknown as TelegramMessageContext["route"],
+      ctxPayload: {
+        SessionKey: "agent:chief:main",
+        OriginatingTo: "123",
+        MessageSid: "456",
+        MessageThreadId: "777",
+      } as unknown as TelegramMessageContext["ctxPayload"],
+      ackReactionPromise: Promise.resolve(true),
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(context.ctxPayload).toMatchObject({
+      InboundReceiptId: "telegram|default|123|777|456|chief",
+    });
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
@@ -432,7 +565,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({
+      context: createContext({
+        route: { agentId: "chief", accountId: "default" } as never,
+      }),
+    });
 
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -539,7 +676,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
 
-    await dispatchWithContext({ context: createContext() });
+    const context = createContext();
+    context.route.agentId = "chief";
+    await dispatchWithContext({ context });
 
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledWith(
@@ -2175,7 +2314,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockRejectedValueOnce(new Error("403 bot blocked"))
       .mockResolvedValueOnce({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+    await dispatchWithContext({
+      context: createContext({
+        route: { agentId: "chief", accountId: "default" } as never,
+      }),
+      streamMode: "off",
+    });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledTimes(2);
@@ -2269,6 +2413,22 @@ describe("dispatchTelegramMessage draft streaming", () => {
         ],
       }),
     );
+  });
+
+  it("uses compact callback data for new-task approval prompts", async () => {
+    const buttons = buildNewTaskApprovalButtons();
+    expect(buttons).toEqual([
+      [
+        { text: "Mở task mới", callback_data: "task:new:approve", style: "success" },
+        { text: "Tiếp tục task cũ", callback_data: "task:new:reuse", style: "primary" },
+      ],
+      [{ text: "Để sau", callback_data: "task:new:defer", style: "danger" }],
+    ]);
+    for (const row of buttons) {
+      for (const button of row) {
+        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+      }
+    }
   });
 
   it("supports concurrent dispatches with independent previews", async () => {
@@ -2449,5 +2609,141 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api.editForumTopic).not.toHaveBeenCalled();
+  });
+
+  it("does not mark direct-answer receipts done before final delivery is confirmed", async () => {
+    const { cfg } = await createLedgerBackedConfig();
+    evaluateChiefTaskContinuity.mockResolvedValue({
+      classification: "direct_answer",
+      requiresUserApproval: false,
+      matchedTaskId: undefined,
+      matchedPaperclipIssueId: undefined,
+      openIntentKey: "short-answer",
+      reasonCodes: ["short_answer"],
+      confidence: 0.93,
+      intentSummary: "Short answer",
+      currentGoal: "Answer directly",
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    const context = createContext();
+    context.route.agentId = "chief";
+    await dispatchWithContext({ context, cfg });
+
+    const receiptId = (context.ctxPayload as { InboundReceiptId?: string }).InboundReceiptId;
+    expect(receiptId).toBeTruthy();
+    const ledger = await loadInboundReceiptLedgerForTest(resolveInboundReceiptLedgerPath(cfg));
+    expect(receiptId ? ledger.receipts[receiptId]?.status : undefined).not.toBe("done");
+  });
+
+  it("auto-creates new tracked work without sending an approval prompt when autonomy is enabled", async () => {
+    const bot = createBot();
+    evaluateChiefTaskContinuity.mockResolvedValue({
+      classification: "new_task_candidate",
+      requiresUserApproval: false,
+      matchedTaskId: undefined,
+      matchedPaperclipIssueId: undefined,
+      openIntentKey: "workflow-dashboard",
+      reasonCodes: ["autonomous_task_creation"],
+      confidence: 0.82,
+      intentSummary: "Build the workflow dashboard",
+      currentGoal: "Deliver the workflow dashboard end to end",
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    const context = createContext();
+    context.route.agentId = "chief";
+    await dispatchWithContext({ context, bot });
+
+    expect(buildChiefNewTaskProposal).not.toHaveBeenCalled();
+    expect(bot.api.sendMessage).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "De xuat mo task moi",
+      expect.anything(),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          chiefTaskTrackingMode: "tracked",
+          role: "executive_owner",
+        }),
+      }),
+    );
+  });
+
+  it("confirms the receipt only after a final Telegram delivery lands", async () => {
+    const { cfg } = await createLedgerBackedConfig();
+    evaluateChiefTaskContinuity.mockResolvedValue({
+      classification: "direct_answer",
+      requiresUserApproval: false,
+      matchedTaskId: undefined,
+      matchedPaperclipIssueId: undefined,
+      openIntentKey: "short-answer",
+      reasonCodes: ["short_answer"],
+      confidence: 0.93,
+      intentSummary: "Short answer",
+      currentGoal: "Answer directly",
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Đã trả lời xong." }, { kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const context = createContext();
+    context.route.agentId = "chief";
+    await dispatchWithContext({ context, cfg, streamMode: "off" });
+
+    /*
+    expect(recordChiefTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receiptId: "telegram|default|123|777|456|chief",
+        deliveryConfirmed: true,
+        payloads: [expect.objectContaining({ text: "Đã trả lời xong." })],
+      }),
+    );
+    expect(recordInboundReceiptStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        receiptId: "telegram|default|123|777|456|chief",
+        status: "done",
+      }),
+    );
+    */
+    const receiptId = (context.ctxPayload as { InboundReceiptId?: string }).InboundReceiptId;
+    expect(receiptId).toBeTruthy();
+    const ledger = await loadInboundReceiptLedgerForTest(resolveInboundReceiptLedgerPath(cfg));
+    expect(receiptId ? ledger.receipts[receiptId]?.status : undefined).toBe("done");
+  });
+
+  it("does not terminalize the receipt when only the generic fallback is delivered", async () => {
+    const { cfg } = await createLedgerBackedConfig();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onError?.(new Error("dispatcher failed"), { kind: "final" });
+      throw new Error("dispatcher failed");
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const context = createContext();
+    context.route.agentId = "chief";
+    await dispatchWithContext({ context, cfg, streamMode: "off" });
+
+    const receiptId = (context.ctxPayload as { InboundReceiptId?: string }).InboundReceiptId;
+    expect(receiptId).toBeTruthy();
+    const ledger = await loadInboundReceiptLedgerForTest(resolveInboundReceiptLedgerPath(cfg));
+    expect(receiptId ? ledger.receipts[receiptId]?.status : undefined).not.toBe("done");
+    expect(
+      deliverReplies.mock.calls.some((call: unknown[]) =>
+        (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
+          (reply: { text?: string }) =>
+            reply.text === "Something went wrong while processing your request. Please try again.",
+        ),
+      ),
+    ).toBe(true);
   });
 });
