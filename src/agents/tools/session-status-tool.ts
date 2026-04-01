@@ -23,6 +23,7 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
+import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -133,11 +134,8 @@ function formatSessionTaskLine(params: {
       : snapshot.recentFailureCount > 0
         ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
         : `latest ${task.status.replaceAll("_", " ")}`;
-  const title = task.label?.trim() || task.task.trim();
-  const detail =
-    task.status === "running" || task.status === "queued"
-      ? task.progressSummary?.trim()
-      : task.error?.trim() || task.terminalSummary?.trim();
+  const title = formatTaskStatusTitle(task);
+  const detail = formatTaskStatusDetail(task);
   const parts = [headline, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
