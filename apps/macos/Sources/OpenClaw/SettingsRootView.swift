@@ -32,6 +32,10 @@ struct SettingsRootView: View {
                     .tabItem { Label("Channels", systemImage: "link") }
                     .tag(SettingsTab.channels)
 
+                ColorSettings()
+                    .tabItem { Label("Colors", systemImage: "paintpalette") }
+                    .tag(SettingsTab.colors)
+
                 VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
                     .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
                     .tag(SettingsTab.voiceWake)
@@ -172,13 +176,14 @@ struct SettingsRootView: View {
 }
 
 enum SettingsTab: CaseIterable {
-    case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
+    case general, channels, colors, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
     static let windowWidth: CGFloat = 824 // wider
     static let windowHeight: CGFloat = 790 // +10% (more room)
     var title: String {
         switch self {
         case .general: "General"
         case .channels: "Channels"
+        case .colors: "Colors"
         case .skills: "Skills"
         case .sessions: "Sessions"
         case .cron: "Cron"
@@ -195,6 +200,7 @@ enum SettingsTab: CaseIterable {
         switch self {
         case .general: "gearshape"
         case .channels: "link"
+        case .colors: "paintpalette"
         case .skills: "sparkles"
         case .sessions: "clock.arrow.circlepath"
         case .cron: "calendar"

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum ColorHexSupport {
@@ -10,5 +11,16 @@ enum ColorHexSupport {
         let g = Double((value >> 8) & 0xFF) / 255.0
         let b = Double(value & 0xFF) / 255.0
         return Color(red: r, green: g, blue: b)
+    }
+
+    static func hex(from color: Color) -> String? {
+        guard let nsColor = NSColor(color).usingColorSpace(.deviceRGB) else {
+            return nil
+        }
+
+        let red = Int(nsColor.redComponent * 255)
+        let green = Int(nsColor.greenComponent * 255)
+        let blue = Int(nsColor.blueComponent * 255)
+        return String(format: "#%02X%02X%02X", red, green, blue)
     }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
@@ -357,6 +358,7 @@ final class AppState {
         self.isInitializing = false
         if !self.isPreview {
             self.startConfigWatcher()
+            _ = ColorPreferencesStore.shared
         }
     }
 

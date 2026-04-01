@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenClawKit
 
 #if os(macOS)
 import AppKit
@@ -101,7 +102,11 @@ enum OpenClawChatTheme {
     }
 
     static var userBubble: Color {
+        #if os(macOS)
+        ColorPreferencesStore.shared.resolvedColor
+        #else
         Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+        #endif
     }
 
     static var assistantBubble: Color {
@@ -128,7 +133,24 @@ enum OpenClawChatTheme {
         #endif
     }
 
-    static var userText: Color { .white }
+    static var userText: Color {
+        #if os(macOS)
+        let backgroundColor = ColorPreferencesStore.shared.resolvedColor
+        let nsColor = NSColor(backgroundColor)
+        guard let rgbColor = nsColor.usingColorSpace(.deviceRGB) else {
+            return .white
+        }
+
+        // Calculate relative luminance using WCAG formula
+        let luminance = 0.2126 * rgbColor.redComponent +
+                       0.7152 * rgbColor.greenComponent +
+                       0.0722 * rgbColor.blueComponent
+
+        return luminance > 0.6 ? Color.black : Color.white
+        #else
+        return .white
+        #endif
+    }
 
     static var assistantText: Color {
         #if os(macOS)
