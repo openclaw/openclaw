@@ -1,9 +1,9 @@
-import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
-import { parseAbsoluteTimeMs } from "./parse.js";
-import { migrateLegacyCronPayload } from "./payload-migration.js";
-import { coerceFiniteScheduleNumber } from "./schedule.js";
-import { inferLegacyName, normalizeOptionalText } from "./service/normalize.js";
-import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
+import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
+import { inferLegacyName, normalizeOptionalText } from "../cron/service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
+import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
+import { migrateLegacyCronPayload } from "./doctor-cron-payload-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -119,6 +119,14 @@ function copyTopLevelAgentTurnFields(
     mutated = true;
   }
   if (
+    !("threadId" in payload) &&
+    ((typeof raw.threadId === "number" && Number.isFinite(raw.threadId)) ||
+      (typeof raw.threadId === "string" && raw.threadId.trim()))
+  ) {
+    payload.threadId = typeof raw.threadId === "string" ? raw.threadId.trim() : raw.threadId;
+    mutated = true;
+  }
+  if (
     typeof payload.bestEffortDeliver !== "boolean" &&
     typeof raw.bestEffortDeliver === "boolean"
   ) {
@@ -164,6 +172,9 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
   if ("to" in raw) {
     delete raw.to;
+  }
+  if ("threadId" in raw) {
+    delete raw.threadId;
   }
   if ("bestEffortDeliver" in raw) {
     delete raw.bestEffortDeliver;
@@ -319,6 +330,7 @@ export function normalizeStoredCronJobs(
       "deliver" in raw ||
       "channel" in raw ||
       "to" in raw ||
+      "threadId" in raw ||
       "bestEffortDeliver" in raw ||
       "provider" in raw;
     if (hadLegacyTopLevelPayloadFields || hadLegacyTopLevelDeliveryFields) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeStoredCronJobs } from "./store-migration.js";
+import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 
 describe("normalizeStoredCronJobs", () => {
   it("normalizes legacy cron fields and reports migration issues", () => {
@@ -12,6 +12,7 @@ describe("normalizeStoredCronJobs", () => {
         deliver: true,
         provider: " TeLeGrAm ",
         to: "12345",
+        threadId: " 77 ",
       },
     ] as Array<Record<string, unknown>>;
 
@@ -39,6 +40,7 @@ describe("normalizeStoredCronJobs", () => {
       mode: "announce",
       channel: "telegram",
       to: "12345",
+      threadId: "77",
     });
     expect(job?.payload).toMatchObject({
       kind: "agentTurn",
