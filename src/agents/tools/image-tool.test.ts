@@ -297,7 +297,7 @@ const minimaxProvider = {
     text: await minimaxUnderstandImage({
       apiKey: process.env.MINIMAX_API_KEY ?? "",
       prompt: params.prompt ?? "Describe the image.",
-      imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+      imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer!.toString("base64")}`,
     }),
     model: "MiniMax-VL-01",
   }),
@@ -310,7 +310,7 @@ const minimaxProvider = {
           params.images.length > 1
             ? `${params.prompt ?? "Describe the image."}\n\nDescribe image ${index + 1} of ${params.images.length} independently.`
             : (params.prompt ?? "Describe the image."),
-        imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
+        imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer!.toString("base64")}`,
       });
       parts.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
     }
@@ -342,7 +342,7 @@ async function describeMoonshotImage(
             {
               type: "image_url",
               image_url: {
-                url: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+                url: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer!.toString("base64")}`,
               },
             },
           ],
