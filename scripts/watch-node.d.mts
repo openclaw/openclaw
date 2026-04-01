@@ -23,4 +23,16 @@ export function runWatchMain(params?: {
   args?: string[];
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  loadChokidar?: () => Promise<{
+    watch: (
+      paths: string[],
+      options: {
+        ignoreInitial: boolean;
+        ignored: (watchPath: string) => boolean;
+      },
+    ) => {
+      on: (event: "add" | "change" | "unlink" | "error", cb: (arg?: unknown) => void) => void;
+      close?: () => Promise<void> | void;
+    };
+  }>;
 }): Promise<number>;

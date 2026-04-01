@@ -62,17 +62,21 @@ const printFriendlyWatchStartupError = (err) => {
 };
 
 const loadChokidar = async () => {
-  try {
-    const mod = await import("chokidar");
-    return mod.default ?? mod;
-  } catch (err) {
-    printFriendlyWatchStartupError(err);
-    throw err;
-  }
+  const mod = await import("chokidar");
+  return mod.default ?? mod;
 };
 
 export async function runWatchMain(params = {}) {
-  const chokidarModule = params.chokidar ?? (await loadChokidar());
+  let createWatcher = params.createWatcher;
+  if (!createWatcher) {
+    try {
+      const chokidarModule = params.chokidar ?? (await (params.loadChokidar ?? loadChokidar)());
+      createWatcher = (watchPaths, options) => chokidarModule.watch(watchPaths, options);
+    } catch (err) {
+      printFriendlyWatchStartupError(err);
+      throw err;
+    }
+  }
 
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -81,8 +85,7 @@ export async function runWatchMain(params = {}) {
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
     now: params.now ?? Date.now,
-    createWatcher:
-      params.createWatcher ?? ((watchPaths, options) => chokidarModule.watch(watchPaths, options)),
+    createWatcher,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   };
 
