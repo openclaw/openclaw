@@ -23,29 +23,17 @@ import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildPluginBindingResolvedText,
-  parsePluginBindingApprovalCustomId,
-  resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
-  dispatchPluginInteractiveHandler,
   type PluginInteractiveDiscordHandlerContext,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
@@ -59,7 +47,6 @@ import {
   type DiscordComponentEntry,
   type DiscordModalEntry,
 } from "../components.js";
-import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
@@ -102,7 +89,47 @@ import {
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { sendTyping } from "./typing.js";
+
+let conversationRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>
+  | undefined;
+let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
+let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
+let replyPipelineRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
+  | undefined;
+let sendComponentsRuntimePromise: Promise<typeof import("../send.components.js")> | undefined;
+let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
+
+async function loadConversationRuntime() {
+  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-runtime");
+  return await conversationRuntimePromise;
+}
+
+async function loadPluginRuntime() {
+  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
+  return await pluginRuntimePromise;
+}
+
+async function loadReplyRuntime() {
+  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
+  return await replyRuntimePromise;
+}
+
+async function loadReplyPipelineRuntime() {
+  replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
+  return await replyPipelineRuntimePromise;
+}
+
+async function loadSendComponentsRuntime() {
+  sendComponentsRuntimePromise ??= import("../send.components.js");
+  return await sendComponentsRuntimePromise;
+}
+
+async function loadTypingRuntime() {
+  typingRuntimePromise ??= import("./typing.js");
+  return await typingRuntimePromise;
+}
 
 function resolveComponentGroupPolicy(
   ctx: AgentComponentContext,
@@ -218,8 +245,14 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
   };
-  const pluginBindingApproval = parsePluginBindingApprovalCustomId(params.data);
+  const conversationRuntime = await loadConversationRuntime();
+  const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
+    const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
+      conversationRuntime;
+    if (!pluginBindingApproval) {
+      return "unmatched";
+    }
     try {
       await respond.acknowledge();
     } catch {
@@ -233,6 +266,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     const approvalMessageId = params.messageId?.trim() || params.interaction.message?.id?.trim();
     if (approvalMessageId) {
       try {
+        const { editDiscordComponentMessage } = await loadSendComponentsRuntime();
         await editDiscordComponentMessage(
           normalizedConversationId,
           approvalMessageId,
@@ -259,6 +293,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     return "handled";
   }
+  const { dispatchPluginInteractiveHandler } = await loadPluginRuntime();
   const dispatched = await dispatchPluginInteractiveHandler({
     channel: "discord",
     data: params.data,
@@ -398,6 +433,22 @@ async function dispatchDiscordComponentEvent(params: {
     envelope: envelopeOptions,
   });
 
+  const {
+    createReplyReferencePlanner,
+    dispatchReplyWithBufferedBlockDispatcher,
+    finalizeInboundContext,
+    resolveChunkMode,
+    resolveTextChunkLimit,
+    recordInboundSession,
+  } = await (async () => {
+    const replyRuntime = await loadReplyRuntime();
+    const conversationRuntime = await loadConversationRuntime();
+    return {
+      ...replyRuntime,
+      recordInboundSession: conversationRuntime.recordInboundSession,
+    };
+  })();
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: eventText,
@@ -463,6 +514,7 @@ async function dispatchDiscordComponentEvent(params: {
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
   const typingChannelId = interactionCtx.channelId;
+  const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: ctx.cfg,
     agentId,
@@ -519,6 +571,7 @@ async function dispatchDiscordComponentEvent(params: {
       },
       onReplyStart: async () => {
         try {
+          const { sendTyping } = await loadTypingRuntime();
           await sendTyping({ client: interaction.client, channelId: typingChannelId });
         } catch (err) {
           logVerbose(`discord: typing failed for component reply: ${String(err)}`);
