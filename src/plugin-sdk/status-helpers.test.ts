@@ -211,30 +211,32 @@ describe("buildBaseChannelStatusSummary", () => {
 });
 
 describe("buildBaseAccountStatusSnapshot", () => {
-  it("builds account status with runtime defaults", () => {
-    expect(
-      buildBaseAccountStatusSnapshot({
+  it.each([
+    {
+      name: "builds account status with runtime defaults",
+      input: {
         account: { accountId: "default", enabled: true, configured: true },
-      }),
-    ).toEqual(expectedAccountSnapshot({ enabled: true, configured: true }));
-  });
-
-  it("merges extra snapshot fields after the shared account shape", () => {
-    expect(
-      buildBaseAccountStatusSnapshot(
-        {
-          account: { accountId: "default", configured: true },
-        },
-        {
-          connected: true,
-          mode: "polling",
-        },
-      ),
-    ).toEqual({
-      ...expectedAccountSnapshot({ configured: true }),
-      connected: true,
-      mode: "polling",
-    });
+      },
+      extra: undefined,
+      expected: expectedAccountSnapshot({ enabled: true, configured: true }),
+    },
+    {
+      name: "merges extra snapshot fields after the shared account shape",
+      input: {
+        account: { accountId: "default", configured: true },
+      },
+      extra: {
+        connected: true,
+        mode: "polling",
+      },
+      expected: {
+        ...expectedAccountSnapshot({ configured: true }),
+        connected: true,
+        mode: "polling",
+      },
+    },
+  ])("$name", ({ input, extra, expected }) => {
+    expect(buildBaseAccountStatusSnapshot(input, extra)).toEqual(expected);
   });
 });
 
