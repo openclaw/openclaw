@@ -4048,7 +4048,7 @@ details[open] > .ov-expandable-toggle::after {
   }
 
   .exec-approval-card {
-    padding: 16px;
+    padding: 16px 16px 0;
   }
 
   .exec-approval-actions {
