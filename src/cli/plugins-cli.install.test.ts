@@ -779,6 +779,35 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
   });
 
+  it("does not fall back to hook pack for local path when security scan fails under dangerous force unsafe install", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+    const cfg = {} as OpenClawConfig;
+    const pluginInstallError = "plugin security scan failed";
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: pluginInstallError,
+      code: "security_scan_failed",
+    });
+
+    try {
+      await expect(
+        runPluginsCommand([
+          "plugins",
+          "install",
+          localPluginDir,
+          "--dangerously-force-unsafe-install",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+  });
+
   it("does not fall back to hook pack for npm installs when dangerous force unsafe install is set", async () => {
     const cfg = {} as OpenClawConfig;
     const pluginInstallError = "plugin blocked by security scan";
@@ -793,6 +822,30 @@ describe("plugins cli install", () => {
       ok: false,
       error: pluginInstallError,
       code: "security_scan_blocked",
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "demo", "--dangerously-force-unsafe-install"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+  });
+
+  it("does not fall back to hook pack for npm installs when security scan fails under dangerous force unsafe install", async () => {
+    const cfg = {} as OpenClawConfig;
+    const pluginInstallError = "plugin security scan failed";
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
+      code: "package_not_found",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: pluginInstallError,
+      code: "security_scan_failed",
     });
 
     await expect(
