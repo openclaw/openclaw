@@ -2,7 +2,10 @@ import type { Command } from "commander";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
-import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import {
+  formatConfigIssueLines,
+  normalizeConfigIssues,
+} from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
@@ -23,6 +26,7 @@ import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { configExplainCommand } from "../commands/config-explain.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -164,7 +168,9 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
     try {
       return JSON.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON value: ${String(err)}`, { cause: err });
+      throw new Error(`Failed to parse JSON value: ${String(err)}`, {
+        cause: err,
+      });
     }
   }
 
@@ -183,13 +189,19 @@ function formatDoctorHint(message: string): string {
   return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
 }
 
-function formatUnsupportedSecretRefPolicyFailureMessage(issues: string[]): string {
+function formatUnsupportedSecretRefPolicyFailureMessage(
+  issues: string[],
+): string {
   const lines = [
     "Config policy validation failed: unsupported SecretRef usage was detected.",
-    ...issues.slice(0, CONFIG_SET_POLICY_ERROR_MAX_ISSUES).map((issue) => `- ${issue}`),
+    ...issues
+      .slice(0, CONFIG_SET_POLICY_ERROR_MAX_ISSUES)
+      .map((issue) => `- ${issue}`),
   ];
   if (issues.length > CONFIG_SET_POLICY_ERROR_MAX_ISSUES) {
-    lines.push(`- ... ${issues.length - CONFIG_SET_POLICY_ERROR_MAX_ISSUES} more`);
+    lines.push(
+      `- ... ${issues.length - CONFIG_SET_POLICY_ERROR_MAX_ISSUES} more`,
+    );
   }
   return lines.join("\n");
 }
@@ -202,7 +214,10 @@ function validatePathSegments(path: PathSegment[]): void {
   }
 }
 
-function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?: unknown } {
+function getAtPath(
+  root: unknown,
+  path: PathSegment[],
+): { found: boolean; value?: unknown } {
   let current: unknown = root;
   for (const segment of path) {
     if (!current || typeof current !== "object") {
@@ -228,7 +243,11 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+function setAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+): void {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
@@ -236,7 +255,9 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
     const nextIsIndex = Boolean(next && isIndexSegment(next));
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
-        throw new Error(`Expected numeric index for array segment "${segment}"`);
+        throw new Error(
+          `Expected numeric index for array segment "${segment}"`,
+        );
       }
       const index = Number.parseInt(segment, 10);
       const existing = current[index];
@@ -250,7 +271,9 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
       throw new Error(`Cannot traverse into "${segment}" (not an object)`);
     }
     const record = current as Record<string, unknown>;
-    const existing = hasOwnPathKey(record, segment) ? record[segment] : undefined;
+    const existing = hasOwnPathKey(record, segment)
+      ? record[segment]
+      : undefined;
     if (!existing || typeof existing !== "object") {
       record[segment] = nextIsIndex ? [] : {};
     }
@@ -272,7 +295,10 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
   (current as Record<string, unknown>)[last] = value;
 }
 
-function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolean {
+function unsetAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+): boolean {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
@@ -326,7 +352,9 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
     return snapshot;
   }
   runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
-  for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
+  for (const line of formatConfigIssueLines(snapshot.issues, "-", {
+    normalizeRoot: true,
+  })) {
     runtime.error(line);
   }
   runtime.error(formatDoctorHint("to repair, then retry."));
@@ -345,7 +373,8 @@ function parseRequiredPath(path: string): PathSegment[] {
 
 function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
-    path.length === expected.length && path.every((segment, index) => segment === expected[index])
+    path.length === expected.length &&
+    path.every((segment, index) => segment === expected[index])
   );
 }
 
@@ -361,7 +390,11 @@ function pruneInactiveGatewayAuthCredentials(params: {
   }
 
   const gatewayRaw = params.root.gateway;
-  if (!gatewayRaw || typeof gatewayRaw !== "object" || Array.isArray(gatewayRaw)) {
+  if (
+    !gatewayRaw ||
+    typeof gatewayRaw !== "object" ||
+    Array.isArray(gatewayRaw)
+  ) {
     return [];
   }
   const gateway = gatewayRaw as Record<string, unknown>;
@@ -419,13 +452,18 @@ function parseSecretRefBuilder(params: {
     );
   }
 
-  const source = parseSecretRefSource(params.source, `${params.fieldPrefix}.source`);
+  const source = parseSecretRefSource(
+    params.source,
+    `${params.fieldPrefix}.source`,
+  );
   const id = params.id.trim();
   if (!id) {
     throw new Error(`${params.fieldPrefix}.id is required.`);
   }
   if (source === "env" && !isValidEnvSecretRefId(id)) {
-    throw new Error(`${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for env refs.`);
+    throw new Error(
+      `${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for env refs.`,
+    );
   }
   if (source === "file" && !isValidFileSecretRefId(id)) {
     throw new Error(
@@ -441,7 +479,10 @@ function parseSecretRefBuilder(params: {
   return { source, provider, id };
 }
 
-function parseOptionalPositiveInteger(raw: string | undefined, flag: string): number | undefined {
+function parseOptionalPositiveInteger(
+  raw: string | undefined,
+  flag: string,
+): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
@@ -466,11 +507,15 @@ function parseProviderEnvEntries(
   for (const entry of entries) {
     const separator = entry.indexOf("=");
     if (separator <= 0) {
-      throw new Error(`--provider-env expects KEY=VALUE entries (received: "${entry}").`);
+      throw new Error(
+        `--provider-env expects KEY=VALUE entries (received: "${entry}").`,
+      );
     }
     const key = entry.slice(0, separator).trim();
     if (!key) {
-      throw new Error(`--provider-env key must not be empty (received: "${entry}").`);
+      throw new Error(
+        `--provider-env key must not be empty (received: "${entry}").`,
+      );
     }
     env[key] = entry.slice(separator + 1);
   }
@@ -496,14 +541,22 @@ function parseProviderAliasPath(path: PathSegment[]): string {
   return alias;
 }
 
-function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig {
+function buildProviderFromBuilder(
+  opts: ConfigSetOptions,
+): SecretProviderConfig {
   const sourceRaw = opts.providerSource?.trim();
   if (!sourceRaw) {
     throw new Error("--provider-source is required in provider builder mode.");
   }
   const source = parseSecretRefSource(sourceRaw, "--provider-source");
-  const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
-  const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
+  const timeoutMs = parseOptionalPositiveInteger(
+    opts.providerTimeoutMs,
+    "--provider-timeout-ms",
+  );
+  const maxBytes = parseOptionalPositiveInteger(
+    opts.providerMaxBytes,
+    "--provider-max-bytes",
+  );
   const noOutputTimeoutMs = parseOptionalPositiveInteger(
     opts.providerNoOutputTimeoutMs,
     "--provider-no-output-timeout-ms",
@@ -516,7 +569,9 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
 
   let provider: SecretProviderConfig;
   if (source === "env") {
-    const allowlist = (opts.providerAllowlist ?? []).map((entry) => entry.trim()).filter(Boolean);
+    const allowlist = (opts.providerAllowlist ?? [])
+      .map((entry) => entry.trim())
+      .filter(Boolean);
     for (const envName of allowlist) {
       if (!isValidEnvSecretRefId(envName)) {
         throw new Error(
@@ -531,13 +586,16 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
   } else if (source === "file") {
     const filePath = opts.providerPath?.trim();
     if (!filePath) {
-      throw new Error("--provider-path is required when --provider-source file is used.");
+      throw new Error(
+        "--provider-path is required when --provider-source file is used.",
+      );
     }
     const modeRaw = opts.providerMode?.trim();
     if (modeRaw && modeRaw !== "singleValue" && modeRaw !== "json") {
       throw new Error("--provider-mode must be one of: singleValue, json.");
     }
-    const mode = modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
+    const mode =
+      modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
     provider = {
       source: "file",
       path: filePath,
@@ -548,7 +606,9 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
   } else {
     const command = opts.providerCommand?.trim();
     if (!command) {
-      throw new Error("--provider-command is required when --provider-source exec is used.");
+      throw new Error(
+        "--provider-command is required when --provider-source exec is used.",
+      );
     }
     provider = {
       source: "exec",
@@ -562,13 +622,23 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
       ...(providerEnv ? { env: providerEnv } : {}),
       ...(opts.providerPassEnv && opts.providerPassEnv.length > 0
-        ? { passEnv: opts.providerPassEnv.map((entry) => entry.trim()).filter(Boolean) }
+        ? {
+            passEnv: opts.providerPassEnv
+              .map((entry) => entry.trim())
+              .filter(Boolean),
+          }
         : {}),
       ...(opts.providerTrustedDir && opts.providerTrustedDir.length > 0
-        ? { trustedDirs: opts.providerTrustedDir.map((entry) => entry.trim()).filter(Boolean) }
+        ? {
+            trustedDirs: opts.providerTrustedDir
+              .map((entry) => entry.trim())
+              .filter(Boolean),
+          }
         : {}),
       ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
-      ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
+      ...(opts.providerAllowSymlinkCommand
+        ? { allowSymlinkCommand: true }
+        : {}),
     };
   }
 
@@ -577,7 +647,9 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     const issue = validated.error.issues[0];
     const issuePath = issue?.path?.join(".") ?? "<provider>";
     const issueMessage = issue?.message ?? "Invalid provider config.";
-    throw new Error(`Provider builder config invalid at ${issuePath}: ${issueMessage}`);
+    throw new Error(
+      `Provider builder config invalid at ${issuePath}: ${issueMessage}`,
+    );
   }
   return validated.data;
 }
@@ -592,7 +664,9 @@ function parseSecretRefFromUnknown(value: unknown, label: string): SecretRef {
     typeof candidate.source !== "string" ||
     typeof candidate.id !== "string"
   ) {
-    throw new Error(`${label} must include string fields: source, provider, id.`);
+    throw new Error(
+      `${label} must include string fields: source, provider, id.`,
+    );
   }
   return parseSecretRefBuilder({
     provider: candidate.provider,
@@ -608,7 +682,10 @@ function buildRefAssignmentOperation(params: {
   inputMode: ConfigSetInputMode;
 }): ConfigSetOperation {
   const resolved = resolveConfigSecretTargetByPath(params.requestedPath);
-  if (resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments) {
+  if (
+    resolved?.entry.secretShape === "sibling_ref" &&
+    resolved.refPathSegments
+  ) {
     return {
       inputMode: params.inputMode,
       requestedPath: params.requestedPath,
@@ -616,7 +693,9 @@ function buildRefAssignmentOperation(params: {
       value: params.ref,
       touchedSecretTargetPath: toDotPath(resolved.pathSegments),
       assignedRef: params.ref,
-      ...(resolved.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
+      ...(resolved.providerId
+        ? { touchedProviderAlias: resolved.providerId }
+        : {}),
     };
   }
   return {
@@ -628,7 +707,9 @@ function buildRefAssignmentOperation(params: {
       ? toDotPath(resolved.pathSegments)
       : toDotPath(params.requestedPath),
     assignedRef: params.ref,
-    ...(resolved?.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
+    ...(resolved?.providerId
+      ? { touchedProviderAlias: resolved.providerId }
+      : {}),
   };
 }
 
@@ -656,13 +737,17 @@ function buildValueAssignmentOperation(params: {
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.value,
-    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(resolved
+      ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) }
+      : {}),
     ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
     ...(coercedRef ? { assignedRef: coercedRef } : {}),
   };
 }
 
-function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
+function parseBatchOperations(
+  entries: ConfigSetBatchEntry[],
+): ConfigSetOperation[] {
   const operations: ConfigSetOperation[] = [];
   for (const [index, entry] of entries.entries()) {
     const path = parseRequiredPath(entry.path);
@@ -716,8 +801,11 @@ function buildSingleSetOperations(params: {
   value?: string;
   opts: ConfigSetOptions;
 }): ConfigSetOperation[] {
-  const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const parsedPath = pathProvided ? parseRequiredPath(params.path as string) : null;
+  const pathProvided =
+    typeof params.path === "string" && params.path.trim().length > 0;
+  const parsedPath = pathProvided
+    ? parseRequiredPath(params.path as string)
+    : null;
   const strictJson = Boolean(params.opts.strictJson || params.opts.json);
   const modeResolution = resolveConfigSetMode({
     hasBatchMode: false,
@@ -736,7 +824,11 @@ function buildSingleSetOperations(params: {
     if (params.value !== undefined) {
       throw modeError("ref builder mode does not accept <value>.");
     }
-    if (!params.opts.refProvider || !params.opts.refSource || !params.opts.refId) {
+    if (
+      !params.opts.refProvider ||
+      !params.opts.refSource ||
+      !params.opts.refId
+    ) {
       throw modeError(
         "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec>, and --ref-id <id>.",
       );
@@ -777,7 +869,9 @@ function buildSingleSetOperations(params: {
   }
 
   if (!pathProvided || !parsedPath) {
-    throw modeError("value/json mode requires <path> when batch mode is not used.");
+    throw modeError(
+      "value/json mode requires <path> when batch mode is not used.",
+    );
   }
   if (params.value === undefined) {
     throw modeError("value/json mode requires <value>.");
@@ -899,7 +993,10 @@ function collectDryRunStaticErrorsForSkippedExecRefs(params: {
   return failures;
 }
 
-function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {
+function selectDryRunRefsForResolution(params: {
+  refs: SecretRef[];
+  allowExecInDryRun: boolean;
+}): {
   refsToResolve: SecretRef[];
   skippedExecRefs: SecretRef[];
 } {
@@ -915,18 +1012,24 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
   return { refsToResolve, skippedExecRefs };
 }
 
-function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
+function collectDryRunSchemaErrors(
+  config: OpenClawConfig,
+): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRaw(config);
   if (validated.ok) {
     return [];
   }
-  return formatConfigIssueLines(validated.issues, "-", { normalizeRoot: true }).map((message) => ({
+  return formatConfigIssueLines(validated.issues, "-", {
+    normalizeRoot: true,
+  }).map((message) => ({
     kind: "schema",
     message,
   }));
 }
 
-function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
+function dedupeDryRunErrors(
+  errors: ConfigSetDryRunError[],
+): ConfigSetDryRunError[] {
   const deduped: ConfigSetDryRunError[] = [];
   const seen = new Set<string>();
   for (const error of errors) {
@@ -949,7 +1052,9 @@ function formatDryRunFailureMessage(params: {
 }): string {
   const { errors, skippedExecRefs } = params;
   const schemaErrors = errors.filter((error) => error.kind === "schema");
-  const resolveErrors = errors.filter((error) => error.kind === "resolvability");
+  const resolveErrors = errors.filter(
+    (error) => error.kind === "resolvability",
+  );
   const lines: string[] = [];
   if (schemaErrors.length > 0) {
     lines.push("Dry run failed: config schema validation failed.");
@@ -962,7 +1067,9 @@ function formatDryRunFailureMessage(params: {
     lines.push(
       ...resolveErrors
         .slice(0, 5)
-        .map((error) => `- ${error.ref ?? "<unknown-ref>"} -> ${error.message}`),
+        .map(
+          (error) => `- ${error.ref ?? "<unknown-ref>"} -> ${error.message}`,
+        ),
     );
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
@@ -1001,7 +1108,9 @@ export async function runConfigSet(opts: {
     const batchEntries = parseBatchSource(opts.cliOptions);
     if (batchEntries) {
       if (opts.path !== undefined || opts.value !== undefined) {
-        throw modeError("batch mode does not accept <path> or <value> arguments.");
+        throw modeError(
+          "batch mode does not accept <path> or <value> arguments.",
+        );
       }
     }
     const operations = batchEntries
@@ -1025,13 +1134,17 @@ export async function runConfigSet(opts: {
     });
     const nextConfig = next as OpenClawConfig;
     const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
-    const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
-      (line) => line.trim(),
-    );
+    const policyIssueLines = formatConfigIssueLines(policyIssues, "", {
+      normalizeRoot: true,
+    }).map((line) => line.trim());
 
     if (opts.cliOptions.dryRun) {
-      const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
-      const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+      const hasJsonMode = operations.some(
+        (operation) => operation.inputMode === "json",
+      );
+      const hasBuilderMode = operations.some(
+        (operation) => operation.inputMode === "builder",
+      );
       const refs =
         hasJsonMode || hasBuilderMode
           ? collectDryRunRefs({
@@ -1074,12 +1187,15 @@ export async function runConfigSet(opts: {
         ok: dedupedErrors.length === 0,
         operations: operations.length,
         configPath: shortenHomePath(snapshot.path),
-        inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+        inputModes: [
+          ...new Set(operations.map((operation) => operation.inputMode)),
+        ],
         checks: {
           schema: hasJsonMode || policyIssueLines.length > 0,
           resolvability: hasJsonMode || hasBuilderMode,
           resolvabilityComplete:
-            (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
+            (hasJsonMode || hasBuilderMode) &&
+            selectedDryRunRefs.skippedExecRefs.length === 0,
         },
         refsChecked: selectedDryRunRefs.refsToResolve.length,
         skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
@@ -1122,7 +1238,9 @@ export async function runConfigSet(opts: {
       return;
     }
     if (policyIssueLines.length > 0) {
-      throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
+      throw new Error(
+        formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines),
+      );
     }
 
     await replaceConfigFile({
@@ -1144,7 +1262,11 @@ export async function runConfigSet(opts: {
       );
       return;
     }
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    runtime.log(
+      info(
+        `Updated ${operations.length} config paths. Restart the gateway to apply.`,
+      ),
+    );
   } catch (err) {
     if (
       opts.cliOptions.dryRun &&
@@ -1160,7 +1282,11 @@ export async function runConfigSet(opts: {
   }
 }
 
-export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
+export async function runConfigGet(opts: {
+  path: string;
+  json?: boolean;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -1191,7 +1317,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -1230,7 +1359,9 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
 }
 
 async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
-  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+  const schema = structuredClone(
+    (await readBestEffortRuntimeConfigSchema()).schema,
+  ) as {
     properties?: Record<string, unknown>;
     required?: string[];
   };
@@ -1253,7 +1384,9 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+export async function runConfigValidate(
+  opts: { json?: boolean; runtime?: RuntimeEnv } = {},
+) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 
@@ -1264,7 +1397,11 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
 
     if (!snapshot.exists) {
       if (opts.json) {
-        writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
+        writeRuntimeJson(
+          runtime,
+          { valid: false, path: outputPath, error: "file not found" },
+          0,
+        );
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
       }
@@ -1279,11 +1416,15 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
         runtime.error(danger(`Config invalid at ${shortPath}:`));
-        for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
+        for (const line of formatConfigIssueLines(issues, danger("×"), {
+          normalizeRoot: true,
+        })) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
-        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+        runtime.error(
+          formatDoctorHint("to repair, or fix the keys above manually."),
+        );
       }
       runtime.exit(1);
       return;
@@ -1296,7 +1437,11 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     }
   } catch (err) {
     if (opts.json) {
-      writeRuntimeJson(runtime, { valid: false, path: outputPath, error: String(err) }, 0);
+      writeRuntimeJson(
+        runtime,
+        { valid: false, path: outputPath, error: String(err) },
+        0,
+      );
     } else {
       runtime.error(danger(`Config validation error: ${String(err)}`));
     }
@@ -1322,7 +1467,8 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+      const { configureCommandFromSectionsArg } =
+        await import("../commands/configure.js");
       await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
 
@@ -1339,7 +1485,11 @@ export function registerConfigCli(program: Command) {
     .description(CONFIG_SET_DESCRIPTION)
     .argument("[path]", "Config path (dot or bracket notation)")
     .argument("[value]", "Value (JSON/JSON5 or raw string)")
-    .option("--strict-json", "Strict JSON parsing (error instead of raw string fallback)", false)
+    .option(
+      "--strict-json",
+      "Strict JSON parsing (error instead of raw string fallback)",
+      false,
+    )
     .option("--json", "Legacy alias for --strict-json", false)
     .option(
       "--dry-run",
@@ -1352,9 +1502,15 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
-    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
+    .option(
+      "--ref-source <source>",
+      "SecretRef builder: source (env|file|exec)",
+    )
     .option("--ref-id <id>", "SecretRef builder: ref id")
-    .option("--provider-source <source>", "Provider builder: source (env|file|exec)")
+    .option(
+      "--provider-source <source>",
+      "Provider builder: source (env|file|exec)",
+    )
     .option(
       "--provider-allowlist <envVar>",
       "Provider builder (env): allowlist entry (repeatable)",
@@ -1362,19 +1518,41 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .option("--provider-path <path>", "Provider builder (file): path")
-    .option("--provider-mode <mode>", "Provider builder (file): mode (singleValue|json)")
-    .option("--provider-timeout-ms <ms>", "Provider builder (file|exec): timeout ms")
-    .option("--provider-max-bytes <bytes>", "Provider builder (file): max bytes")
-    .option("--provider-command <path>", "Provider builder (exec): absolute command path")
+    .option(
+      "--provider-mode <mode>",
+      "Provider builder (file): mode (singleValue|json)",
+    )
+    .option(
+      "--provider-timeout-ms <ms>",
+      "Provider builder (file|exec): timeout ms",
+    )
+    .option(
+      "--provider-max-bytes <bytes>",
+      "Provider builder (file): max bytes",
+    )
+    .option(
+      "--provider-command <path>",
+      "Provider builder (exec): absolute command path",
+    )
     .option(
       "--provider-arg <arg>",
       "Provider builder (exec): command arg (repeatable)",
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
-    .option("--provider-no-output-timeout-ms <ms>", "Provider builder (exec): no-output timeout ms")
-    .option("--provider-max-output-bytes <bytes>", "Provider builder (exec): max output bytes")
-    .option("--provider-json-only", "Provider builder (exec): require JSON output", false)
+    .option(
+      "--provider-no-output-timeout-ms <ms>",
+      "Provider builder (exec): no-output timeout ms",
+    )
+    .option(
+      "--provider-max-output-bytes <bytes>",
+      "Provider builder (exec): max output bytes",
+    )
+    .option(
+      "--provider-json-only",
+      "Provider builder (exec): require JSON output",
+      false,
+    )
     .option(
       "--provider-env <key=value>",
       "Provider builder (exec): env assignment (repeatable)",
@@ -1404,14 +1582,23 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
-    .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
-    .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
-      await runConfigSet({
-        path,
-        value,
-        cliOptions: opts,
-      });
-    });
+    .option(
+      "--batch-file <path>",
+      "Batch mode: read JSON array of set operations from file",
+    )
+    .action(
+      async (
+        path: string | undefined,
+        value: string | undefined,
+        opts: ConfigSetOptions,
+      ) => {
+        await runConfigSet({
+          path,
+          value,
+          cliOptions: opts,
+        });
+      },
+    );
 
   cmd
     .command("unset")
@@ -1419,6 +1606,16 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("explain")
+    .description(
+      "Show config provenance for loaded files and selected high-value keys",
+    )
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await configExplainCommand({ json: Boolean(opts.json) }, defaultRuntime);
     });
 
   cmd
@@ -1437,7 +1634,9 @@ export function registerConfigCli(program: Command) {
 
   cmd
     .command("validate")
-    .description("Validate the current config against the schema without starting the gateway")
+    .description(
+      "Validate the current config against the schema without starting the gateway",
+    )
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
       await runConfigValidate({ json: Boolean(opts.json) });

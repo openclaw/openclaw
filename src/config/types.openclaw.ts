@@ -2,7 +2,12 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type {
+  DiagnosticsConfig,
+  LoggingConfig,
+  SessionConfig,
+  WebConfig,
+} from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
@@ -146,11 +151,14 @@ export type LegacyConfigIssue = {
   message: string;
 };
 
+import type { ConfigProvenanceSnapshot } from "./provenance.js";
+
 export type ConfigFileSnapshot = {
   path: string;
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  provenance?: ConfigProvenanceSnapshot;
   /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.

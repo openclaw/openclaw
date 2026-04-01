@@ -23,8 +23,13 @@ export {
 } from "./io.js";
 export type { ConfigWriteNotification } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
-export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
+export {
+  ConfigMutationConflictError,
+  mutateConfigFile,
+  replaceConfigFile,
+} from "./mutate.js";
 export * from "./paths.js";
+export * from "./provenance.js";
 export * from "./runtime-overrides.js";
 export * from "./types.js";
 export {

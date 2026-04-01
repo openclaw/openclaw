@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/unset/file/schema/validate)"
+summary: "CLI reference for `openclaw config` (get/set/unset/file/explain/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
 title: "config"
@@ -7,7 +7,7 @@ title: "config"
 
 # `openclaw config`
 
-Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/file/schema/validate
+Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/file/explain/schema/validate
 values by path and print the active config file. Run without a subcommand to
 open the configure wizard (same as `openclaw configure`).
 
@@ -15,6 +15,8 @@ open the configure wizard (same as `openclaw configure`).
 
 ```bash
 openclaw config file
+openclaw config explain
+openclaw config explain --json
 openclaw config schema
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
@@ -27,6 +29,32 @@ openclaw config set channels.discord.token --ref-provider default --ref-source e
 openclaw config validate
 openclaw config validate --json
 ```
+
+### `config explain`
+
+Show config provenance for the active config file and selected high-value keys.
+
+```bash
+openclaw config explain
+openclaw config explain --json
+```
+
+This is useful when you want to confirm:
+
+- which config file OpenClaw loaded
+- whether `$include` entries were present
+- whether `${ENV}` substitutions were detected
+- whether selected high-value keys came from the config file or runtime defaults
+
+Tracked keys currently include:
+
+- `gateway.mode`
+- `agents.defaults.workspace`
+- `agents.defaults.model`
+- `agents.defaults.sandbox.mode`
+- `plugins.entries`
+- `cron.enabled`
+- `agents.defaults.heartbeat.every`
 
 ### `config schema`
 
