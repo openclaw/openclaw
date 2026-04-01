@@ -4,9 +4,10 @@ export function safeEqualSecret(
   provided: string | undefined | null,
   expected: string | undefined | null,
 ): boolean {
-  if (typeof provided !== "string" || typeof expected !== "string") {
-    return false;
-  }
+  // Normalize null/undefined to empty string to ensure constant-time comparison
+  const p = typeof provided === "string" ? provided : "";
+  const e = typeof expected === "string" ? expected : "";
   const hash = (s: string) => createHash("sha256").update(s).digest();
-  return timingSafeEqual(hash(provided), hash(expected));
+  const isEqual = timingSafeEqual(hash(p), hash(e));
+  return isEqual && typeof provided === "string" && typeof expected === "string";
 }
