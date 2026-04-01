@@ -41,6 +41,7 @@
       "minHostVersion": ">=2026.4.1"
     },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

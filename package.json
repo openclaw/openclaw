@@ -1039,6 +1039,8 @@
     "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:facades:check && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
+    "release:plugins:clawhub:check": "node --import tsx scripts/plugin-clawhub-release-check.ts",
+    "release:plugins:clawhub:plan": "node --import tsx scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",

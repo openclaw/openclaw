@@ -21,6 +21,7 @@
       "./index.ts"
     ],
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }
