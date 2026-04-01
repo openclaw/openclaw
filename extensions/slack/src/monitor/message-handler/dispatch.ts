@@ -454,6 +454,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             threadTs: usedReplyThreadTs ?? statusThreadTs,
+            ...(slackIdentity ? { identity: slackIdentity } : {}),
           });
           observedReplyDelivery = true;
           return;
@@ -496,6 +497,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         token: ctx.botToken,
         accountId: account.accountId,
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
+        identity: slackIdentity,
         resolveThreadTs: () => {
           const ts = replyPlan.nextThreadTs();
           if (ts) {

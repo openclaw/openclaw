@@ -7,7 +7,8 @@ import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, createSlackWriteClient } from "./client.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
-import { sendMessageSlack } from "./send.js";
+import { hasCustomIdentity, isSlackCustomizeScopeError } from "./customize-scope.js";
+import { type SlackSendIdentity, sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
 export type SlackActionClientOpts = {
@@ -192,17 +193,46 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts & {
+    blocks?: (Block | KnownBlock)[];
+    identity?: SlackSendIdentity;
+  } = {},
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
-  await client.chat.update({
+  // Slack's chat.update API supports username/icon_url/icon_emoji (same as
+  // chat.postMessage) but the @slack/web-api types omit them from
+  // ChatUpdateArguments.  Spread identity fields and widen via `as never` so
+  // the runtime payload is correct while keeping the rest type-safe.
+  const identityFields: Record<string, string> = {};
+  if (opts.identity?.username) {
+    identityFields.username = opts.identity.username;
+  }
+  if (opts.identity?.iconUrl) {
+    identityFields.icon_url = opts.identity.iconUrl;
+  } else if (opts.identity?.iconEmoji) {
+    identityFields.icon_emoji = opts.identity.iconEmoji;
+  }
+  const baseArgs = {
     channel: channelId,
     ts: messageId,
     text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
     ...(blocks ? { blocks } : {}),
-  });
+  };
+  if (Object.keys(identityFields).length > 0) {
+    try {
+      await client.chat.update({ ...baseArgs, ...identityFields } as never);
+    } catch (err) {
+      if (!hasCustomIdentity(opts.identity) || !isSlackCustomizeScopeError(err)) {
+        throw err;
+      }
+      logVerbose("slack edit: missing chat:write.customize, retrying without custom identity");
+      await client.chat.update(baseArgs);
+    }
+  } else {
+    await client.chat.update(baseArgs);
+  }
 }
 
 export async function deleteSlackMessage(
