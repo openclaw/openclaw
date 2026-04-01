@@ -1789,6 +1789,19 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+          if (params.toolsAllow && params.toolsAllow.length > 0) {
+            const allowSet = new Set(params.toolsAllow);
+            const filtered = allTools.filter((tool) => allowSet.has(tool.name));
+            const missing = params.toolsAllow.filter(
+              (name) => !allTools.some((t) => t.name === name),
+            );
+            if (missing.length > 0) {
+              params.log?.(`[toolsAllow] Unknown tool names ignored: ${missing.join(", ")}`);
+            }
+            return filtered;
+          }
+          return allTools;
+        })();
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],

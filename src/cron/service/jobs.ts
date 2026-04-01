@@ -704,6 +704,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.bestEffortDeliver === "boolean") {
     next.bestEffortDeliver = patch.bestEffortDeliver;
   }
+  if (Array.isArray(patch.toolsAllow)) {
+    next.toolsAllow = patch.toolsAllow.length > 0 ? patch.toolsAllow : undefined;
+  } else if ((patch as Record<string, unknown>).toolsAllow === null) {
+    delete next.toolsAllow;
+  }
   return next;
 }
 
