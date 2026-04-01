@@ -395,18 +395,20 @@ describe("runDiscordGatewayLifecycle", () => {
     });
   });
 
-  it("throws queued reconnect exhaustion errors", async () => {
-    const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } = createLifecycleHarness({
-      pendingGatewayEvents: [
-        createGatewayEvent(
-          "reconnect-exhausted",
-          "Max reconnect attempts (50) reached after code 1005",
-        ),
-      ],
-    });
+  it("gracefully handles queued reconnect exhaustion errors", async () => {
+    const { lifecycleParams, start, stop, threadStop, gatewaySupervisor, runtimeError } =
+      createLifecycleHarness({
+        pendingGatewayEvents: [
+          createGatewayEvent(
+            "reconnect-exhausted",
+            "Max reconnect attempts (50) reached after code 1005",
+          ),
+        ],
+      });
 
-    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
-      "discord gateway reconnect-exhausted: Error: Max reconnect attempts (50) reached after code 1005",
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining("reconnect attempts exhausted"),
     );
 
     expectLifecycleCleanup({
@@ -629,6 +631,11 @@ describe("runDiscordGatewayLifecycle", () => {
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
     expect(runtimeError).toHaveBeenCalledWith(
       expect.stringContaining("reconnect attempts exhausted"),
+    );
+    // Only the descriptive catch-block message should be emitted, not the
+    // generic "discord gateway error:" duplicate.
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("discord gateway error:"),
     );
   });
 
