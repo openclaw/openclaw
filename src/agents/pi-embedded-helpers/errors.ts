@@ -364,6 +364,21 @@ const HTTP_ERROR_HINTS = [
 
 type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
 
+export type FailoverSignal = {
+  status?: number;
+  code?: string;
+  message?: string;
+};
+
+export type FailoverClassification =
+  | {
+      kind: "reason";
+      reason: FailoverReason;
+    }
+  | {
+      kind: "context_overflow";
+    };
+
 const BILLING_402_HINTS = [
   "insufficient credits",
   "insufficient quota",
@@ -394,6 +409,19 @@ const RAW_402_MARKER_RE =
   /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
+const TIMEOUT_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EHOSTDOWN",
+  "ENETRESET",
+  "EPIPE",
+  "EAI_AGAIN",
+]);
 
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
   return hints.some((hint) => text.includes(hint));
@@ -467,6 +495,16 @@ function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailover
   return classify402Message(raw);
 }
 
+function toReasonClassification(reason: FailoverReason): FailoverClassification {
+  return { kind: "reason", reason };
+}
+
+function failoverReasonFromClassification(
+  classification: FailoverClassification | null,
+): FailoverReason | null {
+  return classification?.kind === "reason" ? classification.reason : null;
+}
+
 export function isTransientHttpError(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -483,25 +521,36 @@ export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
 ): FailoverReason | null {
-  const messageReason = message ? classifyFailoverReasonFromMessage(message) : null;
+  const messageClassification = message ? classifyFailoverClassificationFromMessage(message) : null;
+  return failoverReasonFromClassification(
+    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
+  );
+}
+
+function classifyFailoverClassificationFromHttpStatus(
+  status: number | undefined,
+  message: string | undefined,
+  messageClassification: FailoverClassification | null,
+): FailoverClassification | null {
+  const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
     return null;
   }
 
   if (status === 402) {
-    return message ? classify402Message(message) : "billing";
+    return toReasonClassification(message ? classify402Message(message) : "billing");
   }
   if (status === 429) {
-    return "rate_limit";
+    return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
     if (message && isAuthPermanentErrorMessage(message)) {
-      return "auth_permanent";
+      return toReasonClassification("auth_permanent");
     }
-    return "auth";
+    return toReasonClassification("auth");
   }
   if (status === 408) {
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (status === 410) {
     // HTTP 410 is only a true session-expiry signal when the payload says the
@@ -514,46 +563,65 @@ export function classifyFailoverReasonFromHttpStatus(
       messageReason === "auth_permanent" ||
       messageReason === "auth"
     ) {
-      return messageReason;
+      return messageClassification;
     }
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (status === 503) {
     if (messageReason === "overloaded") {
-      return "overloaded";
+      return messageClassification;
     }
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (status === 499) {
     if (messageReason === "overloaded") {
-      return "overloaded";
+      return messageClassification;
     }
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (status === 500 || status === 502 || status === 504) {
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (status === 529) {
-    return "overloaded";
+    return toReasonClassification("overloaded");
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific
     // rate limits, auth failures, model-not-found errors, and billing signals
     // are not collapsed into generic "format" failures.
-    if (messageReason) {
-      return messageReason;
+    if (messageClassification) {
+      return messageClassification;
     }
-    // Context overflow does not map to a FailoverReason. Keep it out of the
-    // generic format bucket so callers can handle compaction/reset separately.
-    if (message && isContextOverflowError(message)) {
-      return null;
-    }
-    return "format";
+    return toReasonClassification("format");
   }
   return null;
 }
 
-function classifyFailoverReasonFromMessage(raw: string): FailoverReason | null {
+function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
+  const normalized = raw?.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case "RESOURCE_EXHAUSTED":
+    case "RATE_LIMIT":
+    case "RATE_LIMITED":
+    case "RATE_LIMIT_EXCEEDED":
+    case "TOO_MANY_REQUESTS":
+    case "THROTTLED":
+    case "THROTTLING":
+    case "THROTTLINGEXCEPTION":
+    case "THROTTLING_EXCEPTION":
+      return "rate_limit";
+    case "OVERLOADED":
+    case "OVERLOADED_ERROR":
+      return "overloaded";
+    default:
+      return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
+  }
+}
+
+function classifyFailoverClassificationFromMessage(raw: string): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
@@ -561,61 +629,87 @@ function classifyFailoverReasonFromMessage(raw: string): FailoverReason | null {
     return null;
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
-    return "session_expired";
+    return toReasonClassification("session_expired");
   }
   if (isModelNotFoundErrorMessage(raw)) {
-    return "model_not_found";
+    return toReasonClassification("model_not_found");
+  }
+  if (isContextOverflowError(raw)) {
+    return { kind: "context_overflow" };
   }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
-    return reasonFrom402Text;
+    return toReasonClassification(reasonFrom402Text);
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
-    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
+    return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
   if (isRateLimitErrorMessage(raw)) {
-    return "rate_limit";
+    return toReasonClassification("rate_limit");
   }
   if (isOverloadedErrorMessage(raw)) {
-    return "overloaded";
+    return toReasonClassification("overloaded");
   }
   if (isTransientHttpError(raw)) {
     const status = extractLeadingHttpStatus(raw.trim());
     if (status?.code === 529) {
-      return "overloaded";
+      return toReasonClassification("overloaded");
     }
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   // Billing and auth classifiers run before the broad isJsonApiInternalServerError
   // check so that provider errors like {"type":"api_error","message":"insufficient
   // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
   if (isBillingErrorMessage(raw)) {
-    return "billing";
+    return toReasonClassification("billing");
   }
   if (isAuthPermanentErrorMessage(raw)) {
-    return "auth_permanent";
+    return toReasonClassification("auth_permanent");
   }
   if (isAuthErrorMessage(raw)) {
-    return "auth";
+    return toReasonClassification("auth");
   }
   if (isServerErrorMessage(raw)) {
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (isJsonApiInternalServerError(raw)) {
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   if (isCloudCodeAssistFormatError(raw)) {
-    return "format";
+    return toReasonClassification("format");
   }
   if (isTimeoutErrorMessage(raw)) {
-    return "timeout";
+    return toReasonClassification("timeout");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
   const providerSpecific = classifyProviderSpecificError(raw);
   if (providerSpecific) {
-    return providerSpecific;
+    return toReasonClassification(providerSpecific);
   }
   return null;
+}
+
+export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
+  const inferredStatus =
+    typeof signal.status === "number" && Number.isFinite(signal.status)
+      ? signal.status
+      : extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
+  const messageClassification = signal.message
+    ? classifyFailoverClassificationFromMessage(signal.message)
+    : null;
+  const statusClassification = classifyFailoverClassificationFromHttpStatus(
+    inferredStatus,
+    signal.message,
+    messageClassification,
+  );
+  if (statusClassification) {
+    return statusClassification;
+  }
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  if (codeReason) {
+    return toReasonClassification(codeReason);
+  }
+  return messageClassification;
 }
 
 function coerceText(value: unknown): string {
@@ -1103,11 +1197,12 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const statusReason = classifyFailoverReasonFromHttpStatus(leadingStatus?.code, raw);
-  if (statusReason) {
-    return statusReason;
-  }
-  return classifyFailoverReasonFromMessage(raw);
+  return failoverReasonFromClassification(
+    classifyFailoverSignal({
+      status: leadingStatus?.code,
+      message: raw,
+    }),
+  );
 }
 
 export function isFailoverErrorMessage(raw: string): boolean {
