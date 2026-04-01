@@ -6,10 +6,12 @@ on:
       - main
     paths:
       - ".github/workflows/plugin-clawhub-release.yml"
+      - ".github/actions/setup-node-env/**"
       - "extensions/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "packages/plugin-package-contract/src/index.ts"
+      - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/plugin-clawhub-release.ts"
       - "scripts/openclaw-npm-release-check.ts"

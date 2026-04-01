@@ -215,6 +215,40 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 
     expect(selected.map((plugin) => plugin.extensionId)).toEqual(["demo-plugin", "demo-two"]);
   });
+
+  it("selects all publishable plugins when shared setup or version helpers change", () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["demo-two"],
+    });
+    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    mkdirSync(join(repoDir, ".github", "actions", "setup-node-env"), { recursive: true });
+    mkdirSync(join(repoDir, "scripts", "lib"), { recursive: true });
+    writeFileSync(
+      join(repoDir, ".github", "actions", "setup-node-env", "action.yml"),
+      "name: setup-node-env\n",
+    );
+    writeFileSync(join(repoDir, "scripts", "lib", "npm-publish-plan.mjs"), "export {};\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "shared helpers",
+    ]);
+    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    const selected = resolveSelectedClawHubPublishablePluginPackages({
+      rootDir: repoDir,
+      plugins: collectClawHubPublishablePluginPackages(repoDir),
+      gitRange: { baseRef, headRef },
+    });
+
+    expect(selected.map((plugin) => plugin.extensionId)).toEqual(["demo-plugin", "demo-two"]);
+  });
 });
 
 describe("collectPluginClawHubReleasePlan", () => {

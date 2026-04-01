@@ -75,9 +75,11 @@ const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
+  ".github/actions/setup-node-env",
   "package.json",
   "pnpm-lock.yaml",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",
