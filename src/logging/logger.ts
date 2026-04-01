@@ -199,8 +199,10 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   try {
     currentLogFileFd = fs.openSync(settings.file, "a");
+    currentLogFilePath = settings.file;
   } catch {
-    currentLogFileFd = null; // Will fall back to appendFileSync
+    currentLogFileFd = null;
+    currentLogFilePath = null; // Will fall back to appendFileSync
   }
 
   let warnedAboutSizeCap = false;
@@ -280,19 +282,22 @@ function getCurrentLogFileBytes(file: string): number {
   }
 }
 
-// File descriptor for the current log file (null if using appendFileSync)
+// File descriptor for the log file opened by the most recently built file logger only.
+// Long-lived logger instances may outlive a rebuild; their transports must not write through
+// this FD unless the path matches (see appendLogLine / rotateLogFile).
 let currentLogFileFd: number | null = null;
+let currentLogFilePath: string | null = null;
 
 function releaseCurrentLogFileFd(): void {
-  if (currentLogFileFd === null) {
-    return;
+  if (currentLogFileFd !== null) {
+    try {
+      fs.closeSync(currentLogFileFd);
+    } catch {
+      // Ignore errors during release
+    }
+    currentLogFileFd = null;
   }
-  try {
-    fs.closeSync(currentLogFileFd);
-  } catch {
-    // Ignore errors during release
-  }
-  currentLogFileFd = null;
+  currentLogFilePath = null;
 }
 
 /**
@@ -301,7 +306,12 @@ function releaseCurrentLogFileFd(): void {
  * Time complexity: O(1) - rename is metadata-only, independent of file size.
  */
 function rotateLogFile(basePath: string): string {
-  releaseCurrentLogFileFd();
+  const ownsGlobalFd =
+    currentLogFileFd !== null && currentLogFilePath !== null && basePath === currentLogFilePath;
+
+  if (ownsGlobalFd) {
+    releaseCurrentLogFileFd();
+  }
 
   // Find the next rotation number
   let num = 1;
@@ -320,28 +330,26 @@ function rotateLogFile(basePath: string): string {
     return basePath;
   }
 
-  // Create new empty file (O(1))
-  try {
-    currentLogFileFd = fs.openSync(basePath, "a");
-    return rotatedPath;
-  } catch {
-    // Fallback to appendFileSync if fd approach fails
-    currentLogFileFd = null;
-    return rotatedPath;
+  if (ownsGlobalFd) {
+    try {
+      currentLogFileFd = fs.openSync(basePath, "a");
+      currentLogFilePath = basePath;
+    } catch {
+      currentLogFileFd = null;
+      currentLogFilePath = null;
+    }
   }
+  return rotatedPath;
 }
 
 function appendLogLine(file: string, line: string): boolean {
   try {
-    if (currentLogFileFd !== null) {
-      // Use existing file descriptor (more efficient)
+    if (currentLogFileFd !== null && file === currentLogFilePath) {
       fs.writeSync(currentLogFileFd, line);
       return true;
-    } else {
-      // Fallback to appendFileSync
-      fs.appendFileSync(file, line, { encoding: "utf8" });
-      return true;
     }
+    fs.appendFileSync(file, line, { encoding: "utf8" });
+    return true;
   } catch {
     return false;
   }
