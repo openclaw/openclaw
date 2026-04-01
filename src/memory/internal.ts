@@ -344,9 +344,9 @@ export function chunkMarkdown(
   const chunks: MemoryChunk[] = [];
   const headingAware = chunking.headingAware ?? false;
 
-  // Helper to detect markdown headings
+  // Helper to detect markdown section headings (## and ### level)
   const isHeading = (line: string): boolean => {
-    return /^#{1,6}\s+/.test(line.trim());
+    return /^#{2,3}\s+/.test(line.trim());
   };
 
   let current: Array<{ line: string; lineNo: number }> = [];

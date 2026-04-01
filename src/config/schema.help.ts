@@ -835,7 +835,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.chunking.overlap":
     "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
   "agents.defaults.memorySearch.chunking.headingAware":
-    "When enabled, the chunker splits on markdown heading boundaries first before sub-chunking within sections. This keeps heading context together and improves search relevance for structured documents.",
+    "When enabled, the chunker splits on level-2 and level-3 markdown headings (##, ###) before falling back to token-based splitting. This keeps heading-delimited sections as discrete chunks, improving retrieval precision for structured memory files (e.g., per-contact headings in people.md). Files without headings behave exactly as today.",
   "agents.defaults.memorySearch.query.maxResults":
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "agents.defaults.memorySearch.query.minScore":
