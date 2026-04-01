@@ -3,6 +3,7 @@ import register from "./index.js";
 
 describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
+  const fetchMock = vi.fn() as unknown as typeof globalThis.fetch;
   const api = {
     pluginConfig: {},
     config: {
@@ -18,8 +19,6 @@ describe("thread-ownership plugin", () => {
     }),
   };
 
-  let originalFetch: typeof globalThis.fetch;
-
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(hooks)) delete hooks[key];
@@ -27,12 +26,11 @@ describe("thread-ownership plugin", () => {
     process.env.SLACK_FORWARDER_URL = "http://localhost:8750";
     process.env.SLACK_BOT_USER_ID = "U999";
 
-    originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.unstubAllGlobals();
     delete process.env.SLACK_FORWARDER_URL;
     delete process.env.SLACK_BOT_USER_ID;
     vi.restoreAllMocks();

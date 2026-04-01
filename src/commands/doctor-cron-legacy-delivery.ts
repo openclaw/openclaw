@@ -1,4 +1,24 @@
-import { parseLegacyDeliveryHintsInput } from "./delivery-field-schemas.js";
+import { z } from "zod";
+import {
+  DeliveryThreadIdFieldSchema,
+  LowercaseNonEmptyStringFieldSchema,
+  TrimmedNonEmptyStringFieldSchema,
+  parseOptionalField,
+} from "../cron/delivery-field-schemas.js";
+
+function parseLegacyDeliveryHintsInput(payload: Record<string, unknown>) {
+  return {
+    deliver: parseOptionalField(z.boolean(), payload.deliver),
+    bestEffortDeliver: parseOptionalField(z.boolean(), payload.bestEffortDeliver),
+    channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.channel),
+    provider: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.provider),
+    to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, payload.to),
+    threadId: parseOptionalField(
+      DeliveryThreadIdFieldSchema.transform((value) => String(value)),
+      payload.threadId,
+    ),
+  };
+}
 
 export function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
   const hints = parseLegacyDeliveryHintsInput(payload);
