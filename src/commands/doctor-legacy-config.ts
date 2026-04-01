@@ -14,6 +14,7 @@ import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { LEGACY_TALK_PROVIDER_ID, normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
@@ -23,9 +24,6 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   const NANO_BANANA_SKILL_KEY = "nano-banana-pro";
   const NANO_BANANA_MODEL = "google/gemini-3-pro-image-preview";
   let next: OpenClawConfig = cfg;
-
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
   const normalizeDmAliases = (params: {
     provider: "slack" | "discord";

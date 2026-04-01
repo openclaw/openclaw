@@ -34,8 +34,44 @@ type ToolStartRecord = {
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
 
+/**
+ * Track last activity timestamp per run. Used to sweep orphaned toolStartData
+ * entries when a run has been idle (no tool-start or tool-end) for longer than
+ * TOOL_START_DATA_RUN_IDLE_MS. This protects long-running tool calls: entries
+ * are only swept when the entire run is idle, not per-entry age.
+ */
+const lastRunActivity = new Map<string, number>();
+const TOOL_START_DATA_RUN_IDLE_MS = 5 * 60 * 1000; // 5 minutes
+
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
+}
+
+/**
+ * Sweep orphaned toolStartData entries for runs that have been idle longer
+ * than TOOL_START_DATA_RUN_IDLE_MS. A run is considered idle when no
+ * tool-start or tool-end event has been processed for it within the window.
+ */
+function sweepOrphanedToolStartData(): void {
+  if (lastRunActivity.size === 0) {
+    return;
+  }
+  const now = Date.now();
+  const idleRunIds: string[] = [];
+  for (const [runId, lastActive] of lastRunActivity) {
+    if (now - lastActive >= TOOL_START_DATA_RUN_IDLE_MS) {
+      idleRunIds.push(runId);
+    }
+  }
+  for (const runId of idleRunIds) {
+    const prefix = `${runId}:`;
+    for (const key of toolStartData.keys()) {
+      if (key.startsWith(prefix)) {
+        toolStartData.delete(key);
+      }
+    }
+    lastRunActivity.delete(runId);
+  }
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -343,7 +379,9 @@ export async function handleToolExecutionStart(
   const runId = ctx.params.runId;
 
   // Track start time and args for after_tool_call hook
+  sweepOrphanedToolStartData();
   toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
+  lastRunActivity.set(runId, Date.now());
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -469,6 +507,11 @@ export async function handleToolExecutionEnd(
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
+  lastRunActivity.set(runId, Date.now());
+  // Clean up lastRunActivity when this run has no remaining entries in toolStartData.
+  if (!Array.from(toolStartData.keys()).some((key) => key.startsWith(`${runId}:`))) {
+    lastRunActivity.delete(runId);
+  }
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
