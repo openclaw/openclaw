@@ -1764,7 +1764,9 @@ describe("spawnAcpDirect", () => {
 
       const agentCall = findAgentGatewayCall();
       expect(agentCall).toBeDefined();
-      expect(agentCall!.params!.message).toBe("Do something");
+      const message = agentCall!.params!.message as string;
+      expect(message).not.toContain("[WORKSPACE CONTEXT]");
+      expect(message).toContain("Do something");
     });
 
     it("should not fail spawn if bootstrap loading errors", async () => {
@@ -1778,7 +1780,9 @@ describe("spawnAcpDirect", () => {
 
       const agentCall = findAgentGatewayCall();
       expect(agentCall).toBeDefined();
-      expect(agentCall!.params!.message).toBe("Do something");
+      const message = agentCall!.params!.message as string;
+      expect(message).not.toContain("[WORKSPACE CONTEXT]");
+      expect(message).toContain("Do something");
     });
 
     it("should respect MAX_TOTAL_CHARS budget", async () => {
@@ -1897,6 +1901,53 @@ describe("spawnAcpDirect", () => {
       );
 
       expect(loadWorkspaceBootstrapFilesSpy).toHaveBeenCalledWith("/custom/cwd");
+    });
+  });
+
+  describe("ACP session handback injection", () => {
+    it("should append session control block with session key", async () => {
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Analyze this" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      const message = agentCall!.params!.message as string;
+      expect(message).toContain("[ACP SESSION CONTROL]");
+      expect(message).toContain("openclaw acp close-self --session-key");
+      expect(message).toContain("[/ACP SESSION CONTROL]");
+      // Session control should come after the task
+      expect(message).toContain("Analyze this");
+    });
+
+    it("should skip handback injection on resume sessions", async () => {
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Continue", resumeSessionId: "prev" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      const message = agentCall!.params!.message as string;
+      expect(message).not.toContain("[ACP SESSION CONTROL]");
+    });
+
+    it("should skip handback injection when sessionHandback is false", async () => {
+      replaceSpawnConfig({
+        ...createDefaultSpawnConfig(),
+        acp: { ...createDefaultSpawnConfig().acp, sessionHandback: false },
+      });
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      const message = agentCall!.params!.message as string;
+      expect(message).not.toContain("[ACP SESSION CONTROL]");
     });
   });
 });

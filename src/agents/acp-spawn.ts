@@ -1164,6 +1164,22 @@ export async function spawnAcpDirect(
       emitStartNotice: false,
     });
   }
+  // --- ACP session handback control injection ---
+  if (cfg.acp?.sessionHandback !== false && !params.resumeSessionId) {
+    const handbackBlock = [
+      "[ACP SESSION CONTROL]",
+      `Session key: ${sessionKey}`,
+      "",
+      "You can hand control back to the main agent by running this shell command:",
+      `  openclaw acp close-self --session-key "${sessionKey}"`,
+      "",
+      "Do this ONLY when the user asks about something clearly unrelated to your assigned task.",
+      "Do NOT hand back for follow-ups, clarifications, or when completing your task (summarize first).",
+      "[/ACP SESSION CONTROL]",
+    ].join("\n");
+    effectiveTask = `${effectiveTask}\n\n${handbackBlock}`;
+  }
+
   try {
     const response = await callGateway<{ runId?: string }>({
       method: "agent",
