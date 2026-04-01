@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -34,6 +35,7 @@ export async function handleAcpCloseSelf(opts: {
           sessionKey,
           deliver: true,
           label: "handback",
+          idempotencyKey: crypto.randomUUID(),
         },
         timeoutMs: 10_000,
       });
