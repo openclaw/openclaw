@@ -116,4 +116,46 @@ describe("pw-session connection scoping", () => {
     expect(browserA.browserClose).toHaveBeenCalledTimes(1);
     expect(browserB.browserClose).not.toHaveBeenCalled();
   });
+
+  it("listPagesViaPlaywright rejects when CDP operations hang beyond the timeout", async () => {
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    // connectOverCDP returns a browser whose CDP session never resolves,
+    // simulating a hung CDP endpoint.
+    connectOverCdpSpy.mockImplementation((async () => {
+      const context = {
+        pages: () => [
+          {
+            on: vi.fn(),
+            context: () => context,
+            title: vi.fn(async () => ""),
+            url: vi.fn(() => "about:blank"),
+          },
+        ],
+        on: vi.fn(),
+        newCDPSession: vi.fn(
+          async () =>
+            new Promise<never>(() => {
+              /* never resolves — simulates CDP hang */
+            }),
+        ),
+      } as unknown as import("playwright-core").BrowserContext;
+
+      return {
+        contexts: () => [context],
+        on: vi.fn(),
+        off: vi.fn(),
+        close: vi.fn(async () => {}),
+      } as unknown as import("playwright-core").Browser;
+    }) as never);
+
+    vi.useFakeTimers();
+    try {
+      const pending = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(pending).rejects.toThrow("listPagesViaPlaywright timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

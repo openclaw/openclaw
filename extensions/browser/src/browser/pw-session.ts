@@ -715,6 +715,8 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
  */
+const LIST_PAGES_TIMEOUT_MS = 15_000;
+
 export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
   Array<{
     targetId: string;
@@ -723,7 +725,27 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
     type: string;
   }>
 > {
-  const { browser } = await connectBrowser(opts.cdpUrl);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("listPagesViaPlaywright timed out")),
+      LIST_PAGES_TIMEOUT_MS,
+    );
+  });
+
+  try {
+    return await Promise.race([listPagesCore(opts.cdpUrl), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function listPagesCore(
+  cdpUrl: string,
+): Promise<Array<{ targetId: string; title: string; url: string; type: string }>> {
+  const { browser } = await connectBrowser(cdpUrl);
   const pages = await getAllPages(browser);
   const results: Array<{
     targetId: string;
