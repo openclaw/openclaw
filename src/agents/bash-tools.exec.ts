@@ -446,6 +446,12 @@ export function createExecTool(
       ? defaults.timeoutSec
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
+
+  // Maximum timeout for background processes (24 hours default)
+  const maxBackgroundTimeoutSec =
+    typeof defaults?.maxBackgroundTimeoutSec === "number" && defaults.maxBackgroundTimeoutSec > 0
+      ? defaults.maxBackgroundTimeoutSec
+      : 86400;
   const {
     safeBins,
     safeBinProfiles,
@@ -782,7 +788,7 @@ export function createExecTool(
       const backgroundTimeoutBypass =
         allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
       const effectiveTimeout = backgroundTimeoutBypass
-        ? null
+        ? maxBackgroundTimeoutSec
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
