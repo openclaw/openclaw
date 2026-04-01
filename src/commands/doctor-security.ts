@@ -9,6 +9,7 @@ import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import {
   loadExecApprovals,
   maxAsk,
+  minSecurity,
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
   type ExecAsk,
@@ -79,7 +80,11 @@ function execAskRank(value: ExecAsk): number {
   }
 }
 
-function resolveHostExecPolicy(params: { approvals: ExecApprovalsFile; agentId?: string }): {
+function resolveHostExecPolicy(params: {
+  approvals: ExecApprovalsFile;
+  execConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+  agentId?: string;
+}): {
   security: ExecSecurity;
   ask: ExecAsk;
   securitySource: string;
@@ -91,8 +96,18 @@ function resolveHostExecPolicy(params: { approvals: ExecApprovalsFile; agentId?:
       ? params.approvals.agents[params.agentId]
       : undefined;
   const defaults = params.approvals.defaults;
-  const security = agentEntry?.security ?? defaults?.security ?? "allowlist";
-  const ask = agentEntry?.ask ?? defaults?.ask ?? "on-miss";
+  const configuredSecurity = params.execConfig?.security ?? "allowlist";
+  const configuredAsk = params.execConfig?.ask ?? "on-miss";
+  const resolved = resolveExecApprovalsFromFile({
+    file: params.approvals,
+    agentId: params.agentId,
+    overrides: {
+      security: configuredSecurity,
+      ask: configuredAsk,
+    },
+  });
+  const security = minSecurity(configuredSecurity, resolved.agent.security);
+  const ask = resolved.agent.ask === "off" ? "off" : maxAsk(configuredAsk, resolved.agent.ask);
   return {
     security,
     ask,
@@ -100,12 +115,12 @@ function resolveHostExecPolicy(params: { approvals: ExecApprovalsFile; agentId?:
       ? `${basePath} agents.${params.agentId}.security`
       : defaults?.security
         ? `${basePath} defaults.security`
-        : `${basePath} built-in default security`,
+        : "caller tool policy fallback",
     askSource: agentEntry?.ask
       ? `${basePath} agents.${params.agentId}.ask`
       : defaults?.ask
         ? `${basePath} defaults.ask`
-        : `${basePath} built-in default ask`,
+        : "caller tool policy fallback",
   };
 }
 
@@ -122,7 +137,11 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
     if (!execConfig || (!execConfig.security && !execConfig.ask)) {
       return;
     }
-    const host = resolveHostExecPolicy({ approvals, agentId: params.agentId });
+    const host = resolveHostExecPolicy({
+      approvals,
+      execConfig,
+      agentId: params.agentId,
+    });
     const securityConflict =
       execConfig.security !== undefined &&
       execSecurityRank(execConfig.security) > execSecurityRank(host.security);
@@ -189,10 +208,12 @@ function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
     execConfig: { ask?: ExecAsk } | undefined;
     agentId?: string;
   }) => {
-    const host = resolveHostExecPolicy({ approvals, agentId: params.agentId });
-    const effectiveAsk =
-      params.execConfig?.ask !== undefined ? maxAsk(params.execConfig.ask, host.ask) : host.ask;
-    if (effectiveAsk !== "always") {
+    const host = resolveHostExecPolicy({
+      approvals,
+      execConfig: params.execConfig,
+      agentId: params.agentId,
+    });
+    if (host.ask !== "always") {
       return;
     }
     const durableCount = countDurableExecAllowAlwaysEntries(approvals, params.agentId);

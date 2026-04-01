@@ -211,6 +211,28 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain('security="deny"');
   });
 
+  it("does not invent an on-miss host ask policy when exec-approvals defaults.ask is unset", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {},
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              ask: "always",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain('ask="on-miss"');
+  });
+
   it("warns when a per-agent exec policy is broader than the matching host agent policy", async () => {
     await withExecApprovalsFile(
       {
