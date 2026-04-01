@@ -144,6 +144,13 @@ describe("promptDefaultModel", () => {
     });
 
     expect(runProviderPluginAuthMethod).toHaveBeenCalledOnce();
+    expect(resolvePluginProviders).toHaveBeenCalledWith({
+      config,
+      workspaceDir: undefined,
+      env: undefined,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+    });
     expect(result.model).toBe("vllm/meta-llama/Meta-Llama-3-8B-Instruct");
     expect(result.config?.models?.providers?.vllm).toMatchObject({
       baseUrl: "http://127.0.0.1:8000/v1",
@@ -168,7 +175,7 @@ describe("promptDefaultModel", () => {
       {
         id: "provider:model-picker:ollama",
         kind: "provider",
-        surface: "models",
+        surface: "model-picker",
         option: {
           value: "ollama",
           label: "Ollama",

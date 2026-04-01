@@ -1,5 +1,6 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -9,6 +10,7 @@ import {
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import {
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   hasUsableCustomProviderApiKey,
   requireApiKey,
@@ -17,6 +19,97 @@ import {
   resolveModelAuthMode,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveProviderSyntheticAuthWithPlugin: (params: {
+    provider: string;
+    config?: {
+      plugins?: {
+        enabled?: boolean;
+        entries?: {
+          xai?: {
+            enabled?: boolean;
+            config?: {
+              webSearch?: {
+                apiKey?: unknown;
+              };
+            };
+          };
+        };
+      };
+      tools?: {
+        web?: {
+          search?: {
+            grok?: {
+              apiKey?: unknown;
+            };
+          };
+        };
+      };
+    };
+    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+  }) => {
+    if (params.provider === "xai") {
+      if (
+        params.config?.plugins?.enabled === false ||
+        params.config?.plugins?.entries?.xai?.enabled === false
+      ) {
+        return undefined;
+      }
+      const pluginApiKey = params.config?.plugins?.entries?.xai?.config?.webSearch?.apiKey;
+      if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
+        return {
+          apiKey: pluginApiKey.trim(),
+          source: "plugins.entries.xai.config.webSearch.apiKey",
+          mode: "api-key" as const,
+        };
+      }
+      if (pluginApiKey && typeof pluginApiKey === "object") {
+        return {
+          apiKey: NON_ENV_SECRETREF_MARKER,
+          source: "plugins.entries.xai.config.webSearch.apiKey",
+          mode: "api-key" as const,
+        };
+      }
+      return undefined;
+    }
+    if (params.provider !== "ollama") {
+      return undefined;
+    }
+    const providerConfig = params.context.providerConfig;
+    const hasApiConfig =
+      Boolean(providerConfig?.api?.trim()) ||
+      Boolean(providerConfig?.baseUrl?.trim()) ||
+      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+    if (!hasApiConfig) {
+      return undefined;
+    }
+    return {
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key" as const,
+    };
+  },
+}));
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
+async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
 
 function createCustomProviderConfig(
   baseUrl: string,
@@ -291,6 +384,105 @@ describe("resolveUsableCustomProviderApiKey", () => {
   });
 });
 
+describe("resolveApiKeyForProvider", () => {
+  it("reuses the xai plugin web search key without models.providers.xai", async () => {
+    const resolved = await withoutEnv("XAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                  },
+                },
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      apiKey: "xai-plugin-fallback-key",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    });
+  });
+
+  it("prefers the active runtime snapshot for SecretRef-backed xai fallback auth", async () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: "xai-runtime-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = await withoutEnv("XAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: sourceConfig,
+        store: { version: 1, profiles: {} },
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      apiKey: "xai-runtime-key",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    });
+  });
+
+  it("does not reuse xai fallback auth when the xai plugin is disabled", async () => {
+    await expect(
+      withoutEnv("XAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "xai",
+          cfg: {
+            plugins: {
+              entries: {
+                xai: {
+                  enabled: false,
+                  config: {
+                    webSearch: {
+                      apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                    },
+                  },
+                },
+              },
+            },
+          },
+          store: { version: 1, profiles: {} },
+        }),
+      ),
+    ).rejects.toThrow('No API key found for provider "xai"');
+  });
+});
+
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
   it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {
     const auth = await resolveCustomProviderAuth(
@@ -516,5 +708,178 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
     expect(capturedAuthorization).toBeNull();
     expect(capturedXTest).toBe("1");
+  });
+});
+
+describe("applyAuthHeaderOverride", () => {
+  const baseModel: Model<"openai-completions"> = {
+    id: "gemini-3.1-flash-lite-preview",
+    name: "gemini-3.1-flash-lite-preview",
+    api: "openai-completions" as const,
+    provider: "google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    reasoning: false,
+    input: ["text"] as ("text" | "image")[],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131072,
+    maxTokens: 8192,
+  };
+
+  it("injects Authorization Bearer header when authHeader is true", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.headers).toEqual({ Authorization: "Bearer test-api-key" });
+  });
+
+  it("preserves existing model headers when injecting Authorization", () => {
+    const result = applyAuthHeaderOverride(
+      { ...baseModel, headers: { "X-Custom": "value" } },
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.headers).toEqual({
+      "X-Custom": "value",
+      Authorization: "Bearer test-api-key",
+    });
+  });
+
+  it("returns model unchanged when authHeader is not set", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("returns model unchanged when authHeader is false", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: false,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("returns model unchanged when no API key is available", () => {
+    const result = applyAuthHeaderOverride(baseModel, null, {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            api: "openai-completions",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("returns model unchanged when provider config is missing", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      undefined,
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("rejects synthetic marker API keys", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: CUSTOM_LOCAL_AUTH_MARKER, source: "synthetic", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("strips existing authorization header case-insensitively before injection", () => {
+    const result = applyAuthHeaderOverride(
+      { ...baseModel, headers: { authorization: "old-value", "X-Custom": "keep" } },
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.headers).toEqual({
+      "X-Custom": "keep",
+      Authorization: "Bearer test-api-key",
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
-import { executeZalouserTool } from "./tool.js";
+import { createZalouserTool, executeZalouserTool } from "./tool.js";
 import {
   checkZaloAuthenticated,
   getZaloUserInfo,
@@ -30,8 +30,8 @@ const mockGetUserInfo = vi.mocked(getZaloUserInfo);
 const mockListFriends = vi.mocked(listZaloFriendsMatching);
 const mockListGroups = vi.mocked(listZaloGroupsMatching);
 
-function extractDetails(result: Awaited<ReturnType<typeof executeZalouserTool>>): unknown {
-  const text = result.content[0]?.text ?? "{}";
+function extractDetails(result: { content?: Array<{ type: string; text?: string }> }): unknown {
+  const text = result.content?.[0]?.text ?? "{}";
   return JSON.parse(text) as unknown;
 }
 
@@ -67,6 +67,69 @@ describe("executeZalouserTool", () => {
       isGroup: true,
     });
     expect(extractDetails(result)).toEqual({ success: true, messageId: "m-1" });
+  });
+
+  it("defaults send routing from ambient deliveryContext target", async () => {
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-ambient" });
+    const tool = createZalouserTool({
+      deliveryContext: {
+        channel: "zalouser",
+        to: "zalouser:g-ambient",
+      },
+    });
+
+    const result = await tool.execute("tool-1", {
+      action: "send",
+      message: "hello",
+    });
+
+    expect(mockSendMessage).toHaveBeenCalledWith("g-ambient", "hello", {
+      profile: undefined,
+      isGroup: true,
+    });
+    expect(extractDetails(result)).toEqual({ success: true, messageId: "m-ambient" });
+  });
+
+  it("keeps explicit threadId over ambient delivery defaults", async () => {
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-explicit" });
+    const tool = createZalouserTool({
+      deliveryContext: {
+        channel: "zalouser",
+        to: "zalouser:g-ambient",
+      },
+    });
+
+    await tool.execute("tool-1", {
+      action: "send",
+      threadId: "u-explicit",
+      message: "hello",
+      isGroup: false,
+    });
+
+    expect(mockSendMessage).toHaveBeenCalledWith("u-explicit", "hello", {
+      profile: undefined,
+      isGroup: false,
+    });
+  });
+
+  it("does not route send actions from foreign ambient thread defaults", async () => {
+    const tool = createZalouserTool({
+      deliveryContext: {
+        channel: "slack",
+        to: "channel:C123",
+        threadId: "1710000000.000100",
+      },
+    });
+
+    const result = await tool.execute("tool-1", {
+      action: "send",
+      message: "hello",
+    });
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(extractDetails(result)).toEqual({
+      error: "threadId and message required for send action",
+    });
   });
 
   it("returns tool error when send action fails", async () => {

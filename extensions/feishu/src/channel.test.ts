@@ -55,7 +55,12 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-import { feishuPlugin } from "./channel.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let feishuPlugin: typeof import("./channel.js").feishuPlugin;
 
 function getDescribedActions(cfg: OpenClawConfig): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
@@ -97,6 +102,11 @@ async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: 
 }
 
 describe("feishuPlugin.status.probeAccount", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+  });
+
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {
@@ -131,6 +141,85 @@ describe("feishuPlugin.status.probeAccount", () => {
       }),
     );
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
+  });
+});
+
+describe("feishuPlugin.pairing.notifyApproval", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+    sendMessageFeishuMock.mockReset();
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "pairing-msg", chatId: "ou_user" });
+  });
+
+  it("preserves accountId when sending pairing approvals", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            work: {
+              appId: "cli_work",
+              appSecret: "secret_work",
+              enabled: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await feishuPlugin.pairing?.notifyApproval?.({
+      cfg,
+      id: "ou_user",
+      accountId: "work",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        to: "ou_user",
+        accountId: "work",
+      }),
+    );
+  });
+});
+
+describe("feishuPlugin messaging", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+  });
+
+  it("owns sender/topic session inheritance candidates", () => {
+    expect(
+      feishuPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      }),
+    ).toEqual({
+      id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      baseConversationId: "oc_group_chat",
+      parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
+    });
+    expect(
+      feishuPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "oc_group_chat:topic:om_topic_root",
+      }),
+    ).toEqual({
+      id: "oc_group_chat:topic:om_topic_root",
+      baseConversationId: "oc_group_chat",
+      parentConversationCandidates: ["oc_group_chat"],
+    });
+    expect(
+      feishuPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "oc_group_chat:Topic:om_topic_root:Sender:ou_topic_user",
+      }),
+    ).toEqual({
+      id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      baseConversationId: "oc_group_chat",
+      parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
+    });
   });
 });
 

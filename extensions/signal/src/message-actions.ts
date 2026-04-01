@@ -4,9 +4,9 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
-import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";

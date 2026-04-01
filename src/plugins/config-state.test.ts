@@ -3,139 +3,128 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
+  resolveMemorySlotDecision,
 } from "./config-state.js";
 
+function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
+  return normalizePluginsConfig({
+    entries: {
+      "voice-call": entry,
+    },
+  }).entries["voice-call"];
+}
+
+function expectResolvedEnableState(
+  params: Parameters<typeof resolveEnableState>,
+  expected: ReturnType<typeof resolveEnableState>,
+) {
+  expect(resolveEnableState(...params)).toEqual(expected);
+}
+
+function expectNormalizedEnableState(params: {
+  id: string;
+  origin: "bundled" | "workspace";
+  config: Record<string, unknown>;
+  manifestEnabledByDefault?: boolean;
+  expected: ReturnType<typeof resolveEnableState>;
+}) {
+  expectResolvedEnableState(
+    [
+      params.id,
+      params.origin,
+      normalizePluginsConfig(params.config),
+      params.manifestEnabledByDefault,
+    ],
+    params.expected,
+  );
+}
+
 describe("normalizePluginsConfig", () => {
-  it("uses default memory slot when not specified", () => {
-    const result = normalizePluginsConfig({});
-    expect(result.slots.memory).toBe("memory-core");
+  it.each([
+    [{}, "memory-core"],
+    [{ slots: { memory: "custom-memory" } }, "custom-memory"],
+    [{ slots: { memory: "none" } }, null],
+    [{ slots: { memory: "None" } }, null],
+    [{ slots: { memory: "  custom-memory  " } }, "custom-memory"],
+    [{ slots: { memory: "" } }, "memory-core"],
+    [{ slots: { memory: "   " } }, "memory-core"],
+  ] as const)("normalizes memory slot for %o", (config, expected) => {
+    expect(normalizePluginsConfig(config).slots.memory).toBe(expected);
   });
 
-  it("respects explicit memory slot value", () => {
-    const result = normalizePluginsConfig({
-      slots: { memory: "custom-memory" },
-    });
-    expect(result.slots.memory).toBe("custom-memory");
-  });
-
-  it("disables memory slot when set to 'none' (case insensitive)", () => {
-    expect(
-      normalizePluginsConfig({
-        slots: { memory: "none" },
-      }).slots.memory,
-    ).toBeNull();
-    expect(
-      normalizePluginsConfig({
-        slots: { memory: "None" },
-      }).slots.memory,
-    ).toBeNull();
-  });
-
-  it("trims whitespace from memory slot value", () => {
-    const result = normalizePluginsConfig({
-      slots: { memory: "  custom-memory  " },
-    });
-    expect(result.slots.memory).toBe("custom-memory");
-  });
-
-  it("uses default when memory slot is empty string", () => {
-    const result = normalizePluginsConfig({
-      slots: { memory: "" },
-    });
-    expect(result.slots.memory).toBe("memory-core");
-  });
-
-  it("uses default when memory slot is whitespace only", () => {
-    const result = normalizePluginsConfig({
-      slots: { memory: "   " },
-    });
-    expect(result.slots.memory).toBe("memory-core");
-  });
-
-  it("normalizes plugin hook policy flags", () => {
-    const result = normalizePluginsConfig({
-      entries: {
-        "voice-call": {
-          hooks: {
-            allowPromptInjection: false,
-          },
+  it.each([
+    {
+      name: "normalizes plugin hook policy flags",
+      entry: {
+        hooks: {
+          allowPromptInjection: false,
         },
       },
-    });
-    expect(result.entries["voice-call"]?.hooks?.allowPromptInjection).toBe(false);
+      expectedHooks: {
+        allowPromptInjection: false,
+      },
+    },
+    {
+      name: "drops invalid plugin hook policy values",
+      entry: {
+        hooks: {
+          allowPromptInjection: "nope",
+        } as unknown as { allowPromptInjection: boolean },
+      },
+      expectedHooks: undefined,
+    },
+  ] as const)("$name", ({ entry, expectedHooks }) => {
+    expect(normalizeVoiceCallEntry(entry)?.hooks).toEqual(expectedHooks);
   });
 
-  it("drops invalid plugin hook policy values", () => {
-    const result = normalizePluginsConfig({
-      entries: {
-        "voice-call": {
-          hooks: {
-            allowPromptInjection: "nope",
-          } as unknown as { allowPromptInjection: boolean },
-        },
+  it.each([
+    {
+      name: "normalizes plugin subagent override policy settings",
+      subagent: {
+        allowModelOverride: true,
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
       },
-    });
-    expect(result.entries["voice-call"]?.hooks).toBeUndefined();
-  });
-
-  it("normalizes plugin subagent override policy settings", () => {
-    const result = normalizePluginsConfig({
-      entries: {
-        "voice-call": {
-          subagent: {
-            allowModelOverride: true,
-            allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
-          },
-        },
+      expected: {
+        allowModelOverride: true,
+        hasAllowedModelsConfig: true,
+        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
       },
-    });
-    expect(result.entries["voice-call"]?.subagent).toEqual({
-      allowModelOverride: true,
-      hasAllowedModelsConfig: true,
-      allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
-    });
-  });
-
-  it("preserves explicit subagent allowlist intent even when all entries are invalid", () => {
-    const result = normalizePluginsConfig({
-      entries: {
-        "voice-call": {
-          subagent: {
-            allowModelOverride: true,
-            allowedModels: [42, null, "anthropic"],
-          } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
-        },
+    },
+    {
+      name: "preserves explicit subagent allowlist intent even when all entries are invalid",
+      subagent: {
+        allowModelOverride: true,
+        allowedModels: [42, null, "anthropic"],
+      } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
+      expected: {
+        allowModelOverride: true,
+        hasAllowedModelsConfig: true,
+        allowedModels: ["anthropic"],
       },
-    });
-    expect(result.entries["voice-call"]?.subagent).toEqual({
-      allowModelOverride: true,
-      hasAllowedModelsConfig: true,
-      allowedModels: ["anthropic"],
-    });
-  });
-
-  it("keeps explicit invalid subagent allowlist config visible to callers", () => {
-    const result = normalizePluginsConfig({
-      entries: {
-        "voice-call": {
-          subagent: {
-            allowModelOverride: "nope",
-            allowedModels: [42, null],
-          } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
-        },
+    },
+    {
+      name: "keeps explicit invalid subagent allowlist config visible to callers",
+      subagent: {
+        allowModelOverride: "nope",
+        allowedModels: [42, null],
+      } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
+      expected: {
+        hasAllowedModelsConfig: true,
       },
-    });
-    expect(result.entries["voice-call"]?.subagent).toEqual({
-      hasAllowedModelsConfig: true,
-    });
+    },
+  ] as const)("$name", ({ subagent, expected }) => {
+    expect(normalizeVoiceCallEntry({ subagent })?.subagent).toEqual(expected);
   });
 
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
-      allow: ["openai-codex", "minimax-portal-auth"],
-      deny: ["openai-codex", "minimax-portal-auth"],
+      allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
+      deny: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
       entries: {
         "openai-codex": {
+          enabled: true,
+        },
+        "google-gemini-cli": {
           enabled: true,
         },
         "minimax-portal-auth": {
@@ -144,9 +133,10 @@ describe("normalizePluginsConfig", () => {
       },
     });
 
-    expect(result.allow).toEqual(["openai", "minimax"]);
-    expect(result.deny).toEqual(["openai", "minimax"]);
+    expect(result.allow).toEqual(["openai", "google", "minimax"]);
+    expect(result.deny).toEqual(["openai", "google", "minimax"]);
     expect(result.entries.openai?.enabled).toBe(true);
+    expect(result.entries.google?.enabled).toBe(true);
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 });
@@ -168,44 +158,81 @@ describe("resolveEffectiveEnableState", () => {
     });
   }
 
-  it("enables bundled channels when channels.<id>.enabled=true", () => {
-    const state = resolveBundledTelegramState({
-      enabled: true,
-    });
-    expect(state).toEqual({ enabled: true });
-  });
-
-  it("keeps explicit plugin-level disable authoritative", () => {
-    const state = resolveBundledTelegramState({
-      enabled: true,
-      entries: {
-        telegram: {
-          enabled: false,
+  function resolveConfigOriginTelegramState(config: Parameters<typeof normalizePluginsConfig>[0]) {
+    const normalized = normalizePluginsConfig(config);
+    return resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "config",
+      config: normalized,
+      rootConfig: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
         },
       },
     });
-    expect(state).toEqual({ enabled: false, reason: "disabled in config" });
+  }
+
+  it.each([
+    [{ enabled: true }, { enabled: true }],
+    [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
+    [
+      {
+        enabled: true,
+        entries: {
+          telegram: {
+            enabled: false,
+          },
+        },
+      },
+      { enabled: false, reason: "disabled in config" },
+    ],
+  ] as const)("resolves bundled telegram state for %o", (config, expected) => {
+    expect(resolveBundledTelegramState(config)).toEqual(expected);
+  });
+
+  it("does not bypass allowlists for non-bundled plugins that reuse a channel id", () => {
+    expect(
+      resolveConfigOriginTelegramState({
+        enabled: true,
+        allow: ["browser"] as string[],
+      }),
+    ).toEqual({ enabled: false, reason: "not in allowlist" });
   });
 });
 
 describe("resolveEnableState", () => {
-  it("keeps the selected memory slot plugin enabled even when omitted from plugins.allow", () => {
-    const state = resolveEnableState(
-      "memory-core",
+  it.each([
+    [
+      "openai",
       "bundled",
-      normalizePluginsConfig({
+      normalizePluginsConfig({}),
+      undefined,
+      { enabled: false, reason: "bundled (disabled by default)" },
+    ],
+    ["openai", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
+    ["google", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
+    ["profile-aware", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
+  ] as const)(
+    "resolves %s enable state for origin=%s manifestEnabledByDefault=%s",
+    (id, origin, config, manifestEnabledByDefault, expected) => {
+      expectResolvedEnableState([id, origin, config, manifestEnabledByDefault], expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "keeps the selected memory slot plugin enabled even when omitted from plugins.allow",
+      config: {
         allow: ["telegram"],
         slots: { memory: "memory-core" },
-      }),
-    );
-    expect(state).toEqual({ enabled: true });
-  });
-
-  it("keeps explicit disable authoritative for the selected memory slot plugin", () => {
-    const state = resolveEnableState(
-      "memory-core",
-      "bundled",
-      normalizePluginsConfig({
+      },
+      expected: { enabled: true },
+    },
+    {
+      name: "keeps explicit disable authoritative for the selected memory slot plugin",
+      config: {
         allow: ["telegram"],
         slots: { memory: "memory-core" },
         entries: {
@@ -213,34 +240,33 @@ describe("resolveEnableState", () => {
             enabled: false,
           },
         },
-      }),
-    );
-    expect(state).toEqual({ enabled: false, reason: "disabled in config" });
-  });
-
-  it("disables workspace plugins by default when they are only auto-discovered from the workspace", () => {
-    const state = resolveEnableState("workspace-helper", "workspace", normalizePluginsConfig({}));
-    expect(state).toEqual({
-      enabled: false,
-      reason: "workspace plugin (disabled by default)",
+      },
+      expected: { enabled: false, reason: "disabled in config" },
+    },
+  ] as const)("$name", ({ config, expected }) => {
+    expectNormalizedEnableState({
+      id: "memory-core",
+      origin: "bundled",
+      config,
+      expected,
     });
   });
 
-  it("allows workspace plugins when explicitly listed in plugins.allow", () => {
-    const state = resolveEnableState(
-      "workspace-helper",
-      "workspace",
+  it.each([
+    [
+      normalizePluginsConfig({}),
+      {
+        enabled: false,
+        reason: "workspace plugin (disabled by default)",
+      },
+    ],
+    [
       normalizePluginsConfig({
         allow: ["workspace-helper"],
       }),
-    );
-    expect(state).toEqual({ enabled: true });
-  });
-
-  it("allows workspace plugins when explicitly enabled in plugin entries", () => {
-    const state = resolveEnableState(
-      "workspace-helper",
-      "workspace",
+      { enabled: true },
+    ],
+    [
       normalizePluginsConfig({
         entries: {
           "workspace-helper": {
@@ -248,31 +274,77 @@ describe("resolveEnableState", () => {
           },
         },
       }),
-    );
-    expect(state).toEqual({ enabled: true });
+      { enabled: true },
+    ],
+  ] as const)("resolves workspace-helper enable state for %o", (config, expected) => {
+    expect(resolveEnableState("workspace-helper", "workspace", config)).toEqual(expected);
   });
 
   it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
-    const state = resolveEnableState(
-      "memory-core",
-      "workspace",
-      normalizePluginsConfig({
+    expectNormalizedEnableState({
+      id: "memory-core",
+      origin: "workspace",
+      config: {
         slots: { memory: "memory-core" },
-      }),
-    );
-    expect(state).toEqual({
-      enabled: false,
-      reason: "workspace plugin (disabled by default)",
+      },
+      expected: {
+        enabled: false,
+        reason: "workspace plugin (disabled by default)",
+      },
     });
   });
+});
 
-  it("keeps bundled provider plugins enabled when they are bundled-default providers", () => {
-    const state = resolveEnableState("google", "bundled", normalizePluginsConfig({}));
-    expect(state).toEqual({ enabled: true });
+describe("resolveMemorySlotDecision", () => {
+  it("disables a memory-only plugin when slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: "new-memory",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
   });
 
-  it("allows bundled plugins to opt into default enablement from manifest metadata", () => {
-    const state = resolveEnableState("profile-aware", "bundled", normalizePluginsConfig({}), true);
-    expect(state).toEqual({ enabled: true });
+  it("keeps a dual-kind plugin enabled when memory slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: "new-memory",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBeUndefined();
+  });
+
+  it("selects a dual-kind plugin when it owns the memory slot", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: "dual-plugin",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBe(true);
+  });
+
+  it("keeps a dual-kind plugin enabled when memory slot is null", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: null,
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+  });
+
+  it("disables a memory-only plugin when memory slot is null", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: null,
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
   });
 });

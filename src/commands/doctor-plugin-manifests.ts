@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import { z } from "zod";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const LEGACY_MANIFEST_CONTRACT_KEYS = [
@@ -18,9 +20,7 @@ type LegacyManifestContractMigration = {
   changeLines: string[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const JsonRecordSchema = z.record(z.string(), z.unknown());
 
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -31,8 +31,7 @@ function normalizeStringList(value: unknown): string[] {
 
 function readManifestJson(manifestPath: string): Record<string, unknown> | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
-    return isRecord(raw) ? raw : null;
+    return safeParseJsonWithSchema(JsonRecordSchema, fs.readFileSync(manifestPath, "utf-8"));
   } catch {
     return null;
   }
@@ -43,7 +42,8 @@ function buildLegacyManifestContractMigration(params: {
   raw: Record<string, unknown>;
 }): LegacyManifestContractMigration | null {
   const nextRaw = { ...params.raw };
-  const nextContracts = isRecord(params.raw.contracts) ? { ...params.raw.contracts } : {};
+  const parsedContracts = safeParseWithSchema(JsonRecordSchema, params.raw.contracts);
+  const nextContracts = parsedContracts ? { ...parsedContracts } : {};
   const changeLines: string[] = [];
 
   for (const key of LEGACY_MANIFEST_CONTRACT_KEYS) {

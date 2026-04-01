@@ -153,6 +153,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
       if (access.reason === "dmPolicy=disabled") {
+        log.info("dropping dm (dms disabled)", {
+          sender: senderId,
+          label: senderName,
+        });
         log.debug?.("dropping dm (dms disabled)");
         return;
       }
@@ -179,11 +183,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         label: senderName,
         allowlistMatch: formatAllowlistMatchMeta(allowMatch),
       });
+      log.info("dropping dm (not allowlisted)", {
+        sender: senderId,
+        label: senderName,
+        dmPolicy,
+        reason: access.reason,
+        allowlistMatch: formatAllowlistMatchMeta(allowMatch),
+      });
       return;
     }
 
     if (!isDirectMessage && msteamsCfg) {
       if (channelGate.allowlistConfigured && !channelGate.allowed) {
+        log.info("dropping group message (not in team/channel allowlist)", {
+          conversationId,
+          teamKey: channelGate.teamKey ?? "none",
+          channelKey: channelGate.channelKey ?? "none",
+          channelMatchKey: channelGate.channelMatchKey ?? "none",
+          channelMatchSource: channelGate.channelMatchSource ?? "none",
+        });
         log.debug?.("dropping group message (not in team/channel allowlist)", {
           conversationId,
           teamKey: channelGate.teamKey ?? "none",
@@ -207,12 +225,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
 
       if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
+        log.info("dropping group message (groupPolicy: disabled)", {
+          conversationId,
+        });
         log.debug?.("dropping group message (groupPolicy: disabled)", {
           conversationId,
         });
         return;
       }
       if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
+        log.info("dropping group message (groupPolicy: allowlist, no allowlist)", {
+          conversationId,
+        });
         log.debug?.("dropping group message (groupPolicy: allowlist, no allowlist)", {
           conversationId,
         });
@@ -226,6 +250,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           allowNameMatching,
         });
         log.debug?.("dropping group message (not in groupAllowFrom)", {
+          sender: senderId,
+          label: senderName,
+          allowlistMatch: formatAllowlistMatchMeta(allowMatch),
+        });
+        log.info("dropping group message (not in groupAllowFrom)", {
           sender: senderId,
           label: senderName,
           allowlistMatch: formatAllowlistMatchMeta(allowMatch),
@@ -340,6 +369,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      teamId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
@@ -430,7 +460,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        const formatted = formatThreadContext(allMessages, activity.id);
+        const threadMessages =
+          groupPolicy === "allowlist"
+            ? allMessages.filter((msg) => {
+                return resolveMSTeamsAllowlistMatch({
+                  allowFrom: effectiveGroupAllowFrom,
+                  senderId: msg.from?.user?.id ?? "",
+                  senderName: msg.from?.user?.displayName,
+                  allowNameMatching,
+                }).allowed;
+              })
+            : allMessages;
+        const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {
           threadContext = formatted;
         }
@@ -605,9 +646,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.error("dispatch failed", { error: String(err) });
       runtime.error?.(`msteams dispatch failed: ${String(err)}`);
       try {
-        await context.sendActivity(
-          `⚠️ Agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
         // Best effort.
       }

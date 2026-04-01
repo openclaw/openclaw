@@ -57,4 +57,29 @@ describe("setupCommand", () => {
       expect(raw.gateway?.mode).toBe("local");
     });
   });
+
+  it("treats non-object config roots as empty config", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, '"not-an-object"', "utf-8");
+
+      await setupCommand(undefined, runtime);
+
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: { defaults?: { workspace?: string } };
+        gateway?: { mode?: string };
+      };
+
+      expect(raw.agents?.defaults?.workspace).toBeTruthy();
+      expect(raw.gateway?.mode).toBe("local");
+    });
+  });
 });

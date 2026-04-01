@@ -1,4 +1,5 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -12,8 +13,13 @@ import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import {
+  buildChannelConfigSchema,
+  createChatChannelPlugin,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
@@ -23,10 +29,13 @@ import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared"
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
+  buildProbeChannelStatusSummary,
+  collectStatusIssuesFromLastError,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { matrixMessageActions } from "./actions.js";
+import { matrixApprovalAuth } from "./approval-auth.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
   resolveMatrixGroupRequireMention,
@@ -47,13 +56,9 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 import {
-  buildChannelConfigSchema,
-  buildProbeChannelStatusSummary,
-  collectStatusIssuesFromLastError,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+} from "./matrix/thread-bindings-shared.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
@@ -61,6 +66,22 @@ import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
+
+function chunkTextForOutbound(text: string, limit: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit);
+    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
+    const breakAt = splitAt > 0 ? splitAt : limit;
+    chunks.push(remaining.slice(0, breakAt).trimEnd());
+    remaining = remaining.slice(breakAt).trimStart();
+  }
+  if (remaining.length > 0 || text.length === 0) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}
 
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -133,6 +154,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
     "name",
     "homeserver",
     "allowPrivateNetwork",
+    "proxy",
     "userId",
     "accessToken",
     "password",
@@ -237,6 +259,31 @@ function matchMatrixAcpConversation(params: {
   return null;
 }
 
+function resolveMatrixCommandConversation(params: {
+  threadId?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const parentConversationId = [params.originatingTo, params.commandTo, params.fallbackTo]
+    .map((candidate) => {
+      const trimmed = candidate?.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      const target = resolveMatrixTargetIdentity(trimmed);
+      return target?.kind === "room" ? target.id : undefined;
+    })
+    .find((candidate): candidate is string => Boolean(candidate));
+  if (params.threadId) {
+    return {
+      conversationId: params.threadId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+    };
+  }
+  return parentConversationId ? { conversationId: parentConversationId } : null;
+}
+
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
   createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({
     base: {
@@ -263,9 +310,53 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             },
           }),
       },
+      auth: matrixApprovalAuth,
       groups: {
         resolveRequireMention: resolveMatrixGroupRequireMention,
         resolveToolPolicy: resolveMatrixGroupToolPolicy,
+      },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+        setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+          setMatrixThreadBindingIdleTimeoutBySessionKey({
+            targetSessionKey,
+            accountId: accountId ?? "",
+            idleTimeoutMs,
+          }).map((binding) => ({
+            boundAt: binding.boundAt,
+            lastActivityAt:
+              typeof binding.metadata?.lastActivityAt === "number"
+                ? binding.metadata.lastActivityAt
+                : binding.boundAt,
+            idleTimeoutMs:
+              typeof binding.metadata?.idleTimeoutMs === "number"
+                ? binding.metadata.idleTimeoutMs
+                : undefined,
+            maxAgeMs:
+              typeof binding.metadata?.maxAgeMs === "number"
+                ? binding.metadata.maxAgeMs
+                : undefined,
+          })),
+        setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+          setMatrixThreadBindingMaxAgeBySessionKey({
+            targetSessionKey,
+            accountId: accountId ?? "",
+            maxAgeMs,
+          }).map((binding) => ({
+            boundAt: binding.boundAt,
+            lastActivityAt:
+              typeof binding.metadata?.lastActivityAt === "number"
+                ? binding.metadata.lastActivityAt
+                : binding.boundAt,
+            idleTimeoutMs:
+              typeof binding.metadata?.idleTimeoutMs === "number"
+                ? binding.metadata.idleTimeoutMs
+                : undefined,
+            maxAgeMs:
+              typeof binding.metadata?.maxAgeMs === "number"
+                ? binding.metadata.maxAgeMs
+                : undefined,
+          })),
       },
       messaging: {
         normalizeTarget: normalizeMatrixMessagingTarget,
@@ -321,6 +412,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             conversationId,
             parentConversationId,
           }),
+        resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
+          resolveMatrixCommandConversation({
+            threadId,
+            originatingTo,
+            commandTo,
+            fallbackTo,
+          }),
       },
       status: createComputedAccountStatusAdapter<ResolvedMatrixAccount, MatrixProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -342,6 +440,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
               accountId: account.accountId,
               allowPrivateNetwork: auth.allowPrivateNetwork,
               ssrfPolicy: auth.ssrfPolicy,
+              dispatcherPolicy: auth.dispatcherPolicy,
             });
           } catch (err) {
             return {
@@ -454,7 +553,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText!(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       ...createRuntimeOutboundDelegates({
