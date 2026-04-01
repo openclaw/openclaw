@@ -92,6 +92,14 @@ pnpm gateway:watch
 
 `gateway:watch` 以监视模式运行 Gateway 网关，并在 TypeScript 更改时重新加载。
 
+> 如果 `pnpm gateway:watch` 因 `ERR_INVALID_PACKAGE_CONFIG` 失败，或者错误指向 `node_modules` 下的某个文件，说明你的本地依赖文件可能已损坏或被截断。常见的恢复方式是：
+>
+> ```bash
+> rm -rf node_modules
+> pnpm store prune
+> pnpm install
+> ```
+
 ### 2) 将 macOS 应用指向你正在运行的 Gateway 网关
 
 在 **OpenClaw.app** 中：
