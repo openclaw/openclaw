@@ -159,6 +159,8 @@ The current boundary is:
   bookkeeping, and execution dispatch
 - channel plugins own scoped action discovery, capability discovery, and any
   channel-specific schema fragments
+- channel plugins own provider-specific session conversation grammar, such as
+  how conversation ids encode thread ids or inherit from parent conversations
 - channel plugins execute the final action through their action adapter
 
 For channel plugins, the SDK surface is

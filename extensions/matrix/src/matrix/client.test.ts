@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
@@ -52,6 +52,13 @@ const {
 
 let credentialsReadModule: typeof import("./credentials-read.js") | undefined;
 let sdkModule: typeof import("./sdk.js") | undefined;
+
+function requireCredentialsReadModule(): typeof import("./credentials-read.js") {
+  if (!credentialsReadModule) {
+    throw new Error("credentials-read test module not initialized");
+  }
+  return credentialsReadModule;
+}
 
 beforeEach(() => {
   installMatrixTestRuntime();
@@ -591,13 +598,17 @@ describe("resolveMatrixConfig", () => {
 });
 
 describe("resolveMatrixAuth", () => {
-  beforeEach(async () => {
-    credentialsReadModule ??= await import("./credentials-read.js");
-    sdkModule ??= await import("./sdk.js");
-    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReset();
-    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue(null);
-    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReset();
-    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(false);
+  beforeAll(async () => {
+    credentialsReadModule = await import("./credentials-read.js");
+    sdkModule = await import("./sdk.js");
+  });
+
+  beforeEach(() => {
+    const readModule = requireCredentialsReadModule();
+    vi.mocked(readModule.loadMatrixCredentials).mockReset();
+    vi.mocked(readModule.loadMatrixCredentials).mockReturnValue(null);
+    vi.mocked(readModule.credentialsMatchConfig).mockReset();
+    vi.mocked(readModule.credentialsMatchConfig).mockReturnValue(false);
     saveMatrixCredentialsMock.mockReset();
     touchMatrixCredentialsMock.mockReset();
   });

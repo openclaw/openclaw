@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   expectExplicitMatrixClientConfig,
@@ -46,10 +46,12 @@ let withResolvedRoomAction: typeof import("./client.js").withResolvedRoomAction;
 let withStartedActionClient: typeof import("./client.js").withStartedActionClient;
 
 describe("action client helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ withResolvedActionClient, withResolvedRoomAction, withStartedActionClient } =
       await import("./client.js"));
+  });
+
+  beforeEach(() => {
     primeMatrixClientResolverMocks();
     resolveMatrixRoomIdMock
       .mockReset()
