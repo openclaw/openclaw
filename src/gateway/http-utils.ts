@@ -155,10 +155,7 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
 ): string[] {
-  if (
-    usesSharedSecretGatewayMethod(requestAuth.authMethod) ||
-    requestAuth.authMethod === "none"
-  ) {
+  if (usesSharedSecretGatewayMethod(requestAuth.authMethod) || requestAuth.authMethod === "none") {
     // Shared-secret HTTP bearer auth is a documented trusted-operator surface
     // for the compat APIs and direct /tools/invoke. This is designed-as-is:
     // token/password auth proves possession of the gateway operator secret, not
@@ -185,10 +182,7 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
 ): boolean {
-  if (
-    usesSharedSecretGatewayMethod(requestAuth.authMethod) ||
-    requestAuth.authMethod === "none"
-  ) {
+  if (usesSharedSecretGatewayMethod(requestAuth.authMethod) || requestAuth.authMethod === "none") {
     // Shared-secret HTTP bearer auth also carries owner semantics on the compat
     // APIs and direct /tools/invoke. This is intentional: there is no separate
     // per-request owner primitive on that shared-secret path, so owner-only
