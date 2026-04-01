@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
   GatewayUnavailableError,
@@ -17,7 +18,7 @@ const READY_TIMEOUT_MS = 2_000;
 function gatewayUnavailableResult(
   toolName: string,
   diagnostics: OpenClawChannelBridgeDiagnostics,
-) {
+): CallToolResult {
   return {
     content: [{ type: "text", text: `gateway unavailable: ${toolName}` }],
     structuredContent: {
@@ -31,11 +32,11 @@ function gatewayUnavailableResult(
   };
 }
 
-async function withGatewayReadiness<T>(
+async function withGatewayReadiness(
   bridge: OpenClawChannelBridge,
   toolName: string,
-  handler: () => Promise<T>,
-): Promise<T | ReturnType<typeof gatewayUnavailableResult>> {
+  handler: () => Promise<CallToolResult>,
+): Promise<CallToolResult> {
   try {
     await bridge.requireReady(READY_TIMEOUT_MS);
     return await handler();
@@ -80,11 +81,11 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async (args) =>
       await withGatewayReadiness(bridge, "conversations_list", async () => {
-      const conversations = await bridge.listConversations(args);
-      return {
-        ...summarizeResult("conversations", conversations.length),
-        structuredContent: { conversations },
-      };
+        const conversations = await bridge.listConversations(args);
+        return {
+          ...summarizeResult("conversations", conversations.length),
+          structuredContent: { conversations },
+        };
       }),
   );
 
@@ -94,17 +95,17 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     { session_key: z.string().min(1) },
     async ({ session_key }) =>
       await withGatewayReadiness(bridge, "conversation_get", async () => {
-      const conversation = await bridge.getConversation(session_key);
-      if (!conversation) {
+        const conversation = await bridge.getConversation(session_key);
+        if (!conversation) {
+          return {
+            content: [{ type: "text", text: `conversation not found: ${session_key}` }],
+            isError: true,
+          };
+        }
         return {
-          content: [{ type: "text", text: `conversation not found: ${session_key}` }],
-          isError: true,
+          content: [{ type: "text", text: `conversation ${conversation.sessionKey}` }],
+          structuredContent: { conversation },
         };
-      }
-      return {
-        content: [{ type: "text", text: `conversation ${conversation.sessionKey}` }],
-        structuredContent: { conversation },
-      };
       }),
   );
 
@@ -117,11 +118,11 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ session_key, limit }) =>
       await withGatewayReadiness(bridge, "messages_read", async () => {
-      const messages = await bridge.readMessages(session_key, limit ?? 20);
-      return {
-        ...summarizeResult("messages", messages.length),
-        structuredContent: { messages },
-      };
+        const messages = await bridge.readMessages(session_key, limit ?? 20);
+        return {
+          ...summarizeResult("messages", messages.length),
+          structuredContent: { messages },
+        };
       }),
   );
 
@@ -135,19 +136,19 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ session_key, message_id, limit }) =>
       await withGatewayReadiness(bridge, "attachments_fetch", async () => {
-      const messages = await bridge.readMessages(session_key, limit ?? 100);
-      const message = messages.find((entry) => resolveMessageId(entry) === message_id);
-      if (!message) {
+        const messages = await bridge.readMessages(session_key, limit ?? 100);
+        const message = messages.find((entry) => resolveMessageId(entry) === message_id);
+        if (!message) {
+          return {
+            content: [{ type: "text", text: `message not found: ${message_id}` }],
+            isError: true,
+          };
+        }
+        const attachments = extractAttachmentsFromMessage(message);
         return {
-          content: [{ type: "text", text: `message not found: ${message_id}` }],
-          isError: true,
+          ...summarizeResult("attachments", attachments.length),
+          structuredContent: { attachments, message },
         };
-      }
-      const attachments = extractAttachmentsFromMessage(message);
-      return {
-        ...summarizeResult("attachments", attachments.length),
-        structuredContent: { attachments, message },
-      };
       }),
   );
 
@@ -161,14 +162,14 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ after_cursor, session_key, limit }) =>
       await withGatewayReadiness(bridge, "events_poll", async () => {
-      const { events, nextCursor } = bridge.pollEvents(
-        { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
-        limit ?? 20,
-      );
-      return {
-        ...summarizeResult("events", events.length),
-        structuredContent: { events, next_cursor: nextCursor },
-      };
+        const { events, nextCursor } = bridge.pollEvents(
+          { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
+          limit ?? 20,
+        );
+        return {
+          ...summarizeResult("events", events.length),
+          structuredContent: { events, next_cursor: nextCursor },
+        };
       }),
   );
 
@@ -182,14 +183,14 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ after_cursor, session_key, timeout_ms }) =>
       await withGatewayReadiness(bridge, "events_wait", async () => {
-      const event = await bridge.waitForEvent(
-        { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
-        timeout_ms ?? 30_000,
-      );
-      return {
-        content: [{ type: "text", text: event ? `event ${event.cursor}` : "timeout" }],
-        structuredContent: { event },
-      };
+        const event = await bridge.waitForEvent(
+          { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
+          timeout_ms ?? 30_000,
+        );
+        return {
+          content: [{ type: "text", text: event ? `event ${event.cursor}` : "timeout" }],
+          structuredContent: { event },
+        };
       }),
   );
 
@@ -202,11 +203,11 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ session_key, text }) =>
       await withGatewayReadiness(bridge, "messages_send", async () => {
-      const result = await bridge.sendMessage({ sessionKey: session_key, text });
-      return {
-        content: [{ type: "text", text: "sent" }],
-        structuredContent: { result },
-      };
+        const result = await bridge.sendMessage({ sessionKey: session_key, text });
+        return {
+          content: [{ type: "text", text: "sent" }],
+          structuredContent: { result },
+        };
       }),
   );
 
@@ -216,11 +217,11 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     {},
     async () =>
       await withGatewayReadiness(bridge, "permissions_list_open", async () => {
-      const approvals = bridge.listPendingApprovals();
-      return {
-        ...summarizeResult("approvals", approvals.length),
-        structuredContent: { approvals },
-      };
+        const approvals = bridge.listPendingApprovals();
+        return {
+          ...summarizeResult("approvals", approvals.length),
+          structuredContent: { approvals },
+        };
       }),
   );
 
@@ -234,11 +235,11 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ kind, id, decision }) =>
       await withGatewayReadiness(bridge, "permissions_respond", async () => {
-      const result = await bridge.respondToApproval({ kind, id, decision });
-      return {
-        content: [{ type: "text", text: "approval resolved" }],
-        structuredContent: { result },
-      };
+        const result = await bridge.respondToApproval({ kind, id, decision });
+        return {
+          content: [{ type: "text", text: "approval resolved" }],
+          structuredContent: { result },
+        };
       }),
   );
 }

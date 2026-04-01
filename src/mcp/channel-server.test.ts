@@ -510,6 +510,29 @@ describe("openclaw channel mcp server", () => {
     test("waits for queued events through the MCP tool", async () => {
       const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
       try {
+        const gatewayRequest = vi.fn().mockResolvedValue({ ok: true });
+        (
+          mcp.bridge as unknown as {
+            gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+            readySettled: boolean;
+            resolveReady: () => void;
+          }
+        ).gateway = {
+          request: gatewayRequest,
+          stopAndWait: async () => {},
+        };
+        (
+          mcp.bridge as unknown as {
+            readySettled: boolean;
+            resolveReady: () => void;
+          }
+        ).readySettled = true;
+        (
+          mcp.bridge as unknown as {
+            resolveReady: () => void;
+          }
+        ).resolveReady();
+
         await (
           mcp.bridge as unknown as {
             handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
