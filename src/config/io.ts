@@ -1812,6 +1812,7 @@ function buildConfigProvenance(params: {
   });
 
   const includePaths = new Set<string>();
+  const configDir = path.dirname(params.configPath);
   const collectIncludePaths = (value: unknown): void => {
     if (!value || typeof value !== "object") {
       return;
@@ -1838,12 +1839,25 @@ function buildConfigProvenance(params: {
     }
   };
   collectIncludePaths(params.parsed);
-  const failedIncludePaths = new Set(params.failedIncludePaths ?? []);
+  const failedIncludePaths = new Set(
+    (params.failedIncludePaths ?? []).map((includePath) =>
+      path.normalize(includePath),
+    ),
+  );
   for (const includePath of [...includePaths].sort()) {
+    const normalizedIncludePath = path.normalize(includePath);
+    const resolvedIncludePath = path.normalize(
+      path.isAbsolute(includePath)
+        ? includePath
+        : path.resolve(configDir, includePath),
+    );
     recordConfigEntry(snapshot, {
       path: includePath,
       kind: "include",
-      applied: params.exists && !failedIncludePaths.has(includePath),
+      applied:
+        params.exists &&
+        !failedIncludePaths.has(normalizedIncludePath) &&
+        !failedIncludePaths.has(resolvedIncludePath),
     });
   }
 
