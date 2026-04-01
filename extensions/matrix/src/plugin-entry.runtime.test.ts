@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const REPO_ROOT = process.cwd();
-const MATRIX_RUNTIME_STUB = [
+const PACKAGED_RUNTIME_STUB = [
   "export async function ensureMatrixCryptoRuntime() {}",
   "export async function handleVerifyRecoveryKey() {}",
   "export async function handleVerificationBootstrap() {}",
@@ -82,7 +82,7 @@ it("loads the packaged runtime wrapper without recursing through the stable root
   writeFixtureFile(
     fixtureRoot,
     "dist/extensions/matrix/plugin-entry.handlers.runtime.js",
-    MATRIX_RUNTIME_STUB,
+    PACKAGED_RUNTIME_STUB,
   );
 
   const wrapperUrl = pathToFileURL(
