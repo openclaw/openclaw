@@ -156,8 +156,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-      // Send text first if provided
-      if (text?.trim()) {
+      // Send text as a companion message before media (only when media is present).
+      if (text?.trim() && mediaUrl) {
         await sendOutboundText({
           cfg,
           to,
