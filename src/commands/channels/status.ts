@@ -306,9 +306,16 @@ export async function channelsStatusCommand(
     }
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
-    runtime.error(`Gateway not reachable: ${String(err)}`);
     const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, {
+          ok: false,
+          error: `Gateway not reachable: ${String(err)}`,
+        });
+        return;
+      }
+      runtime.error(`Gateway not reachable: ${String(err)}`);
       return;
     }
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
@@ -317,11 +324,28 @@ export async function channelsStatusCommand(
       targetIds: getChannelsCommandSecretTargetIds(),
       mode: "read_only_status",
     });
+    const snapshot = await readConfigFileSnapshot();
+    const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
+
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        ok: false,
+        error: `Gateway not reachable: ${String(err)}`,
+        fallback: {
+          kind: "config_only",
+          path: snapshot.path,
+          mode,
+          diagnostics,
+          config: resolvedConfig,
+        },
+      });
+      return;
+    }
+
+    runtime.error(`Gateway not reachable: ${String(err)}`);
     for (const entry of diagnostics) {
       runtime.log(`[secrets] ${entry}`);
     }
-    const snapshot = await readConfigFileSnapshot();
-    const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
     runtime.log(
       (
         await formatConfigChannelsStatusLines(

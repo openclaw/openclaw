@@ -171,4 +171,32 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).not.toContain("secret unavailable in this command path");
     expect(joined).not.toContain("token:config (unavailable)");
   });
+
+  it("keeps --json output machine-readable when the gateway is unreachable", async () => {
+    callGateway.mockRejectedValue(new Error("gateway closed"));
+    requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
+    resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: { secretResolved: false, channels: {} },
+      diagnostics: [
+        "channels status: channels.discord.token is unavailable in this command path; continuing with degraded read-only config.",
+      ],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: true,
+    });
+    const jsonWrites: unknown[] = [];
+    const { runtime, logs, errors } = createRuntimeCapture();
+    const runtimeWithJson = {
+      ...runtime,
+      writeStdout: (_value: string) => {},
+      writeJson: (value: unknown) => {
+        jsonWrites.push(value);
+      },
+    };
+
+    await channelsStatusCommand({ probe: false, json: true }, runtimeWithJson as never);
+
+    expect(jsonWrites).toHaveLength(1);
+    expect(logs).toEqual([]);
+    expect(errors).toEqual([]);
+  });
 });
