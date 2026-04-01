@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capability set for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open"
+  ]
+}
