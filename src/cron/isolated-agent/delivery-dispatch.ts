@@ -1,20 +1,14 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import {
-  deliverOutboundPayloads,
-  type OutboundDeliveryResult,
-} from "../../infra/outbound/deliver.js";
-import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
-import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -136,6 +130,9 @@ type CompletedDirectCronDelivery = {
 };
 
 let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
+let deliveryOutboundRuntimePromise:
+  | Promise<typeof import("./delivery-outbound.runtime.js")>
+  | undefined;
 let subagentFollowupRuntimePromise:
   | Promise<typeof import("./subagent-followup.runtime.js")>
   | undefined;
@@ -145,6 +142,13 @@ const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDeli
 async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
   gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
   return await gatewayCallRuntimePromise;
+}
+
+async function loadDeliveryOutboundRuntime(): Promise<
+  typeof import("./delivery-outbound.runtime.js")
+> {
+  deliveryOutboundRuntimePromise ??= import("./delivery-outbound.runtime.js");
+  return await deliveryOutboundRuntimePromise;
 }
 
 async function loadSubagentFollowupRuntime(): Promise<
@@ -254,20 +258,21 @@ function resolveCronAwarenessMainSessionKey(params: {
     : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
-function queueCronAwarenessSystemEvent(params: {
+async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
   agentId: string;
   deliveryIdempotencyKey: string;
   outputText?: string;
   synthesizedText?: string;
-}): void {
+}): Promise<void> {
   const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
   if (!text) {
     return;
   }
 
   try {
+    const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
     enqueueSystemEvent(text, {
       sessionKey: resolveCronAwarenessMainSessionKey({
         cfg: params.cfg,
@@ -379,6 +384,12 @@ export async function dispatchCronDelivery(
     delivery: SuccessfulDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
+    const {
+      buildOutboundSessionContext,
+      createOutboundSendDeps,
+      deliverOutboundPayloads,
+      resolveAgentOutboundIdentity,
+    } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       runSessionId: params.runSessionId,
@@ -490,7 +501,7 @@ export async function dispatchCronDelivery(
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
       if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
-        queueCronAwarenessSystemEvent({
+        await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
