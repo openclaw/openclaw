@@ -198,7 +198,7 @@ export async function mergeExtractedTreeIntoDestination(params: {
         rootDir: params.destinationRealDir,
         relativePath: relPath,
         mkdir: true,
-        createMode: 0o666,
+        createMode: sourceStat.mode & 0o777,
       });
       await applyStagedEntryMode({
         destinationRealDir: params.destinationRealDir,
