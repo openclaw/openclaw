@@ -158,6 +158,22 @@ describe("resolveEffectiveEnableState", () => {
     });
   }
 
+  function resolveConfigOriginTelegramState(config: Parameters<typeof normalizePluginsConfig>[0]) {
+    const normalized = normalizePluginsConfig(config);
+    return resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "config",
+      config: normalized,
+      rootConfig: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    });
+  }
+
   it.each([
     [{ enabled: true }, { enabled: true }],
     [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
@@ -174,6 +190,15 @@ describe("resolveEffectiveEnableState", () => {
     ],
   ] as const)("resolves bundled telegram state for %o", (config, expected) => {
     expect(resolveBundledTelegramState(config)).toEqual(expected);
+  });
+
+  it("does not bypass allowlists for non-bundled plugins that reuse a channel id", () => {
+    expect(
+      resolveConfigOriginTelegramState({
+        enabled: true,
+        allow: ["browser"] as string[],
+      }),
+    ).toEqual({ enabled: false, reason: "not in allowlist" });
   });
 });
 
