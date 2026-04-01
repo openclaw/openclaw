@@ -197,6 +197,13 @@ export const registerTelegramHandlers = ({
         : async () => ({});
     return { message, me: ctx.me, getFile };
   };
+  const isSelfAuthoredTelegramMessage = (
+    ctx: Pick<TelegramContext, "me">,
+    message: Message,
+  ): boolean => {
+    const botId = ctx.me?.id;
+    return typeof botId === "number" && message.from?.id === botId;
+  };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
     resolveDebounceMs: (entry) =>
