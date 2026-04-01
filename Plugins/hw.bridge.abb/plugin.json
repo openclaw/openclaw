@@ -1,0 +1,18 @@
+{ 
+  "schemaVersion": 1,
+  "plugin": {
+    "id": "hw.bridge.abb",
+    "name": "ABB Robot Native Bridge",
+    "version": "2.1.9",
+    "description": "Native MCP Bridge for OpenClaw to control and interact with ABB Robotics Controllers.",
+    "author": "MyOpenClawPlugin Team",
+    "engines": {
+      "openclaw": ">=1.0.0"
+    }  
+  },
+  "mcp": {
+    "type": "stdio",
+    "command": "ABB.exe",
+    "args": []
+  }
+}

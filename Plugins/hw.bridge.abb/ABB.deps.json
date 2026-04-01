@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "ABB/2.1.0": {
+      "ABB/2.1.11": {
         "dependencies": {
           "mcpdotnet": "1.2.0.1",
           "Microsoft.Extensions.DependencyInjection": "10.0.5",
@@ -435,7 +435,7 @@
     }
   },
   "libraries": {
-    "ABB/2.1.0": {
+    "ABB/2.1.11": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
