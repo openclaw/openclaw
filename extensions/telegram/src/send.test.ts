@@ -1861,6 +1861,25 @@ describe("sendStickerTelegram", () => {
       }),
     ).rejects.toThrow(/returned no message_id/i);
   });
+
+  it("does not retry generic grammY failed envelopes for sticker sends", async () => {
+    const chatId = "123";
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'sendSticker' failed!"));
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await expect(
+      sendStickerTelegram(chatId, "fileId123", {
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow(/Network request for 'sendSticker' failed!/i);
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("shared send behaviors", () => {

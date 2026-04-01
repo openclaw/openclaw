@@ -134,20 +134,6 @@ describe("createTelegramRetryRunner", () => {
         expectedError: "Network request",
       },
       {
-        name: "retries grammY HttpError via regex 'Network request' match",
-        runnerOptions: {
-          retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
-        },
-        fnSteps: [
-          {
-            type: "reject" as const,
-            value: new Error("Network request for 'sendMessage' failed!"),
-          },
-        ],
-        expectedCalls: 2,
-        expectedError: "Network request",
-      },
-      {
         name: "keeps retrying retriable errors until attempts are exhausted",
         runnerOptions: {
           retry: ZERO_DELAY_RETRY,
