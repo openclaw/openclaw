@@ -42,6 +42,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
   normalizeDmAllowFromWithStore,
+  resolveSenderAllowMatch,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -1082,13 +1083,31 @@ export const registerTelegramHandlers = ({
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const senderUsername = msg.from?.username ?? "";
     const isDirectChat = msg.chat.type === "private";
-    const isLinkedOwnerSender = isSenderAllowed({
+    const ownerSenderMatch = resolveSenderAllowMatch({
       allow: ownerAllowFrom,
       senderId,
       senderUsername,
     });
+    const isLinkedOwnerSender =
+      ownerSenderMatch.allowed && ownerSenderMatch.matchSource !== "wildcard";
     const isOwnerDirectChat = isLinkedOwnerSender && isDirectChat;
     const shouldTriggerTakeover = isLinkedOwnerSender && !isDirectChat;
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const isForum = await resolveTelegramForumFlag({
+      chatId,
+      chatType: msg.chat.type,
+      isGroup,
+      isForum: msg.chat.is_forum,
+      getChat,
+    });
+    const takeoverSession = resolveTelegramSessionState({
+      chatId,
+      isGroup,
+      isForum,
+      messageThreadId: msg.message_thread_id,
+      resolvedThreadId,
+      senderId,
+    });
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
@@ -1098,7 +1117,7 @@ export const registerTelegramHandlers = ({
       );
     }
     const takeoverDecision = decideHumanTakeover({
-      sessionKey: `telegram:${accountId ?? "default"}:${conversationKey}`,
+      sessionKey: takeoverSession.sessionKey,
       enabled: humanTakeover.enabled,
       cooldownMs: humanTakeover.cooldownMs,
       isOwnerMessage: shouldTriggerTakeover,

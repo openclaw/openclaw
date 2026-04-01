@@ -242,12 +242,16 @@ export async function processMessage(params: {
       `WhatsApp human takeover check session=${params.route.sessionKey} fromMe=${String(Boolean(params.msg.fromMe))} isDirectSelfChat=${String(isDirectSelfChat)} sender=${senderE164 ?? "unknown"} ownerAllowlisted=${String(Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164)))}`,
     );
   }
+  const messageLooksCommandLike = params.msg.body.trim().startsWith("/");
+  // fromMe DM events can pass inbound access control when takeover is enabled.
+  // Treat owner-authored slash messages as manual intervention, not inbound commands.
+  const commandLikeForTakeover = messageLooksCommandLike && !Boolean(params.msg.fromMe);
   const takeoverDecision = decideHumanTakeover({
     sessionKey: params.route.sessionKey,
     enabled: humanTakeover.enabled,
     cooldownMs: humanTakeover.cooldownMs,
     isOwnerMessage: ownerTriggeredTakeover,
-    isCommandLike: params.msg.body.trim().startsWith("/"),
+    isCommandLike: commandLikeForTakeover,
   });
   if (humanTakeover.enabled && shouldLogVerbose()) {
     logVerbose(

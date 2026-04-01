@@ -79,7 +79,6 @@ export function decideHumanTakeover(params: {
     }
     const nextActiveUntil = nowMs + params.cooldownMs;
     humanTakeoverCooldownBySession.set(params.sessionKey, nextActiveUntil);
-    pruneHumanTakeoverState(nowMs);
     return {
       skipAutoReply: true,
       activated: true,

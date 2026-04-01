@@ -59,4 +59,83 @@ describe("human takeover", () => {
     });
     expect(followUp.skipAutoReply).toBe(false);
   });
+
+  it("expires cooldown after active window", () => {
+    decideHumanTakeover({
+      sessionKey: "session-expire",
+      enabled: true,
+      cooldownMs: 10_000,
+      isOwnerMessage: true,
+      nowMs: 1_000,
+    });
+
+    const afterExpiry = decideHumanTakeover({
+      sessionKey: "session-expire",
+      enabled: true,
+      cooldownMs: 10_000,
+      isOwnerMessage: false,
+      nowMs: 11_001,
+    });
+
+    expect(afterExpiry.skipAutoReply).toBe(false);
+    expect(afterExpiry.activated).toBe(false);
+  });
+
+  it("extends cooldown when owner sends another message", () => {
+    decideHumanTakeover({
+      sessionKey: "session-extend",
+      enabled: true,
+      cooldownMs: 10_000,
+      isOwnerMessage: true,
+      nowMs: 1_000,
+    });
+
+    decideHumanTakeover({
+      sessionKey: "session-extend",
+      enabled: true,
+      cooldownMs: 10_000,
+      isOwnerMessage: true,
+      nowMs: 9_000,
+    });
+
+    const stillActive = decideHumanTakeover({
+      sessionKey: "session-extend",
+      enabled: true,
+      cooldownMs: 10_000,
+      isOwnerMessage: false,
+      nowMs: 15_000,
+    });
+    expect(stillActive.skipAutoReply).toBe(true);
+    expect(stillActive.reason).toBe("cooldown-active");
+
+    const expiredAfterExtension = decideHumanTakeover({
+      sessionKey: "session-extend",
+      enabled: true,
+      cooldownMs: 10_000,
+      isOwnerMessage: false,
+      nowMs: 19_001,
+    });
+    expect(expiredAfterExtension.skipAutoReply).toBe(false);
+  });
+
+  it("keeps cooldown state isolated per session", () => {
+    decideHumanTakeover({
+      sessionKey: "session-a",
+      enabled: true,
+      cooldownMs: 60_000,
+      isOwnerMessage: true,
+      nowMs: 1_000,
+    });
+
+    const otherSession = decideHumanTakeover({
+      sessionKey: "session-b",
+      enabled: true,
+      cooldownMs: 60_000,
+      isOwnerMessage: false,
+      nowMs: 2_000,
+    });
+
+    expect(otherSession.skipAutoReply).toBe(false);
+    expect(otherSession.activated).toBe(false);
+  });
 });

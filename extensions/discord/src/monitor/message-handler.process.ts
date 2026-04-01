@@ -44,7 +44,11 @@ import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
-import { allowListMatches, normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
+import {
+  normalizeDiscordAllowList,
+  normalizeDiscordSlug,
+  resolveDiscordAllowListMatch,
+} from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -139,24 +143,26 @@ export async function processDiscordMessage(
     channelConfig: cfg.channels?.discord,
     accountConfig: discordConfig,
   });
+  // Human takeover owner detection follows account-level owner config only.
+  // Guild/channel allowlists are for access control and are not treated as owner identity.
   const ownerAllowRaw = discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom;
   const ownerAllowList = normalizeDiscordAllowList(ownerAllowRaw, ["discord:", "user:", "pk:"]);
-  const takeoverDecision = decideHumanTakeover({
-    sessionKey: boundSessionKey ?? baseSessionKey,
-    enabled: humanTakeover.enabled,
-    cooldownMs: humanTakeover.cooldownMs,
-    isOwnerMessage: Boolean(
-      ownerAllowList &&
-      allowListMatches(
-        ownerAllowList,
-        {
+  const ownerMatch = ownerAllowList
+    ? resolveDiscordAllowListMatch({
+        allowList: ownerAllowList,
+        candidate: {
           id: sender.id,
           name: sender.name,
           tag: sender.tag,
         },
-        { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig ?? {}) },
-      ),
-    ),
+        allowNameMatching: isDangerousNameMatchingEnabled(discordConfig ?? {}),
+      })
+    : { allowed: false };
+  const takeoverDecision = decideHumanTakeover({
+    sessionKey: boundSessionKey ?? baseSessionKey,
+    enabled: humanTakeover.enabled,
+    cooldownMs: humanTakeover.cooldownMs,
+    isOwnerMessage: ownerMatch.allowed && ownerMatch.matchSource !== "wildcard",
     isCommandLike: Boolean((baseText ?? messageText ?? "").trim().startsWith("/")),
   });
   if (takeoverDecision.skipAutoReply) {
