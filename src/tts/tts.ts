@@ -68,7 +68,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
-  extension: ".opus",
+  extension: ".ogg",
   voiceCompatible: true,
 };
 

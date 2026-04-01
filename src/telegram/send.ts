@@ -399,7 +399,6 @@ export async function sendMessageTelegram(
     const file = new InputFile(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
-
     if (isVideoNote) {
       caption = undefined;
       followUpText = text.trim() ? text : undefined;

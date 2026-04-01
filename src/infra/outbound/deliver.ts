@@ -469,7 +469,7 @@ async function deliverOutboundPayloadsCore(
       }
 
       params.onPayload?.(payloadSummary);
-      if (handler.sendPayload && effectivePayload.channelData) {
+      if (handler.sendPayload && (effectivePayload.channelData || effectivePayload.audioAsVoice)) {
         results.push(await handler.sendPayload(effectivePayload));
         emitMessageSent(true);
         continue;
