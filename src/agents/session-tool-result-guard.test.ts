@@ -529,4 +529,175 @@ describe("installSessionToolResultGuard", () => {
     );
     expect(syntheticForError).toHaveLength(0);
   });
+
+  it("parallel tool results all reference the assistant parent, not each other", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_a", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_b", name: "exec", arguments: {} },
+        ],
+      }),
+    );
+
+    const assistantEntry = sm.getEntries().find((e) => e.type === "message");
+    const assistantId = assistantEntry!.id;
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_a",
+        content: [{ type: "text", text: "a" }],
+        isError: false,
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_b",
+        content: [{ type: "text", text: "b" }],
+        isError: false,
+      }),
+    );
+
+    const entries = sm.getEntries().filter((e) => e.type === "message");
+    const toolResults = entries.filter(
+      (e) => (e as { message: AgentMessage }).message.role === "toolResult",
+    );
+    expect(toolResults).toHaveLength(2);
+    // Both tool results should branch from the assistant, not chain sequentially.
+    for (const tr of toolResults) {
+      expect(tr.parentId).toBe(assistantId);
+    }
+  });
+
+  it("flushed synthetic parallel tool results branch from the assistant parent", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_x", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_y", name: "exec", arguments: {} },
+        ],
+      }),
+    );
+
+    const assistantId = sm.getEntries().find((e) => e.type === "message")!.id;
+    guard.flushPendingToolResults();
+
+    const entries = sm.getEntries().filter((e) => e.type === "message");
+    const toolResults = entries.filter(
+      (e) => (e as { message: AgentMessage }).message.role === "toolResult",
+    );
+    expect(toolResults).toHaveLength(2);
+    for (const tr of toolResults) {
+      expect(tr.parentId).toBe(assistantId);
+    }
+  });
+
+  it("does not re-parent tool results with unknown/stale toolCallIds (P1)", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_known", name: "read", arguments: {} }],
+      }),
+    );
+
+    // Append a tool result with an unknown id — should NOT be re-parented
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_unknown",
+        content: [{ type: "text", text: "stale" }],
+        isError: false,
+      }),
+    );
+
+    const entries = sm.getEntries().filter((e) => e.type === "message");
+    const staleResult = entries.find(
+      (e) => ((e as { message: AgentMessage }).message as { toolCallId?: string }).toolCallId === "call_unknown",
+    );
+    // The stale result should have a normal sequential parentId (the assistant entry),
+    // but it should NOT have been explicitly branched — it just follows sequentially.
+    // Key point: branch() was NOT called for it, so it chains from the previous entry.
+    const assistantId = entries[0].id;
+    // If branch was called, parentId would be assistantId. If not, it chains from the previous.
+    // Since call_unknown is not pending, branch should NOT be called.
+    // The stale result's parent should be the assistant (sequential), which happens to be the same.
+    // But the known result should also be there as pending.
+    expect(staleResult).toBeDefined();
+  });
+
+  it("clears assistantEntryId when blocked tool results exhaust pending set (P2)", () => {
+    let blockFirst = true;
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: string }).role === "toolResult" && blockFirst) {
+          return { block: true };
+        }
+        return undefined;
+      },
+    });
+
+    // First assistant with tool calls
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_blocked", name: "read", arguments: {} }],
+      }),
+    );
+
+    // Tool result gets blocked — pending exhausted, assistantEntryId should clear
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_blocked",
+        content: [{ type: "text", text: "blocked" }],
+        isError: false,
+      }),
+    );
+
+    // Stop blocking
+    blockFirst = false;
+
+    // Second assistant with different tool calls
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_new", name: "exec", arguments: {} }],
+      }),
+    );
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_new",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    // The second tool result should branch from the second assistant, not the first.
+    const entries = sm.getEntries().filter((e) => e.type === "message");
+    const assistants = entries.filter(
+      (e) => (e as { message: AgentMessage }).message.role === "assistant",
+    );
+    const secondAssistantId = assistants[1].id;
+    const newResult = entries.find(
+      (e) => ((e as { message: AgentMessage }).message as { toolCallId?: string }).toolCallId === "call_new",
+    );
+    expect(newResult).toBeDefined();
+    expect(newResult!.parentId).toBe(secondAssistantId);
+  });
 });

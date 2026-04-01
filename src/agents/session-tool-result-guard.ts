@@ -108,6 +108,9 @@ export function installSessionToolResultGuard(
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pendingState = createPendingToolCallState();
+  // Track the assistant entry ID that originated current tool calls so all
+  // tool results branch from it instead of chaining sequentially.
+  let assistantEntryId: string | undefined;
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
@@ -148,6 +151,10 @@ export function installSessionToolResultGuard(
     }
     if (allowSyntheticToolResults) {
       for (const [id, name] of pendingState.entries()) {
+        // Branch back to the assistant message so synthetic results don't chain.
+        if (assistantEntryId) {
+          sessionManager.branch(assistantEntryId);
+        }
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
@@ -162,10 +169,12 @@ export function installSessionToolResultGuard(
       }
     }
     pendingState.clear();
+    assistantEntryId = undefined;
   };
 
   const clearPendingToolResults = () => {
     pendingState.clear();
+    assistantEntryId = undefined;
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -187,9 +196,14 @@ export function installSessionToolResultGuard(
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
+      const isPending = !!(id && pendingState.getToolName(id) !== undefined);
       const toolName = id ? pendingState.getToolName(id) : undefined;
       if (id) {
         pendingState.delete(id);
+      }
+      // P1: Only re-parent tool results whose toolCallId is in the pending set.
+      if (isPending && assistantEntryId) {
+        sessionManager.branch(assistantEntryId);
       }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
@@ -203,6 +217,10 @@ export function installSessionToolResultGuard(
         }),
       );
       if (!persisted) {
+        // P2: Clear assistantEntryId when tool result is blocked and no pending calls remain.
+        if (pendingState.size() === 0) {
+          assistantEntryId = undefined;
+        }
         return undefined;
       }
       return originalAppend(persisted as never);
@@ -254,6 +272,10 @@ export function installSessionToolResultGuard(
 
     if (toolCalls.length > 0) {
       pendingState.trackToolCalls(toolCalls);
+      // Remember the assistant entry so tool results can branch back to it.
+      if (typeof result === "string") {
+        assistantEntryId = result;
+      }
     }
 
     return result;
