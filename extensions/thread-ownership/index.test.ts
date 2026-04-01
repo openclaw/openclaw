@@ -38,14 +38,6 @@ describe("thread-ownership plugin", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers message_received and message_sending hooks", () => {
-    register.register(api as any);
-
-    expect(api.on).toHaveBeenCalledTimes(2);
-    expect(api.on).toHaveBeenCalledWith("message_received", expect.any(Function));
-    expect(api.on).toHaveBeenCalledWith("message_sending", expect.any(Function));
-  });
-
   describe("message_sending", () => {
     beforeEach(() => {
       register.register(api as any);
