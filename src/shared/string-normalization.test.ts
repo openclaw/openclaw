@@ -34,6 +34,17 @@ describe("shared/string-normalization", () => {
     expect(normalizeHyphenSlug(" ###Team@@@Room### ")).toBe("###team@@@room###");
   });
 
+  it("preserves CJK characters in slug normalization", () => {
+    // CJK
+    expect(normalizeHyphenSlug("中文-组")).toBe("中文-组");
+    // Cyrillic
+    expect(normalizeHyphenSlug("  Группа Тест  ")).toBe("группа-тест");
+    // Arabic
+    expect(normalizeHyphenSlug("مجموعة-اختبار")).toBe("مجموعة-اختبار");
+    // Mixed ASCII + CJK
+    expect(normalizeHyphenSlug("team-中文")).toBe("team-中文");
+  });
+
   it("normalizes @/# prefixed slugs used by channel allowlists", () => {
     expect(normalizeAtHashSlug(" #My_Channel + Alerts ")).toBe("my-channel-alerts");
     expect(normalizeAtHashSlug("@@Room___Name")).toBe("room-name");
