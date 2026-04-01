@@ -69,6 +69,39 @@ export type RunCapabilityResult = {
   decision: MediaUnderstandingDecision;
 };
 
+function providerSupportsCapability(
+  provider: MediaUnderstandingProvider | undefined,
+  capability: MediaUnderstandingCapability,
+): boolean {
+  if (!provider) {
+    return false;
+  }
+  if (capability === "audio") {
+    return Boolean(provider.transcribeAudio);
+  }
+  if (capability === "image") {
+    return Boolean(provider.describeImage);
+  }
+  return Boolean(provider.describeVideo);
+}
+
+function resolveConfiguredKeyProviderOrder(params: {
+  cfg: OpenClawConfig;
+  providerRegistry: ProviderRegistry;
+  capability: MediaUnderstandingCapability;
+  fallbackProviders: readonly string[];
+}): string[] {
+  const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
+    .map((providerId) => normalizeMediaProviderId(providerId))
+    .filter(Boolean)
+    .filter((providerId, index, values) => values.indexOf(providerId) === index)
+    .filter((providerId) =>
+      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),
+    );
+
+  return [...new Set([...configuredProviders, ...params.fallbackProviders])];
+}
+
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
   cfg?: OpenClawConfig,
@@ -368,7 +401,12 @@ async function resolveKeyEntry(params: {
         return activeEntry;
       }
     }
-    for (const providerId of AUTO_IMAGE_KEY_PROVIDERS) {
+    for (const providerId of resolveConfiguredKeyProviderOrder({
+      cfg,
+      providerRegistry,
+      capability,
+      fallbackProviders: AUTO_IMAGE_KEY_PROVIDERS,
+    })) {
       const model = DEFAULT_IMAGE_MODELS[providerId];
       const entry = await checkProvider(providerId, model);
       if (entry) {
@@ -386,7 +424,12 @@ async function resolveKeyEntry(params: {
         return activeEntry;
       }
     }
-    for (const providerId of AUTO_VIDEO_KEY_PROVIDERS) {
+    for (const providerId of resolveConfiguredKeyProviderOrder({
+      cfg,
+      providerRegistry,
+      capability,
+      fallbackProviders: AUTO_VIDEO_KEY_PROVIDERS,
+    })) {
       const entry = await checkProvider(providerId, undefined);
       if (entry) {
         return entry;
@@ -402,7 +445,12 @@ async function resolveKeyEntry(params: {
       return activeEntry;
     }
   }
-  for (const providerId of AUTO_AUDIO_KEY_PROVIDERS) {
+  for (const providerId of resolveConfiguredKeyProviderOrder({
+    cfg,
+    providerRegistry,
+    capability,
+    fallbackProviders: AUTO_AUDIO_KEY_PROVIDERS,
+  })) {
     const entry = await checkProvider(providerId, undefined);
     if (entry) {
       return entry;
