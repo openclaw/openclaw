@@ -1073,7 +1073,8 @@ def _allow_dream_promotion(item: str, kind: str) -> bool:
 def load_latest_dream_payload(workspace: Path, report_json: str | None = None) -> dict[str, Any]:
     candidate_paths: list[Path] = []
     if report_json:
-        candidate_paths.append(Path(report_json))
+        report_path = Path(report_json)
+        candidate_paths.append(report_path if report_path.is_absolute() else workspace / report_path)
     facts_json = read_json(workspace / "memory/facts.json") or {}
     dream_meta = facts_json.get("dream_memory", {}) if isinstance(facts_json, dict) else {}
     last_payload_json = dream_meta.get("last_payload_json")
@@ -1437,7 +1438,8 @@ def build_dream_verification(
     try:
         payload = load_latest_dream_payload(workspace, report_json)
         if report_json:
-            latest_payload_path = str(Path(report_json))
+            report_path = Path(report_json)
+            latest_payload_path = str(report_path if report_path.is_absolute() else workspace / report_path)
         else:
             facts_json = read_json(workspace / "memory/facts.json") or {}
             dream_meta = facts_json.get("dream_memory", {}) if isinstance(facts_json, dict) else {}
@@ -4109,7 +4111,7 @@ def update_dispatch_run(
     if stage_id not in stage_map:
         raise KeyError(f"Unknown stage id: {stage_id}")
     stage = stage_map[stage_id]
-    if stage["status"] not in {"ready", "in_progress", "pending"}:
+    if stage["status"] not in {"ready", "in_progress"}:
         raise ValueError(f"Stage {stage_id} is not updatable from status {stage['status']}")
     stage["status"] = "completed"
     stage["result_text"] = text

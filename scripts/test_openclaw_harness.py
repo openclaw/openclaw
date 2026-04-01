@@ -106,6 +106,21 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(updated["current_stage"], "evidence")
             self.assertEqual(updated["stages"][0]["status"], "completed")
 
+    def test_dispatch_update_rejects_pending_stage(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "memory").mkdir(parents=True)
+            (workspace / "memory/current-task.md").write_text(
+                "# Current Task\n\n## 当前主任务\n- 继续优化 OpenClaw harness\n",
+                encoding="utf-8",
+            )
+            bundle = harness.build_dispatch_bundle(workspace, "继续优化 OpenClaw harness，并且把 nightly dream 和验证链接起来")
+            run = harness.initialize_dispatch_run(bundle)
+            applied = harness.apply_dispatch_run(workspace, run)
+
+            with self.assertRaisesRegex(ValueError, "Stage evidence is not updatable from status pending"):
+                harness.update_dispatch_run(workspace, applied["json"], "evidence", "files: scripts/openclaw_harness.py")
+
     def test_dispatch_bundle_includes_low_approval_tool_policy_for_read_only_roles(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
@@ -2073,6 +2088,26 @@ class DreamMemoryTests(unittest.TestCase):
             facts = json.loads((workspace / "memory/facts.json").read_text(encoding="utf-8"))
             self.assertEqual(facts["dream_memory"]["last_window_days"], 7)
             self.assertIn("last_payload_json", facts["dream_memory"])
+
+    def test_load_latest_dream_payload_resolves_report_json_relative_to_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            dreams_dir = workspace / "memory" / "dreams"
+            dreams_dir.mkdir(parents=True)
+            expected = {
+                "generated_at": "2026-04-01T16:00:00",
+                "window_days": 7,
+                "sources": ["memory/2026-04-01.md"],
+            }
+            (dreams_dir / "custom.json").write_text(json.dumps(expected, ensure_ascii=False), encoding="utf-8")
+            original_cwd = Path.cwd()
+            outside_dir = Path(tempfile.mkdtemp())
+            try:
+                os.chdir(outside_dir)
+                payload = harness.load_latest_dream_payload(workspace, "memory/dreams/custom.json")
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(payload, expected)
 
     def test_apply_dream_promotion_updates_structured_memory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
