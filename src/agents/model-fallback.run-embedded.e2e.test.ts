@@ -202,8 +202,9 @@ async function runEmbeddedFallback(params: {
   sessionKey: string;
   runId: string;
   abortSignal?: AbortSignal;
+  config?: OpenClawConfig;
 }) {
-  const cfg = makeConfig();
+  const cfg = params.config ?? makeConfig();
   return await runWithModelFallback({
     cfg,
     provider: "openai",
@@ -321,8 +322,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder();
-      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
@@ -358,8 +359,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["groq:p1"]?.disabledUntil).toBeUndefined();
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      expect(computeBackoffMock).toHaveBeenCalledTimes(2);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(2);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
@@ -421,8 +422,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
       expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 2 });
-      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
@@ -466,6 +467,10 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
           sessionKey: "agent:test:overloaded-backoff-abort",
           runId: "run:overloaded-backoff-abort",
           abortSignal: controller.signal,
+          config: {
+            ...makeConfig(),
+            auth: { cooldowns: { overloadedBackoffMs: 321 } },
+          },
         }),
       ).rejects.toMatchObject({
         name: "AbortError",
@@ -483,7 +488,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
   it("caps overloaded profile rotations and escalates to cross-provider fallback (#58348)", async () => {
     // When a provider has multiple auth profiles and all return overloaded_error,
     // the runner should not exhaust all profiles before falling back. It should
-    // cap profile rotations at MAX_OVERLOAD_PROFILE_ROTATIONS (1) and escalate
+    // cap profile rotations at overloadedProfileRotations=1 and escalate
     // to cross-provider fallback immediately.
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       // Write auth store with multiple profiles for openai
@@ -549,7 +554,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(result.model).toBe("mock-2");
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
-      // With MAX_OVERLOAD_PROFILE_ROTATIONS=1, we expect:
+      // With overloadedProfileRotations=1, we expect:
       // - 1 initial openai attempt (p1)
       // - 1 rotation to p2 (capped)
       // - escalation to groq (1 attempt)
@@ -561,6 +566,75 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
         (call) => (call[0] as { provider?: string })?.provider === "groq",
       );
       expect(openaiAttempts.length).toBe(2);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("respects overloadedProfileRotations=0 and falls back immediately", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
+            "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { lastUsed: 2 },
+            "groq:p1": { lastUsed: 3 },
+          },
+        }),
+      );
+
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as { provider: string };
+        if (attemptParams.provider === "openai") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-no-rotation",
+        runId: "run:overloaded-no-rotation",
+        config: {
+          ...makeConfig(),
+          auth: { cooldowns: { overloadedProfileRotations: 0 } },
+        },
+      });
+
+      expect(result.provider).toBe("groq");
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(1);
       expect(groqAttempts.length).toBe(1);
     });
   });

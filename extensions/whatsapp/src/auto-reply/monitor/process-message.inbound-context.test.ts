@@ -171,6 +171,7 @@ describe("web processMessage inbound context", () => {
           to: "+15550001111",
           chatType: "group",
           body: "hi",
+          timestamp: 1737158400000,
           senderName: "Alice",
           senderJid: "alice@s.whatsapp.net",
           senderE164: "+15550002222",
@@ -182,7 +183,9 @@ describe("web processMessage inbound context", () => {
 
     expect(capturedCtx).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
-    expectInboundContextContract(capturedCtx as any);
+    const ctx = capturedCtx as any;
+    expectInboundContextContract(ctx);
+    expect(ctx.Timestamp).toBe(1737158400000);
   });
 
   it("falls back SenderId to SenderE164 when senderJid is empty", async () => {

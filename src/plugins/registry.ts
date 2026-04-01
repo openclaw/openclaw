@@ -24,7 +24,6 @@ import {
   registerMemoryPromptSection,
   registerMemoryRuntime,
 } from "./memory-state.js";
-import { registerOperationsRuntimeForOwner } from "./operations-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
@@ -1153,20 +1152,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMemoryEmbeddingProvider(adapter, {
                   ownerPluginId: record.id,
                 });
-              },
-              registerOperationsRuntime: (runtime) => {
-                const result = registerOperationsRuntimeForOwner(runtime, record.id, {
-                  allowSameOwnerRefresh: true,
-                });
-                if (!result.ok) {
-                  const ownerDetail = result.existingOwner ? ` (${result.existingOwner})` : "";
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: `operations runtime already registered${ownerDetail}`,
-                  });
-                }
               },
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),

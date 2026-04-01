@@ -4,6 +4,7 @@ import { setMatrixRuntime } from "../runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
 import { sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } from "./send.js";
 
+const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
   fileName: "photo.png",
@@ -22,6 +23,14 @@ const resolveTextChunkLimitMock = vi.fn<
 >(() => 4000);
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+  };
+});
 
 const runtimeStub = {
   config: {
@@ -100,6 +109,22 @@ function makeEncryptedMediaClient() {
 
 function resetMatrixSendRuntimeMocks() {
   setMatrixRuntime(runtimeStub);
+  loadOutboundMediaFromUrlMock.mockReset().mockImplementation(
+    async (
+      mediaUrl: string,
+      options?: {
+        maxBytes?: number;
+        mediaLocalRoots?: readonly string[];
+        mediaReadFile?: (filePath: string) => Promise<Buffer>;
+      },
+    ) =>
+      await loadWebMediaMock(mediaUrl, {
+        maxBytes: options?.maxBytes,
+        localRoots: options?.mediaLocalRoots,
+        hostReadCapability: false,
+        readFile: options?.mediaReadFile,
+      }),
+  );
   loadWebMediaMock.mockReset().mockResolvedValue({
     buffer: Buffer.from("media"),
     fileName: "photo.png",
@@ -334,10 +359,13 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: 1024 * 1024,
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: 1024 * 1024,
+        localRoots: undefined,
+      }),
+    );
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
@@ -350,10 +378,13 @@ describe("sendMessageMatrix media", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: undefined,
-      localRoots: ["/tmp/openclaw-matrix-test"],
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: undefined,
+        localRoots: ["/tmp/openclaw-matrix-test"],
+      }),
+    );
   });
 });
 

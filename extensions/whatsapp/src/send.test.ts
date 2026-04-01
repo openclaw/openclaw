@@ -6,6 +6,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const hoisted = vi.hoisted(() => ({
+  loadOutboundMediaFromUrl: vi.fn(),
+}));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
@@ -14,9 +17,13 @@ let setActiveWebListener: typeof import("./active-listener.js").setActiveWebList
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./media.js", () => ({
-  loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
-}));
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,
+  };
+});
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
@@ -33,6 +40,26 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
+      async (
+        mediaUrl: string,
+        options?: {
+          maxBytes?: number;
+          mediaAccess?: {
+            localRoots?: readonly string[];
+            readFile?: (filePath: string) => Promise<Buffer>;
+          };
+          mediaLocalRoots?: readonly string[];
+          mediaReadFile?: (filePath: string) => Promise<Buffer>;
+        },
+      ) =>
+        await loadWebMediaMock(mediaUrl, {
+          maxBytes: options?.maxBytes,
+          localRoots: options?.mediaAccess?.localRoots ?? options?.mediaLocalRoots,
+          readFile: options?.mediaAccess?.readFile ?? options?.mediaReadFile,
+          hostReadCapability: Boolean(options?.mediaAccess?.readFile ?? options?.mediaReadFile),
+        }),
+    );
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -214,10 +241,13 @@ describe("web outbound", () => {
       mediaLocalRoots: ["/tmp/workspace"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
-      maxBytes: 100 * 1024 * 1024,
-      localRoots: ["/tmp/workspace"],
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/tmp/pic.jpg",
+      expect.objectContaining({
+        maxBytes: 100 * 1024 * 1024,
+        localRoots: ["/tmp/workspace"],
+      }),
+    );
   });
 
   it("sends polls via active listener", async () => {

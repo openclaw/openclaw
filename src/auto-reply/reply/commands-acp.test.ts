@@ -114,7 +114,8 @@ const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
 const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
-const { createTaskRecord, resetTaskRegistryForTests } = await import("openclaw/plugin-sdk/tasks");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
 
 function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   const trimmed = raw?.trim().replace(/^telegram:/i, "");
@@ -1463,7 +1464,8 @@ describe("/acp command", () => {
     });
     createTaskRecord({
       runtime: "acp",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       childSessionKey: defaultAcpSessionKey,
       runId: "acp-run-1",
       task: "Inspect ACP backlog",
