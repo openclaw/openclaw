@@ -10,12 +10,38 @@ import {
   SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES,
 } from "./fs-bridge-mutation-helper.js";
 
+const FORCED_EXDEV_RENAME = [
+  "    try:",
+  "        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
+].join("\n");
+
+const FORCED_EXDEV_REPLACE = [
+  "    try:",
+  "        raise OSError(errno.EXDEV, 'forced cross-device rename for test')",
+  "        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
+].join("\n");
+
 function runMutation(args: string[], input?: string) {
   return spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...args], {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+function runForcedExdevMutation(args: string[]) {
+  return spawnSync(
+    "python3",
+    [
+      "-c",
+      SANDBOX_PINNED_MUTATION_PYTHON.replace(FORCED_EXDEV_RENAME, FORCED_EXDEV_REPLACE),
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
 }
 
 function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
@@ -246,6 +272,41 @@ describe("sandbox pinned mutation helper", () => {
           fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
         ).resolves.toBe("payload");
         await expect(fs.stat(path.join(sourceRoot, "dir"))).rejects.toThrow();
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects hardlinked files during rename fallback copy",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const outside = path.join(root, "outside");
+        const workspace = path.join(root, "workspace");
+        const destRoot = path.join(root, "dest");
+        await fs.mkdir(outside, { recursive: true });
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+
+        await fs.writeFile(path.join(outside, "secret.txt"), "classified", "utf8");
+        await fs.link(path.join(outside, "secret.txt"), path.join(workspace, "hardlink.txt"));
+
+        const result = runForcedExdevMutation([
+          "rename",
+          workspace,
+          "",
+          "hardlink.txt",
+          destRoot,
+          "",
+          "copied.txt",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/hardlinked file/i);
+        await expect(fs.readFile(path.join(outside, "secret.txt"), "utf8")).resolves.toBe(
+          "classified",
+        );
+        await expect(fs.stat(path.join(destRoot, "copied.txt"))).rejects.toThrow();
       });
     },
   );
