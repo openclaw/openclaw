@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDiskSpaceWarnings,
@@ -46,28 +48,37 @@ describe("formatBytes", () => {
 });
 
 describe("findExistingAncestor", () => {
+  const tmpDir = os.tmpdir();
+  const fsRoot = path.parse(tmpDir).root;
+
   it("returns the path itself when it exists", () => {
-    const result = findExistingAncestor("/tmp");
-    expect(result).toBe("/tmp");
+    const result = findExistingAncestor(tmpDir);
+    expect(result).toBe(path.resolve(tmpDir));
   });
 
   it("returns parent when child does not exist", () => {
-    const result = findExistingAncestor("/tmp/nonexistent-openclaw-test-dir-12345");
-    expect(result).toBe("/tmp");
+    const result = findExistingAncestor(path.join(tmpDir, "nonexistent-openclaw-test-dir-12345"));
+    expect(result).toBe(path.resolve(tmpDir));
   });
 
   it("walks up multiple levels", () => {
-    const result = findExistingAncestor("/tmp/nonexistent-a/nonexistent-b/nonexistent-c");
-    expect(result).toBe("/tmp");
+    const result = findExistingAncestor(
+      path.join(tmpDir, "nonexistent-a", "nonexistent-b", "nonexistent-c"),
+    );
+    expect(result).toBe(path.resolve(tmpDir));
   });
 
   it("returns root for deeply nonexistent paths", () => {
-    const result = findExistingAncestor("/nonexistent-openclaw-root-test/deep/path");
-    expect(result).toBe("/");
+    const result = findExistingAncestor(
+      path.join(fsRoot, "nonexistent-openclaw-root-test", "deep", "path"),
+    );
+    expect(result).toBe(path.resolve(fsRoot));
   });
 });
 
 describe("getAvailableBytes", () => {
+  const tmpDir = os.tmpdir();
+
   it("returns available bytes from statfsSync", () => {
     const mockStatfs = vi.fn().mockReturnValue({ bavail: 1000n, bsize: 4096n });
     const result = getAvailableBytes("/some/path", { statfsSync: mockStatfs });
@@ -83,13 +94,11 @@ describe("getAvailableBytes", () => {
   });
 
   it("probes ancestor when target dir does not exist", () => {
+    const nonexistent = path.join(tmpDir, "nonexistent-openclaw-test-dir-67890");
     const mockStatfs = vi.fn().mockReturnValue({ bavail: 500n, bsize: 4096n });
-    const result = getAvailableBytes("/tmp/nonexistent-openclaw-test-dir-67890", {
-      statfsSync: mockStatfs,
-    });
+    const result = getAvailableBytes(nonexistent, { statfsSync: mockStatfs });
     expect(result).toBe(2048000);
-    // Should have been called with /tmp (the existing ancestor), not the nonexistent path
-    expect(mockStatfs).toHaveBeenCalledWith("/tmp");
+    expect(mockStatfs).toHaveBeenCalledWith(path.resolve(tmpDir));
   });
 });
 
