@@ -1,7 +1,14 @@
 import {
   describeBundledMetadataOnlyChannelCatalogContract,
+  describeChannelCatalogEntryContract,
   describeOfficialFallbackChannelCatalogContract,
-} from "../../test/helpers/channels/channel-catalog-contract.js";
+} from "../../../test/helpers/channels/channel-catalog-contract.js";
+
+describeChannelCatalogEntryContract({
+  channelId: "msteams",
+  npmSpec: "@openclaw/msteams",
+  alias: "teams",
+});
 
 const whatsappMeta = {
   id: "whatsapp",
