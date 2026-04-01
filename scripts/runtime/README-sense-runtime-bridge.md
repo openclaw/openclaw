@@ -8,6 +8,8 @@ Formal runtime-plane entrypoints for the T550 control plane live in:
 - `scripts/runtime/sense-runtime-intent.sh`
 - `scripts/runtime/sense_runtime_subprocess_tool.py`
 - `scripts/runtime/sense-runtime-subprocess-tool.sh`
+- `scripts/runtime/sense_runtime_manager_tool.py`
+- `scripts/runtime/sense-runtime-manager-tool.sh`
 
 Responsibility split:
 
@@ -23,13 +25,19 @@ Responsibility split:
   - runtime execution entrypoint
   - prints the final structured `result` object only
 - `sense-runtime-intent.sh`
-  - intent mapper for manager / bot / workflow
+  - intent mapper for shell/operator use
   - turns natural control-plane intents into runtime actions
 - `sense_runtime_subprocess_tool.py`
-  - manager-facing subprocess wrapper with explicit `--action`
+  - explicit-action subprocess wrapper
   - safely builds argv and delegates to `sense-runtime-intent.sh`
 - `sense-runtime-subprocess-tool.sh`
-  - executable shell entrypoint for manager / bot / workflow subprocess calls
+  - executable shell entrypoint for workflow subprocess calls
+- `sense_runtime_manager_tool.py`
+  - manager-facing tool wrapper
+  - accepts natural-language intent or explicit action
+  - returns a minimal manager-friendly JSON payload
+- `sense-runtime-manager-tool.sh`
+  - executable shell entrypoint for manager and bot subprocess calls
 
 Supported actions:
 
@@ -48,27 +56,29 @@ Action to intent mapping:
 Manager-friendly examples:
 
 ```bash
-scripts/runtime/sense-runtime-subprocess-tool.sh --action status --token "$SENSE_WORKER_TOKEN"
-scripts/runtime/sense-runtime-subprocess-tool.sh --action start --token "$SENSE_WORKER_TOKEN"
-scripts/runtime/sense-runtime-subprocess-tool.sh --action stop --token "$SENSE_WORKER_TOKEN"
-scripts/runtime/sense-runtime-subprocess-tool.sh --action sandbox-status --token "$SENSE_WORKER_TOKEN" --sandbox-name sense-wsl-agent
+scripts/runtime/sense-runtime-manager-tool.sh --intent "sense runtime status" --token "$SENSE_WORKER_TOKEN"
+scripts/runtime/sense-runtime-manager-tool.sh --intent "sense runtime start" --token "$SENSE_WORKER_TOKEN"
+scripts/runtime/sense-runtime-manager-tool.sh --intent "sense runtime stop" --token "$SENSE_WORKER_TOKEN"
+scripts/runtime/sense-runtime-manager-tool.sh --intent "sense sandbox status" --token "$SENSE_WORKER_TOKEN" --sandbox-name sense-wsl-agent
 ```
 
 Compatibility note:
 
 - `scripts/dev/sense_runtime_bridge.py` remains as a thin shim so existing one-off validation commands do not break
-- natural-language routing can keep calling `scripts/runtime/sense-runtime-intent.sh`
-- manager / bot / workflow integrations should prefer `scripts/runtime/sense-runtime-subprocess-tool.sh`
-- `scripts/runtime/sense-runtime-tool.sh` remains the stable execution boundary for result-only JSON
+- `scripts/runtime/sense-runtime-intent.sh` remains the natural-language shell entrypoint
+- `scripts/runtime/sense-runtime-subprocess-tool.sh` remains the stable explicit-action subprocess boundary
+- manager / bot integrations should prefer `scripts/runtime/sense-runtime-manager-tool.sh`
 
 Control plane / runtime plane split:
 
 - T550 OpenClaw = control plane and orchestration
 - Sense worker + Sense WSL NemoClaw = runtime plane and execution
 
-Subprocess tool path:
+Manager tool path:
 
 - manager / bot / workflow
+- -> `scripts/runtime/sense-runtime-manager-tool.sh`
+- -> `scripts/runtime/sense_runtime_manager_tool.py`
 - -> `scripts/runtime/sense-runtime-subprocess-tool.sh`
 - -> `scripts/runtime/sense_runtime_subprocess_tool.py`
 - -> `scripts/runtime/sense-runtime-intent.sh`
@@ -82,5 +92,5 @@ Operational notes:
 
 - `401 unauthorized` is returned directly when the shared token is wrong
 - `start` may still be functionally limited until provider configuration such as NVIDIA API keys is complete
-- `sandbox-status` is still a text-heavy runtime report, but the bridge now strips ANSI and keeps it readable for manager-side consumption
-- if manager or bot needs richer sandbox fields later, `sandbox-status` can be further structured without changing the bridge path
+- `sandbox-status` is still a text-heavy runtime report; manager currently gets summary/key_points/suggested_next_action plus a raw_output-carrying details block
+- if manager or bot needs richer sandbox fields later, `sandbox-status` should be the next target for structured parsing
