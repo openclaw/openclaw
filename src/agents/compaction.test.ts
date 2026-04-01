@@ -76,6 +76,90 @@ describe("splitMessagesByTokenShare", () => {
     const parts = splitMessagesByTokenShare(messages, 3);
     expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
   });
+
+  it("keeps tool_use and matching toolResult in the same chunk", () => {
+    // Regression test for #58836: split must not land between
+    // an assistant+tool_use message and its corresponding toolResult.
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000), // ~1000 tokens
+      makeAssistantToolCall(2, "call_split"), // ~1000 tokens (tool_use)
+      makeToolResult(3, "call_split", "r".repeat(800)), // ~200 tokens (toolResult)
+      makeMessage(4, 4000), // ~1000 tokens
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    // Find which chunk contains the assistant tool_use message
+    const chunkWithToolUse = parts.find((chunk) =>
+      chunk.some((m) => m.role === "assistant" && m.timestamp === 2),
+    );
+    // The matching toolResult must be in the same chunk
+    const chunkWithToolResult = parts.find((chunk) =>
+      chunk.some((m) => m.role === "toolResult" && m.timestamp === 3),
+    );
+    expect(chunkWithToolUse).toBeDefined();
+    expect(chunkWithToolResult).toBeDefined();
+    expect(chunkWithToolUse).toBe(chunkWithToolResult);
+
+    // All messages must still be present
+    expect(parts.flat().length).toBe(messages.length);
+  });
+
+  it("keeps multiple toolResults with their assistant in the same chunk", () => {
+    // Assistant with two tool_use blocks; both toolResults must stay together.
+    const assistant = makeAgentAssistantMessage({
+      content: [
+        { type: "text", text: "x".repeat(4000) },
+        { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
+        { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
+      ],
+      model: "gpt-5.2",
+      stopReason: "stop",
+      timestamp: 2,
+    });
+
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      assistant,
+      makeToolResult(3, "call_a", "result_a".repeat(200)),
+      makeToolResult(4, "call_b", "result_b".repeat(200)),
+      makeMessage(5, 4000),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    const chunkWithAssistant = parts.find((chunk) =>
+      chunk.some((m) => m.role === "assistant" && m.timestamp === 2),
+    )!;
+    const resultTimestamps = chunkWithAssistant
+      .filter((m) => m.role === "toolResult")
+      .map((m) => m.timestamp);
+    expect(resultTimestamps).toContain(3);
+    expect(resultTimestamps).toContain(4);
+    expect(parts.flat().length).toBe(messages.length);
+  });
+
+  it("splits after a completed tool_call/result pair when over budget", () => {
+    // Regression: after all toolResults for an assistant are consumed,
+    // the chunk must still be eligible for splitting so that
+    // pruneHistoryForContextShare can produce multiple chunks.
+    const messages: AgentMessage[] = [
+      makeAssistantToolCall(1, "call_x", "y".repeat(4000)), // ~1000 tokens
+      makeToolResult(2, "call_x", "r".repeat(4000)), // ~1000 tokens
+      makeMessage(3, 4000), // ~1000 tokens
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    // Must produce 2 chunks, not 1.
+    expect(parts.length).toBe(2);
+    // The tool pair stays together in chunk 1.
+    const chunk1Roles = parts[0].map((m) => m.role);
+    expect(chunk1Roles).toContain("assistant");
+    expect(chunk1Roles).toContain("toolResult");
+    // All messages preserved.
+    expect(parts.flat().length).toBe(messages.length);
+  });
 });
 
 describe("pruneHistoryForContextShare", () => {
@@ -176,15 +260,15 @@ describe("pruneHistoryForContextShare", () => {
       parts: 2,
     });
 
-    // The orphaned tool_result should NOT be in kept messages
-    // (this is the critical invariant that prevents API errors)
+    // With the tool_use/toolResult boundary fix, the assistant+tool_use and
+    // its toolResult now stay in the same chunk. When that chunk is dropped,
+    // both are dropped together — no orphaned toolResult in the kept portion.
     const keptRoles = pruned.messages.map((m) => m.role);
     expect(keptRoles).not.toContain("toolResult");
 
-    // The orphan count should be reflected in droppedMessages
-    // (orphaned tool_results are dropped but not added to droppedMessagesList
-    // since they lack context for summarization)
-    expect(pruned.droppedMessages).toBeGreaterThan(pruned.droppedMessagesList.length);
+    // Both assistant and toolResult are dropped as a unit, so
+    // droppedMessages equals droppedMessagesList.length (no extra orphans).
+    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
 
   it("keeps tool_result when its tool_use is also kept", () => {
@@ -218,7 +302,8 @@ describe("pruneHistoryForContextShare", () => {
     // Scenario: assistant with multiple tool_use blocks is dropped,
     // all corresponding tool_results should be removed from kept messages
     const messages: AgentMessage[] = [
-      // Chunk 1 (will be dropped) - contains multiple tool_use blocks
+      // With the boundary fix, assistant + both toolResults stay in the same chunk.
+      // When that chunk is dropped, all three are dropped together.
       makeAgentAssistantMessage({
         content: [
           { type: "text", text: "x".repeat(4000) },
@@ -229,7 +314,6 @@ describe("pruneHistoryForContextShare", () => {
         stopReason: "stop",
         timestamp: 1,
       }),
-      // Chunk 2 (will be kept) - contains orphaned tool_results
       makeToolResult(2, "call_a", "result_a"),
       makeToolResult(3, "call_b", "result_b"),
       {
@@ -246,13 +330,12 @@ describe("pruneHistoryForContextShare", () => {
       parts: 2,
     });
 
-    // No orphaned tool_results should be in kept messages
+    // No tool_results should be in kept messages (all dropped with their assistant)
     const keptToolResults = pruned.messages.filter((m) => m.role === "toolResult");
     expect(keptToolResults).toHaveLength(0);
 
-    // The orphan count should reflect both dropped tool_results
-    // droppedMessages = 1 (assistant) + 2 (orphaned tool_results) = 3
-    // droppedMessagesList only has the assistant message
-    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length + 2);
+    // All three messages (assistant + 2 toolResults) are dropped as a unit,
+    // so droppedMessages equals droppedMessagesList.length (no extra orphans).
+    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
 });

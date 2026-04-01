@@ -9,6 +9,7 @@ import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -131,9 +132,16 @@ export function splitMessagesByTokenShare(
   let current: AgentMessage[] = [];
   let currentTokens = 0;
 
+  // Collect pending tool call IDs from the last assistant message in the current chunk.
+  // When non-empty, the chunk boundary is deferred until all matching toolResults are consumed.
+  let pendingToolCallIds = new Set<string>();
+
   for (const message of messages) {
     const messageTokens = estimateCompactionMessageTokens(message);
+
+    // Only consider a split when there are no pending tool calls awaiting results.
     if (
+      pendingToolCallIds.size === 0 &&
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
       currentTokens + messageTokens > targetTokens
@@ -145,6 +153,40 @@ export function splitMessagesByTokenShare(
 
     current.push(message);
     currentTokens += messageTokens;
+
+    // Track tool call boundaries: when an assistant message contains tool_use blocks,
+    // record their IDs so subsequent matching toolResult messages stay in the same chunk.
+    if (message.role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(message);
+      if (toolCalls.length > 0) {
+        pendingToolCallIds = new Set(toolCalls.map((t) => t.id));
+      } else {
+        // No tool calls in this assistant turn — clear any stale pending state.
+        pendingToolCallIds = new Set();
+      }
+    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      const resultId = extractToolResultId(message);
+      if (resultId) {
+        pendingToolCallIds.delete(resultId);
+      }
+      // Once all pending tool results have been consumed, check whether the
+      // current chunk has exceeded the target and should be split now.
+      // Without this, the split opportunity is missed because the gate at the
+      // top of the loop already passed before pending IDs were cleared.
+      if (
+        pendingToolCallIds.size === 0 &&
+        chunks.length < normalizedParts - 1 &&
+        currentTokens > targetTokens
+      ) {
+        chunks.push(current);
+        current = [];
+        currentTokens = 0;
+      }
+    } else {
+      // Any non-assistant, non-toolResult message clears pending tracking,
+      // since tool results should directly follow their assistant turn.
+      pendingToolCallIds = new Set();
+    }
   }
 
   if (current.length > 0) {
