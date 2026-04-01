@@ -214,7 +214,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       pushAssistantText(text);
     }
 
-    state.assistantTextBaseline = assistantTexts.length;
+    // NOTE: We intentionally do NOT update assistantTextBaseline here.
+    // The baseline must remain pointing to the start of the current assistant
+    // message so that buildEmbeddedRunPayloads can correctly scope its fallback
+    // deduplication to entries from this message only. The baseline will be
+    // updated by resetAssistantMessageState when the next assistant message starts.
   };
 
   // ── Messaging tool duplicate detection ──────────────────────────────────────
