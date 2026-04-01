@@ -640,10 +640,22 @@ export class TelegramPollingSession {
         signal: controller.signal,
       });
       const status = response.status;
-      await response.body?.cancel().catch(() => {});
       if (response.ok) {
-        return "ok";
+        // Telegram can return HTTP 200 with { "ok": false } for throttling
+        // or upstream application errors. Validate the payload before
+        // treating the heartbeat as successful.
+        let telegramOk = true;
+        try {
+          const body = (await response.json()) as { ok?: boolean };
+          telegramOk = body.ok !== false;
+        } catch {
+          // If JSON parsing fails, still treat HTTP 200 as success —
+          // a reachable server with a malformed body is better than
+          // one that is unreachable.
+        }
+        return telegramOk ? "ok" : "network-failure";
       }
+      await response.body?.cancel().catch(() => {});
       if (status === 401 || status === 403 || status === 404) {
         return "fatal-api-failure";
       }
