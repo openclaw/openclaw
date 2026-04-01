@@ -198,4 +198,41 @@ describe("gateway/node-catalog", () => {
       }),
     );
   });
+
+  it("prefers the live command surface for connected nodes", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [],
+      pairedNodes: [
+        {
+          nodeId: "mac-1",
+          token: "node-token",
+          platform: "darwin",
+          caps: ["system"],
+          commands: ["system.run"],
+          createdAtMs: 1,
+          approvedAtMs: 123,
+        },
+      ],
+      connectedNodes: [
+        {
+          nodeId: "mac-1",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: "Mac",
+          platform: "darwin",
+          caps: ["canvas"],
+          commands: ["canvas.snapshot"],
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    expect(getKnownNode(catalog, "mac-1")).toEqual(
+      expect.objectContaining({
+        caps: ["canvas"],
+        commands: ["canvas.snapshot"],
+        connected: true,
+      }),
+    );
+  });
 });

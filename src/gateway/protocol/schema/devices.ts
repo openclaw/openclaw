@@ -51,7 +51,6 @@ export const DevicePairRequestedEventSchema = Type.Object(
     remoteIp: Type.Optional(NonEmptyString),
     silent: Type.Optional(Type.Boolean()),
     isRepair: Type.Optional(Type.Boolean()),
-    repairReason: Type.Optional(NonEmptyString),
     ts: Type.Integer({ minimum: 0 }),
   },
   { additionalProperties: false },
