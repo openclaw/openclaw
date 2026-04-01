@@ -378,6 +378,95 @@ describe("resolveMatrixConfig", () => {
     );
   });
 
+  it("does not materialize a default account from shared top-level defaults alone", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          name: "Shared Defaults",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveImplicitMatrixAccountId(cfg, {} as NodeJS.ProcessEnv)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
+  });
+
+  it("does not materialize a default account from partial top-level auth defaults", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "shared-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveImplicitMatrixAccountId(cfg, {} as NodeJS.ProcessEnv)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
+  });
+
+  it("honors injected env when implicit Matrix account selection becomes ambiguous", () => {
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_ACCESS_TOKEN: "default-token",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBeNull();
+    expect(() => resolveMatrixAuthContext({ cfg, env })).toThrow(
+      /channels\.matrix\.defaultAccount.*--account <id>/i,
+    );
+  });
+
+  it("does not materialize a default env account from partial global auth fields", () => {
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_ACCESS_TOKEN: "shared-token",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
+  });
+
+  it("keeps implicit selection for env-backed accounts that can use cached credentials", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_OPS_USER_ID: "@ops:example.org",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
+  });
+
   it("rejects explicit non-default account ids that are neither configured nor scoped in env", () => {
     const cfg = {
       channels: {
@@ -721,6 +810,43 @@ describe("resolveMatrixAuth", () => {
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
+      accessToken: "cached-token",
+      deviceId: "CACHEDDEVICE",
+    });
+    expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses cached matching credentials for env-backed named accounts without fresh auth", async () => {
+    vi.mocked(credentialsReadModule!.loadMatrixCredentials).mockReturnValue({
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "cached-token",
+      deviceId: "CACHEDDEVICE",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    vi.mocked(credentialsReadModule!.credentialsMatchConfig).mockReturnValue(true);
+
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_OPS_USER_ID: "@ops:example.org",
+    } as NodeJS.ProcessEnv;
+
+    const auth = await resolveMatrixAuth({
+      cfg,
+      env,
+      accountId: "ops",
+    });
+
+    expect(auth).toMatchObject({
+      accountId: "ops",
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
       accessToken: "cached-token",
       deviceId: "CACHEDDEVICE",
     });
