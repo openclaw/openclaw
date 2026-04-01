@@ -609,12 +609,12 @@ export function resolveMatrixConfigForAccount(
 
 export function resolveImplicitMatrixAccountId(
   cfg: CoreConfig,
-  _env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  if (requiresExplicitMatrixDefaultAccount(cfg)) {
+  if (requiresExplicitMatrixDefaultAccount(cfg, env)) {
     return null;
   }
-  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
+  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg, env));
 }
 
 export function resolveMatrixAuthContext(params?: {
