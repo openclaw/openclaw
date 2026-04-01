@@ -1,5 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
-import { slackOutbound } from "../../../../test/channel-outbounds.js";
+import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -123,6 +123,19 @@ type SlackOutboundPayloadHarness = {
   to: string;
 };
 
+let slackOutboundForTests:
+  | typeof import("../../../../extensions/slack/test-api.js").slackOutbound
+  | undefined;
+
+function getSlackOutboundForTests() {
+  if (!slackOutboundForTests) {
+    ({ slackOutbound: slackOutboundForTests } = loadBundledPluginTestApiSync<{
+      slackOutbound: typeof import("../../../../extensions/slack/test-api.js").slackOutbound;
+    }>("slack"));
+  }
+  return slackOutboundForTests;
+}
+
 export function createSlackOutboundPayloadHarness(params: {
   payload: ReplyPayload;
   sendResults?: Array<{ messageId: string }>;
@@ -143,7 +156,7 @@ export function createSlackOutboundPayloadHarness(params: {
     },
   };
   return {
-    run: async () => await slackOutbound.sendPayload!(ctx),
+    run: async () => await getSlackOutboundForTests().sendPayload!(ctx),
     sendMock: sendSlack,
     to: ctx.to,
   };

@@ -5,7 +5,7 @@ import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";

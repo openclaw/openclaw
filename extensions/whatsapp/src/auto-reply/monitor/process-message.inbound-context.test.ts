@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let capturedCtx: unknown;

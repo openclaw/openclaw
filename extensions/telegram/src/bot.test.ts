@@ -4,7 +4,7 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 const {
