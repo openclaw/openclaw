@@ -196,3 +196,21 @@ Routing loop behavior change:
   - `next_step = configure_gpu_runtime`
 
 This is still a minimal remediation layer. It uses current structured sandbox fields and does not yet call a separate GPU probe or host-side scheduler inspection.
+
+`configure_gpu_runtime` now performs a minimal real remediation attempt instead of only returning a next step:
+
+- re-check current structured sandbox GPU signals
+- trigger `sense runtime start`
+- re-check runtime status
+- re-check structured sandbox status
+- rebuild `gpu_status` from the follow-up sandbox signals
+
+Current behavior after remediation:
+
+- if `gpu_status.gpu_ready == true`
+  - `next_step = run_runtime_task`
+- if `gpu_status.gpu_ready == false`
+  - `next_step = configure_gpu_runtime`
+  - routing loop stops with `final_state = gpu_not_ready`
+
+This is intentionally conservative. It can improve readiness when runtime start fixes a transient issue, but if GPU runtime prerequisites are still missing, the loop stops with a structured explanation instead of retrying indefinitely.

@@ -206,6 +206,29 @@ def build_gpu_status(gpu_signals: dict) -> dict:
     return status
 
 
+def annotate_gpu_status_from_start(gpu_status: dict, start_result: dict | None) -> dict:
+    status = dict(gpu_status)
+    missing = list(status.get('missing_requirements') or [])
+    if isinstance(start_result, dict):
+        haystacks = []
+        summary = start_result.get('summary')
+        if isinstance(summary, str):
+            haystacks.append(summary.lower())
+        for item in start_result.get('key_points') if isinstance(start_result.get('key_points'), list) else []:
+            if isinstance(item, str):
+                haystacks.append(item.lower())
+        text = ' '.join(haystacks)
+        if 'api key required' in text or 'nvidia api key' in text:
+            missing.append('API key may be required')
+    deduped = []
+    for item in missing:
+        if item not in deduped:
+            deduped.append(item)
+    status['missing_requirements'] = deduped
+    status['gpu_ready'] = len(deduped) == 0
+    return status
+
+
 def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
@@ -246,6 +269,29 @@ def main() -> int:
             response['next_step'] = 'configure_gpu_runtime'
         else:
             response['next_step'] = 'inspect_gpu_runtime'
+    elif recommended_action == 'configure_gpu_runtime':
+        initial_sandbox_payload = get_sandbox_status(script_dir, args)
+        initial_gpu_status = build_gpu_status(summarize_capabilities(initial_sandbox_payload))
+        start_result = run_runtime_start(script_dir, args)
+        runtime_status = get_runtime_status(script_dir, args)
+        followup_sandbox_payload = get_sandbox_status(script_dir, args)
+        followup_gpu_status = build_gpu_status(summarize_capabilities(followup_sandbox_payload))
+        followup_gpu_status = annotate_gpu_status_from_start(followup_gpu_status, start_result)
+
+        remediation_steps = ['checked sandbox gpu signals', 'triggered sense runtime start', 're-checked runtime and sandbox status']
+        if initial_gpu_status.get('gpu_ready') and followup_gpu_status.get('gpu_ready'):
+            remediation_steps.insert(1, 'gpu runtime already appeared ready before remediation')
+
+        response['remediation_result'] = '; '.join(remediation_steps)
+        response['gpu_status'] = followup_gpu_status
+        response['initial_gpu_status'] = initial_gpu_status
+        response['start_result'] = start_result
+        response['runtime_status'] = runtime_status
+        response['followup_status'] = followup_gpu_status
+        if followup_gpu_status.get('gpu_ready') is True:
+            response['next_step'] = 'run_runtime_task'
+        else:
+            response['next_step'] = 'configure_gpu_runtime'
     elif recommended_action == 'wait_for_runtime_ready':
         attempts: list[dict] = []
         last_decision = decision

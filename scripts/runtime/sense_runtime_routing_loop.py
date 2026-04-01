@@ -116,7 +116,24 @@ def main() -> int:
             break
 
         gpu_status = remediation.get('gpu_status') if isinstance(remediation, dict) else None
-        if isinstance(gpu_status, dict) and gpu_status.get('gpu_ready') is False:
+        remediation_action = str(remediation.get('remediation_action') or '') if isinstance(remediation, dict) else ''
+        if next_step == 'configure_gpu_runtime' and remediation_action != 'configure_gpu_runtime':
+            configure_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'configure_gpu_runtime']
+            configure_result = run_json(configure_cmd)
+            last_remediation = configure_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'configure_gpu_runtime', 'result': configure_result})
+            next_step = str(configure_result.get('next_step') or next_step)
+            configured_gpu_status = configure_result.get('gpu_status') if isinstance(configure_result, dict) else None
+            if isinstance(configured_gpu_status, dict) and configured_gpu_status.get('gpu_ready') is False:
+                final_state = 'gpu_not_ready'
+                next_step = 'configure_gpu_runtime'
+                break
+            if next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
+        gpu_status = last_remediation.get('gpu_status') if isinstance(last_remediation, dict) else None
+        if isinstance(gpu_status, dict) and gpu_status.get('gpu_ready') is False and remediation_action == 'configure_gpu_runtime':
             final_state = 'gpu_not_ready'
             next_step = 'configure_gpu_runtime'
             break
