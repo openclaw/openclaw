@@ -29,7 +29,13 @@ export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
 };
 
 /** Lazy agent-tool factory used when tool availability depends on config. */
-export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
+export type ChannelAgentToolFactory = (params: {
+  cfg?: OpenClawConfig;
+  /** Trusted sender id from inbound context (server-injected, not LLM-controlled). */
+  requesterSenderId?: string | null;
+  /** Whether the current sender is the bot owner. */
+  senderIsOwner?: boolean;
+}) => ChannelAgentTool[];
 
 /**
  * Discovery-time inputs passed to channel action adapters when the core is

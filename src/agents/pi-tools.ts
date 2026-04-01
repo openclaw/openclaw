@@ -701,8 +701,14 @@ export function createOpenClawCodingTools(options?: {
     ...(execTool ? [execTool as unknown as AnyAgentTool] : []),
     ...(processTool ? [processTool as unknown as AnyAgentTool] : []),
     // Channel docking: include channel-defined agent tools (login, etc.).
-    ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
-    ...(includeOpenClawTools
+    ...(includeCoreTools
+      ? listChannelAgentTools({
+          cfg: options?.config,
+          requesterSenderId: options?.senderId,
+          senderIsOwner: options?.senderIsOwner,
+        })
+      : []),
+    ...(includeCoreTools
       ? createOpenClawTools({
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
