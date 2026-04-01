@@ -31,6 +31,14 @@ describe("normalizeGoogleApiBaseUrl", () => {
       value: "generativelanguage.googleapis.com",
       expected: "generativelanguage.googleapis.com",
     },
+    {
+      value: "https://proxy.example.com/gemini?tenant=acme",
+      expected: "https://proxy.example.com/gemini?tenant=acme",
+    },
+    {
+      value: "https://proxy.example.com/gemini#section",
+      expected: "https://proxy.example.com/gemini#section",
+    },
   ])("normalizes %s", ({ value, expected }) => {
     expect(normalizeGoogleApiBaseUrl(value)).toBe(expected);
   });

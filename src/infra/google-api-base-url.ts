@@ -14,13 +14,14 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   const raw = trimTrailingSlashes(baseUrl?.trim() || DEFAULT_GOOGLE_API_BASE_URL);
   try {
     const url = new URL(raw);
-    url.hash = "";
-    url.search = "";
-    if (
-      resolveProviderEndpoint(url.toString()).endpointClass === "google-generative-ai" &&
-      trimTrailingSlashes(url.pathname || "") === ""
-    ) {
-      url.pathname = "/v1beta";
+    const isGoogleEndpoint =
+      resolveProviderEndpoint(url.toString()).endpointClass === "google-generative-ai";
+    if (isGoogleEndpoint) {
+      url.hash = "";
+      url.search = "";
+      if (trimTrailingSlashes(url.pathname || "") === "") {
+        url.pathname = "/v1beta";
+      }
     }
     return trimTrailingSlashes(url.toString());
   } catch {
