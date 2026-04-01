@@ -32,7 +32,7 @@ function estimateSessionTokensFromTranscript(entry: SessionEntry): number | unde
   try {
     // Dynamic require to avoid circular imports
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { readSessionMessages } = require("../../agents/pi-embedded-runner/session-io.js");
+    const { readSessionMessages } = require("../../gateway/session-utils.fs.js");
     const messages = readSessionMessages(
       sessionId,
       undefined,
