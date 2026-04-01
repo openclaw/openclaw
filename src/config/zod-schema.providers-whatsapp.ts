@@ -9,6 +9,7 @@ import {
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  HumanTakeoverSchema,
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
 
@@ -45,6 +46,7 @@ const WhatsAppSharedSchema = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   selfChatMode: z.boolean().optional(),
   allowFrom: z.array(z.string()).optional(),
+  humanTakeover: HumanTakeoverSchema,
   defaultTo: z.string().optional(),
   groupAllowFrom: z.array(z.string()).optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),

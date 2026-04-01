@@ -3,6 +3,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  HumanTakeoverConfig,
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
@@ -301,6 +302,8 @@ export type DiscordAccountConfig = {
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
+  /** Owner-triggered human takeover cooldown controls. */
+  humanTakeover?: HumanTakeoverConfig;
   /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
   defaultTo?: string;
   dm?: DiscordDmConfig;

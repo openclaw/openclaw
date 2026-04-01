@@ -149,9 +149,21 @@ export async function checkInboundAccessControl(params: {
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
+      const humanTakeoverEnabled = account.humanTakeover?.enabled === true;
+      if (!humanTakeoverEnabled) {
+        logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+      logVerbose(
+        "Allowing outbound DM (fromMe) through inbound pipeline to activate human takeover cooldown.",
+      );
       return {
-        allowed: false,
+        allowed: true,
         shouldMarkRead: false,
         isSelfChat,
         resolvedAccountId: account.accountId,

@@ -121,6 +121,23 @@ Token resolution order is account-aware. In practice, config values win over env
 
     For one-owner bots, prefer `dmPolicy: "allowlist"` with explicit numeric `allowFrom` IDs to keep access policy durable in config (instead of depending on previous pairing approvals).
 
+    Human takeover (owner cooldown):
+
+    ```json5
+    {
+      channels: {
+        telegram: {
+          humanTakeover: {
+            enabled: true,
+            cooldownSeconds: 300,
+          },
+        },
+      },
+    }
+    ```
+
+    When enabled, owner messages trigger a temporary cooldown window where auto-replies are skipped for the same conversation session.
+
     ### Finding your Telegram user ID
 
     Safer (no third-party bot):

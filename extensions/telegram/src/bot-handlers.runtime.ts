@@ -5,7 +5,9 @@ import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-h
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
+  decideHumanTakeover,
   resolveInboundDebounceMs,
+  resolveHumanTakeoverConfig,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildCommandsMessagePaginated,
@@ -145,6 +147,15 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const humanTakeover = resolveHumanTakeoverConfig({
+    channelConfig: cfg.channels?.telegram,
+    accountConfig: telegramCfg,
+  });
+  const ownerAllowFrom = normalizeDmAllowFromWithStore({
+    allowFrom,
+    storeAllowFrom: [],
+    dmPolicy: "allowlist",
+  });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
@@ -1069,9 +1080,29 @@ export const registerTelegramHandlers = ({
         ]
       : [];
     const senderId = msg.from?.id ? String(msg.from.id) : "";
+    const senderUsername = msg.from?.username ?? "";
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
+    const takeoverDecision = decideHumanTakeover({
+      sessionKey: `telegram:${accountId ?? "default"}:${conversationKey}`,
+      enabled: humanTakeover.enabled,
+      cooldownMs: humanTakeover.cooldownMs,
+      isOwnerMessage: isSenderAllowed({ allow: ownerAllowFrom, senderId, senderUsername }),
+      isCommandLike: Boolean((msg.text ?? msg.caption ?? "").trim().startsWith("/")),
+    });
+    if (takeoverDecision.skipAutoReply) {
+      if (takeoverDecision.reason === "owner-message") {
+        logVerbose(
+          `Skipping telegram auto-reply: human takeover activated for ${conversationKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s)`,
+        );
+      } else {
+        logVerbose(
+          `Skipping telegram auto-reply: human takeover cooldown active for ${conversationKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s left)`,
+        );
+      }
+      return;
+    }
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
       ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`

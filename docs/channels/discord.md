@@ -267,6 +267,25 @@ Now create some channels on your Discord server and start chatting. Your agent c
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 
+## Human takeover cooldown
+
+Enable owner-triggered cooldown so manual owner messages temporarily pause auto-replies in the same session:
+
+```json5
+{
+  channels: {
+    discord: {
+      humanTakeover: {
+        enabled: true,
+        cooldownSeconds: 300,
+      },
+    },
+  },
+}
+```
+
+Owner detection follows configured owner allowlist (`channels.discord.allowFrom` / `channels.discord.dm.allowFrom`).
+
 ## Forum channels
 
 Discord forum and media channels only accept thread posts. OpenClaw supports two ways to create them:

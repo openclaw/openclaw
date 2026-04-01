@@ -1,5 +1,7 @@
 import { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  decideHumanTakeover,
+  resolveHumanTakeoverConfig,
   resolveInboundSessionEnvelopeContext,
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -158,6 +160,10 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
 }) {
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+  });
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
@@ -212,6 +218,39 @@ export async function processMessage(params: {
     return false;
   }
 
+  const sender = getSenderIdentity(params.msg);
+  const normalizedOwnerAllowFrom = new Set(
+    (account.allowFrom ?? [])
+      .map((entry) => normalizeE164(String(entry)))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+  const senderE164 = sender.e164 ? normalizeE164(sender.e164) : null;
+  const ownerTriggeredTakeover =
+    Boolean(params.msg.fromMe) || Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164));
+  const humanTakeover = resolveHumanTakeoverConfig({
+    channelConfig: params.cfg.channels?.whatsapp,
+    accountConfig: account,
+  });
+  const takeoverDecision = decideHumanTakeover({
+    sessionKey: params.route.sessionKey,
+    enabled: humanTakeover.enabled,
+    cooldownMs: humanTakeover.cooldownMs,
+    isOwnerMessage: ownerTriggeredTakeover,
+    isCommandLike: params.msg.body.trim().startsWith("/"),
+  });
+  if (takeoverDecision.skipAutoReply) {
+    if (takeoverDecision.reason === "owner-message") {
+      logVerbose(
+        `Skipping auto-reply: human takeover activated for ${params.route.sessionKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s)`,
+      );
+    } else {
+      logVerbose(
+        `Skipping auto-reply: human takeover cooldown active for ${params.route.sessionKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s left)`,
+      );
+    }
+    return false;
+  }
+
   // Send ack reaction immediately upon message receipt (post-gating)
   maybeSendAckReaction({
     cfg: params.cfg,
@@ -248,7 +287,6 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
-  const sender = getSenderIdentity(params.msg);
   const self = getSelfIdentity(params.msg);
   const replyTo = getReplyContext(params.msg);
   const dmRouteTarget =
