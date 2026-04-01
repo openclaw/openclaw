@@ -73,4 +73,31 @@ describe("rolling log file size rotation", () => {
 
     stderrSpy.mockRestore();
   });
+
+  it("does not rotate when a single serialized line exceeds maxFileBytes", () => {
+    const today = formatLocalDate(new Date());
+    logDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-log-rot-"));
+    rollingPath = path.join(logDir, `openclaw-${today}.log`);
+    rmRollingLogFamily(rollingPath);
+
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+
+    const maxFileBytes = 256;
+    setLoggerOverride({ level: "info", file: rollingPath, maxFileBytes });
+    const logger = getLogger();
+
+    const huge = "h".repeat(400);
+    for (let i = 0; i < 15; i++) {
+      logger.error(`oversize-${i}-${huge}`);
+    }
+
+    expect(fs.existsSync(`${rollingPath}.1`)).toBe(false);
+    for (let n = 2; n < 12; n++) {
+      expect(fs.existsSync(`${rollingPath}.${n}`)).toBe(false);
+    }
+
+    stderrSpy.mockRestore();
+  });
 });

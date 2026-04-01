@@ -218,8 +218,13 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       let pendingBytes = currentFileBytes;
 
       // Rotate before hitting the hard cap (rolling logs only): keeps writes flowing when the
-      // current file cannot fit this line.
-      if (isRollingPath(settings.file) && pendingBytes + payloadBytes > settings.maxFileBytes) {
+      // current file cannot fit this line. Skip rotation when a single entry alone exceeds
+      // maxFileBytes — otherwise every suppressed write would rename to .N and pile up segments.
+      if (
+        isRollingPath(settings.file) &&
+        pendingBytes + payloadBytes > settings.maxFileBytes &&
+        payloadBytes <= settings.maxFileBytes
+      ) {
         rotateLogFile(settings.file);
         pendingBytes = 0;
         warnedAboutSizeCap = false;
