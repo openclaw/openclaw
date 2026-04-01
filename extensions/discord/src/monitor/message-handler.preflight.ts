@@ -8,9 +8,9 @@ import {
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";

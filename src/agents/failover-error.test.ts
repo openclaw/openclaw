@@ -6,6 +6,7 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "./failover-error.js";
+import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -222,6 +223,20 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
+  it("keeps context overflow first-class in the shared signal classifier", () => {
+    expect(
+      classifyFailoverSignal({
+        status: 400,
+        message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        message: "prompt is too long: 150000 tokens > 128000 maximum",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -383,6 +398,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
   });
 
+  it("infers rate-limit and overload from symbolic error codes", () => {
+    expect(resolveFailoverReasonFromError({ code: "RESOURCE_EXHAUSTED" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ code: "THROTTLING_EXCEPTION" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ code: "OVERLOADED_ERROR" })).toBe("overloaded");
+  });
+
   it("infers timeout from abort/error stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
@@ -438,6 +459,15 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
     expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
     expect(coerceToFailoverError(err)?.status).toBe(429);
+  });
+
+  it("lets wrapped causes override parent context-overflow classifications", () => {
+    const err = new Error("INVALID_ARGUMENT: input exceeds the maximum number of tokens", {
+      cause: { code: "RESOURCE_EXHAUSTED" },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
