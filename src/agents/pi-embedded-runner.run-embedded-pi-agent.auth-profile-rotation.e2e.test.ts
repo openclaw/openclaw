@@ -898,6 +898,51 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
 
+  it("emits an API error notice when overload rotation cap forces model fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const onBlockReply = vi.fn();
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: [],
+          lastAssistant: buildAssistant({
+            stopReason: "error",
+            errorMessage:
+              '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+          }),
+        }),
+      );
+
+      await expect(
+        runEmbeddedPiAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:overloaded-cap-notice",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig({
+            fallbacks: ["openai/mock-2"],
+            overloadedProfileRotations: 0,
+          }),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:overloaded-cap-notice",
+          onBlockReply,
+        }),
+      ).rejects.toMatchObject({ name: "FailoverError", reason: "overloaded" });
+
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(onBlockReply.mock.calls[0]?.[0]?.text).toContain("temporary error");
+    });
+  });
+
   it("rotates on timeout without cooling down the timed-out profile", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: "request ended without sending any chunks",
