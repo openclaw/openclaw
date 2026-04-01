@@ -573,15 +573,21 @@ export async function spawnSubagentDirect(
     globalPolicy: globalFs,
     agentPolicy: agentFs,
     spawnPolicy: {
-      workspaceOnly: params.fsPolicy?.workspaceOnly ?? subagentFs?.workspaceOnly,
-      allowedPaths: params.fsPolicy?.allowedPaths ?? subagentFs?.allowedPaths,
-      denyPaths: params.fsPolicy?.denyPaths ?? subagentFs?.denyPaths,
+      // Subagent defaults are an independent ceiling layer.
+      // Spawn-time overrides may only tighten further; they must not replace the ceiling.
+      workspaceOnly: subagentFs?.workspaceOnly === true || params.fsPolicy?.workspaceOnly === true,
+      allowedPaths: subagentFs?.allowedPaths ?? params.fsPolicy?.allowedPaths,
+      denyPaths:
+        subagentFs?.denyPaths || params.fsPolicy?.denyPaths
+          ? [...(subagentFs?.denyPaths ?? []), ...(params.fsPolicy?.denyPaths ?? [])]
+          : undefined,
     },
   });
 
   if (
     effectiveFsPolicy.workspaceOnly ||
-    (effectiveFsPolicy.allowedPaths?.length ?? 0) > 0 ||
+    // Persist explicit empty allowlists (deny-all) as a real ceiling.
+    effectiveFsPolicy.allowedPaths !== undefined ||
     (effectiveFsPolicy.denyPaths?.length ?? 0) > 0
   ) {
     const fsPolicyPatchError = await patchChildSession({

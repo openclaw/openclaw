@@ -396,8 +396,10 @@ export function createOpenClawCodingTools(options?: {
     });
   const shouldWrapFsTools =
     workspaceOnly ||
-    (fsConfig.allowedPaths?.length ?? 0) > 0 ||
-    (fsConfig.denyPaths?.length ?? 0) > 0;
+    // Gate wrapping on the *effective* policy, not only config defaults.
+    // Spawned subagents may supply fsPolicy overrides even when global/agent fsConfig is empty.
+    fsPolicy.allowedPaths !== undefined ||
+    (fsPolicy.denyPaths?.length ?? 0) > 0;
 
   if (sandboxRoot && !sandboxFsBridge) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
