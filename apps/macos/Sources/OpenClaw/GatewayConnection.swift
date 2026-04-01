@@ -618,11 +618,13 @@ extension GatewayConnection {
     func chatHistory(
         sessionKey: String,
         limit: Int? = nil,
+        maxChars: Int? = nil,
         timeoutMs: Int? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
         if let limit { params["limit"] = AnyCodable(limit) }
+        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
         let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .chatHistory,

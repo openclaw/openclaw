@@ -10628,6 +10628,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          webchat: {
+            type: "object",
+            properties: {
+              chatHistoryMaxChars: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 500000,
+              },
+            },
+            additionalProperties: false,
+          },
           channelHealthCheckMinutes: {
             type: "integer",
             minimum: 0,
@@ -13505,6 +13516,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway Node Denylist",
       help: "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
       tags: ["access", "network"],
+    },
+    "gateway.webchat.chatHistoryMaxChars": {
+      label: "WebChat History Max Chars",
+      help: "Max characters per text field in chat.history responses before truncation (default: 12000).",
+      tags: ["network", "performance"],
     },
     "nodeHost.browserProxy": {
       label: "Node Browser Proxy",
