@@ -5,9 +5,8 @@ vi.hoisted(() => {
   process.env.OPENCLAW_TEST_FAST = "1";
 });
 
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";

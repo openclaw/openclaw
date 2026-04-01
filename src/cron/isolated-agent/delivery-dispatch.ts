@@ -20,12 +20,7 @@ import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.js";
-import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
-  readDescendantSubagentFallbackReply,
-  waitForDescendantSubagentSummary,
-} from "./subagent-followup.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const channelLower = channel.trim().toLowerCase();
@@ -141,12 +136,22 @@ type CompletedDirectCronDelivery = {
 };
 
 let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
+let subagentFollowupRuntimePromise:
+  | Promise<typeof import("./subagent-followup.runtime.js")>
+  | undefined;
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
 
 async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
   gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
   return await gatewayCallRuntimePromise;
+}
+
+async function loadSubagentFollowupRuntime(): Promise<
+  typeof import("./subagent-followup.runtime.js")
+> {
+  subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
+  return await subagentFollowupRuntimePromise;
 }
 
 function cloneDeliveryResults(
@@ -545,21 +550,27 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const shouldCheckCompletedDescendants =
+      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+    const needsSubagentFollowupRuntime =
+      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
+    const subagentFollowupRuntime = needsSubagentFollowupRuntime
+      ? await loadSubagentFollowupRuntime()
+      : undefined;
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
     // expectedSubagentFollowup may be false (e.g. cron said "on it" which
     // doesn't match the narrow hint list). We still need to use the
     // descendant's output instead of the interim cron text.
-    const completedDescendantReply =
-      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText)
-        ? await readDescendantSubagentFallbackReply({
-            sessionKey: params.agentSessionKey,
-            runStartedAt: params.runStartedAt,
-          })
-        : undefined;
+    const completedDescendantReply = shouldCheckCompletedDescendants
+      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+          sessionKey: params.agentSessionKey,
+          runStartedAt: params.runStartedAt,
+        })
+      : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
-      let finalReply = await waitForDescendantSubagentSummary({
+      let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
@@ -567,7 +578,7 @@ export async function dispatchCronDelivery(
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await readDescendantSubagentFallbackReply({
+        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
         });
