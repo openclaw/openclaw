@@ -169,4 +169,68 @@ describe("resolveConfiguredDiscordBotAgentIdsByBotUserId", () => {
       }).size,
     ).toBe(0);
   });
+
+  it("fails closed when one bot user id resolves to multiple owners", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "MTIz.shared.token",
+          accounts: {
+            ops: {},
+            alerts: {},
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "ops-agent",
+          match: { channel: "discord", accountId: "ops" },
+        },
+        {
+          agentId: "alerts-agent",
+          match: { channel: "discord", accountId: "alerts" },
+        },
+      ],
+    };
+
+    expect(
+      resolveConfiguredDiscordBotAgentIdsByBotUserId({
+        cfg,
+        currentAccountId: "ops",
+        currentBotUserId: "123",
+      }).get("123"),
+    ).toBeUndefined();
+  });
+
+  it("keeps the mapping when duplicate accounts resolve to the same owner", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "MTIz.shared.token",
+          accounts: {
+            ops: {},
+            alerts: {},
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "ops-agent",
+          match: { channel: "discord", accountId: "ops" },
+        },
+        {
+          agentId: "ops-agent",
+          match: { channel: "discord", accountId: "alerts" },
+        },
+      ],
+    };
+
+    expect(
+      resolveConfiguredDiscordBotAgentIdsByBotUserId({
+        cfg,
+        currentAccountId: "ops",
+        currentBotUserId: "123",
+      }).get("123"),
+    ).toBe("ops-agent");
+  });
 });

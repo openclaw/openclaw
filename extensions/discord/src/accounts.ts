@@ -107,6 +107,7 @@ export function resolveConfiguredDiscordBotAgentIdsByBotUserId(params: {
   currentBotUserId?: string | null;
 }): ReadonlyMap<string, string> {
   const identityAgentIds = new Map<string, string>();
+  const ambiguousBotUserIds = new Set<string>();
   for (const account of listEnabledDiscordAccounts(params.cfg)) {
     const senderAgentId = resolveOwningAgentIdForChannelAccount(
       params.cfg,
@@ -121,10 +122,18 @@ export function resolveConfiguredDiscordBotAgentIdsByBotUserId(params: {
         ? params.currentBotUserId
         : parseApplicationIdFromToken(account.token),
     );
-    if (!botUserId) {
+    if (!botUserId || ambiguousBotUserIds.has(botUserId)) {
       continue;
     }
-    identityAgentIds.set(botUserId, senderAgentId);
+    const existingAgentId = identityAgentIds.get(botUserId);
+    if (!existingAgentId) {
+      identityAgentIds.set(botUserId, senderAgentId);
+      continue;
+    }
+    if (existingAgentId !== senderAgentId) {
+      identityAgentIds.delete(botUserId);
+      ambiguousBotUserIds.add(botUserId);
+    }
   }
   return identityAgentIds;
 }

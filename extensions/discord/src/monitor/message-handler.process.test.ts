@@ -304,6 +304,32 @@ describe("processDiscordMessage sender ownership", () => {
       }),
     );
   });
+
+  it("omits senderAgentId when the bot user id is owned by multiple agents", async () => {
+    const ctx = await createBaseContext({
+      author: {
+        id: "BOT-OPS",
+        username: "sharedbot",
+        discriminator: "0",
+        globalName: "Shared Bot",
+      },
+      sender: {
+        id: "BOT-OPS",
+        label: "shared-bot",
+        name: "Shared Bot",
+        tag: "shared-bot",
+      },
+      identityAgentIds: new Map(),
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchCtx()).toEqual(
+      expect.not.objectContaining({
+        SenderAgentId: expect.anything(),
+      }),
+    );
+  });
 });
 
 function expectSinglePreviewEdit() {
