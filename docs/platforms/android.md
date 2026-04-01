@@ -171,13 +171,13 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
 Android can forward device notifications to the gateway as events. Several controls let you scope which notifications are forwarded and when.
 
-| Key | Type | Description |
-| --- | ---- | ----------- |
-| `notifications.allowPackages` | string[] | Only forward notifications from these package names. If set, all other packages are ignored. |
-| `notifications.denyPackages` | string[] | Never forward notifications from these package names. Applied after `allowPackages`. |
+| Key                              | Type           | Description                                                                                       |
+| -------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| `notifications.allowPackages`    | string[]       | Only forward notifications from these package names. If set, all other packages are ignored.      |
+| `notifications.denyPackages`     | string[]       | Never forward notifications from these package names. Applied after `allowPackages`.              |
 | `notifications.quietHours.start` | string (HH:mm) | Start of quiet hours window (local device time). Notifications are suppressed during this window. |
-| `notifications.quietHours.end` | string (HH:mm) | End of quiet hours window. |
-| `notifications.rateLimit` | number | Maximum forwarded notifications per package per minute. Excess notifications are dropped. |
+| `notifications.quietHours.end`   | string (HH:mm) | End of quiet hours window.                                                                        |
+| `notifications.rateLimit`        | number         | Maximum forwarded notifications per package per minute. Excess notifications are dropped.         |
 
 The notification picker also uses safer behavior for forwarded notification events, preventing accidental forwarding of sensitive system notifications.
 

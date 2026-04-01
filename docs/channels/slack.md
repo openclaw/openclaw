@@ -494,9 +494,7 @@ Configuration uses the shared `approvals.exec` config with Slack targets:
   approvals: {
     exec: {
       enabled: true,
-      targets: [
-        { channel: "slack", to: "U12345678" },
-      ],
+      targets: [{ channel: "slack", to: "U12345678" }],
     },
   },
 }
