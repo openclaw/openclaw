@@ -10,6 +10,13 @@ if [[ "${mode}" != "--publish" ]]; then
   exit 2
 fi
 
+if [[ -n "${publish_target}" && -f "${publish_target}" ]]; then
+  case "${publish_target}" in
+    /*|./*|../*) ;;
+    *) publish_target="./${publish_target}" ;;
+  esac
+fi
+
 package_version="$(node -p "require('./package.json').version")"
 current_beta_version="$(npm view openclaw dist-tags.beta 2>/dev/null || true)"
 mapfile -t publish_plan < <(
