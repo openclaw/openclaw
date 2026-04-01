@@ -51,7 +51,7 @@ async function resolveImageRuntime(params: {
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
   if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
@@ -66,6 +66,35 @@ async function resolveImageRuntime(params: {
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model };
+}
+
+/**
+ * Converts an image input (buffer or URL) to a buffer.
+ * - If buffer is available, returns it directly.
+ * - If only URL is available, fetches the URL and returns the buffer.
+ * @throws Error if neither buffer nor url is provided.
+ */
+async function resolveImageBuffer(params: {
+  url?: string;
+  buffer?: Buffer;
+  mime?: string;
+}): Promise<{ buffer: Buffer; mime: string }> {
+  if (params.buffer) {
+    return { buffer: params.buffer, mime: params.mime ?? "image/jpeg" };
+  }
+  if (params.url) {
+    const response = await fetch(params.url);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch image from URL: ${response.status} ${response.statusText}`,
+      );
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const mime = params.mime ?? (response.headers.get("content-type") ?? "image/jpeg");
+    return { buffer, mime };
+  }
+  throw new Error("Image must have either buffer or url");
 }
 
 function buildImageContext(
@@ -154,6 +183,14 @@ export async function describeImagesWithModel(
   params: ImagesDescriptionRequest,
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
+
+  // Resolve all URL-based images to buffers (for MiniMax VLM which requires base64)
+  const resolvedImages = await Promise.all(
+    params.images.map((img) =>
+      resolveImageBuffer({ url: img.url, buffer: img.buffer, mime: img.mime }),
+    ),
+  );
+
   let apiKey: string;
   let model: Model<Api> | undefined;
 
@@ -171,7 +208,7 @@ export async function describeImagesWithModel(
       modelId: params.model,
       modelBaseUrl: fallback.modelBaseUrl,
       prompt,
-      images: params.images,
+      images: resolvedImages,
     });
   }
 
@@ -181,11 +218,11 @@ export async function describeImagesWithModel(
       modelId: model.id,
       modelBaseUrl: model.baseUrl,
       prompt,
-      images: params.images,
+      images: resolvedImages,
     });
   }
 
-  const context = buildImageContext(prompt, params.images);
+  const context = buildImageContext(prompt, resolvedImages);
   const controller = new AbortController();
   const timeout =
     typeof params.timeoutMs === "number" &&
@@ -215,6 +252,7 @@ export async function describeImageWithModel(
     images: [
       {
         buffer: params.buffer,
+        url: params.url,
         fileName: params.fileName,
         mime: params.mime,
       },
