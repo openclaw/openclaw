@@ -8,6 +8,30 @@ Replaces `claude -p` / `codex exec` / `gemini --prompt` subprocess spawns
 with `ostk agent run` — kernel-managed sessions with compiled context,
 session journals, and pin-enforced capabilities.
 
+## Prerequisites
+
+Install the ostk binary:
+
+```bash
+curl -fsSL https://ostk.ai/install.sh | sh
+```
+
+Or via Homebrew:
+
+```bash
+brew install os-tack/tap/ostk
+```
+
+Then initialize the kernel in your project:
+
+```bash
+cd your-project
+ostk init
+```
+
+This creates `.ostk/` with compiled context, session state, and default pin
+capabilities. See [ostk.ai](https://ostk.ai) for full documentation.
+
 ## Boundary rules
 
 - This plugin only registers a `CliBackendPlugin`. It does not modify
