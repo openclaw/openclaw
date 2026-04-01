@@ -1,7 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct RootView: View {
     var body: some View {
-        RootCanvas()
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            RootIPad()
+        } else {
+            RootCanvas()
+        }
     }
 }
