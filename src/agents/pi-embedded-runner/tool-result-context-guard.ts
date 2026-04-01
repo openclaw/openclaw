@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { extractToolResultId } from "../tool-call-id.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -23,13 +24,14 @@ const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
 export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "[truncated: output exceeded context limit]";
-const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
 
 export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
   "[compacted: tool output removed to free context]";
 
 export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Preemptive context overflow: estimated context size exceeds safe threshold during tool loop";
+export const DUPLICATE_TOOL_RESULT_PLACEHOLDER =
+  "[Duplicate tool call/result omitted; see earlier identical result.]";
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -42,27 +44,147 @@ type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
 
-function truncateTextToBudget(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
+const TOOL_RESULT_DEDUPE_FINGERPRINT = Symbol("openclaw.toolResultDedupeFingerprint");
+
+function buildDuplicateToolResultNotice(count: number): string {
+  return `[This tool was called ${count} times with identical results. Showing once.]`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return `{${entries
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+    .join(",")}}`;
+}
+
+function findMatchingAssistantToolCall(args: {
+  messages: AgentMessage[];
+  toolResultIndex: number;
+  toolCallId: string | null;
+}): { toolName?: string; arguments?: unknown } | null {
+  if (!args.toolCallId) {
+    return null;
+  }
+  for (let i = args.toolResultIndex - 1; i >= 0; i -= 1) {
+    const message = args.messages[i];
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const typed = block as {
+        type?: unknown;
+        id?: unknown;
+        name?: unknown;
+        arguments?: unknown;
+      };
+      if (
+        typed.id === args.toolCallId &&
+        (typed.type === "toolCall" || typed.type === "toolUse" || typed.type === "functionCall")
+      ) {
+        return {
+          toolName: typeof typed.name === "string" ? typed.name : undefined,
+          arguments: typed.arguments,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function getStoredToolResultFingerprint(message: AgentMessage): string | undefined {
+  return (message as AgentMessage & { [TOOL_RESULT_DEDUPE_FINGERPRINT]?: string })[
+    TOOL_RESULT_DEDUPE_FINGERPRINT
+  ];
+}
+
+function setStoredToolResultFingerprint(message: AgentMessage, fingerprint: string): void {
+  (
+    message as AgentMessage & {
+      [TOOL_RESULT_DEDUPE_FINGERPRINT]?: string;
+    }
+  )[TOOL_RESULT_DEDUPE_FINGERPRINT] = fingerprint;
+}
+
+function resolveToolResultFingerprint(messages: AgentMessage[], index: number): string | null {
+  const message = messages[index];
+  if (!isToolResultMessage(message)) {
+    return null;
+  }
+  const stored = getStoredToolResultFingerprint(message);
+  if (stored) {
+    return stored;
+  }
+  const toolCallId =
+    message.role === "toolResult" ? extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>) : null;
+  const linkedToolCall = findMatchingAssistantToolCall({
+    messages,
+    toolResultIndex: index,
+    toolCallId,
+  });
+  const toolName =
+    (linkedToolCall?.toolName ??
+      (message as { toolName?: unknown }).toolName ??
+      (message as { tool_name?: unknown }).tool_name) ?? "tool";
+  const fingerprint = stableStringify({
+    toolName,
+    arguments: linkedToolCall?.arguments,
+    isError: (message as { isError?: unknown }).isError === true,
+    content: (message as { content?: unknown }).content,
+    details: (message as { details?: unknown }).details,
+  });
+  setStoredToolResultFingerprint(message, fingerprint);
+  return fingerprint;
+}
+
+function collapseDuplicateToolResultsInPlace(params: {
+  messages: AgentMessage[];
+  cache: MessageCharEstimateCache;
+}): void {
+  const groupedIndexes = new Map<string, number[]>();
+  for (let i = 0; i < params.messages.length; i += 1) {
+    const message = params.messages[i];
+    if (!isToolResultMessage(message)) {
+      continue;
+    }
+    const fingerprint = resolveToolResultFingerprint(params.messages, i);
+    if (!fingerprint) {
+      continue;
+    }
+    const indexes = groupedIndexes.get(fingerprint);
+    if (indexes) {
+      indexes.push(i);
+    } else {
+      groupedIndexes.set(fingerprint, [i]);
+    }
   }
 
-  if (maxChars <= 0) {
-    return CONTEXT_LIMIT_TRUNCATION_NOTICE;
+  for (const [fingerprint, indexes] of groupedIndexes.entries()) {
+    if (indexes.length < 2) {
+      continue;
+    }
+    for (let duplicateOrder = 1; duplicateOrder < indexes.length; duplicateOrder += 1) {
+      const index = indexes[duplicateOrder];
+      const message = params.messages[index];
+      const replacementText =
+        duplicateOrder === 1
+          ? buildDuplicateToolResultNotice(indexes.length)
+          : DUPLICATE_TOOL_RESULT_PLACEHOLDER;
+      const replacement = replaceToolResultText(message, replacementText);
+      applyMessageMutationInPlace(message, replacement, params.cache);
+      setStoredToolResultFingerprint(message, fingerprint);
+    }
   }
-
-  const bodyBudget = Math.max(0, maxChars - CONTEXT_LIMIT_TRUNCATION_SUFFIX.length);
-  if (bodyBudget <= 0) {
-    return CONTEXT_LIMIT_TRUNCATION_NOTICE;
-  }
-
-  let cutPoint = bodyBudget;
-  const newline = text.lastIndexOf("\n", bodyBudget);
-  if (newline > bodyBudget * 0.7) {
-    cutPoint = newline;
-  }
-
-  return text.slice(0, cutPoint) + CONTEXT_LIMIT_TRUNCATION_SUFFIX;
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
@@ -168,6 +290,8 @@ function enforceToolResultContextBudgetInPlace(params: {
 }): void {
   const { messages, contextBudgetChars, maxSingleToolResultTokens } = params;
   const estimateCache = createMessageCharEstimateCache();
+
+  collapseDuplicateToolResultsInPlace({ messages, cache: estimateCache });
 
   // Ensure each tool result has an upper bound before considering total context usage.
   for (const message of messages) {

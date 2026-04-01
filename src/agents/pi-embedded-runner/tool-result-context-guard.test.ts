@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  DUPLICATE_TOOL_RESULT_PLACEHOLDER,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
   PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
   installToolResultContextGuard,
@@ -23,6 +24,14 @@ function makeToolResult(id: string, text: string): AgentMessage {
     toolName: "read",
     content: [{ type: "text", text }],
     isError: false,
+    timestamp: Date.now(),
+  });
+}
+
+function makeAssistantToolCall(id: string, args: Record<string, unknown>): AgentMessage {
+  return castAgentMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "read", arguments: args }],
     timestamp: Date.now(),
   });
 }
@@ -217,6 +226,34 @@ describe("installToolResultContextGuard", () => {
     const transformedMessages = transformed as AgentMessage[];
     const oldResultText = getToolResultText(transformedMessages[1]);
     expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  });
+
+  it("collapses duplicate tool results that share identical params and output", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 100_000,
+      toolResultMaxTokens: 2_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("compare duplicate reads"),
+      makeAssistantToolCall("call_1", { path: "README.md" }),
+      makeToolResult("call_1", "same output"),
+      makeAssistantToolCall("call_2", { path: "README.md" }),
+      makeToolResult("call_2", "same output"),
+      makeAssistantToolCall("call_3", { path: "README.md" }),
+      makeToolResult("call_3", "same output"),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    expect(getToolResultText(contextForNextCall[2])).toBe("same output");
+    expect(getToolResultText(contextForNextCall[4])).toContain(
+      "This tool was called 3 times with identical results. Showing once.",
+    );
+    expect(getToolResultText(contextForNextCall[6])).toBe(DUPLICATE_TOOL_RESULT_PLACEHOLDER);
   });
 
   it("handles legacy role=tool string outputs when enforcing context budget", async () => {
