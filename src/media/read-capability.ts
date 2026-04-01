@@ -88,18 +88,26 @@ export function resolveAgentScopedOutboundMediaAccess(
     workspaceDir?: string;
     mediaAccess?: OutboundMediaAccess;
     mediaReadFile?: OutboundMediaReadFile;
+    ignoreConfiguredRoots?: boolean;
   } & OutboundHostMediaPolicyContext,
 ): OutboundMediaAccess {
   const hostMediaReadAllowed = isAgentScopedHostMediaReadAllowed(params);
   const localRoots =
     params.mediaAccess?.localRoots ??
-    (hostMediaReadAllowed
+    (params.ignoreConfiguredRoots
       ? getAgentScopedMediaLocalRootsForSources({
           cfg: params.cfg,
           agentId: params.agentId,
           mediaSources: params.mediaSources,
+          ignoreConfiguredRoots: true,
         })
-      : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
+      : hostMediaReadAllowed
+        ? getAgentScopedMediaLocalRootsForSources({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            mediaSources: params.mediaSources,
+          })
+        : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
   const resolvedWorkspaceDir =
     params.workspaceDir ??
     params.mediaAccess?.workspaceDir ??
@@ -125,7 +133,7 @@ export function resolveAgentScopedOutboundMediaAccess(
         })
       : undefined);
   return {
-    ...(localRoots?.length ? { localRoots } : {}),
+    ...(localRoots !== undefined ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
     ...(resolvedWorkspaceDir ? { workspaceDir: resolvedWorkspaceDir } : {}),
   };
