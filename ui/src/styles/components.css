@@ -2752,7 +2752,7 @@ td.data-table-key-col {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: 20px 20px 0;
   animation: scale-in 0.2s var(--ease-out);
   max-height: 90vh;
   overflow-y: auto;
@@ -2833,6 +2833,7 @@ td.data-table-key-col {
   bottom: 0;
   background: var(--card);
   padding-top: 12px;
+  padding-bottom: 20px;
   border-top: 1px solid var(--border);
 }
 
