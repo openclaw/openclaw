@@ -123,6 +123,7 @@ async function buildBotUserIdMap(params: {
         const c = createMattermostClient({
           baseUrl: a.baseUrl!,
           botToken: a.botToken!,
+          allowPrivateNetwork: a.config?.allowPrivateNetwork === true,
         });
         const u = await fetchMattermostMe(c);
         return { mattermostUserId: u.id, accountId: a.accountId };

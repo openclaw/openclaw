@@ -82,6 +82,31 @@ export async function readMattermostError(res: Response): Promise<string> {
   return await res.text();
 }
 
+/**
+ * Infer whether the target Mattermost URL is on a private/internal network.
+ * When `allowPrivateNetwork` is not explicitly set by callers, this prevents
+ * SSRF guards from blocking legitimate self-hosted/Docker setups (e.g.
+ * `host.docker.internal`, `*.local`, `localhost`, RFC-1918 IPs).
+ */
+function inferAllowPrivateNetwork(baseUrl: string, explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      hostname === "localhost" ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".internal") ||
+      hostname.startsWith("10.") ||
+      hostname.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
@@ -93,6 +118,7 @@ export function createMattermostClient(params: {
   if (!baseUrl) {
     throw new Error("Mattermost baseUrl is required");
   }
+  const allowPrivateNetwork = inferAllowPrivateNetwork(baseUrl, params.allowPrivateNetwork);
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
   // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
@@ -116,7 +142,7 @@ export function createMattermostClient(params: {
       url,
       init,
       auditContext: "mattermost-api",
-      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+      policy: allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
     });
     try {
       const bodyBytes = NULL_BODY_STATUSES.has(response.status)
