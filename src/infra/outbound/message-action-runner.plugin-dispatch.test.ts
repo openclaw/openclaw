@@ -1,13 +1,122 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
+import { extractToolPayload } from "./tool-payload.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
+
+const mocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn(),
+  executeSendAction: vi.fn(),
+  executePollAction: vi.fn(),
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
+
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: mocks.executeSendAction,
+  executePollAction: mocks.executePollAction,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("./message-action-threading.js", () => ({
+  resolveAndApplyOutboundThreadId: vi.fn(
+    (
+      actionParams: Record<string, unknown>,
+      context: {
+        cfg: OpenClawConfig;
+        to: string;
+        accountId?: string | null;
+        toolContext?: Record<string, unknown>;
+        resolveAutoThreadId?: (params: {
+          cfg: OpenClawConfig;
+          accountId?: string | null;
+          to: string;
+          toolContext?: Record<string, unknown>;
+          replyToId?: string;
+        }) => string | undefined;
+      },
+    ) => {
+      const explicit =
+        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
+      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
+      const resolved =
+        explicit ??
+        context.resolveAutoThreadId?.({
+          cfg: context.cfg,
+          accountId: context.accountId,
+          to: context.to,
+          toolContext: context.toolContext,
+          replyToId,
+        });
+      if (resolved && !actionParams.threadId) {
+        actionParams.threadId = resolved;
+      }
+      return resolved ?? undefined;
+    },
+  ),
+  prepareOutboundMirrorRoute: vi.fn(
+    async ({
+      actionParams,
+      cfg,
+      to,
+      accountId,
+      toolContext,
+      agentId,
+      resolveAutoThreadId,
+    }: {
+      actionParams: Record<string, unknown>;
+      cfg: OpenClawConfig;
+      to: string;
+      accountId?: string | null;
+      toolContext?: Record<string, unknown>;
+      agentId?: string;
+      resolveAutoThreadId?: (params: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+        to: string;
+        toolContext?: Record<string, unknown>;
+        replyToId?: string;
+      }) => string | undefined;
+    }) => {
+      const explicit =
+        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
+      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
+      const resolvedThreadId =
+        explicit ??
+        resolveAutoThreadId?.({
+          cfg,
+          accountId,
+          to,
+          toolContext,
+          replyToId,
+        });
+      if (resolvedThreadId && !actionParams.threadId) {
+        actionParams.threadId = resolvedThreadId;
+      }
+      if (agentId) {
+        actionParams.__agentId = agentId;
+      }
+      return {
+        resolvedThreadId,
+        outboundRoute: null,
+      };
+    },
+  ),
+}));
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
@@ -47,7 +156,69 @@ function createPollForwardingPlugin(params: {
   };
 }
 
+async function executePluginAction(params: {
+  action: "send" | "poll";
+  ctx: {
+    channel: string;
+    cfg: OpenClawConfig;
+    params: Record<string, unknown>;
+    mediaAccess?: {
+      localRoots?: string[];
+      readFile?: unknown;
+    };
+    accountId?: string | null;
+    gateway?: unknown;
+    toolContext?: unknown;
+    dryRun: boolean;
+    agentId?: string;
+  };
+}) {
+  const handled = await dispatchChannelMessageAction({
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    mediaAccess: params.ctx.mediaAccess,
+    mediaLocalRoots: params.ctx.mediaAccess?.localRoots ?? [],
+    mediaReadFile:
+      typeof params.ctx.mediaAccess?.readFile === "function"
+        ? params.ctx.mediaAccess.readFile
+        : undefined,
+    accountId: params.ctx.accountId ?? undefined,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.toolContext,
+    dryRun: params.ctx.dryRun,
+    agentId: params.ctx.agentId,
+  });
+  if (!handled) {
+    throw new Error(`expected plugin to handle ${params.action}`);
+  }
+  return {
+    handledBy: "plugin" as const,
+    payload: extractToolPayload(handled),
+    toolResult: handled,
+  };
+}
+
 describe("runMessageAction plugin dispatch", () => {
+  beforeEach(() => {
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+    );
+    mocks.executeSendAction.mockReset();
+    mocks.executeSendAction.mockImplementation(
+      async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
+        await executePluginAction({ action: "send", ctx }),
+    );
+    mocks.executePollAction.mockReset();
+    mocks.executePollAction.mockImplementation(
+      async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
+        await executePluginAction({ action: "poll", ctx }),
+    );
+  });
+
   describe("alias-based plugin action dispatch", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
