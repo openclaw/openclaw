@@ -519,9 +519,11 @@ export async function runPreparedReply(
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
   const followupRun = {
-    prompt: queuedBody,
+    execution: { visibility: "internal", agentPrompt: queuedBody },
+    display: baseBodyTrimmedRaw
+      ? { visibility: "user-visible", summaryLine: baseBodyTrimmedRaw }
+      : undefined,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-    summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,

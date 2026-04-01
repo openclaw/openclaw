@@ -22,8 +22,8 @@ export function createMockFollowupRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
   const base: FollowupRun = {
-    prompt: "hello",
-    summaryLine: "hello",
+    execution: { visibility: "internal", agentPrompt: "hello" },
+    display: { visibility: "user-visible", summaryLine: "hello" },
     enqueuedAt: Date.now(),
     originatingTo: "channel:C1",
     run: {

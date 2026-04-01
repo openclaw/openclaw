@@ -348,7 +348,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
-    params.promptForEstimate ?? params.followupRun.prompt,
+    params.promptForEstimate ?? params.followupRun.execution.agentPrompt,
   );
   const transcriptPromptTokens =
     typeof freshPersistedTokens === "number"
@@ -495,7 +495,7 @@ export async function runMemoryFlushIfNeeded(params: {
   });
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
-    params.promptForEstimate ?? params.followupRun.prompt,
+    params.promptForEstimate ?? params.followupRun.execution.agentPrompt,
   );
   const persistedPromptTokensRaw = entry?.totalTokens;
   const persistedPromptTokens =
