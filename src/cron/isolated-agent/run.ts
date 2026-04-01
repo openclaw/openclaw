@@ -61,7 +61,7 @@ import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
-import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 let sessionStoreRuntimePromise:
   | Promise<typeof import("../../config/sessions/store.runtime.js")>

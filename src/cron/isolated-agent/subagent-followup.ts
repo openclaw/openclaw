@@ -2,6 +2,8 @@ import { listDescendantRunsForRequester } from "../../agents/subagent-registry-r
 import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+export { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function resolveCronSubagentTimings() {
   const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
@@ -10,53 +12,6 @@ function resolveCronSubagentTimings() {
     finalReplyGraceMs: fastTestMode ? 50 : 5_000,
     gracePollMs: fastTestMode ? 8 : 200,
   };
-}
-
-const SUBAGENT_FOLLOWUP_HINTS = [
-  "subagent spawned",
-  "spawned a subagent",
-  "auto-announce when done",
-  "both subagents are running",
-  "wait for them to report back",
-] as const;
-
-const INTERIM_CRON_HINTS = [
-  "on it",
-  "pulling everything together",
-  "give me a few",
-  "give me a few min",
-  "few minutes",
-  "let me compile",
-  "i'll gather",
-  "i will gather",
-  "working on it",
-  "retrying now",
-  "should be about",
-  "should have your summary",
-  "it'll auto-announce when done",
-  "it will auto-announce when done",
-  ...SUBAGENT_FOLLOWUP_HINTS,
-] as const;
-
-function normalizeHintText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-export function isLikelyInterimCronMessage(value: string): boolean {
-  const normalized = normalizeHintText(value);
-  if (!normalized) {
-    // Empty text after payload filtering means the agent either returned
-    // NO_REPLY (deliberately silent) or produced no deliverable content.
-    // Do not treat this as an interim acknowledgement that needs a rerun.
-    return false;
-  }
-  const words = normalized.split(" ").filter(Boolean).length;
-  return words <= 45 && INTERIM_CRON_HINTS.some((hint) => normalized.includes(hint));
-}
-
-export function expectsSubagentFollowup(value: string): boolean {
-  const normalized = normalizeHintText(value);
-  return Boolean(normalized && SUBAGENT_FOLLOWUP_HINTS.some((hint) => normalized.includes(hint)));
 }
 
 export async function readDescendantSubagentFallbackReply(params: {
