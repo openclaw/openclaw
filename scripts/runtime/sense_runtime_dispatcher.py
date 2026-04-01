@@ -5,6 +5,13 @@ import sys
 from pathlib import Path
 
 REQUIRED_POLICIES = ['nvidia', 'openclaw_api']
+NEXT_STEP_BY_ACTION = {
+    'proceed': 'run_runtime_task',
+    'check_runtime_provider': 'sense_runtime_start',
+    'check_gpu_runtime': 'inspect_gpu_runtime',
+    'wait_for_runtime_ready': 'sense_runtime_status',
+    'review_runtime_capabilities': 'review_runtime_capabilities',
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,7 +64,7 @@ def evaluate_sandbox_status(sandbox_status: dict) -> dict:
         if readiness == 'ready':
             readiness = 'limited'
             recommended_action = 'review_runtime_capabilities'
-        elif readiness == 'degraded':
+        elif readiness in {'degraded', 'limited'}:
             recommended_action = 'review_runtime_capabilities'
 
     if phase == 'Ready' and not reasons:
@@ -67,6 +74,7 @@ def evaluate_sandbox_status(sandbox_status: dict) -> dict:
         'readiness': readiness,
         'recommended_action': recommended_action,
         'reasons': reasons,
+        'next_step': NEXT_STEP_BY_ACTION.get(recommended_action, 'manual_review'),
     }
 
 

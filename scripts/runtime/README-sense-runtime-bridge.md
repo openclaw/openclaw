@@ -12,43 +12,21 @@ Formal runtime-plane entrypoints for the T550 control plane live in:
 - `scripts/runtime/sense-runtime-manager-tool.sh`
 - `scripts/runtime/sense_runtime_dispatcher.py`
 - `scripts/runtime/sense-runtime-dispatcher.sh`
+- `scripts/runtime/sense_runtime_decision.py`
+- `scripts/runtime/sense-runtime-decision.sh`
 
-Responsibility split:
+Decision step flow:
 
-- `sense_runtime_bridge.py`
-  - submit to Sense worker
-  - poll `/jobs/{job_id}`
-  - preserve structured result semantics
-  - sanitize `sandbox-status` text so manager and bot flows do not have to parse ANSI noise
-- `sense-runtime.sh`
-  - operator-facing shell entrypoint
-  - prints the full completed job envelope
-- `sense-runtime-tool.sh`
-  - runtime execution entrypoint
-  - prints the final structured `result` object only
-- `sense-runtime-intent.sh`
-  - intent mapper for shell/operator use
-  - turns natural control-plane intents into runtime actions
-- `sense_runtime_subprocess_tool.py`
-  - explicit-action subprocess wrapper
-  - safely builds argv and delegates to `sense-runtime-intent.sh`
-- `sense-runtime-subprocess-tool.sh`
-  - executable shell entrypoint for workflow subprocess calls
-- `sense_runtime_manager_tool.py`
-  - manager-facing tool wrapper
-  - accepts natural-language intent or explicit action
-  - returns manager-friendly JSON
-  - for `sandbox-status`, extracts a structured `details.sandbox_status` block
-- `sense-runtime-manager-tool.sh`
-  - executable shell entrypoint for manager and bot subprocess calls
-- `sense_runtime_dispatcher.py`
-  - minimal dispatcher for manager decisions
-  - consumes `details.sandbox_status` only
-  - does not re-parse text
-- `sense-runtime-dispatcher.sh`
-  - shell entrypoint for dispatcher use in workflows or manager chains
+- manager requests `sense sandbox status`
+- `sense-runtime-manager-tool.sh` returns structured `details.sandbox_status`
+- `sense-runtime-dispatcher.sh` evaluates readiness from structured fields only
+- `sense-runtime-decision.sh` wires the two together and returns:
+  - `readiness`
+  - `recommended_action`
+  - `reasons`
+  - `next_step`
 
-Structured sandbox-status fields used by the dispatcher:
+Dispatcher fields used:
 
 - `phase`
 - `gpu_enabled`
@@ -57,27 +35,41 @@ Structured sandbox-status fields used by the dispatcher:
 - `runtime_name`
 - `openshell_status`
 
-Dispatcher rules:
+Decision rules:
 
-- `phase != Ready` -> `readiness=not_ready`, `recommended_action=wait_for_runtime_ready`
-- `gpu_enabled == false` -> degrade readiness and recommend `check_gpu_runtime`
-- `nim_status != running` -> degrade readiness and recommend `check_runtime_provider`
-- missing required policies -> `readiness=limited` or degraded with `review_runtime_capabilities`
-- `provider` and `model` may still be `unknown`; dispatcher does not fail on those fields
+- `readiness == ready`
+  - next runtime task may proceed
+  - `next_step = run_runtime_task`
+- `readiness == degraded`
+  - route to provider or GPU checks
+  - examples: `check_runtime_provider`, `check_gpu_runtime`
+- `readiness == not_ready`
+  - re-check or start the runtime first
+  - `next_step = sense_runtime_status`
+- `provider` and `model` may remain `unknown`
+  - manager does not use those fields yet for readiness decisions
 
-Dispatcher example:
+Example:
 
 ```bash
-scripts/runtime/sense-runtime-manager-tool.sh --intent "sense sandbox status" --token "$SENSE_WORKER_TOKEN" --sandbox-name sense-wsl-agent \
-  | scripts/runtime/sense-runtime-dispatcher.sh
+scripts/runtime/sense-runtime-decision.sh \
+  --token "$SENSE_WORKER_TOKEN" \
+  --sandbox-name sense-wsl-agent
 ```
 
-Example output:
+Current observed result on Sense:
 
 ```json
 {
   "readiness": "degraded",
   "recommended_action": "check_runtime_provider",
-  "reasons": ["gpu is not enabled", "nim_status is not running"]
+  "reasons": ["gpu is not enabled", "nim_status is not running"],
+  "next_step": "sense_runtime_start"
 }
 ```
+
+Natural next extension:
+
+- wire `check_runtime_provider` to a remediation step
+- wire `check_gpu_runtime` to a GPU health probe
+- wire `wait_for_runtime_ready` to retry / backoff around `sense runtime status`
