@@ -1,6 +1,41 @@
 import Foundation
 import os
 
+enum SpeechLanguageSetting: String, CaseIterable, Identifiable, Sendable {
+    case english = "en"
+    case french = "fr"
+
+    static let userDefaultsKey = "talk.language"
+
+    var id: String { self.rawValue }
+
+    var displayName: String {
+        switch self {
+        case .english:
+            return "English"
+        case .french:
+            return "French"
+        }
+    }
+
+    var recognitionLocaleIdentifier: String {
+        switch self {
+        case .english:
+            return "en-US"
+        case .french:
+            return "fr-FR"
+        }
+    }
+
+    var systemSpeechLanguageCode: String {
+        self.recognitionLocaleIdentifier
+    }
+
+    var elevenLabsLanguageCode: String {
+        self.rawValue
+    }
+}
+
 enum GatewaySettingsStore {
     private static let gatewayService = "ai.openclaw.gateway"
     private static let nodeService = "ai.openclaw.node"
@@ -33,6 +68,15 @@ enum GatewaySettingsStore {
         self.ensureStableInstanceID()
         self.ensurePreferredGatewayStableID()
         self.ensureLastDiscoveredGatewayStableID()
+    }
+
+    static func loadSpeechLanguage(defaults: UserDefaults = .standard) -> SpeechLanguageSetting {
+        let rawValue = defaults.string(forKey: SpeechLanguageSetting.userDefaultsKey) ?? SpeechLanguageSetting.english.rawValue
+        return SpeechLanguageSetting(rawValue: rawValue) ?? .english
+    }
+
+    static func saveSpeechLanguage(_ language: SpeechLanguageSetting, defaults: UserDefaults = .standard) {
+        defaults.set(language.rawValue, forKey: SpeechLanguageSetting.userDefaultsKey)
     }
 
     static func loadStableInstanceID() -> String? {

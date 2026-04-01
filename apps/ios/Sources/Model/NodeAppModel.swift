@@ -514,6 +514,22 @@ final class NodeAppModel {
         }
     }
 
+    func updateSpeechLanguage(_ language: SpeechLanguageSetting) {
+        GatewaySettingsStore.saveSpeechLanguage(language)
+
+        let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
+        let voiceWakeEnabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
+
+        if talkEnabled {
+            self.setTalkEnabled(true)
+            return
+        }
+
+        if voiceWakeEnabled {
+            self.setVoiceWakeEnabled(true)
+        }
+    }
+
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
         guard mode != .off else { return true }
         let status = await self.locationService.ensureAuthorization(mode: mode)

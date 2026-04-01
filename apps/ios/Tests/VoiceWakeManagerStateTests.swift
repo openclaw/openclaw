@@ -4,6 +4,22 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct VoiceWakeManagerStateTests {
+    @Test func speechLanguageSettingDefaultsToEnglish() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        #expect(GatewaySettingsStore.loadSpeechLanguage(defaults: defaults) == .english)
+    }
+
+    @Test func speechLanguageSettingRoundTripsFrench() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        GatewaySettingsStore.saveSpeechLanguage(.french, defaults: defaults)
+
+        #expect(GatewaySettingsStore.loadSpeechLanguage(defaults: defaults) == .french)
+    }
+
     @Test @MainActor func suspendAndResumeCycleUpdatesState() async {
         let manager = VoiceWakeManager()
         manager.isEnabled = true

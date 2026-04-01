@@ -26,4 +26,12 @@ final class TalkPromptBuilderTests: XCTestCase {
         XCTAssertFalse(prompt.contains("ElevenLabs voice"))
         XCTAssertTrue(prompt.contains("Talk Mode active."))
     }
+
+    func testBuildIncludesRequestedResponseLanguage() {
+        let prompt = TalkPromptBuilder.build(
+            transcript: "Bonjour",
+            interruptedAtSeconds: nil,
+            responseLanguageName: "French")
+        XCTAssertTrue(prompt.contains("Respond in French."))
+    }
 }

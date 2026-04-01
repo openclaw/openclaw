@@ -163,6 +163,18 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    func refreshSpeechLanguage() {
+        guard self.isEnabled else { return }
+        self.incrementalSpeechLanguage = self.preferredSpeechLanguage.elevenLabsLanguageCode
+        guard !self.isSpeaking, self.captureMode != .pushToTalk else { return }
+        self.silenceTask?.cancel()
+        self.silenceTask = nil
+        self.stopRecognition()
+        self.isListening = false
+        self.statusText = self.gatewayConnected ? "Restarting…" : "Offline"
+        Task { await self.start() }
+    }
+
     func start() async {
         guard self.isEnabled else { return }
         guard self.captureMode != .pushToTalk else { return }
@@ -500,7 +512,7 @@ final class TalkModeManager: NSObject {
         #endif
 
         self.stopRecognition()
-        self.speechRecognizer = SFSpeechRecognizer()
+        self.speechRecognizer = Self.makeSpeechRecognizer(preferredLocale: self.speechRecognitionLocale)
         guard let recognizer = self.speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Speech recognizer unavailable",
@@ -875,6 +887,7 @@ final class TalkModeManager: NSObject {
         return TalkPromptBuilder.build(
             transcript: transcript,
             interruptedAtSeconds: interrupted,
+            responseLanguageName: self.preferredSpeechLanguage.displayName,
             includeVoiceDirectiveHint: false)
     }
 
@@ -998,10 +1011,12 @@ final class TalkModeManager: NSObject {
         self.statusText = "Generating voice…"
         self.isSpeaking = true
         self.lastSpokenText = cleaned
+        let systemSpeechLanguage = self.systemSpeechLanguage(for: directive?.language)
 
         do {
             let started = Date()
             let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
+                ?? self.preferredSpeechLanguage.elevenLabsLanguageCode
             let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedVoice = self.resolveVoiceAlias(requestedVoice)
             if requestedVoice?.isEmpty == false, resolvedVoice == nil {
@@ -1112,7 +1127,7 @@ final class TalkModeManager: NSObject {
                     }
                 }
                 self.statusText = "Speaking (System)…"
-                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: systemSpeechLanguage)
             }
         } catch {
             self.logger.error(
@@ -1128,8 +1143,7 @@ final class TalkModeManager: NSObject {
                     }
                 }
                 self.statusText = "Speaking (System)…"
-                let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
-                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: systemSpeechLanguage)
             } catch {
                 self.statusText = "Speak failed: \(error.localizedDescription)"
                 self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
@@ -1186,6 +1200,59 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    private var preferredSpeechLanguage: SpeechLanguageSetting {
+        GatewaySettingsStore.loadSpeechLanguage()
+    }
+
+    private var speechRecognitionLocale: Locale {
+        Locale(identifier: self.preferredSpeechLanguage.recognitionLocaleIdentifier)
+    }
+
+    private nonisolated static func makeSpeechRecognizer(preferredLocale: Locale) -> SFSpeechRecognizer? {
+        if let recognizer = SFSpeechRecognizer(locale: preferredLocale) {
+            return recognizer
+        }
+
+        let preferredLanguageCode = preferredLocale.language.languageCode?.identifier
+            ?? preferredLocale.identifier.split(separator: "-").first.map(String.init)
+
+        if let preferredLanguageCode {
+            let supportedMatch = SFSpeechRecognizer.supportedLocales().first { locale in
+                let candidateCode = locale.language.languageCode?.identifier
+                    ?? locale.identifier.split(separator: "-").first.map(String.init)
+                return candidateCode == preferredLanguageCode
+            }
+            if let supportedMatch, let recognizer = SFSpeechRecognizer(locale: supportedMatch) {
+                return recognizer
+            }
+
+            if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: preferredLanguageCode)) {
+                return recognizer
+            }
+        }
+
+        return SFSpeechRecognizer()
+    }
+
+    private func systemSpeechLanguage(for rawLanguage: String?) -> String {
+        guard let rawLanguage = rawLanguage?.trimmingCharacters(in: .whitespacesAndNewlines), !rawLanguage.isEmpty else {
+            return self.preferredSpeechLanguage.systemSpeechLanguageCode
+        }
+
+        if AVSpeechSynthesisVoice(language: rawLanguage) != nil {
+            return rawLanguage
+        }
+
+        switch rawLanguage.lowercased() {
+        case "en":
+            return SpeechLanguageSetting.english.systemSpeechLanguageCode
+        case "fr":
+            return SpeechLanguageSetting.french.systemSpeechLanguageCode
+        default:
+            return self.preferredSpeechLanguage.systemSpeechLanguageCode
+        }
+    }
+
     private func shouldUseIncrementalTTS() -> Bool {
         true
     }
@@ -1224,7 +1291,7 @@ final class TalkModeManager: NSObject {
         self.cancelIncrementalPrefetch()
         self.incrementalSpeechActive = true
         self.incrementalSpeechUsed = false
-        self.incrementalSpeechLanguage = nil
+        self.incrementalSpeechLanguage = self.preferredSpeechLanguage.elevenLabsLanguageCode
         self.incrementalSpeechBuffer = IncrementalSpeechBuffer()
         self.incrementalSpeechContext = nil
         self.incrementalSpeechDirective = nil
@@ -1625,7 +1692,7 @@ final class TalkModeManager: NSObject {
             guard let resolvedContext = self.incrementalSpeechContext else {
                 try? await TalkSystemSpeechSynthesizer.shared.speak(
                     text: text,
-                    language: self.incrementalSpeechLanguage)
+                    language: self.systemSpeechLanguage(for: self.incrementalSpeechLanguage))
                 return
             }
             context = resolvedContext
@@ -1634,7 +1701,7 @@ final class TalkModeManager: NSObject {
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else {
             try? await TalkSystemSpeechSynthesizer.shared.speak(
                 text: text,
-                language: self.incrementalSpeechLanguage)
+                language: self.systemSpeechLanguage(for: self.incrementalSpeechLanguage))
             return
         }
 

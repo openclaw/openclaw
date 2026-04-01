@@ -143,6 +143,15 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
+    func refreshSpeechLanguage() {
+        guard self.isEnabled else { return }
+        self.tearDownRecognitionPipeline()
+        self.isListening = false
+        self.statusText = self.suppressedByTalk ? "Paused" : "Restarting…"
+        guard !self.suppressedByTalk else { return }
+        Task { await self.start() }
+    }
+
     func setSuppressedByTalk(_ suppressed: Bool) {
         self.suppressedByTalk = suppressed
         if suppressed {
@@ -194,7 +203,7 @@ final class VoiceWakeManager: NSObject {
             return
         }
 
-        self.speechRecognizer = SFSpeechRecognizer()
+        self.speechRecognizer = Self.makeSpeechRecognizer(preferredLocale: self.speechRecognitionLocale)
         guard self.speechRecognizer != nil else {
             self.statusText = "Speech recognizer unavailable"
             self.isListening = false
@@ -351,6 +360,36 @@ final class VoiceWakeManager: NSObject {
 
     private func extractCommand(from transcript: String, segments: [WakeWordSegment]) -> String? {
         Self.extractCommand(from: transcript, segments: segments, triggers: self.activeTriggerWords)
+    }
+
+    private var speechRecognitionLocale: Locale {
+        Locale(identifier: GatewaySettingsStore.loadSpeechLanguage().recognitionLocaleIdentifier)
+    }
+
+    private nonisolated static func makeSpeechRecognizer(preferredLocale: Locale) -> SFSpeechRecognizer? {
+        if let recognizer = SFSpeechRecognizer(locale: preferredLocale) {
+            return recognizer
+        }
+
+        let preferredLanguageCode = preferredLocale.language.languageCode?.identifier
+            ?? preferredLocale.identifier.split(separator: "-").first.map(String.init)
+
+        if let preferredLanguageCode {
+            let supportedMatch = SFSpeechRecognizer.supportedLocales().first { locale in
+                let candidateCode = locale.language.languageCode?.identifier
+                    ?? locale.identifier.split(separator: "-").first.map(String.init)
+                return candidateCode == preferredLanguageCode
+            }
+            if let supportedMatch, let recognizer = SFSpeechRecognizer(locale: supportedMatch) {
+                return recognizer
+            }
+
+            if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: preferredLanguageCode)) {
+                return recognizer
+            }
+        }
+
+        return SFSpeechRecognizer()
     }
 
     nonisolated static func extractCommand(
