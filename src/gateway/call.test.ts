@@ -85,6 +85,7 @@ vi.mock("./client.js", () => ({
 
 const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
   await import("./call.js");
+const { ensureExplicitGatewayAuth } = __testing;
 
 class StubGatewayClient {
   constructor(opts: {
@@ -169,6 +170,19 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
     },
   };
 }
+
+describe("ensureExplicitGatewayAuth", () => {
+  it("mentions explicit credential flags for CLI url overrides", () => {
+    expect(() =>
+      ensureExplicitGatewayAuth({
+        urlOverride: "ws://127.0.0.1:18789",
+        urlOverrideSource: "cli",
+        errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+        configPath: "/tmp/openclaw.json",
+      }),
+    ).toThrowError(/gateway url override requires explicit credentials \(--token or --password\)/);
+  });
+});
 
 describe("callGateway url resolution", () => {
   const envSnapshot = captureEnv([
