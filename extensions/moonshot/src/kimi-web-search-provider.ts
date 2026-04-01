@@ -19,14 +19,27 @@ import {
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
+  type WebSearchProviderSetupContext,
   type WebSearchProviderToolDefinition,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  isNativeMoonshotBaseUrl,
+  MOONSHOT_BASE_URL,
+  MOONSHOT_CN_BASE_URL,
+  MOONSHOT_DEFAULT_MODEL_ID,
+} from "../provider-catalog.js";
 
-const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
+const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
+/** Models that require explicit thinking disablement for web search.
+ * Reasoning variants (kimi-k2-thinking, kimi-k2-thinking-turbo) are excluded
+ * because they default to thinking-enabled and disabling it would defeat their
+ * purpose; they are also unlikely to be used for web search. */
+const KIMI_THINKING_MODELS = new Set(["kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -73,8 +86,8 @@ function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
-    readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
-    readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
+      readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
+      readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
   );
 }
 
@@ -99,8 +112,8 @@ function extractKimiMessageText(message: KimiMessage | undefined): string | unde
 
 function extractKimiCitations(data: KimiSearchResponse): string[] {
   const citations = (data.search_results ?? [])
-    .map((entry) => entry.url?.trim())
-    .filter((url): url is string => Boolean(url));
+      .map((entry) => entry.url?.trim())
+      .filter((url): url is string => Boolean(url));
 
   for (const toolCall of data.choices?.[0]?.message?.tool_calls ?? []) {
     const rawArguments = toolCall.function?.arguments;
@@ -128,14 +141,12 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
   return [...new Set(citations)];
 }
 
-function buildKimiToolResultContent(data: KimiSearchResponse): string {
-  return JSON.stringify({
-    search_results: (data.search_results ?? []).map((entry) => ({
-      title: entry.title ?? "",
-      url: entry.url ?? "",
-      content: entry.content ?? "",
-    })),
-  });
+function extractKimiToolResultContent(toolCall: KimiToolCall): string | undefined {
+  const rawArguments = toolCall.function?.arguments;
+  if (typeof rawArguments !== "string" || rawArguments.trim().length === 0) {
+    return undefined;
+  }
+  return rawArguments;
 }
 
 async function runKimiSearch(params: {
@@ -151,65 +162,72 @@ async function runKimiSearch(params: {
 
   for (let round = 0; round < 3; round += 1) {
     const next = await withTrustedWebSearchEndpoint(
-      {
-        url: endpoint,
-        timeoutSeconds: params.timeoutSeconds,
-        init: {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${params.apiKey}`,
+        {
+          url: endpoint,
+          timeoutSeconds: params.timeoutSeconds,
+          init: {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${params.apiKey}`,
+            },
+            body: JSON.stringify({
+              model: params.model,
+              ...(KIMI_THINKING_MODELS.has(params.model) ? { thinking: { type: "disabled" } } : {}),
+              messages,
+              tools: [KIMI_WEB_SEARCH_TOOL],
+            }),
           },
-          body: JSON.stringify({
-            model: params.model,
-            messages,
-            tools: [KIMI_WEB_SEARCH_TOOL],
-          }),
         },
-      },
-      async (
-        res,
-      ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
-        if (!res.ok) {
-          const detail = await res.text();
-          throw new Error(`Kimi API error (${res.status}): ${detail || res.statusText}`);
-        }
-
-        const data = (await res.json()) as KimiSearchResponse;
-        for (const citation of extractKimiCitations(data)) {
-          collectedCitations.add(citation);
-        }
-        const choice = data.choices?.[0];
-        const message = choice?.message;
-        const text = extractKimiMessageText(message);
-        const toolCalls = message?.tool_calls ?? [];
-
-        if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
-        }
-
-        messages.push({
-          role: "assistant",
-          content: message?.content ?? "",
-          ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-          tool_calls: toolCalls,
-        });
-
-        const toolContent = buildKimiToolResultContent(data);
-        let pushed = false;
-        for (const toolCall of toolCalls) {
-          const toolCallId = toolCall.id?.trim();
-          if (!toolCallId) {
-            continue;
+        async (
+            res,
+        ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
+          if (!res.ok) {
+            const detail = await res.text();
+            throw new Error(`Kimi API error (${res.status}): ${detail || res.statusText}`);
           }
-          pushed = true;
-          messages.push({ role: "tool", tool_call_id: toolCallId, content: toolContent });
-        }
-        if (!pushed) {
-          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
-        }
-        return { done: false };
-      },
+
+          const data = (await res.json()) as KimiSearchResponse;
+          for (const citation of extractKimiCitations(data)) {
+            collectedCitations.add(citation);
+          }
+          const choice = data.choices?.[0];
+          const message = choice?.message;
+          const text = extractKimiMessageText(message);
+          const toolCalls = message?.tool_calls ?? [];
+
+          if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
+            return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
+          }
+
+          messages.push({
+            role: "assistant",
+            content: message?.content ?? "",
+            ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+            tool_calls: toolCalls,
+          });
+
+          let pushed = false;
+          for (const toolCall of toolCalls) {
+            const toolCallId = toolCall.id?.trim();
+            const toolCallName = toolCall.function?.name?.trim();
+            const toolContent = extractKimiToolResultContent(toolCall);
+            if (!toolCallId || !toolCallName || !toolContent) {
+              continue;
+            }
+            pushed = true;
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCallId,
+              name: toolCallName,
+              content: toolContent,
+            });
+          }
+          if (!pushed) {
+            return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
+          }
+          return { done: false };
+        },
     );
 
     if (next.done) {
@@ -227,11 +245,11 @@ function createKimiSchema() {
   return Type.Object({
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: MAX_SEARCH_COUNT,
-      }),
+        Type.Number({
+          description: "Number of results to return (1-10).",
+          minimum: 1,
+          maximum: MAX_SEARCH_COUNT,
+        }),
     ),
     country: Type.Optional(Type.String({ description: "Not supported by Kimi." })),
     language: Type.Optional(Type.String({ description: "Not supported by Kimi." })),
@@ -242,11 +260,11 @@ function createKimiSchema() {
 }
 
 function createKimiToolDefinition(
-  searchConfig?: SearchConfigRecord,
+    searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
     description:
-      "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",
+        "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",
     parameters: createKimiSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
@@ -261,16 +279,16 @@ function createKimiToolDefinition(
         return {
           error: "missing_kimi_api_key",
           message:
-            "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
+              "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
 
       const query = readStringParam(params, "query", { required: true });
       const count =
-        readNumberParam(params, "count", { integer: true }) ??
-        searchConfig?.maxResults ??
-        undefined;
+          readNumberParam(params, "count", { integer: true }) ??
+          searchConfig?.maxResults ??
+          undefined;
       const model = resolveKimiModel(kimiConfig);
       const baseUrl = resolveKimiBaseUrl(kimiConfig);
       const cacheKey = buildSearchCacheKey([
@@ -313,6 +331,91 @@ function createKimiToolDefinition(
   };
 }
 
+async function runKimiSearchProviderSetup(
+    ctx: WebSearchProviderSetupContext,
+): Promise<WebSearchProviderSetupContext["config"]> {
+  const existingPluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
+  const existingBaseUrl =
+      typeof existingPluginConfig?.baseUrl === "string" ? existingPluginConfig.baseUrl.trim() : "";
+  // Normalize trailing slashes so initialValue matches canonical option values.
+  const normalizedBaseUrl = existingBaseUrl.replace(/\/+$/, "");
+  const existingModel =
+      typeof existingPluginConfig?.model === "string" ? existingPluginConfig.model.trim() : "";
+
+  // Region selection (baseUrl)
+  const isCustomBaseUrl = normalizedBaseUrl && !isNativeMoonshotBaseUrl(normalizedBaseUrl);
+  const regionOptions: Array<{ value: string; label: string; hint?: string }> = [];
+  if (isCustomBaseUrl) {
+    regionOptions.push({
+      value: normalizedBaseUrl,
+      label: `Keep current (${normalizedBaseUrl})`,
+      hint: "custom endpoint",
+    });
+  }
+  regionOptions.push(
+      {
+        value: MOONSHOT_BASE_URL,
+        label: "Moonshot API key (.ai)",
+        hint: "api.moonshot.ai",
+      },
+      {
+        value: MOONSHOT_CN_BASE_URL,
+        label: "Moonshot API key (.cn)",
+        hint: "api.moonshot.cn",
+      },
+  );
+
+  const regionChoice = await ctx.prompter.select<string>({
+    message: "Kimi API region",
+    options: regionOptions,
+    initialValue: normalizedBaseUrl || MOONSHOT_BASE_URL,
+  });
+  const baseUrl = regionChoice;
+
+  // Model selection
+  const currentModelLabel = existingModel
+      ? `Keep current (moonshot/${existingModel})`
+      : `Use default (moonshot/${DEFAULT_KIMI_SEARCH_MODEL})`;
+  const modelChoice = await ctx.prompter.select<string>({
+    message: "Kimi web search model",
+    options: [
+      {
+        value: "__keep__",
+        label: currentModelLabel,
+      },
+      {
+        value: "__custom__",
+        label: "Enter model manually",
+      },
+      {
+        value: DEFAULT_KIMI_SEARCH_MODEL,
+        label: `moonshot/${DEFAULT_KIMI_SEARCH_MODEL}`,
+      },
+    ],
+    initialValue: "__keep__",
+  });
+
+  let model: string;
+  if (modelChoice === "__keep__") {
+    model = existingModel || DEFAULT_KIMI_SEARCH_MODEL;
+  } else if (modelChoice === "__custom__") {
+    const customModel = await ctx.prompter.text({
+      message: "Kimi model name",
+      initialValue: existingModel || DEFAULT_KIMI_SEARCH_MODEL,
+      placeholder: DEFAULT_KIMI_SEARCH_MODEL,
+    });
+    model = customModel?.trim() || DEFAULT_KIMI_SEARCH_MODEL;
+  } else {
+    model = modelChoice;
+  }
+
+  // Write baseUrl and model into plugins.entries.moonshot.config.webSearch
+  const next = { ...ctx.config };
+  setProviderWebSearchPluginConfigValue(next, "moonshot", "baseUrl", baseUrl);
+  setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);
+  return next;
+}
+
 export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "kimi",
@@ -329,20 +432,21 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     inactiveSecretPaths: ["plugins.entries.moonshot.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "kimi"),
     setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "kimi", value),
+        setScopedCredentialValue(searchConfigTarget, "kimi", value),
     getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "moonshot")?.apiKey,
+        resolveProviderWebSearchPluginConfig(config, "moonshot")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "moonshot", "apiKey", value);
     },
+    runSetup: runKimiSearchProviderSetup,
     createTool: (ctx) =>
-      createKimiToolDefinition(
-        mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
-          "kimi",
-          resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
-        ) as SearchConfigRecord | undefined,
-      ),
+        createKimiToolDefinition(
+            mergeScopedSearchConfig(
+                ctx.searchConfig as SearchConfigRecord | undefined,
+                "kimi",
+                resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
+            ) as SearchConfigRecord | undefined,
+        ),
   };
 }
 
@@ -351,4 +455,5 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  extractKimiToolResultContent,
 } as const;
