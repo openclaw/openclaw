@@ -278,9 +278,9 @@ function resolveSafeControlUiFile(
   });
   if (!opened.ok) {
     return matchBoundaryFileOpenFailure(opened, {
-      io: (failure) => {
-        throw failure.error;
-      },
+      io: () => null,
+      validation: () => null,
+      path: () => null,
       fallback: () => null,
     });
   }
