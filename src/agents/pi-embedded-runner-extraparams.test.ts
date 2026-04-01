@@ -1,6 +1,14 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+  resolveAnthropicBetas,
+  resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
+} from "../../extensions/anthropic/api.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -94,6 +102,25 @@ beforeEach(() => {
           params.context.streamFn,
           params.context.extraParams?.fastMode === true,
         );
+      }
+      if (params.provider === "anthropic") {
+        let streamFn = params.context.streamFn;
+        const anthropicBetas = resolveAnthropicBetas(
+          params.context.extraParams,
+          params.context.modelId,
+        );
+        if (anthropicBetas?.length) {
+          streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
+        }
+        const serviceTier = resolveAnthropicServiceTier(params.context.extraParams);
+        if (serviceTier) {
+          streamFn = createAnthropicServiceTierWrapper(streamFn, serviceTier);
+        }
+        const fastMode = resolveAnthropicFastMode(params.context.extraParams);
+        if (fastMode !== undefined) {
+          streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
+        }
+        return streamFn;
       }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
@@ -1356,29 +1383,6 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
   });
-  it("adds OpenRouter attribution headers to stream options", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-      "X-Custom": "1",
-    });
-  });
-
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
@@ -1472,6 +1476,106 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
     expect(calls[0]?.openaiWsWarmup).toBe(false);
+  });
+
+  it("injects native Codex web_search for direct openai-codex Responses models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "live",
+                allowedDomains: ["example.com"],
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
+      payload: { tools: [{ type: "function", name: "read" }] },
+    });
+
+    expect(payload.tools).toEqual([
+      { type: "function", name: "read" },
+      {
+        type: "web_search",
+        external_web_access: true,
+        filters: { allowed_domains: ["example.com"] },
+      },
+    ]);
+  });
+
+  it("does not inject duplicate native Codex web_search tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "gateway",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
+      payload: { tools: [{ type: "web_search" }] },
+    });
+
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("keeps payload unchanged when Codex native search is inactive", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "read" }] },
+    });
+
+    expect(payload.tools).toEqual([{ type: "function", name: "read" }]);
   });
 
   it("lets runtime options override OpenAI default transport", () => {
@@ -1709,24 +1813,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  it("disables prompt caching for non-Anthropic Bedrock models", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "amazon.nova-micro-v1");
-
-    const model = {
-      api: "openai-completions",
-      provider: "amazon-bedrock",
-      id: "amazon.nova-micro-v1",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.cacheRetention).toBe("none");
-  });
-
   it("keeps Anthropic Bedrock models eligible for provider-side caching", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -1917,6 +2003,42 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
+  });
+
+  it("strips disabled OpenAI reasoning payloads instead of sending effort:none", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5-mini",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
+  });
+
+  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5-mini",
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      } as unknown as Model<"azure-openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {

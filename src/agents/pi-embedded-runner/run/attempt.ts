@@ -417,7 +417,8 @@ export async function runEmbeddedAttempt(
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
       ? []
-      : createOpenClawCodingTools({
+      : (() => {
+          const allTools = createOpenClawCodingTools({
           agentId: sessionAgentId,
           trigger: params.trigger,
           memoryFlushWritePath: params.memoryFlushWritePath,
@@ -456,6 +457,7 @@ export async function runEmbeddedAttempt(
           modelProvider: params.model.provider,
           modelId: params.modelId,
           modelCompat: params.model.compat,
+          modelApi: params.model.api,
           modelContextWindowTokens: params.model.contextWindow,
           modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
           currentChannelId: params.currentChannelId,
@@ -475,6 +477,12 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+          if (params.toolsAllow && params.toolsAllow.length > 0) {
+            const allowSet = new Set(params.toolsAllow);
+            return allTools.filter((tool) => allowSet.has(tool.name));
+          }
+          return allTools;
+        })();
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
@@ -611,6 +619,10 @@ export async function runEmbeddedAttempt(
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode = resolvePromptModeForSession(params.sessionKey);
+
+    // When toolsAllow is set, use minimal prompt and strip skills catalog
+    const effectivePromptMode = params.toolsAllow?.length ? "minimal" as const : promptMode;
+    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -636,12 +648,12 @@ export async function runEmbeddedAttempt(
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt,
-      skillsPrompt,
+      skillsPrompt: effectiveSkillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,
       workspaceNotes,
       reactionGuidance,
-      promptMode,
+      promptMode: effectivePromptMode,
       acpEnabled: params.config?.acp?.enabled !== false,
       runtimeInfo,
       messageToolHints,
@@ -918,6 +930,7 @@ export async function runEmbeddedAttempt(
         sessionAgentId,
         effectiveWorkspace,
         params.model,
+        agentDir,
       );
       const agentTransportOverride = resolveAgentTransportOverride({
         settingsManager,
