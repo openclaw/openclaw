@@ -16,7 +16,10 @@ export function renderDeferredBatch(params: {
   }
   params.items.forEach((item, idx) => {
     const payload = assertDeferredDisplayPayload(item, `renderable deferred item #${idx + 1}`);
-    const content = payload.text?.trim() || payload.summaryLine?.trim();
+    const content =
+      payload.visibility === "summary-only"
+        ? payload.summaryLine?.trim()
+        : payload.text?.trim() || payload.summaryLine?.trim();
     blocks.push(`---\nQueued #${idx + 1}\n${content}`.trim());
   });
   return blocks.join("\n\n");

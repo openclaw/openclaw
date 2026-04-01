@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   assertDeferredDisplayPayload,
   assertUserVisibleDeferredDisplayPayload,
@@ -17,22 +16,30 @@ describe("deferred-visibility", () => {
   });
 
   it("recognizes user-visible display payloads only when they have content", () => {
-    expect(
-      isUserVisibleDeferredDisplayPayload({ visibility: "user-visible", text: "ready" }),
-    ).toBe(true);
+    expect(isUserVisibleDeferredDisplayPayload({ visibility: "user-visible", text: "ready" })).toBe(
+      true,
+    );
     expect(
       isUserVisibleDeferredDisplayPayload({ visibility: "summary-only", summaryLine: "later" }),
     ).toBe(false);
-    expect(
-      isUserVisibleDeferredDisplayPayload({ visibility: "user-visible", text: "   " }),
-    ).toBe(false);
+    expect(isUserVisibleDeferredDisplayPayload({ visibility: "user-visible", text: "   " })).toBe(
+      false,
+    );
   });
 
-  it("rejects missing display payload content", () => {
-    expect(() => assertDeferredDisplayPayload(undefined)).toThrow(/Missing deferred display payload/);
+  it("rejects missing or non-display payload content", () => {
+    expect(() => assertDeferredDisplayPayload(undefined)).toThrow(
+      /Missing deferred display payload/,
+    );
     expect(() =>
       assertDeferredDisplayPayload({ visibility: "summary-only", text: "  ", summaryLine: "" }),
     ).toThrow(/missing text or summaryLine/);
+    expect(() =>
+      assertDeferredDisplayPayload({
+        visibility: "internal",
+        agentPrompt: "hidden",
+      } as never),
+    ).toThrow(/expected display visibility/);
   });
 
   it("rejects non-user-visible payloads at the user-visible assertion boundary", () => {
