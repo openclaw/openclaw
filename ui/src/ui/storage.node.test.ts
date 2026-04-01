@@ -142,13 +142,9 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "",
       sessionKey: "agent",
     });
-    const persisted = JSON.parse(
-      localStorage.getItem("openclaw.control.settings.v1:wss://gateway.example:8443/openclaw") ??
-        "{}",
-    );
-    expect(persisted).toEqual({
     const scopedKey = "openclaw.control.settings.v1:wss://gateway.example:8443/openclaw";
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
+    expect(persisted).toEqual({
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       theme: "claw",
       themeMode: "system",

@@ -1,9 +1,8 @@
 import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
-import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
@@ -70,8 +69,7 @@ function uniqueNormalized(paths: readonly string[]): string[] {
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { fsPolicy?: ToolFsPolicy },
-  options?: { workspaceOnly?: boolean },
+  options?: { fsPolicy?: ToolFsPolicy; workspaceOnly?: boolean },
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw) ?? undefined;
@@ -86,8 +84,6 @@ export function resolveMediaToolLocalRoots(
   // Exact policy enforcement is applied per resolved file path in image/pdf tools via PathGuard.
   const defaultRoots = getDefaultLocalRoots();
   return uniqueNormalized(workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots);
-  const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
 }
 
 export function resolvePromptAndModelOverride(
