@@ -12,8 +12,13 @@
 
 - PR додає **PathGuard**: політика `workspaceOnly + allowedPaths + denyPaths` з підтримкою glob’ів та захистом від symlink-escape.
 - Інтеграція зроблена в tool-обгортки (read/write/edit + image/pdf), плюс тестове покриття.
-- В процесі роботи знайдені **реальні компіляційні/лінт проблеми** в гілці PR (дубль імпортів, неправильний шлях імпорту, дубль ключа в об’єкті) — їх виправлено окремим комітом у fork-гілку автора.
-- Далі найближча задача: **пройти “ботів/CI”** (lint/typecheck/unit), **не ставлячи нічого** зайвого, та прибрати конфлікти/флейки. Після цього — глибокий безпековий прохід (exec/spawn bypass тощо).
+- Виправлено всі **P1/P2 parse- та lint-ошибки**, які репортили боти:
+  - duplicate `getMediaUnderstandingProvider` (image-tool)
+  - duplicate `loadWebMediaRaw` (pdf-tool)
+  - duplicate `getDefaultLocalRoots` + duplicate param `options` (media-tool-shared)
+  - синтаксична помилка в `ui/storage.node.test.ts` (не закритий object literal)
+- Поточний стан локально: `pnpm lint` = OK; `pnpm test -- src/security/path-guard.test.ts` = OK.
+- Далі найближча задача: **перевірка build/CI без інсталяцій** (де можливо) + чистка конфліктів; потім — глибокий безпековий прохід (exec/spawn bypass).
 
 ---
 
