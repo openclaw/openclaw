@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/ostk",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ostk kernel backend for OpenClaw",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.4.1",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  }
+}

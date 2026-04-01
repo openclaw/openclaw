@@ -290,6 +290,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
+"extensions: ostk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ostk/**"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:
