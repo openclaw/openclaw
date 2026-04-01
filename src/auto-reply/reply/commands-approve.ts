@@ -1,3 +1,7 @@
+import {
+  isTelegramExecApprovalAuthorizedSender,
+  isTelegramExecApprovalClientEnabled,
+} from "../../../extensions/telegram/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
@@ -68,6 +72,17 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
   return `${channel}:${sender}`;
+}
+
+function isAuthorizedTelegramExecSender(params: Parameters<CommandHandler>[0]): boolean {
+  if (params.command.channel !== "telegram") {
+    return false;
+  }
+  return isTelegramExecApprovalAuthorizedSender({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+    senderId: params.command.senderId,
+  });
 }
 
 function readErrorCode(value: unknown): string | null {
@@ -159,6 +174,8 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
 
+  const isPluginId = parsed.id.startsWith("plugin:");
+  const telegramExecAuthorizedSender = isAuthorizedTelegramExecSender(params);
   const execApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
@@ -181,6 +198,18 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+
+  if (
+    params.command.channel === "telegram" &&
+    !isPluginId &&
+    !telegramExecAuthorizedSender &&
+    !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
+  ) {
+    return {
+      shouldContinue: false,
+      reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
+    };
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {

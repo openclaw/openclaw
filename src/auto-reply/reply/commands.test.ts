@@ -993,7 +993,7 @@ describe("/approve command", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("accepts Telegram /approve from exec target recipients even when native approvals are disabled", async () => {
+  it("ignores Telegram /approve from exec target recipients when native approvals are disabled", async () => {
     const cfg = {
       commands: { text: true },
       approvals: {
@@ -1020,13 +1020,8 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expect(result.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {
@@ -1261,7 +1256,7 @@ describe("/approve command", () => {
         expectGatewayCalls: 2,
       },
       {
-        name: "telegram disabled native delivery now reports plain approval auth denial",
+        name: "telegram disabled native delivery reports the channel-disabled message",
         cfg: createTelegramApproveCfg(null),
         commandBody: "/approve abc12345 allow-once",
         ctx: {
@@ -1270,7 +1265,7 @@ describe("/approve command", () => {
           SenderId: "123",
         },
         setup: undefined,
-        expectedText: "not authorized to approve exec requests on Telegram",
+        expectedText: "Telegram exec approvals are not enabled",
         expectGatewayCalls: 0,
       },
       {
