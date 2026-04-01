@@ -10,32 +10,52 @@ describe("kimi web search provider", () => {
     expect(__testing.resolveKimiModel({ model: "kimi-k2" })).toBe("kimi-k2");
     expect(__testing.resolveKimiBaseUrl()).toBe("https://api.moonshot.ai/v1");
     expect(__testing.resolveKimiBaseUrl({ baseUrl: "https://kimi.example/v1" })).toBe(
-      "https://kimi.example/v1",
+        "https://kimi.example/v1",
     );
   });
 
   it("extracts unique citations from search results and tool call arguments", () => {
     expect(
-      __testing.extractKimiCitations({
-        search_results: [{ url: "https://a.test" }, { url: "https://b.test" }],
-        choices: [
-          {
-            message: {
-              tool_calls: [
-                {
-                  function: {
-                    arguments: JSON.stringify({
-                      url: "https://a.test",
-                      search_results: [{ url: "https://c.test" }],
-                    }),
+        __testing.extractKimiCitations({
+          search_results: [{ url: "https://a.test" }, { url: "https://b.test" }],
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    function: {
+                      arguments: JSON.stringify({
+                        url: "https://a.test",
+                        search_results: [{ url: "https://c.test" }],
+                      }),
+                    },
                   },
-                },
-              ],
+                ],
+              },
             },
-          },
-        ],
-      }),
+          ],
+        }),
     ).toEqual(["https://a.test", "https://b.test", "https://c.test"]);
+  });
+
+  it("returns original tool arguments as tool content", () => {
+    const rawArguments = '  {"query":"MacBook Neo","usage":{"total_tokens":123}}  ';
+
+    expect(
+        __testing.extractKimiToolResultContent({
+          function: {
+            arguments: rawArguments,
+          },
+        }),
+    ).toBe(rawArguments);
+
+    expect(
+        __testing.extractKimiToolResultContent({
+          function: {
+            arguments: "   ",
+          },
+        }),
+    ).toBeUndefined();
   });
 
   it("uses config apiKey when provided", () => {
