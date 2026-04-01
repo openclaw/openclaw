@@ -427,9 +427,7 @@ export function applyJobResult(
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const isBestEffort =
-        job.delivery?.bestEffort === true ||
-        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+      const isBestEffort = job.delivery?.bestEffort === true;
       if (!isBestEffort) {
         const now = state.deps.nowMs();
         const lastAlert = job.state.lastFailureAlertAtMs;

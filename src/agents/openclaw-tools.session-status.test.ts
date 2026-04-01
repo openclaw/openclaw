@@ -515,6 +515,43 @@ describe("session_status tool", () => {
     expect(text).toContain("permission denied");
   });
 
+  it("truncates long task titles and details in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-long",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        task: "This is a deliberately long task prompt that should never be emitted in full by session_status because it can include internal instructions and file paths that are not appropriate for user-visible task summaries.",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        progressSummary:
+          "This progress detail is also intentionally long so the session_status tool proves it truncates verbose task context instead of dumping a long internal update into the tool response.",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-truncated", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain(
+      "This is a deliberately long task prompt that should never be emitted in full by…",
+    );
+    expect(text).toContain(
+      "This progress detail is also intentionally long so the session_status tool proves it truncates verbose task context ins…",
+    );
+    expect(text).not.toContain("internal instructions and file paths");
+    expect(text).not.toContain("dumping a long internal update");
+  });
+
   it("prefers failure context over newer success context in session_status output", async () => {
     resetSessionStore({
       "agent:main:main": {
