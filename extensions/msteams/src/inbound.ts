@@ -125,7 +125,8 @@ export function stripMSTeamsBotMentionTag(text: string, botMentionName?: string)
   if (!botMentionName) {
     return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
   }
-  const escaped = botMentionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Escape regex metacharacters plus <> which appear in the surrounding <at>...</at> pattern.
+  const escaped = botMentionName.replace(/[.*+?^${}()|[\]\\<>]/g, "\\$&");
   return text
     .replace(new RegExp(`<at[^>]*>${escaped}</at>`, "gi"), "")
     .replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1")

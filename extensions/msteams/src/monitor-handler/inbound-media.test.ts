@@ -119,4 +119,38 @@ describe("resolveMSTeamsInboundMedia", () => {
     expect(mocks.buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
     expect(result).toHaveLength(0);
   });
+
+  it("does not trigger Graph fallback for Adaptive Card attachments", async () => {
+    mocks.downloadMSTeamsAttachments.mockResolvedValue([]);
+
+    const result = await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: { type: "AdaptiveCard", body: [] },
+        },
+      ],
+    });
+
+    expect(mocks.buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+    expect(result).toHaveLength(0);
+  });
+
+  it("does not trigger Graph fallback for Hero Card attachments", async () => {
+    mocks.downloadMSTeamsAttachments.mockResolvedValue([]);
+
+    const result = await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.hero",
+          content: { title: "Hello" },
+        },
+      ],
+    });
+
+    expect(mocks.buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+    expect(result).toHaveLength(0);
+  });
 });

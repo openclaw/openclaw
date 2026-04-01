@@ -52,14 +52,20 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    // Fall back to Graph API when direct download produced nothing.
-    // Previously this only triggered when ALL attachments were text/html, but Teams
-    // thread replies often send a mix of text/html (quote blockquote) and
-    // application/vnd.microsoft.teams.file.download.info (without downloadUrl).
-    // The strict check prevented Graph fallback for thread file attachments.
-    const hasAttachments = attachments.length > 0;
+    // Fall back to Graph API when direct download produced nothing and attachments
+    // look like they could contain downloadable media. Only trigger for text/html
+    // (Teams file thumbnails, inline images) and file.download.info (Teams file
+    // attachments that may lack a downloadUrl in thread replies). Skip Adaptive Cards,
+    // Hero Cards, and other metadata-only content types to avoid unnecessary Graph calls.
+    const mayHaveDownloadableMedia =
+      attachments.length > 0 &&
+      attachments.some(
+        (att) =>
+          String(att.contentType ?? "").startsWith("text/html") ||
+          String(att.contentType ?? "").includes("file.download.info"),
+      );
 
-    if (hasAttachments) {
+    if (mayHaveDownloadableMedia) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
