@@ -87,12 +87,12 @@ Welcome to the lobster tank! 🦞
 
 ## Development Environment
 
-OpenClaw is built with **TypeScript** on **Node.js 24 LTS** and uses **pnpm** as its package manager for source development.
+OpenClaw is built with **TypeScript** on **Node.js** (22 LTS minimum, 24 LTS recommended) and uses **pnpm** as its package manager for source development.
 
 ### Prerequisites
 
-- **Node.js ≥ 22.12.0** (24.x LTS recommended). Install via [NodeSource](https://github.com/nodesource/distributions) or your preferred version manager.
-- **pnpm** — install globally with `sudo npm install -g pnpm`. The project workspace configuration requires pnpm; npm alone is not sufficient for source builds.
+- **Node.js ≥ 22.14.0** (24.x LTS recommended). Install via [NodeSource](https://github.com/nodesource/distributions) or your preferred version manager.
+- **pnpm** — install globally with `npm install -g pnpm` (add `sudo` if Node.js was installed system-wide via NodeSource; omit it if you use nvm). The project workspace configuration requires pnpm; npm alone is not sufficient for source builds.
 
 ### Windows (WSL2)
 
@@ -100,7 +100,12 @@ Windows contributors should develop inside **WSL2 with Ubuntu** rather than nati
 
 Key WSL2 setup notes:
 
-1. **Enable systemd** — add `[boot] systemd=true` to `/etc/wsl.conf` inside your Ubuntu instance and restart WSL (`wsl --shutdown` from PowerShell). The gateway daemon service requires systemd.
+1. **Enable systemd** — add the following to `/etc/wsl.conf` inside your Ubuntu instance and restart WSL (`wsl --shutdown` from PowerShell). The gateway daemon service requires systemd:
+
+````ini
+   [boot]
+   systemd=true
+```
 2. **Resource limits** — create or edit `%UserProfile%\.wslconfig` on the Windows side to set memory and CPU limits. Without this, WSL2 claims up to 50% of host RAM, which can cause instability on machines with limited memory:
 
 ```ini
@@ -248,3 +253,4 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 8. **Remediation Advice**
 
 Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+````
