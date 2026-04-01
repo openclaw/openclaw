@@ -41,6 +41,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/plugins/contracts/**",
   ...boundaryTestFiles,
   ...bundledPluginDependentUnitTestFiles,
+  "test/scripts/**",
 ];
 
 const sharedBaseExcludePatterns = [
