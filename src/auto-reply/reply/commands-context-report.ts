@@ -10,12 +10,58 @@ import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const STARTUP_MEMORY_FILE_NAMES = new Set(["MEMORY.md", "memory.md"]);
+const SEARCHABLE_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+type SessionSystemPromptReportWithMemory = SessionSystemPromptReport & {
+  memory: NonNullable<SessionSystemPromptReport["memory"]>;
+};
+
+function isConversationRecallTool(name: string): boolean {
+  return /^lcm_/i.test(name);
+}
+
 function formatInt(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
 }
 
 function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
+}
+
+function formatStatusLabel(status: "loaded" | "present-not-injected" | "missing"): string {
+  switch (status) {
+    case "loaded":
+      return "loaded";
+    case "present-not-injected":
+      return "present, not startup-injected";
+    case "missing":
+      return "missing";
+  }
+}
+
+function formatMemoryBoundaryLines(report: SessionSystemPromptReportWithMemory): string[] {
+  const startupFiles = report.memory.startup.files;
+  const startupLine = startupFiles.length
+    ? `Startup memory: ${startupFiles
+        .map((file) => `${file.name} (${formatStatusLabel(file.status)})`)
+        .join(", ")}`
+    : "Startup memory: none detected";
+
+  const searchableLine = report.memory.searchable.available
+    ? `Searchable memory: on-demand via ${report.memory.searchable.toolNames.join(", ")} (note roots: ${report.memory.searchable.noteRoots.join(", ")})`
+    : "Searchable memory: no memory_search/memory_get tool exposed in this session";
+
+  const recallLine = report.memory.recall.available
+    ? `Conversation recall: separate from durable memory via ${report.memory.recall.toolNames.join(", ")}`
+    : "Conversation recall: no LCM recall tools exposed in this session";
+
+  return [
+    "Memory layers:",
+    startupLine,
+    searchableLine,
+    recallLine,
+    "Rule of thumb: startup memory is preloaded, searchable memory is pulled on demand, and recall/history stays separate.",
+  ];
 }
 
 function parseContextArgs(commandBodyNormalized: string): string {
@@ -39,12 +85,53 @@ function formatListTop(
   return { lines, omitted };
 }
 
+function ensureMemoryReport(
+  report: SessionSystemPromptReport,
+): SessionSystemPromptReportWithMemory {
+  if (report.memory) {
+    return report as SessionSystemPromptReportWithMemory;
+  }
+
+  const startupFiles = report.injectedWorkspaceFiles
+    .filter((file) => STARTUP_MEMORY_FILE_NAMES.has(file.name))
+    .map((file) => ({
+      name: file.name,
+      path: file.path,
+      status: file.missing
+        ? ("missing" as const)
+        : file.injectedChars > 0
+          ? ("loaded" as const)
+          : ("present-not-injected" as const),
+      rawChars: file.rawChars,
+      injectedChars: file.injectedChars,
+    }));
+  const toolNames = report.tools.entries.map((tool) => tool.name);
+
+  return {
+    ...report,
+    memory: {
+      startup: {
+        files: startupFiles,
+      },
+      searchable: {
+        available: toolNames.some((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name)),
+        toolNames: toolNames.filter((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name)),
+        noteRoots: ["memory/"],
+      },
+      recall: {
+        available: toolNames.some(isConversationRecallTool),
+        toolNames: toolNames.filter(isConversationRecallTool),
+      },
+    },
+  };
+}
+
 async function resolveContextReport(
   params: HandleCommandsParams,
-): Promise<SessionSystemPromptReport> {
+): Promise<SessionSystemPromptReportWithMemory> {
   const existing = params.sessionEntry?.systemPromptReport;
   if (existing && existing.source === "run") {
-    return existing;
+    return ensureMemoryReport(existing);
   }
 
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
@@ -68,7 +155,7 @@ async function resolveContextReport(
     injectedFiles,
     skillsPrompt,
     tools,
-  });
+  }) as SessionSystemPromptReportWithMemory;
 }
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
@@ -81,6 +168,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "🧠 /context",
         "",
         "What counts as context (high-level), plus a breakdown mode.",
+        "Also shows the boundary between startup memory, searchable notes, and conversation recall.",
         "",
         "Try:",
         "- /context list   (short breakdown)",
@@ -201,6 +289,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     "",
     "Injected workspace files:",
     ...fileLines,
+    "",
+    ...formatMemoryBoundaryLines(report),
     "",
     skillsLine,
     skillsNamesLine,

@@ -373,6 +373,26 @@ export type SessionSystemPromptReport = {
     projectContextChars: number;
     nonProjectContextChars: number;
   };
+  memory?: {
+    startup: {
+      files: Array<{
+        name: string;
+        path: string;
+        status: "loaded" | "present-not-injected" | "missing";
+        rawChars: number;
+        injectedChars: number;
+      }>;
+    };
+    searchable: {
+      available: boolean;
+      toolNames: string[];
+      noteRoots: string[];
+    };
+    recall: {
+      available: boolean;
+      toolNames: string[];
+    };
+  };
   injectedWorkspaceFiles: Array<{
     name: string;
     path: string;

@@ -4,6 +4,13 @@ import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
+const STARTUP_MEMORY_FILE_NAMES = new Set(["MEMORY.md", "memory.md"]);
+const SEARCHABLE_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+
+function isConversationRecallTool(name: string): boolean {
+  return /^lcm_/i.test(name);
+}
+
 function extractBetween(
   input: string,
   startMarker: string,
@@ -107,6 +114,27 @@ export function buildSystemPromptReport(params: {
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({
+    bootstrapFiles: params.bootstrapFiles,
+    injectedFiles: params.injectedFiles,
+  });
+  const startupMemoryFiles = injectedWorkspaceFiles
+    .filter((file) => STARTUP_MEMORY_FILE_NAMES.has(file.name))
+    .map((file) => ({
+      name: file.name,
+      path: file.path,
+      status: file.missing
+        ? ("missing" as const)
+        : file.injectedChars > 0
+          ? ("loaded" as const)
+          : ("present-not-injected" as const),
+      rawChars: file.rawChars,
+      injectedChars: file.injectedChars,
+    }));
+  const searchableMemoryTools = toolsEntries
+    .map((tool) => tool.name)
+    .filter((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name));
+  const recallTools = toolsEntries.map((tool) => tool.name).filter(isConversationRecallTool);
 
   return {
     source: params.source,
@@ -125,10 +153,21 @@ export function buildSystemPromptReport(params: {
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
     },
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    memory: {
+      startup: {
+        files: startupMemoryFiles,
+      },
+      searchable: {
+        available: searchableMemoryTools.length > 0,
+        toolNames: searchableMemoryTools,
+        noteRoots: ["memory/"],
+      },
+      recall: {
+        available: recallTools.length > 0,
+        toolNames: recallTools,
+      },
+    },
+    injectedWorkspaceFiles,
     skills: {
       promptChars: params.skillsPrompt.length,
       entries: skillsEntries,

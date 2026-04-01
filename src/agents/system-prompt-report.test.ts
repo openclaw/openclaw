@@ -112,4 +112,85 @@ describe("buildSystemPromptReport", () => {
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
   });
+
+  it("classifies startup memory separately from searchable memory and recall tools", () => {
+    const memoryFile = makeBootstrapFile({
+      name: "MEMORY.md",
+      path: "/tmp/workspace/MEMORY.md",
+      content: "durable facts",
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [memoryFile],
+      injectedFiles: [{ path: "/tmp/workspace/MEMORY.md", content: "durable facts" }],
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "memory_search",
+          description: "Search memory",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "memory_get",
+          description: "Read memory",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "lcm_expand_query",
+          description: "Recall compacted context",
+          parameters: { type: "object", properties: {} },
+        },
+      ] as never,
+    });
+
+    expect(report.memory?.startup.files).toEqual([
+      {
+        name: "MEMORY.md",
+        path: "/tmp/workspace/MEMORY.md",
+        status: "loaded",
+        rawChars: "durable facts".length,
+        injectedChars: "durable facts".length,
+      },
+    ]);
+    expect(report.memory?.searchable).toEqual({
+      available: true,
+      toolNames: ["memory_search", "memory_get"],
+      noteRoots: ["memory/"],
+    });
+    expect(report.memory?.recall).toEqual({
+      available: true,
+      toolNames: ["lcm_expand_query"],
+    });
+  });
+
+  it("marks startup memory as present-not-injected when scoped sessions omit it", () => {
+    const memoryFile = makeBootstrapFile({
+      name: "MEMORY.md",
+      path: "/tmp/workspace/MEMORY.md",
+      content: "durable facts",
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [memoryFile],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.memory?.startup.files).toEqual([
+      {
+        name: "MEMORY.md",
+        path: "/tmp/workspace/MEMORY.md",
+        status: "present-not-injected",
+        rawChars: "durable facts".length,
+        injectedChars: 0,
+      },
+    ]);
+  });
 });

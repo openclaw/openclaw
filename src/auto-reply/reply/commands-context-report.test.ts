@@ -5,8 +5,40 @@ import type { HandleCommandsParams } from "./commands-types.js";
 function makeParams(
   commandBodyNormalized: string,
   truncated: boolean,
-  options?: { omitBootstrapLimits?: boolean },
+  options?: {
+    omitBootstrapLimits?: boolean;
+    includeLegacyMemoryFile?: boolean;
+    includeMemoryTools?: boolean;
+  },
 ): HandleCommandsParams {
+  const injectedWorkspaceFiles = [
+    {
+      name: "AGENTS.md",
+      path: "/tmp/workspace/AGENTS.md",
+      missing: false,
+      rawChars: truncated ? 200_000 : 10_000,
+      injectedChars: truncated ? 20_000 : 10_000,
+      truncated,
+    },
+  ];
+  if (options?.includeLegacyMemoryFile) {
+    injectedWorkspaceFiles.push({
+      name: "MEMORY.md",
+      path: "/tmp/workspace/MEMORY.md",
+      missing: false,
+      rawChars: 500,
+      injectedChars: 0,
+      truncated: true,
+    });
+  }
+  const toolEntries = [{ name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 }];
+  if (options?.includeMemoryTools) {
+    toolEntries.push(
+      { name: "memory_search", summaryChars: 10, schemaChars: 20, propertiesCount: 1 },
+      { name: "memory_get", summaryChars: 10, schemaChars: 20, propertiesCount: 1 },
+      { name: "lcm_expand_query", summaryChars: 10, schemaChars: 20, propertiesCount: 1 },
+    );
+  }
   return {
     command: {
       commandBodyNormalized,
@@ -37,16 +69,7 @@ function makeParams(
           projectContextChars: 500,
           nonProjectContextChars: 500,
         },
-        injectedWorkspaceFiles: [
-          {
-            name: "AGENTS.md",
-            path: "/tmp/workspace/AGENTS.md",
-            missing: false,
-            rawChars: truncated ? 200_000 : 10_000,
-            injectedChars: truncated ? 20_000 : 10_000,
-            truncated,
-          },
-        ],
+        injectedWorkspaceFiles,
         skills: {
           promptChars: 10,
           entries: [{ name: "checks", blockChars: 10 }],
@@ -54,7 +77,7 @@ function makeParams(
         tools: {
           listChars: 10,
           schemaChars: 20,
-          entries: [{ name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 }],
+          entries: toolEntries,
         },
       },
     },
@@ -88,5 +111,21 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
+  });
+
+  it("synthesizes memory-layer output for legacy cached reports", async () => {
+    const result = await buildContextReply(
+      makeParams("/context list", false, {
+        includeLegacyMemoryFile: true,
+        includeMemoryTools: true,
+      }),
+    );
+    expect(result.text).toContain("Startup memory: MEMORY.md (present, not startup-injected)");
+    expect(result.text).toContain(
+      "Searchable memory: on-demand via memory_search, memory_get (note roots: memory/)",
+    );
+    expect(result.text).toContain(
+      "Conversation recall: separate from durable memory via lcm_expand_query",
+    );
   });
 });
