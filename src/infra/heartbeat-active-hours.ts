@@ -68,6 +68,16 @@ function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | nul
   }
 }
 
+function isWithinWindow(currentMin: number, startMin: number, endMin: number): boolean {
+  if (startMin === endMin) {
+    return false;
+  }
+  if (endMin > startMin) {
+    return currentMin >= startMin && currentMin < endMin;
+  }
+  return currentMin >= startMin || currentMin < endMin;
+}
+
 export function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
@@ -93,20 +103,7 @@ export function isWithinActiveHours(
     return true;
   }
 
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
-  }
-  return currentMin >= startMin || currentMin < endMin;
-}
-
-function isWithinWindow(currentMin: number, startMin: number, endMin: number): boolean {
-  if (startMin === endMin) {
-    return false;
-  }
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
-  }
-  return currentMin >= startMin || currentMin < endMin;
+  return isWithinWindow(currentMin, startMin, endMin);
 }
 
 /**

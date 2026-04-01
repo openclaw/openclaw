@@ -8,7 +8,6 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveScheduleIntervalMs } from "./heartbeat-active-hours.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
@@ -68,22 +67,6 @@ export function resolveHeartbeatIntervalMs(
     return null;
   }
   return ms;
-}
-
-/**
- * Resolves the effective heartbeat interval at a given time, checking the
- * schedule first and falling back to the base `every` interval.
- */
-export function resolveHeartbeatIntervalMsAtTime(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig,
-  nowMs?: number,
-): number | null {
-  const scheduleMs = resolveScheduleIntervalMs(cfg, heartbeat, nowMs);
-  if (scheduleMs !== null) {
-    return scheduleMs;
-  }
-  return resolveHeartbeatIntervalMs(cfg, undefined, heartbeat);
 }
 
 export function resolveHeartbeatSummaryForAgent(

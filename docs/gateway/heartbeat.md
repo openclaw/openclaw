@@ -216,7 +216,7 @@ Overnight windows work naturally: `{ start: "23:00", end: "08:00", every: "2h" }
 
 **First-match-wins:** if schedule entries overlap, the first matching entry determines the interval.
 
-**Boundary behavior:** when a heartbeat run is in flight at a window boundary, the current run finishes normally. The next tick uses the new interval from the matching window.
+**Boundary behavior:** when a heartbeat run is in flight at a window boundary, the current run finishes normally. The next tick uses the new interval from the matching window. Transitions are accurate to the minute; the runner wakes at window boundaries but may fire up to ~60 seconds after the exact transition.
 
 **Manual wakes** (via `openclaw system heartbeat wake`) always fire regardless of schedule intervals.
 

@@ -1144,13 +1144,14 @@ export function startHeartbeatRunner(opts: {
 
       for (const agent of state.agents.values()) {
         // Re-resolve the schedule interval at tick time so boundary transitions
-        // take effect promptly: a 2h overnight interval transitioning to 15m
-        // work-hours means the agent may already be overdue under the new interval.
+        // take effect in both directions: shorter intervals make the agent due
+        // sooner, longer intervals push the next due time forward (avoiding
+        // spurious runs when transitioning to a slower cadence).
         if (isInterval) {
           const scheduleMs = resolveScheduleIntervalMs(state.cfg, agent.heartbeat, now);
           if (scheduleMs !== null && typeof agent.lastRunMs === "number") {
             const recalcDue = agent.lastRunMs + scheduleMs;
-            if (recalcDue < agent.nextDueMs) {
+            if (recalcDue !== agent.nextDueMs) {
               agent.nextDueMs = recalcDue;
             }
           }
