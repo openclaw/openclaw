@@ -179,6 +179,7 @@ describe("archive-staging helpers", () => {
         const sourceDir = path.join(rootDir, "source");
         const destDir = path.join(rootDir, "dest");
         const sourcePath = path.join(sourceDir, "locked.txt");
+        const destPath = path.join(destDir, "locked.txt");
         await fs.mkdir(sourceDir, { recursive: true });
         await fs.mkdir(destDir, { recursive: true });
         await fs.writeFile(sourcePath, "first", { mode: 0o600 });
@@ -190,9 +191,7 @@ describe("archive-staging helpers", () => {
           destinationDir: destDir,
           destinationRealDir,
         });
-        await expect(fs.stat(path.join(destDir, "locked.txt"))).resolves.toMatchObject({
-          mode: expect.any(Number),
-        });
+        expect((await fs.stat(destPath)).mode & 0o777).toBe(0o000);
 
         await mergeExtractedTreeIntoDestination({
           sourceDir,
@@ -200,7 +199,6 @@ describe("archive-staging helpers", () => {
           destinationRealDir,
         });
 
-        const destPath = path.join(destDir, "locked.txt");
         const stat = await fs.stat(destPath);
         expect(stat.mode & 0o777).toBe(0o000);
         await fs.chmod(destPath, 0o600);

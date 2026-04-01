@@ -193,17 +193,18 @@ export async function mergeExtractedTreeIntoDestination(params: {
         originalPath,
         isDirectory: false,
       });
+      const sourceMode = sourceStat.mode & 0o777;
       await copyFileWithinRoot({
         sourcePath,
         rootDir: params.destinationRealDir,
         relativePath: relPath,
         mkdir: true,
-        createMode: sourceStat.mode & 0o777,
+        createMode: sourceMode | 0o600,
       });
       await applyStagedEntryMode({
         destinationRealDir: params.destinationRealDir,
         relPath,
-        mode: sourceStat.mode & 0o777,
+        mode: sourceMode,
         originalPath,
       });
     }
