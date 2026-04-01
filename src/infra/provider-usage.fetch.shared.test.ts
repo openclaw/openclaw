@@ -60,21 +60,27 @@ describe("provider usage fetch shared helpers", () => {
   });
 
   it("aborts timed out requests and clears the timer on rejection", async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    const fetchFnMock = vi.fn(
-      (_input: URL | RequestInfo, init?: RequestInit) =>
-        new Promise<Response>((_, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
-            once: true,
-          });
-        }),
-    );
-    const fetchFn = withFetchPreconnect(fetchFnMock);
+    vi.useFakeTimers();
+    try {
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const fetchFnMock = vi.fn(
+        (_input: URL | RequestInfo, init?: RequestInit) =>
+          new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
+              once: true,
+            });
+          }),
+      );
+      const fetchFn = withFetchPreconnect(fetchFnMock);
+      const responsePromise = fetchJson("https://example.com/usage", {}, 10, fetchFn);
+      const rejection = expect(responsePromise).rejects.toThrow("aborted by timeout");
 
-    await expect(fetchJson("https://example.com/usage", {}, 10, fetchFn)).rejects.toThrow(
-      "aborted by timeout",
-    );
-    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10);
+      await rejection;
+      expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("maps configured status codes to token expired", () => {
