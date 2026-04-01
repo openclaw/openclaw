@@ -1,7 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
-let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
 let createDiscordComponentButton: typeof import("./agent-components.js").createDiscordComponentButton;
 let createDiscordComponentChannelSelect: typeof import("./agent-components.js").createDiscordComponentChannelSelect;
 let createDiscordComponentMentionableSelect: typeof import("./agent-components.js").createDiscordComponentMentionableSelect;
@@ -11,7 +9,6 @@ let createDiscordComponentStringSelect: typeof import("./agent-components.js").c
 let createDiscordComponentUserSelect: typeof import("./agent-components.js").createDiscordComponentUserSelect;
 
 beforeAll(async () => {
-  ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } = await import("../components.js"));
   ({
     createDiscordComponentButton,
     createDiscordComponentChannelSelect,
@@ -30,6 +27,14 @@ type WildcardComponent = {
 
 function asWildcardComponent(value: unknown): WildcardComponent {
   return value as WildcardComponent;
+}
+
+function buildInteractionComponentCustomId(componentId: string): string {
+  return `occomp:cid=${componentId}`;
+}
+
+function buildInteractionModalCustomId(modalId: string): string {
+  return `ocmodal:mid=${modalId}`;
 }
 
 function createWildcardComponents() {
@@ -56,8 +61,8 @@ describe("discord wildcard component registration ids", () => {
 
   it("still resolves sentinel ids and runtime ids through wildcard parser key", () => {
     const components = createWildcardComponents();
-    const interactionCustomId = buildDiscordComponentCustomId({ componentId: "sel_test" });
-    const interactionModalId = buildDiscordModalCustomId("mdl_test");
+    const interactionCustomId = buildInteractionComponentCustomId("sel_test");
+    const interactionModalId = buildInteractionModalCustomId("mdl_test");
 
     for (const component of components) {
       expect(component.customIdParser(component.customId).key).toBe("*");
