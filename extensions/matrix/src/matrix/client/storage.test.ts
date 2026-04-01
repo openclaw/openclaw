@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
@@ -39,12 +39,10 @@ vi.mock("../../../../../src/infra/backup-create.js", async (importOriginal) => {
     createBackupArchive: (params: unknown) => createBackupArchiveMock(params),
   };
 });
-
 vi.mock("./migration-snapshot.runtime.js", () => ({
   maybeCreateMatrixMigrationSnapshot: (params: unknown) =>
     maybeCreateMatrixMigrationSnapshotMock(params),
 }));
-
 describe("matrix client storage paths", () => {
   const tempDirs: string[] = [];
   const defaultStorageAuth = {
@@ -52,8 +50,6 @@ describe("matrix client storage paths", () => {
     userId: "@bot:example.org",
     accessToken: "secret-token",
   };
-
-  beforeEach(() => {});
 
   afterEach(() => {
     createBackupArchiveMock.mockReset();

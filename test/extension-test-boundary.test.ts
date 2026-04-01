@@ -34,6 +34,13 @@ function findExtensionImports(source: string): string[] {
   ].map((match) => match[1]);
 }
 
+function findPluginSdkImports(source: string): string[] {
+  return [
+    ...source.matchAll(/from\s+["']((?:\.\.\/)+plugin-sdk\/[^"']+)["']/g),
+    ...source.matchAll(/import\(\s*["']((?:\.\.\/)+plugin-sdk\/[^"']+)["']\s*\)/g),
+  ].map((match) => match[1]);
+}
+
 describe("non-extension test boundaries", () => {
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {
     const testFiles = [
@@ -65,5 +72,27 @@ describe("non-extension test boundaries", () => {
       .filter((value): value is { file: string; imports: string[] } => value !== null);
 
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps extension-owned onboard helper coverage out of the core onboard auth suite", () => {
+    const bannedPluginSdkModules = new Set<string>([
+      "../plugin-sdk/litellm.js",
+      "../plugin-sdk/minimax.js",
+      "../plugin-sdk/mistral.js",
+      "../plugin-sdk/opencode-go.js",
+      "../plugin-sdk/opencode.js",
+      "../plugin-sdk/openrouter.js",
+      "../plugin-sdk/synthetic.js",
+      "../plugin-sdk/xai.js",
+      "../plugin-sdk/xiaomi.js",
+      "../plugin-sdk/zai.js",
+    ]);
+    const file = "src/commands/onboard-auth.test.ts";
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    const imports = findPluginSdkImports(source).filter((entry) =>
+      bannedPluginSdkModules.has(entry),
+    );
+
+    expect(imports).toEqual([]);
   });
 });

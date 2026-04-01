@@ -7,6 +7,7 @@ import {
   createActionGate,
   extractToolSend,
   jsonResult,
+  loadOutboundMediaFromUrl,
   readNumberParam,
   readReactionParams,
   readStringParam,
@@ -53,7 +54,12 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 async function loadGoogleChatActionMedia(params: {
   mediaUrl: string;
   maxBytes: number;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const runtime = getGoogleChatRuntime();
   return /^https?:\/\//i.test(params.mediaUrl)
@@ -61,9 +67,11 @@ async function loadGoogleChatActionMedia(params: {
         url: params.mediaUrl,
         maxBytes: params.maxBytes,
       })
-    : await runtime.media.loadWebMedia(params.mediaUrl, {
+    : await loadOutboundMediaFromUrl(params.mediaUrl, {
         maxBytes: params.maxBytes,
-        localRoots: params.mediaLocalRoots?.length ? params.mediaLocalRoots : undefined,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
       });
 }
 
@@ -85,7 +93,15 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  }) => {
     const account = resolveGoogleChatAccount({
       cfg: cfg,
       accountId,
@@ -117,7 +133,9 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         const loaded = await loadGoogleChatActionMedia({
           mediaUrl,
           maxBytes,
+          mediaAccess,
           mediaLocalRoots,
+          mediaReadFile,
         });
         const uploadFileName =
           readStringParam(params, "filename") ??

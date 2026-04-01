@@ -1,12 +1,70 @@
+import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
+import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
+import { qqbotPlugin } from "./channel.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { QQBotConfigSchema } from "./config-schema.js";
 import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
 
 describe("qqbot config", () => {
+  it("accepts top-level speech overrides in the manifest schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
+    ) as { configSchema: Record<string, unknown> };
+
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "qqbot.manifest.speech-overrides",
+      value: {
+        tts: {
+          provider: "openai",
+          baseUrl: "https://example.com/v1",
+          apiKey: "tts-key",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          authStyle: "api-key",
+          queryParams: {
+            format: "wav",
+          },
+          speed: 1.1,
+        },
+        stt: {
+          provider: "openai",
+          baseUrl: "https://example.com/v1",
+          apiKey: "stt-key",
+          model: "whisper-1",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts defaultAccount in the manifest schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
+    ) as { configSchema: Record<string, unknown> };
+
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "qqbot.manifest.default-account",
+      value: {
+        defaultAccount: "bot2",
+        accounts: {
+          bot2: {
+            appId: "654321",
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts SecretRef-backed credentials in the runtime schema", () => {
     const parsed = QQBotConfigSchema.safeParse({
+      defaultAccount: "bot2",
       appId: "123456",
       clientSecret: {
         source: "env",
@@ -36,6 +94,21 @@ describe("qqbot config", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("rejects account-level speech overrides that runtime does not consume", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      accounts: {
+        bot2: {
+          appId: "654321",
+          tts: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it("preserves top-level media and upgrade config on the default account", () => {
@@ -147,5 +220,121 @@ describe("qqbot config", () => {
       appId: "102905186",
       clientSecret: "Oi2Mg1Mh2Ni3:Pl7TpBXuHe1OmAYwKi7W",
     });
+  });
+
+  it("rejects malformed --token consistently across setup paths", () => {
+    const runtimeSetup = qqbotPlugin.setup;
+    const lightweightSetup = qqbotSetupPlugin.setup;
+    expect(runtimeSetup).toBeDefined();
+    expect(lightweightSetup).toBeDefined();
+
+    const input = { token: "broken", name: "Bad" };
+
+    expect(
+      runtimeSetup!.validateInput?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+        input,
+      }),
+    ).toBe("QQBot --token must be in appId:clientSecret format");
+    expect(
+      lightweightSetup!.validateInput?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+        input,
+      }),
+    ).toBe("QQBot --token must be in appId:clientSecret format");
+    expect(
+      runtimeSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+        input,
+      }),
+    ).toEqual({});
+    expect(
+      lightweightSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+        input,
+      }),
+    ).toEqual({});
+  });
+
+  it("preserves the --use-env add flow across setup paths", () => {
+    const runtimeSetup = qqbotPlugin.setup;
+    const lightweightSetup = qqbotSetupPlugin.setup;
+    expect(runtimeSetup).toBeDefined();
+    expect(lightweightSetup).toBeDefined();
+
+    const input = { useEnv: true, name: "Env Bot" };
+
+    expect(
+      runtimeSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+        input,
+      }),
+    ).toMatchObject({
+      channels: {
+        qqbot: {
+          enabled: true,
+          allowFrom: ["*"],
+          name: "Env Bot",
+        },
+      },
+    });
+    expect(
+      lightweightSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+        input,
+      }),
+    ).toMatchObject({
+      channels: {
+        qqbot: {
+          enabled: true,
+          allowFrom: ["*"],
+          name: "Env Bot",
+        },
+      },
+    });
+  });
+
+  it("rejects --use-env for named accounts across setup paths", () => {
+    const runtimeSetup = qqbotPlugin.setup;
+    const lightweightSetup = qqbotSetupPlugin.setup;
+    expect(runtimeSetup).toBeDefined();
+    expect(lightweightSetup).toBeDefined();
+
+    const input = { useEnv: true, name: "Env Bot" };
+
+    expect(
+      runtimeSetup!.validateInput?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toBe("QQBot --use-env only supports the default account");
+    expect(
+      lightweightSetup!.validateInput?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toBe("QQBot --use-env only supports the default account");
+    expect(
+      runtimeSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toEqual({});
+    expect(
+      lightweightSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toEqual({});
   });
 });

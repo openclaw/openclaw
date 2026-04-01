@@ -4,6 +4,14 @@ import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
+const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
+  vi.fn(async (_mediaUrl: string, _options?: unknown) => ({
+    buffer: Buffer.from("fake-image"),
+    contentType: "image/png",
+    kind: "image",
+    fileName: "screenshot.png",
+  })),
+);
 const fetchWithSsrFGuard = vi.fn(
   async (params: { url: string; init?: RequestInit }) =>
     ({
@@ -22,17 +30,20 @@ vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
-  loadWebMedia: vi.fn(async () => ({
-    buffer: Buffer.from("fake-image"),
-    contentType: "image/png",
-    kind: "image",
-    fileName: "screenshot.png",
-  })),
-}));
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+  const mockedLoadOutboundMediaFromUrl =
+    loadOutboundMediaFromUrlMock as unknown as typeof actual.loadOutboundMediaFromUrl;
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
+      mockedLoadOutboundMediaFromUrl(...args),
+  };
+});
 
 let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
 let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
+({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -65,16 +76,12 @@ function createUploadTestClient(): UploadTestClient {
 describe("sendMessageSlack file upload with user IDs", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
-  });
-
   beforeEach(() => {
     globalThis.fetch = vi.fn(
       async () => new Response("ok", { status: 200 }),
     ) as unknown as typeof fetch;
     fetchWithSsrFGuard.mockClear();
+    loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
   });
 

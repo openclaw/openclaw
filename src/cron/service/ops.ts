@@ -6,7 +6,6 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
-import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -250,8 +249,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const normalizedInput = normalizeCronCreateDeliveryInput(input);
-    const job = createJob(state, normalizedInput);
+    const job = createJob(state, input);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -400,7 +398,8 @@ function tryCreateManualTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,
@@ -436,6 +435,7 @@ function tryFinishManualTaskRun(
     if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
       completeTaskRunByRunId({
         runId: params.taskRunId,
+        runtime: "cron",
         endedAt: params.endedAt,
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
@@ -444,6 +444,7 @@ function tryFinishManualTaskRun(
     }
     failTaskRunByRunId({
       runId: params.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
           ? "timed_out"

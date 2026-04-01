@@ -71,21 +71,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
           mode: "api-key" as const,
         };
       }
-      const legacyApiKey = params.config?.tools?.web?.search?.grok?.apiKey;
-      if (typeof legacyApiKey === "string" && legacyApiKey.trim()) {
-        return {
-          apiKey: legacyApiKey.trim(),
-          source: "tools.web.search.grok.apiKey",
-          mode: "api-key" as const,
-        };
-      }
-      if (legacyApiKey && typeof legacyApiKey === "object") {
-        return {
-          apiKey: NON_ENV_SECRETREF_MARKER,
-          source: "tools.web.search.grok.apiKey",
-          mode: "api-key" as const,
-        };
-      }
       return undefined;
     }
     if (params.provider !== "ollama") {
