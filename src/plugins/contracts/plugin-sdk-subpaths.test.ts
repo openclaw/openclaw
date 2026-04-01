@@ -22,6 +22,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import type {
   BaseProbeResult,
@@ -43,9 +44,8 @@ import type {
   OpenClawPluginApi as SharedOpenClawPluginApi,
   PluginRuntime as SharedPluginRuntime,
 } from "./channel-plugin-common.js";
-import { pluginSdkSubpaths } from "./entrypoints.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
