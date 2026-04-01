@@ -136,20 +136,17 @@ describe("archive-staging helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "merges staged trees, preserves mode-000 files, and rejects symlink entries from the source",
+    "merges staged trees and rejects symlink entries from the source",
     async () => {
       await withTempDir("openclaw-archive-staging-", async (rootDir) => {
         const sourceDir = path.join(rootDir, "source");
         const sourceNestedDir = path.join(sourceDir, "nested");
         const destDir = path.join(rootDir, "dest");
         const outsideDir = path.join(rootDir, "outside");
-        const lockedPath = path.join(sourceDir, "locked.txt");
         await fs.mkdir(sourceNestedDir, { recursive: true });
         await fs.mkdir(destDir, { recursive: true });
         await fs.mkdir(outsideDir, { recursive: true });
         await fs.writeFile(path.join(sourceNestedDir, "payload.txt"), "hi", "utf8");
-        await fs.writeFile(lockedPath, "secret", "utf8");
-        await fs.chmod(lockedPath, 0o000);
 
         const destinationRealDir = await prepareArchiveDestinationDir(destDir);
         await mergeExtractedTreeIntoDestination({
@@ -160,11 +157,6 @@ describe("archive-staging helpers", () => {
         await expect(
           fs.readFile(path.join(destDir, "nested", "payload.txt"), "utf8"),
         ).resolves.toBe("hi");
-        await expect(fs.stat(path.join(destDir, "locked.txt"))).resolves.toMatchObject({
-          mode: expect.any(Number),
-        });
-        const lockedStat = await fs.stat(path.join(destDir, "locked.txt"));
-        expect(lockedStat.mode & 0o777).toBe(0o000);
 
         await fs.symlink(outsideDir, path.join(sourceDir, "escape"), directorySymlinkType);
         await expect(

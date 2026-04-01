@@ -266,6 +266,23 @@ describe("fs-safe", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves explicit zero createMode for newly created files",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: "nested/locked.txt",
+        data: "secret",
+        createMode: 0o000,
+      });
+
+      const stat = await fs.stat(path.join(root, "nested", "locked.txt"));
+      expect(stat.mode & 0o777).toBe(0o000);
+    },
+  );
+
   it("appends to a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const targetPath = path.join(root, "nested", "out.txt");
@@ -298,6 +315,26 @@ describe("fs-safe", () => {
       "copy-ok",
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves explicit zero createMode when copying new files",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
+      const sourcePath = path.join(sourceDir, "in.txt");
+      await fs.writeFile(sourcePath, "copy-ok");
+
+      await copyFileWithinRoot({
+        sourcePath,
+        rootDir: root,
+        relativePath: "nested/copied-locked.txt",
+        createMode: 0o000,
+      });
+
+      const stat = await fs.stat(path.join(root, "nested", "copied-locked.txt"));
+      expect(stat.mode & 0o777).toBe(0o000);
+    },
+  );
 
   it("removes a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");

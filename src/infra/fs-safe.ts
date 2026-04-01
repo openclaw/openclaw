@@ -939,7 +939,7 @@ async function writeFileWithinRootLegacy(params: {
       tempPath,
       data: params.data,
       encoding: params.encoding,
-      mode: targetMode || params.createMode || 0o600,
+      mode: targetMode ?? params.createMode ?? 0o600,
     });
     await fs.rename(tempPath, destinationPath);
     tempPath = null;
@@ -990,7 +990,7 @@ async function copyFileWithinRootLegacy(
     targetClosedByUs = true;
 
     tempPath = buildAtomicWriteTempPath(destinationPath);
-    tempHandle = await fs.open(tempPath, OPEN_WRITE_CREATE_FLAGS, targetMode || 0o600);
+    tempHandle = await fs.open(tempPath, OPEN_WRITE_CREATE_FLAGS, targetMode ?? 0o600);
     const sourceStream = source.handle.createReadStream();
     const targetStream = tempHandle.createWriteStream();
     sourceStream.once("close", () => {
