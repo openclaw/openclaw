@@ -57,10 +57,15 @@ import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -995,6 +1000,50 @@ export async function spawnAcpDirect(
     });
   }
 
+  // --- ACP bootstrap injection ---
+  let effectiveTask = params.task;
+  if (!params.resumeSessionId) {
+    const bootstrapWorkspace = params.cwd || resolveAgentWorkspaceDir(cfg, targetAgentId);
+    if (bootstrapWorkspace && cfg.acp?.injectBootstrap !== false) {
+      try {
+        const bootstrapFiles = await loadWorkspaceBootstrapFiles(bootstrapWorkspace);
+        const ACP_BOOTSTRAP_INCLUDE = new Set([
+          "AGENTS.md",
+          "SOUL.md",
+          "IDENTITY.md",
+          "USER.md",
+          "TOOLS.md",
+          "MEMORY.md",
+          "memory.md",
+        ]);
+        const includedFiles = bootstrapFiles.filter(
+          (f) => !f.missing && f.content?.trim() && ACP_BOOTSTRAP_INCLUDE.has(f.name),
+        );
+        if (includedFiles.length > 0) {
+          const MAX_TOTAL_CHARS = 50_000;
+          let totalChars = 0;
+          const sections: string[] = [];
+          for (const file of includedFiles) {
+            const content = file.content!.trim();
+            if (totalChars + content.length > MAX_TOTAL_CHARS) {
+              break;
+            }
+            sections.push(`## ${file.name}\n\n${content}`);
+            totalChars += content.length;
+          }
+          if (sections.length > 0) {
+            const bootstrapBlock = sections.join("\n\n---\n\n");
+            effectiveTask = `[WORKSPACE CONTEXT]\nThe following files define your identity, operating instructions, and memory for this workspace. Follow them.\n\n${bootstrapBlock}\n\n[/WORKSPACE CONTEXT]\n\n${params.task}`;
+          }
+        }
+      } catch (err) {
+        log.warn(
+          `ACP bootstrap injection failed for workspace ${bootstrapWorkspace}: ${summarizeError(err)}`,
+        );
+      }
+    }
+  }
+
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
@@ -1118,7 +1167,7 @@ export async function spawnAcpDirect(
     const response = await callGateway<{ runId?: string }>({
       method: "agent",
       params: {
-        message: params.task,
+        message: effectiveTask,
         sessionKey,
         channel: deliveryPlan.channel,
         to: deliveryPlan.to,

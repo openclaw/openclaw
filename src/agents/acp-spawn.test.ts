@@ -23,6 +23,8 @@ import {
 } from "../infra/outbound/session-binding-service.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
+import * as agentScope from "./agent-scope.js";
+import * as workspace from "./workspace.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -95,6 +97,8 @@ const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
   acpSpawnParentStream,
   "resolveAcpSpawnStreamLogPath",
 );
+const loadWorkspaceBootstrapFilesSpy = vi.spyOn(workspace, "loadWorkspaceBootstrapFiles");
+const resolveAgentWorkspaceDirSpy = vi.spyOn(agentScope, "resolveAgentWorkspaceDir");
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
@@ -487,6 +491,8 @@ describe("spawnAcpDirect", () => {
     areHeartbeatsEnabledSpy
       .mockReset()
       .mockImplementation(() => hoisted.areHeartbeatsEnabledMock());
+    loadWorkspaceBootstrapFilesSpy.mockReset().mockResolvedValue([]);
+    resolveAgentWorkspaceDirSpy.mockReset().mockReturnValue("/tmp/workspace-codex");
   });
 
   afterEach(() => {
@@ -1676,5 +1682,221 @@ describe("spawnAcpDirect", () => {
     expect(expectFailedSpawn(result, "error").error).toContain('streamTo="parent"');
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  describe("ACP bootstrap injection", () => {
+    it("should prepend workspace bootstrap files to task string", async () => {
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace-codex/SOUL.md",
+          content: "You are a researcher.",
+          missing: false,
+        },
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace-codex/AGENTS.md",
+          content: "Follow these rules.",
+          missing: false,
+        },
+      ]);
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Investigate flaky tests" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      expect(agentCall).toBeDefined();
+      const message = agentCall!.params!.message as string;
+      expect(message).toContain("[WORKSPACE CONTEXT]");
+      expect(message).toContain("You are a researcher.");
+      expect(message).toContain("Follow these rules.");
+      expect(message).toContain("[/WORKSPACE CONTEXT]");
+      expect(message).toContain("Investigate flaky tests");
+      // Task should come after the context block
+      expect(message.indexOf("[/WORKSPACE CONTEXT]")).toBeLessThan(
+        message.indexOf("Investigate flaky tests"),
+      );
+    });
+
+    it("should skip bootstrap injection on resume sessions", async () => {
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace-codex/SOUL.md",
+          content: "You are a researcher.",
+          missing: false,
+        },
+      ]);
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Continue work", resumeSessionId: "prev-session" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      expect(agentCall).toBeDefined();
+      expect(agentCall!.params!.message).toBe("Continue work");
+    });
+
+    it("should skip bootstrap when acp.injectBootstrap is false", async () => {
+      replaceSpawnConfig({
+        ...createDefaultSpawnConfig(),
+        acp: { ...createDefaultSpawnConfig().acp, injectBootstrap: false },
+      });
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace-codex/SOUL.md",
+          content: "You are a researcher.",
+          missing: false,
+        },
+      ]);
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      expect(agentCall).toBeDefined();
+      expect(agentCall!.params!.message).toBe("Do something");
+    });
+
+    it("should not fail spawn if bootstrap loading errors", async () => {
+      loadWorkspaceBootstrapFilesSpy.mockRejectedValue(new Error("Permission denied"));
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      expect(agentCall).toBeDefined();
+      expect(agentCall!.params!.message).toBe("Do something");
+    });
+
+    it("should respect MAX_TOTAL_CHARS budget", async () => {
+      const largeContent = "x".repeat(40_000);
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace-codex/SOUL.md",
+          content: largeContent,
+          missing: false,
+        },
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace-codex/AGENTS.md",
+          content: largeContent,
+          missing: false,
+        },
+      ]);
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      const message = agentCall!.params!.message as string;
+      // Should include SOUL.md (40k) but not AGENTS.md (would exceed 50k)
+      expect(message).toContain("## SOUL.md");
+      expect(message).not.toContain("## AGENTS.md");
+    });
+
+    it("should exclude missing and empty bootstrap files", async () => {
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace-codex/SOUL.md",
+          content: "Real content.",
+          missing: false,
+        },
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace-codex/AGENTS.md",
+          content: undefined,
+          missing: true,
+        },
+        {
+          name: "IDENTITY.md",
+          path: "/tmp/workspace-codex/IDENTITY.md",
+          content: "   ",
+          missing: false,
+        },
+      ]);
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      const message = agentCall!.params!.message as string;
+      expect(message).toContain("## SOUL.md");
+      expect(message).not.toContain("## AGENTS.md");
+      expect(message).not.toContain("## IDENTITY.md");
+    });
+
+    it("should exclude HEARTBEAT.md and BOOTSTRAP.md", async () => {
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace-codex/SOUL.md",
+          content: "Identity.",
+          missing: false,
+        },
+        {
+          name: "HEARTBEAT.md",
+          path: "/tmp/workspace-codex/HEARTBEAT.md",
+          content: "heartbeat config",
+          missing: false,
+        },
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/workspace-codex/BOOTSTRAP.md",
+          content: "bootstrap ritual",
+          missing: false,
+        },
+      ]);
+
+      const result = await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something" }),
+        createRequesterContext(),
+      );
+      expect(result.status).toBe("accepted");
+
+      const agentCall = findAgentGatewayCall();
+      const message = agentCall!.params!.message as string;
+      expect(message).toContain("## SOUL.md");
+      expect(message).not.toContain("HEARTBEAT.md");
+      expect(message).not.toContain("BOOTSTRAP.md");
+    });
+
+    it("should use params.cwd over resolveAgentWorkspaceDir when provided", async () => {
+      loadWorkspaceBootstrapFilesSpy.mockResolvedValue([
+        {
+          name: "SOUL.md",
+          path: "/custom/cwd/SOUL.md",
+          content: "Custom workspace.",
+          missing: false,
+        },
+      ]);
+
+      await spawnAcpDirect(
+        createSpawnRequest({ task: "Do something", cwd: "/custom/cwd" }),
+        createRequesterContext(),
+      );
+
+      expect(loadWorkspaceBootstrapFilesSpy).toHaveBeenCalledWith("/custom/cwd");
+    });
   });
 });
