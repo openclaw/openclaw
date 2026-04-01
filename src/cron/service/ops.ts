@@ -11,6 +11,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  isJobEnabled,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
@@ -162,7 +163,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }
@@ -215,10 +216,10 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const sortDir = opts?.sortDir ?? "asc";
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
-      if (enabledFilter === "enabled" && !job.enabled) {
+      if (enabledFilter === "enabled" && !isJobEnabled(job)) {
         return false;
       }
-      if (enabledFilter === "disabled" && job.enabled) {
+      if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
       }
       if (!query) {
@@ -307,13 +308,13 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
-      if (job.enabled) {
+      if (isJobEnabled(job)) {
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       } else {
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
       }
-    } else if (job.enabled) {
+    } else if (isJobEnabled(job)) {
       // Non-schedule edits should not mutate other jobs, but still repair a
       // missing/corrupt nextRunAtMs for the updated job.
       const nextRun = job.state.nextRunAtMs;

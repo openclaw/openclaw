@@ -5,14 +5,14 @@ import {
   createAsyncLock,
   pruneExpiredPending,
   readJsonFile,
+  reconcilePendingPairingRequests,
   resolvePairingPaths,
-  upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-type NodePairingNodeMetadata = {
+export type NodeDeclaredSurface = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -27,14 +27,24 @@ type NodePairingNodeMetadata = {
   remoteIp?: string;
 };
 
-export type NodePairingPendingRequest = NodePairingNodeMetadata & {
+export type NodeApprovedSurface = NodeDeclaredSurface;
+
+export type NodePairingRepairReason = "approved-command-drift" | "paired-node-refresh";
+
+export type NodePairingRequestInput = NodeDeclaredSurface & {
+  silent?: boolean;
+  repairReason?: NodePairingRepairReason;
+};
+
+export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   silent?: boolean;
   isRepair?: boolean;
+  repairReason?: NodePairingRepairReason;
   ts: number;
 };
 
-export type NodePairingPairedNode = Omit<NodePairingNodeMetadata, "requestId"> & {
+export type NodePairingPairedNode = NodeApprovedSurface & {
   token: string;
   bins?: string[];
   createdAtMs: number;
@@ -58,6 +68,79 @@ const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 const withLock = createAsyncLock();
+
+function normalizeStringList(values?: string[]): string[] | undefined {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : [];
+}
+
+function resolveNodePairingRepairReason(params: {
+  existingPairedNode: boolean;
+  requestedRepairReason?: NodePairingRepairReason;
+}): NodePairingRepairReason | undefined {
+  if (params.requestedRepairReason) {
+    return params.requestedRepairReason;
+  }
+  if (params.existingPairedNode) {
+    return "paired-node-refresh";
+  }
+  return undefined;
+}
+
+function buildPendingNodePairingRequest(params: {
+  requestId?: string;
+  req: NodePairingRequestInput;
+}): NodePairingPendingRequest {
+  const repairReason = params.req.repairReason;
+  return {
+    requestId: params.requestId ?? randomUUID(),
+    nodeId: params.req.nodeId,
+    displayName: params.req.displayName,
+    platform: params.req.platform,
+    version: params.req.version,
+    coreVersion: params.req.coreVersion,
+    uiVersion: params.req.uiVersion,
+    deviceFamily: params.req.deviceFamily,
+    modelIdentifier: params.req.modelIdentifier,
+    caps: normalizeStringList(params.req.caps),
+    commands: normalizeStringList(params.req.commands),
+    permissions: params.req.permissions,
+    remoteIp: params.req.remoteIp,
+    silent: params.req.silent,
+    repairReason,
+    isRepair: Boolean(repairReason),
+    ts: Date.now(),
+  };
+}
+
+function refreshPendingNodePairingRequest(
+  existing: NodePairingPendingRequest,
+  incoming: NodePairingRequestInput,
+): NodePairingPendingRequest {
+  const repairReason = incoming.repairReason ?? existing.repairReason;
+  return {
+    ...existing,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    version: incoming.version ?? existing.version,
+    coreVersion: incoming.coreVersion ?? existing.coreVersion,
+    uiVersion: incoming.uiVersion ?? existing.uiVersion,
+    deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
+    modelIdentifier: incoming.modelIdentifier ?? existing.modelIdentifier,
+    caps: normalizeStringList(incoming.caps) ?? existing.caps,
+    commands: normalizeStringList(incoming.commands) ?? existing.commands,
+    permissions: incoming.permissions ?? existing.permissions,
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    // Preserve interactive visibility if either request needs attention.
+    silent: Boolean(existing.silent && incoming.silent),
+    repairReason,
+    isRepair: Boolean(repairReason),
+    ts: Date.now(),
+  };
+}
 
 function resolveNodeApprovalRequiredScope(pending: NodePairingPendingRequest): string | null {
   const commands = Array.isArray(pending.commands) ? pending.commands : [];
@@ -122,7 +205,7 @@ export async function getPairedNode(
 }
 
 export async function requestNodePairing(
-  req: Omit<NodePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  req: NodePairingRequestInput,
   baseDir?: string,
 ): Promise<{
   status: "pending";
@@ -135,29 +218,32 @@ export async function requestNodePairing(
     if (!nodeId) {
       throw new Error("nodeId required");
     }
-
-    return await upsertPendingPairingRequest({
+    const repairReason = resolveNodePairingRepairReason({
+      existingPairedNode: Boolean(state.pairedByNodeId[nodeId]),
+      requestedRepairReason: req.repairReason,
+    });
+    const pendingForNode = Object.values(state.pendingById)
+      .filter((pending) => pending.nodeId === nodeId)
+      .toSorted((left, right) => right.ts - left.ts);
+    return await reconcilePendingPairingRequests({
       pendingById: state.pendingById,
-      isExisting: (pending) => pending.nodeId === nodeId,
-      isRepair: Boolean(state.pairedByNodeId[nodeId]),
-      createRequest: (isRepair) => ({
-        requestId: randomUUID(),
+      existing: pendingForNode,
+      incoming: {
+        ...req,
         nodeId,
-        displayName: req.displayName,
-        platform: req.platform,
-        version: req.version,
-        coreVersion: req.coreVersion,
-        uiVersion: req.uiVersion,
-        deviceFamily: req.deviceFamily,
-        modelIdentifier: req.modelIdentifier,
-        caps: req.caps,
-        commands: req.commands,
-        permissions: req.permissions,
-        remoteIp: req.remoteIp,
-        silent: req.silent,
-        isRepair,
-        ts: Date.now(),
-      }),
+        repairReason,
+      },
+      canRefreshSingle: () => true,
+      refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
+      buildReplacement: ({ existing, incoming }) =>
+        buildPendingNodePairingRequest({
+          req: {
+            ...incoming,
+            silent: Boolean(
+              incoming.silent && existing.every((pending) => pending.silent === true),
+            ),
+          },
+        }),
       persist: async () => await persistState(state, baseDir),
     });
   });

@@ -30,6 +30,14 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+  resolveAnthropicBetas,
+  resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
+} from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -443,6 +451,22 @@ export default definePluginEntry({
         dropThinkingBlockModelHints: ["claude"],
       },
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
+      wrapStreamFn: (ctx) => {
+        let streamFn = ctx.streamFn;
+        const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+        if (anthropicBetas?.length) {
+          streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
+        }
+        const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
+        if (serviceTier) {
+          streamFn = createAnthropicServiceTierWrapper(streamFn, serviceTier);
+        }
+        const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+        if (fastMode !== undefined) {
+          streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
+        }
+        return streamFn;
+      },
       resolveDefaultThinkingLevel: ({ modelId }) =>
         matchesAnthropicModernModel(modelId) &&
         (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||

@@ -190,6 +190,56 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("shows plugin-blocked guidance instead of first-time Telegram guidance when telegram is explicitly disabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
+          'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
+        ),
+      ),
+    ).toBe(true);
+    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+  });
+
+  it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+      plugins: {
+        enabled: false,
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
+          "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
+        ),
+      ),
+    ).toBe(true);
+    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+  });
+
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {

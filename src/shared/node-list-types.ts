@@ -30,6 +30,7 @@ export type PendingRequest = {
   uiVersion?: string;
   remoteIp?: string;
   isRepair?: boolean;
+  repairReason?: string;
   ts: number;
 };
 
