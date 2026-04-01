@@ -102,7 +102,7 @@ describe("parseMemoryToMB", () => {
 // ─── buildWSLDiagnosticNotes ────────────────────────────────────
 
 describe("buildWSLDiagnosticNotes", () => {
-  function healthyDiag(): WSLDiagnostics {
+  function healthyWSL2Diag(): WSLDiagnostics {
     return {
       isWSL: true,
       isWSL2: true,
@@ -115,11 +115,11 @@ describe("buildWSLDiagnosticNotes", () => {
   }
 
   it("returns empty array when everything is healthy", () => {
-    expect(buildWSLDiagnosticNotes(healthyDiag())).toEqual([]);
+    expect(buildWSLDiagnosticNotes(healthyWSL2Diag())).toEqual([]);
   });
 
   it("does not emit systemd notes (handled by gateway daemon flow)", () => {
-    const diag = healthyDiag();
+    const diag = healthyWSL2Diag();
     diag.systemdAvailable = false;
     diag.wslConfSystemdEnabled = false;
     const notes = buildWSLDiagnosticNotes(diag);
@@ -127,7 +127,7 @@ describe("buildWSLDiagnosticNotes", () => {
   });
 
   it("warns when WSL memory limit is below 4GB", () => {
-    const diag = healthyDiag();
+    const diag = healthyWSL2Diag();
     diag.wslconfig = { memory: "2GB", processors: 4, swap: "1GB" };
     const notes = buildWSLDiagnosticNotes(diag);
     expect(notes.some((n) => n.includes("too low"))).toBe(true);
@@ -135,7 +135,7 @@ describe("buildWSLDiagnosticNotes", () => {
   });
 
   it("warns when processor count is below 2", () => {
-    const diag = healthyDiag();
+    const diag = healthyWSL2Diag();
     diag.wslconfig = { memory: "8GB", processors: 1, swap: "4GB" };
     const notes = buildWSLDiagnosticNotes(diag);
     expect(notes.some((n) => n.includes("processor limit is 1"))).toBe(true);
@@ -143,26 +143,39 @@ describe("buildWSLDiagnosticNotes", () => {
   });
 
   it("does not warn when memory and processors are sufficient", () => {
-    const diag = healthyDiag();
+    const diag = healthyWSL2Diag();
     diag.wslconfig = { memory: "16GB", processors: 8, swap: "8GB" };
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
 
   it("warns when no .wslconfig and WSL visible memory is below 4GB", () => {
-    const diag = healthyDiag();
+    const diag = healthyWSL2Diag();
     diag.wslconfig = null;
-    // os.totalmem() inside WSL returns the WSL VM allocation directly
-    diag.wslVisibleMemoryBytes = 3 * 1024 * 1024 * 1024; // 3GB visible
+    diag.wslVisibleMemoryBytes = 3 * 1024 * 1024 * 1024;
     const notes = buildWSLDiagnosticNotes(diag);
     expect(notes.some((n) => n.includes("limited to ~3GB"))).toBe(true);
     expect(notes.some((n) => n.includes(".wslconfig"))).toBe(true);
   });
 
   it("does not warn when no .wslconfig but WSL visible memory is ample", () => {
-    const diag = healthyDiag();
+    const diag = healthyWSL2Diag();
     diag.wslconfig = null;
-    // 8GB visible — well above the 4GB threshold
     diag.wslVisibleMemoryBytes = 8 * 1024 * 1024 * 1024;
+    expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
+  });
+
+  it("skips resource diagnostics for WSL1 (wslconfig does not apply)", () => {
+    const diag = healthyWSL2Diag();
+    diag.isWSL2 = false;
+    diag.wslconfig = { memory: "2GB", processors: 1, swap: "1GB" };
+    expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
+  });
+
+  it("skips missing-wslconfig warning for WSL1", () => {
+    const diag = healthyWSL2Diag();
+    diag.isWSL2 = false;
+    diag.wslconfig = null;
+    diag.wslVisibleMemoryBytes = 2 * 1024 * 1024 * 1024;
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
 
