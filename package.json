@@ -1248,7 +1248,8 @@
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
-      "rolldown": "1.0.0-rc.10"
+      "rolldown": "1.0.0-rc.10",
+      "@discordjs/voice": "0.19.2"
     },
     "onlyBuiltDependencies": [
       "@lydell/node-pty",
