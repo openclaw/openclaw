@@ -242,6 +242,9 @@ export async function executeNodeHostCommand(
       idempotencyKey: crypto.randomUUID(),
     }) satisfies Record<string, unknown>;
 
+  let inlineApprovedByAsk = false;
+  let inlineApprovalDecision: "allow-once" | "allow-always" | null = null;
+  let inlineApprovalId: string | undefined;
   if (requiresAsk) {
     const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
@@ -302,6 +305,9 @@ export async function executeNodeHostCommand(
           }),
         );
       }
+      inlineApprovedByAsk = approvedByAsk;
+      inlineApprovalDecision = approvedByAsk ? "allow-once" : null;
+      inlineApprovalId = approvalId;
     } else {
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
         approvalId,
@@ -418,7 +424,7 @@ export async function executeNodeHostCommand(
   const raw = await callGatewayTool(
     "node.invoke",
     { timeoutMs: invokeTimeoutMs },
-    buildInvokeParams(false, null),
+    buildInvokeParams(inlineApprovedByAsk, inlineApprovalDecision, inlineApprovalId),
   );
   const payload =
     raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;

@@ -380,6 +380,7 @@ function evaluateSegments(
 
   const satisfied = segments.every((segment) => {
     if (segment.resolution?.policyBlocked === true) {
+      segmentAllowlistEntries.push(null);
       segmentSatisfiedBy.push(null);
       return false;
     }

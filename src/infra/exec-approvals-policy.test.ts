@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+} from "./exec-approvals-test-helpers.js";
+import {
+  evaluateExecAllowlist,
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
@@ -133,5 +138,56 @@ describe("exec approvals policy helpers", () => {
         commandText: 'powershell -NoProfile -Command "Write-Output hi"',
       }),
     ).toBe(true);
+  });
+
+  it("marks policy-blocked segments as non-durable allowlist entries", () => {
+    const executable = makeMockExecutableResolution({
+      rawExecutable: "/usr/bin/echo",
+      resolvedPath: "/usr/bin/echo",
+      executableName: "echo",
+    });
+    const result = evaluateExecAllowlist({
+      analysis: {
+        ok: true,
+        segments: [
+          {
+            raw: "/usr/bin/echo ok",
+            argv: ["/usr/bin/echo", "ok"],
+            resolution: makeMockCommandResolution({
+              execution: executable,
+            }),
+          },
+          {
+            raw: "/bin/sh -lc whoami",
+            argv: ["/bin/sh", "-lc", "whoami"],
+            resolution: makeMockCommandResolution({
+              execution: makeMockExecutableResolution({
+                rawExecutable: "/bin/sh",
+                resolvedPath: "/bin/sh",
+                executableName: "sh",
+              }),
+              policyBlocked: true,
+            }),
+          },
+        ],
+      },
+      allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      safeBins: new Set(),
+      cwd: "/tmp",
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/echo" }),
+      null,
+    ]);
+    expect(
+      hasDurableExecApproval({
+        analysisOk: true,
+        segmentAllowlistEntries: result.segmentAllowlistEntries,
+        allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      }),
+    ).toBe(false);
   });
 });

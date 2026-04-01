@@ -926,6 +926,61 @@ describe("exec approvals", () => {
     ).toBe(false);
   });
 
+  it("forwards inline cron approval state to node system.run", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "full" },
+      agents: {},
+    });
+    mockNoApprovalRouteRegistration();
+
+    let systemRunInvoke: unknown;
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { id: "approval-id", decision: null };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: null };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          systemRunInvoke = params;
+          return { payload: { success: true, stdout: "cron-node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      security: "full",
+      trigger: "cron",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-cron-inline-node-approval", {
+      command: "echo cron-node-ok",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("cron-node-ok");
+    expect(systemRunInvoke).toMatchObject({
+      command: "system.run",
+      params: {
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+    });
+    expect((systemRunInvoke as { params?: { runId?: string } }).params?.runId).toEqual(
+      expect.any(String),
+    );
+  });
+
   it("explains cron no-route denials with a host-policy fix hint", async () => {
     mockNoApprovalRouteRegistration();
 
