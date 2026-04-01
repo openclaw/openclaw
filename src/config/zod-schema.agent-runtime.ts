@@ -671,6 +671,7 @@ export const MemorySearchSchema = z
       .object({
         tokens: z.number().int().positive().optional(),
         overlap: z.number().int().nonnegative().optional(),
+        headingAware: z.boolean().optional(),
       })
       .strict()
       .optional(),

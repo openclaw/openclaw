@@ -834,6 +834,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Chunk size in tokens used when splitting memory sources before embedding/indexing. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
   "agents.defaults.memorySearch.chunking.overlap":
     "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+  "agents.defaults.memorySearch.chunking.headingAware":
+    "When enabled, the chunker splits on markdown heading boundaries first before sub-chunking within sections. This keeps heading context together and improves search relevance for structured documents.",
   "agents.defaults.memorySearch.query.maxResults":
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "agents.defaults.memorySearch.query.minScore":
