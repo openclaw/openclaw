@@ -36,6 +36,8 @@ sources = [
   'src/gateway_http.c',
   'src/gateway_protocol.c',
   'src/gateway_ws.c',
+  'src/gateway_rpc.c',
+  'src/gateway_data.c',
   'src/gateway_client.c',
   'src/state.c',
   'src/runtime_mode.c',
@@ -104,3 +106,19 @@ test_display_model_exe = executable('test_display_model',
    'src/runtime_mode.c', 'src/gateway_config.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('display_model', test_display_model_exe)
+
+test_gateway_data_exe = executable('test_gateway_data',
+  ['tests/test_gateway_data.c', 'src/gateway_data.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('gateway_data', test_gateway_data_exe)
+
+test_gateway_rpc_exe = executable('test_gateway_rpc',
+  ['tests/test_gateway_rpc.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('gateway_rpc', test_gateway_rpc_exe)
+
+test_rpc_lifecycle_exe = executable('test_rpc_lifecycle',
+  ['tests/test_rpc_lifecycle.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c',
+   'src/gateway_data.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('rpc_lifecycle', test_rpc_lifecycle_exe)

@@ -21,6 +21,8 @@ typedef enum {
     SECTION_DASHBOARD,
     SECTION_GENERAL,
     SECTION_CONFIG,
+    SECTION_CHANNELS,
+    SECTION_SKILLS,
     SECTION_ENVIRONMENT,
     SECTION_DIAGNOSTICS,
     SECTION_ABOUT,
@@ -34,4 +36,3 @@ typedef enum {
 void app_window_show(void);
 void app_window_navigate_to(AppSection section);
 gboolean app_window_is_visible(void);
-

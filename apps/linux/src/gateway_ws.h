@@ -46,4 +46,11 @@ GatewayWsState gateway_ws_get_state(void);
 const gchar* gateway_ws_get_last_error(void);
 const gchar* gateway_ws_state_to_string(GatewayWsState state);
 
+/*
+ * Send a raw text frame over the authenticated WebSocket connection.
+ * Used by gateway_rpc to dispatch outbound request frames.
+ * Returns TRUE if the frame was sent, FALSE if the connection is not open.
+ */
+gboolean gateway_ws_send_text(const gchar *text);
+
 #endif /* OPENCLAW_LINUX_GATEWAY_WS_H */
