@@ -1,4 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -62,6 +63,32 @@ export function createSubagentRegistryLifecycleController(params: {
   runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
+  const maskRunId = (runId: string): string => {
+    const trimmed = runId.trim();
+    if (!trimmed) {
+      return "unknown";
+    }
+    if (trimmed.length <= 8) {
+      return "***";
+    }
+    return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
+  };
+
+  const maskSessionKey = (sessionKey: string): string => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed) {
+      return "unknown";
+    }
+    const prefix = trimmed.split(":").slice(0, 2).join(":") || "session";
+    return `${prefix}:…`;
+  };
+
+  const buildSafeLifecycleErrorMeta = (err: unknown): Record<string, string> => {
+    const message = formatErrorMessage(err);
+    const name = readErrorName(err);
+    return name ? { name, message } : { message };
+  };
+
   const safeSetSubagentTaskDeliveryStatus = (args: {
     runId: string;
     childSessionKey: string;
@@ -76,9 +103,9 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     } catch (err) {
       params.warn("failed to update subagent background task delivery state", {
-        err,
-        runId: args.runId,
-        childSessionKey: args.childSessionKey,
+        error: buildSafeLifecycleErrorMeta(err),
+        runId: maskRunId(args.runId),
+        childSessionKey: maskSessionKey(args.childSessionKey),
         deliveryStatus: args.deliveryStatus,
       });
     }
@@ -116,9 +143,9 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     } catch (err) {
       params.warn("failed to finalize subagent background task state", {
-        err,
-        runId: args.entry.runId,
-        childSessionKey: args.entry.childSessionKey,
+        error: buildSafeLifecycleErrorMeta(err),
+        runId: maskRunId(args.entry.runId),
+        childSessionKey: maskSessionKey(args.entry.childSessionKey),
         outcomeStatus: args.outcome.status,
       });
     }

@@ -100,8 +100,9 @@ describe("subagent registry lifecycle hardening", () => {
     expect(warn).toHaveBeenCalledWith(
       "failed to finalize subagent background task state",
       expect.objectContaining({
-        runId: "run-1",
-        childSessionKey: "agent:main:subagent:child",
+        error: { name: "Error", message: "task store boom" },
+        runId: "***",
+        childSessionKey: "agent:main:…",
         outcomeStatus: "ok",
       }),
     );
@@ -154,8 +155,9 @@ describe("subagent registry lifecycle hardening", () => {
     expect(warn).toHaveBeenCalledWith(
       "failed to update subagent background task delivery state",
       expect.objectContaining({
-        runId: "run-1",
-        childSessionKey: "agent:main:subagent:child",
+        error: { name: "Error", message: "delivery state boom" },
+        runId: "***",
+        childSessionKey: "agent:main:…",
         deliveryStatus: "failed",
       }),
     );
