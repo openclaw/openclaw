@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SANDBOX_PINNED_MUTATION_OPERATION_MARKER } from "./fs-bridge-mutation-helper.js";
 import {
   createSandbox,
   createSandboxFsBridge,
@@ -111,11 +112,12 @@ describe("sandbox fs bridge anchored ops", () => {
       const opCall = mockedExecDockerRaw.mock.calls.find(
         ([args]) =>
           typeof args[5] === "string" &&
-          args[5].includes("python3 /dev/fd/3 \"$@\" 3<<'PY'") &&
+          args[5].includes(SANDBOX_PINNED_MUTATION_OPERATION_MARKER) &&
           getDockerArg(args, 1) === testCase.expectedArgs[0],
       );
       expect(opCall).toBeDefined();
       const args = opCall?.[0] ?? [];
+      expect(String(args[5] ?? "")).toContain('exec "$python_cmd" -c "$python_script" "$@"');
       testCase.expectedArgs.forEach((value, index) => {
         expect(getDockerArg(args, index + 1)).toBe(value);
       });
