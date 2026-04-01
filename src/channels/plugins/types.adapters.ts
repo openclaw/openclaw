@@ -588,6 +588,11 @@ export type ChannelApprovalRenderAdapter = {
   };
 };
 
+export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
+  getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
+};
+
 export type ChannelApprovalAdapter = {
   delivery?: ChannelApprovalDeliveryAdapter;
   render?: ChannelApprovalRenderAdapter;

@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
-import { createDiscordNativeApprovalAdapter } from "./approval-native.js";
+import {
+  createDiscordNativeApprovalAdapter,
+  shouldHandleDiscordApprovalRequest,
+} from "./approval-native.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 
@@ -13,6 +16,31 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
+  it("honors ownerAllowFrom fallback when gating approval requests", () => {
+    expect(
+      shouldHandleDiscordApprovalRequest({
+        cfg: {
+          commands: {
+            ownerAllowFrom: ["discord:123"],
+          },
+        } as never,
+        accountId: "main",
+        configOverride: { enabled: true } as never,
+        request: {
+          id: "approval-1",
+          request: {
+            command: "pwd",
+            turnSourceChannel: "discord",
+            turnSourceTo: "channel:123456789",
+            turnSourceAccountId: "main",
+          },
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("normalizes prefixed turn-source channel ids", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
 

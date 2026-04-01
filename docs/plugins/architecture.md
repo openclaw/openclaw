@@ -981,6 +981,7 @@ authoring plugins:
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
   `openclaw/plugin-sdk/infra-runtime`,
   `openclaw/plugin-sdk/agent-runtime`,
@@ -990,6 +991,10 @@ authoring plugins:
   `openclaw/plugin-sdk/status-helpers`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+- Approval-specific channel seams should prefer one `approvalCapability`
+  contract on the plugin. Core then reads approval auth, delivery, render, and
+  native-routing behavior through that one capability instead of mixing
+  approval behavior into unrelated plugin fields.
 - `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
   New code should import the narrower primitives instead.
 - Bundled extension internals remain private. External plugins should use only
