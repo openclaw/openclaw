@@ -21,11 +21,17 @@ function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 function resolveFreshSessionTotalTokens(entry: SessionEntry): number | undefined {
-  // Only use totalTokens when freshly reported by the API for the current context.
-  // The cumulative totalTokens (across all turns) is NOT the current context size
-  // and produces wildly incorrect pressure values after compaction.
+  // Only use totalTokens when freshly reported AND within a sane range.
+  // GH Copilot and some providers report cumulative cache/token counts
+  // that exceed the actual context window — those are noise.
   if ("totalTokensFresh" in entry && entry.totalTokensFresh) {
-    return (entry as { totalTokens?: number }).totalTokens;
+    const tokens = (entry as { totalTokens?: number }).totalTokens;
+    const contextWindow = (entry as Record<string, unknown>).contextTokens as number | undefined;
+    // If reported tokens exceed the context window, the value is cumulative noise
+    if (tokens && contextWindow && tokens > contextWindow) {
+      return undefined;
+    }
+    return tokens;
   }
   return undefined;
 }
