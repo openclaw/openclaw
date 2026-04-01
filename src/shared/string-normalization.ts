@@ -12,7 +12,7 @@ export function normalizeHyphenSlug(raw?: string | null) {
     return "";
   }
   const dashed = trimmed.replace(/\s+/g, "-");
-  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
+  const cleaned = dashed.replace(/[^\p{L}\p{N}#@._+-]+/gu, "-");
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
