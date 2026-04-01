@@ -346,15 +346,12 @@ export type ToolUseRepairReport = {
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
   moved: boolean;
+  changed: boolean;
 };
-
-function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
-  return options?.erroredAssistantResultPolicy === "drop";
-}
 
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
-  options?: ToolUseResultPairingOptions,
+  _options?: ToolUseResultPairingOptions,
 ): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
@@ -463,22 +460,30 @@ export function repairToolUseResultPairing(
       }
     }
 
-    // Aborted/errored assistant turns should never synthesize missing tool results, but
-    // the replay sanitizer can still legitimately retain real tool results for surviving
-    // tool calls in the same turn after malformed siblings are dropped.
+    // Aborted/errored assistant turns: strip orphaned tool_use/toolCall/functionCall
+    // blocks from the assistant message instead of passing them through unchanged.
+    // Previously we skipped synthesis to avoid creating synthetic tool_results for
+    // incomplete tool calls (#4597), but preserving orphaned blocks causes permanent
+    // session corruption — Anthropic rejects every subsequent request with
+    // "tool_use ids were found without tool_result blocks" (#48354).
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      out.push(msg);
-      if (!shouldDropErroredAssistantResults(options)) {
-        for (const toolCall of toolCalls) {
-          const result = spanResultsById.get(toolCall.id);
-          if (!result) {
-            continue;
-          }
-          pushToolResult(result);
-        }
-      } else if (spanResultsById.size > 0) {
+      const content = Array.isArray(assistant.content) ? assistant.content : [];
+      const stripped = content.filter(
+        (b: { type?: string }) =>
+          b && b.type !== "toolCall" && b.type !== "toolUse" && b.type !== "functionCall",
+      );
+      if (stripped.length < content.length) {
         changed = true;
+        out.push({
+          ...assistant,
+          content:
+            stripped.length > 0
+              ? stripped
+              : [{ type: "text" as const, text: "[tool calls from errored turn stripped]" }],
+        } as typeof assistant);
+      } else {
+        out.push(msg);
       }
       for (const rem of remainder) {
         out.push(rem);
@@ -526,5 +531,6 @@ export function repairToolUseResultPairing(
     droppedDuplicateCount,
     droppedOrphanCount,
     moved: changedOrMoved,
+    changed: changedOrMoved,
   };
 }

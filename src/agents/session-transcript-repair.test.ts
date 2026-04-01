@@ -144,10 +144,11 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
-    // When an assistant message has stopReason: "error", its tool_use blocks may be
-    // incomplete/malformed. We should NOT create synthetic tool_results for them,
-    // as this causes API 400 errors: "unexpected tool_use_id found in tool_result blocks"
+  it("strips tool_use blocks from assistant messages with stopReason 'error'", () => {
+    // When an assistant message has stopReason: "error", its tool_use blocks are
+    // orphaned (no tool_result will ever come). Instead of passing them through
+    // (which causes permanent session corruption — see #48354), strip the tool
+    // call blocks entirely. Do NOT create synthetic tool_results either (#4597).
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -159,17 +160,19 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    // Should NOT add synthetic tool results for errored messages
+    // Should strip the tool call block, not create synthetic results
     expect(result.added).toHaveLength(0);
-    // The assistant message should be passed through unchanged
     expect(result.messages[0]?.role).toBe("assistant");
+    const assistantContent = (result.messages[0] as { content: { type: string }[] }).content;
+    expect(assistantContent.every((b: { type: string }) => b.type !== "toolCall")).toBe(true);
     expect(result.messages[1]?.role).toBe("user");
     expect(result.messages).toHaveLength(2);
+    expect(result.changed).toBe(true);
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'aborted'", () => {
-    // When a request is aborted mid-stream, the assistant message may have incomplete
-    // tool_use blocks (with partialJson). We should NOT create synthetic tool_results.
+  it("strips tool_use blocks from assistant messages with stopReason 'aborted'", () => {
+    // When a request is aborted mid-stream, strip orphaned tool_use blocks
+    // to prevent permanent session corruption from dangling tool calls.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -181,12 +184,38 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    // Should NOT add synthetic tool results for aborted messages
+    // Tool call blocks should be stripped
     expect(result.added).toHaveLength(0);
-    // Messages should be passed through without synthetic insertions
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]?.role).toBe("assistant");
+    const assistantContent = (result.messages[0] as { content: { type: string }[] }).content;
+    expect(assistantContent.every((b: { type: string }) => b.type !== "toolCall")).toBe(true);
     expect(result.messages[1]?.role).toBe("user");
+    expect(result.changed).toBe(true);
+  });
+
+  it("preserves text content alongside stripped tool_use in error messages", () => {
+    // If the errored assistant message has both text and tool_use blocks,
+    // only strip the tool calls and keep the text.
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me try running that..." },
+          { type: "toolCall", id: "call_err2", name: "exec", arguments: {} },
+        ],
+        stopReason: "error",
+      },
+      { role: "user", content: "what happened?" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const assistantContent = (result.messages[0] as { content: { type: string; text?: string }[] })
+      .content;
+    expect(assistantContent).toHaveLength(1);
+    expect(assistantContent[0]?.type).toBe("text");
+    expect(assistantContent[0]?.text).toBe("Let me try running that...");
   });
 
   it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
@@ -207,9 +236,9 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added[0]?.toolCallId).toBe("call_normal");
   });
 
-  it("retains matching tool results that follow an aborted assistant message", () => {
-    // Aborted assistant turns do not synthesize missing tool results, but real
-    // matching results in the same span remain part of the repaired transcript.
+  it("strips tool_use and drops matching tool results for aborted assistant messages", () => {
+    // With tool_use blocks stripped from aborted messages, any trailing tool results
+    // for those calls become orphans and are dropped.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -228,40 +257,11 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.droppedOrphanCount).toBe(0);
-    expect(result.messages).toHaveLength(3);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("toolResult");
-    expect(result.messages[2]?.role).toBe("user");
-    expect(result.added).toHaveLength(0);
-  });
-
-  it("drops matching tool results for aborted assistant messages when requested", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
-        stopReason: "aborted",
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_aborted",
-        toolName: "exec",
-        content: [{ type: "text", text: "partial result" }],
-        isError: false,
-      },
-      { role: "user", content: "retrying" },
-    ]);
-
-    const result = repairToolUseResultPairing(input, {
-      erroredAssistantResultPolicy: "drop",
-    });
-
-    expect(result.droppedOrphanCount).toBe(0);
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]?.role).toBe("assistant");
     expect(result.messages[1]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
+    expect(result.changed).toBe(true);
   });
 });
 
