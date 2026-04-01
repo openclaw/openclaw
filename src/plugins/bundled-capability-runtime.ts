@@ -110,6 +110,7 @@ function createCapabilityPluginRecord(params: {
     name: params.name ?? params.id,
     version: params.version,
     description: params.description,
+    skills: [],
     source: params.source,
     rootDir: params.rootDir,
     origin: "bundled",
