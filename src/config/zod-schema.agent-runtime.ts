@@ -12,9 +12,18 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+const HeartbeatScheduleEntrySchema = z
+  .object({
+    start: z.string(),
+    end: z.string(),
+    every: z.string(),
+  })
+  .strict();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    schedule: z.array(HeartbeatScheduleEntrySchema).optional(),
     activeHours: z
       .object({
         start: z.string().optional(),
@@ -90,6 +99,67 @@ export const HeartbeatSchema = z
 
     validateTime(active.start, { allow24: false }, "start");
     validateTime(active.end, { allow24: true }, "end");
+  })
+  .superRefine((val, ctx) => {
+    const schedule = val.schedule;
+    if (!schedule || schedule.length === 0) {
+      return;
+    }
+    const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
+    const validateScheduleTime = (
+      raw: string,
+      opts: { allow24: boolean },
+      index: number,
+      field: string,
+    ) => {
+      if (!timePattern.test(raw)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["schedule", index, field],
+          message: 'invalid time (use "HH:MM" 24h format)',
+        });
+        return;
+      }
+      const [hourStr, minuteStr] = raw.split(":");
+      const hour = Number(hourStr);
+      const minute = Number(minuteStr);
+      if (hour === 24 && minute !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["schedule", index, field],
+          message: "invalid time (24:00 is the only allowed 24:xx value)",
+        });
+        return;
+      }
+      if (hour === 24 && !opts.allow24) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["schedule", index, field],
+          message: "invalid time (start cannot be 24:00)",
+        });
+      }
+    };
+    for (let i = 0; i < schedule.length; i++) {
+      const entry = schedule[i];
+      validateScheduleTime(entry.start, { allow24: false }, i, "start");
+      validateScheduleTime(entry.end, { allow24: true }, i, "end");
+      if (entry.start === entry.end) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["schedule", i],
+          message: "schedule entry start and end cannot be equal (zero-width window)",
+        });
+      }
+      try {
+        parseDurationMs(entry.every, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["schedule", i, "every"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
+    }
   })
   .optional();
 
