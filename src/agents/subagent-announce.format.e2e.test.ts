@@ -1708,7 +1708,7 @@ describe("subagent announce formatting", () => {
     });
   });
 
-  it("uses direct completion delivery when explicit channel+to route is available", async () => {
+  it("keeps completion direct announces session-only even when explicit channel+to route is available", async () => {
     sessionStore = {
       "agent:main:main": {
         sessionId: "requester-session-direct-route",
@@ -1734,7 +1734,7 @@ describe("subagent announce formatting", () => {
         sessionKey: "agent:main:main",
         channel: "discord",
         to: "channel:12345",
-        deliver: true,
+        deliver: false,
       },
     });
   });
