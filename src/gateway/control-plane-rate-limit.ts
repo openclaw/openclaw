@@ -1,7 +1,25 @@
 import type { GatewayClient } from "./server-methods/types.js";
 
-const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
-const CONTROL_PLANE_RATE_LIMIT_WINDOW_MS = 60_000;
+// Defaults — can be overridden via gateway.controlPlane.rateLimit config.
+const DEFAULT_CONTROL_PLANE_MAX_REQUESTS = 3;
+const DEFAULT_CONTROL_PLANE_WINDOW_MS = 60_000;
+
+let controlPlaneMaxRequests = DEFAULT_CONTROL_PLANE_MAX_REQUESTS;
+let controlPlaneWindowMs = DEFAULT_CONTROL_PLANE_WINDOW_MS;
+
+/**
+ * Apply control-plane rate limit configuration.
+ * Called once during gateway startup with config from openclaw.json.
+ * Clears existing buckets so new limits take effect immediately.
+ */
+export function configureControlPlaneRateLimit(config?: {
+  maxRequests?: number;
+  windowMs?: number;
+}): void {
+  controlPlaneMaxRequests = config?.maxRequests ?? DEFAULT_CONTROL_PLANE_MAX_REQUESTS;
+  controlPlaneWindowMs = config?.windowMs ?? DEFAULT_CONTROL_PLANE_WINDOW_MS;
+  controlPlaneBuckets.clear();
+}
 
 type Bucket = {
   count: number;
@@ -39,12 +57,14 @@ export function consumeControlPlaneWriteBudget(params: {
   retryAfterMs: number;
   remaining: number;
   key: string;
+  maxRequests: number;
+  windowMs: number;
 } {
   const nowMs = params.nowMs ?? Date.now();
   const key = resolveControlPlaneRateLimitKey(params.client);
   const bucket = controlPlaneBuckets.get(key);
 
-  if (!bucket || nowMs - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {
+  if (!bucket || nowMs - bucket.windowStartMs >= controlPlaneWindowMs) {
     controlPlaneBuckets.set(key, {
       count: 1,
       windowStartMs: nowMs,
@@ -52,21 +72,22 @@ export function consumeControlPlaneWriteBudget(params: {
     return {
       allowed: true,
       retryAfterMs: 0,
-      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - 1,
+      remaining: controlPlaneMaxRequests - 1,
       key,
+      maxRequests: controlPlaneMaxRequests,
+      windowMs: controlPlaneWindowMs,
     };
   }
 
-  if (bucket.count >= CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS) {
-    const retryAfterMs = Math.max(
-      0,
-      bucket.windowStartMs + CONTROL_PLANE_RATE_LIMIT_WINDOW_MS - nowMs,
-    );
+  if (bucket.count >= controlPlaneMaxRequests) {
+    const retryAfterMs = Math.max(0, bucket.windowStartMs + controlPlaneWindowMs - nowMs);
     return {
       allowed: false,
       retryAfterMs,
       remaining: 0,
       key,
+      maxRequests: controlPlaneMaxRequests,
+      windowMs: controlPlaneWindowMs,
     };
   }
 
@@ -74,13 +95,18 @@ export function consumeControlPlaneWriteBudget(params: {
   return {
     allowed: true,
     retryAfterMs: 0,
-    remaining: Math.max(0, CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - bucket.count),
+    remaining: Math.max(0, controlPlaneMaxRequests - bucket.count),
     key,
+    maxRequests: controlPlaneMaxRequests,
+    windowMs: controlPlaneWindowMs,
   };
 }
 
 export const __testing = {
   resetControlPlaneRateLimitState() {
     controlPlaneBuckets.clear();
+    controlPlaneMaxRequests = DEFAULT_CONTROL_PLANE_MAX_REQUESTS;
+    controlPlaneWindowMs = DEFAULT_CONTROL_PLANE_WINDOW_MS;
   },
+  configureControlPlaneRateLimit,
 };

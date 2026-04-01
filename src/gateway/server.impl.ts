@@ -86,6 +86,7 @@ import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
+import { configureControlPlaneRateLimit } from "./control-plane-rate-limit.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -660,6 +661,14 @@ export async function startGatewayServer(
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
+
+  // Control-plane write rate limiting — configurable via gateway.controlPlane.rateLimit.
+  // Allows operators to raise the default 3 req/60s limit for multi-tenant deployments
+  // that push many config.patch/config.apply RPCs during sync cycles.
+  const controlPlaneRateLimitConfig = cfgAtStart.gateway?.controlPlane?.rateLimit;
+  if (controlPlaneRateLimitConfig) {
+    configureControlPlaneRateLimit(controlPlaneRateLimitConfig);
+  }
 
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {

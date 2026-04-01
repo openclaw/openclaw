@@ -124,7 +124,7 @@ export async function handleGatewayRequest(
             retryAfterMs: budget.retryAfterMs,
             details: {
               method: req.method,
-              limit: "3 per 60s",
+              limit: `${budget.maxRequests} per ${budget.windowMs / 1000}s`,
             },
           },
         ),
