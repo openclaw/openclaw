@@ -700,7 +700,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (!senderId || !conversationId) {
         return null;
       }
-      return `msteams:${appId}:${conversationId}:${senderId}`;
+      // Include replyToId in debounce key when thread bindings are enabled so that
+      // rapid messages from the same user in different threads are not merged.
+      const threadSuffix =
+        cfg.session?.threadBindings?.enabled === true && entry.context.activity.replyToId
+          ? `:${entry.context.activity.replyToId}`
+          : "";
+      return `msteams:${appId}:${conversationId}:${senderId}${threadSuffix}`;
     },
     shouldDebounce: (entry) => {
       if (!entry.text.trim()) {
