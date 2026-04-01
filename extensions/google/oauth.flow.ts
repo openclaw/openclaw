@@ -36,7 +36,6 @@ export function buildAuthUrl(challenge: string, state: string): string {
 
 export function parseCallbackInput(
   input: string,
-  expectedState: string,
 ): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
   if (!trimmed) {

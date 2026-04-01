@@ -41,7 +41,7 @@ export async function loginGeminiCliOAuth(
     ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
     ctx.progress.update("Waiting for you to paste the callback URL...");
     const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-    const parsed = parseCallbackInput(callbackInput, state);
+    const parsed = parseCallbackInput(callbackInput);
     if ("error" in parsed) {
       throw new Error(parsed.error);
     }
@@ -77,7 +77,7 @@ export async function loginGeminiCliOAuth(
       ctx.progress.update("Local callback server failed. Switching to manual mode...");
       ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
       const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-      const parsed = parseCallbackInput(callbackInput, state);
+      const parsed = parseCallbackInput(callbackInput);
       if ("error" in parsed) {
         throw new Error(parsed.error, { cause: err });
       }
