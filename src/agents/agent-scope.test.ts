@@ -548,4 +548,25 @@ describe("resolveAgentIdsByWorkspacePath", () => {
       "main",
     ]);
   });
+
+  it("returns all agents sharing agents.defaults.workspace when none have explicit workspace", () => {
+    const sharedWorkspace = `/tmp/openclaw-agent-scope-${Date.now()}-shared`;
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: sharedWorkspace },
+        list: [
+          { id: "main", default: true },
+          { id: "agent-a" },
+          { id: "agent-b" },
+        ],
+      },
+    };
+
+    // All agents without explicit workspace resolve to the shared default,
+    // so resolveAgentIdsByWorkspacePath returns all of them.
+    const result = resolveAgentIdsByWorkspacePath(cfg, `${sharedWorkspace}/some/path`);
+    expect(result).toContain("main");
+    expect(result).toContain("agent-a");
+    expect(result).toContain("agent-b");
+  });
 });
