@@ -122,6 +122,7 @@ async function applyStagedEntryMode(params: {
   relPath: string;
   mode: number;
   originalPath: string;
+  isDirectory?: boolean;
 }): Promise<void> {
   const destinationPath = path.join(params.destinationRealDir, params.relPath);
   await assertResolvedInsideDestination({
@@ -129,6 +130,9 @@ async function applyStagedEntryMode(params: {
     targetPath: destinationPath,
     originalPath: params.originalPath,
   });
+  if (params.isDirectory && params.mode === 0) {
+    return;
+  }
   await fs.chmod(destinationPath, params.mode).catch(() => undefined);
 }
 
@@ -177,6 +181,7 @@ export async function mergeExtractedTreeIntoDestination(params: {
           relPath,
           mode: sourceStat.mode & 0o777,
           originalPath,
+          isDirectory: true,
         });
         continue;
       }
