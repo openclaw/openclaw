@@ -155,24 +155,13 @@ export function scheduleFollowupDrain(
             continue;
           }
 
+          let prompt: string;
           try {
-            const prompt = renderDeferredBatch({
+            prompt = renderDeferredBatch({
               title: "[Queued messages while agent was busy]",
               items: renderableItems,
               summary,
             });
-            await effectiveRunFollowup({
-              execution: { visibility: "internal", agentPrompt: prompt },
-              display: { visibility: "user-visible", text: prompt },
-              run,
-              enqueuedAt: Date.now(),
-              ...routing,
-            });
-            queue.items.splice(0, items.length);
-            if (summary) {
-              clearQueueSummaryState(queue);
-            }
-            continue;
           } catch (err) {
             defaultRuntime.error?.(
               `collect-mode deferred batch render failed for ${key}; falling back to individual drain: ${String(err)}`,
@@ -180,6 +169,19 @@ export function scheduleFollowupDrain(
             collectState.forceIndividualCollect = true;
             continue;
           }
+
+          await effectiveRunFollowup({
+            execution: { visibility: "internal", agentPrompt: prompt },
+            display: { visibility: "user-visible", text: prompt },
+            run,
+            enqueuedAt: Date.now(),
+            ...routing,
+          });
+          queue.items.splice(0, items.length);
+          if (summary) {
+            clearQueueSummaryState(queue);
+          }
+          continue;
         }
 
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });

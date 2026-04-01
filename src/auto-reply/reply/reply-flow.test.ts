@@ -1491,8 +1491,50 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain(
       "[Queue overflow] Dropped 1 message due to cap.",
     );
-    expect(calls[0]?.execution.agentPrompt).toContain("- first hidden item");
+    expect(calls[0]?.execution.agentPrompt).toContain("- [Hidden message]");
+    expect(calls[0]?.execution.agentPrompt).not.toContain("first hidden item");
     expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
+  });
+
+  it("retries collect display batches as a batch after transient execution failures", async () => {
+    const key = `test-collect-display-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("transient failure");
+      }
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "hidden one", displayText: "visible one" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "hidden two", displayText: "visible two" }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.execution.agentPrompt).toContain("visible one");
+    expect(calls[0]?.execution.agentPrompt).toContain("visible two");
+    expect(calls[0]?.execution.agentPrompt).not.toContain("hidden one");
+    expect(calls[0]?.execution.agentPrompt).not.toContain("hidden two");
   });
 
   it("does not retry already-run collect fallback items after a later failure", async () => {
