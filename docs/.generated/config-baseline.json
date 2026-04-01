@@ -3015,6 +3015,25 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.params",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.params.*",
+      "kind": "core",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.pdfMaxBytesMb",
       "kind": "core",
       "type": "number",
@@ -37811,6 +37830,22 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.reactionLevel",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "ack",
+        "minimal",
+        "extensive"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.responsePrefix",
       "kind": "channel",
       "type": "string",
@@ -38494,6 +38529,22 @@
       "kind": "channel",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.reactionLevel",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "ack",
+        "minimal",
+        "extensive"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -47107,6 +47158,65 @@
       ],
       "label": "@openclaw/amazon-bedrock-provider Config",
       "help": "Plugin-defined config payload for amazon-bedrock.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.guardrailIdentifier",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.guardrailVersion",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.streamProcessingMode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "sync",
+        "async"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.trace",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "enabled",
+        "disabled",
+        "enabled_full"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {

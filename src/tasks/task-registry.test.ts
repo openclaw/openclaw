@@ -36,6 +36,8 @@ import {
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
   runTaskRegistryMaintenance,
+  startTaskRegistryMaintenance,
+  stopTaskRegistryMaintenanceForTests,
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -80,6 +82,66 @@ async function loadFreshTaskRegistryModulesForControlTest() {
     killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
   }));
   return await import("./task-registry.js");
+}
+
+async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
+  currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
+  snapshotTasks: ReturnType<typeof createTaskRecord>[];
+}) {
+  vi.resetModules();
+  vi.doMock("../acp/runtime/session-meta.js", () => ({
+    readAcpSessionEntry: () => ({ entry: undefined, storeReadFailed: false }),
+  }));
+  vi.doMock("../config/sessions.js", () => ({
+    loadSessionStore: () => ({}),
+    resolveStorePath: () => "",
+  }));
+  vi.doMock("../routing/session-key.js", () => ({
+    parseAgentSessionKey: () => undefined,
+  }));
+  vi.doMock("./runtime-internal.js", () => ({
+    deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
+    ensureTaskRegistryReady: () => {},
+    getTaskById: (taskId: string) => params.currentTasks.get(taskId),
+    listTaskRecords: () => params.snapshotTasks,
+    markTaskLostById: (patch: {
+      taskId: string;
+      endedAt: number;
+      lastEventAt?: number;
+      error?: string;
+      cleanupAfter?: number;
+    }) => {
+      const current = params.currentTasks.get(patch.taskId);
+      if (!current) {
+        return null;
+      }
+      const next = {
+        ...current,
+        status: "lost" as const,
+        endedAt: patch.endedAt,
+        lastEventAt: patch.lastEventAt ?? patch.endedAt,
+        ...(patch.error !== undefined ? { error: patch.error } : {}),
+        ...(patch.cleanupAfter !== undefined ? { cleanupAfter: patch.cleanupAfter } : {}),
+      };
+      params.currentTasks.set(patch.taskId, next);
+      return next;
+    },
+    maybeDeliverTaskTerminalUpdate: () => false,
+    resolveTaskForLookupToken: () => undefined,
+    setTaskCleanupAfterById: (patch: { taskId: string; cleanupAfter: number }) => {
+      const current = params.currentTasks.get(patch.taskId);
+      if (!current) {
+        return null;
+      }
+      const next = {
+        ...current,
+        cleanupAfter: patch.cleanupAfter,
+      };
+      params.currentTasks.set(patch.taskId, next);
+      return next;
+    },
+  }));
+  return await import("./task-registry.maintenance.js");
 }
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
@@ -1026,7 +1088,7 @@ describe("task-registry", () => {
         lastEventAt: now - 10 * 60_000,
       });
 
-      expect(runTaskRegistryMaintenance()).toEqual({
+      expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 1,
         cleanupStamped: 0,
         pruned: 0,
@@ -1061,7 +1123,7 @@ describe("task-registry", () => {
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
 
-      expect(sweepTaskRegistry()).toEqual({
+      expect(await sweepTaskRegistry()).toEqual({
         reconciled: 0,
         cleanupStamped: 0,
         pruned: 1,
@@ -1110,12 +1172,123 @@ describe("task-registry", () => {
         pruned: 0,
       });
 
-      expect(runTaskRegistryMaintenance()).toEqual({
+      expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 0,
         cleanupStamped: 1,
         pruned: 0,
       });
       expect(getTaskById("task-missing-cleanup")?.cleanupAfter).toBeGreaterThan(now);
+    });
+  });
+
+  it("cancels the deferred maintenance sweep during test teardown", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      vi.useFakeTimers();
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:missing",
+        runId: "run-deferred-maintenance-stop",
+        task: "Missing child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      startTaskRegistryMaintenance();
+      stopTaskRegistryMaintenanceForTests();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushAsyncWork();
+
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "running",
+      });
+    });
+  });
+
+  it("rechecks current task state before marking a task lost", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:acp:missing-stale",
+      runId: "run-lost-stale",
+      task: "Missing child",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const staleTask = {
+      ...snapshotTask,
+      lastEventAt: now - 10 * 60_000,
+    };
+    const currentTask = {
+      ...snapshotTask,
+      lastEventAt: now,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, currentTask]]);
+    const { runTaskRegistryMaintenance } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "running",
+      lastEventAt: now,
+    });
+  });
+
+  it("rechecks current task state before pruning a task", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:main",
+      runId: "run-prune-stale",
+      task: "Old completed task",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      startedAt: now - 9 * 24 * 60 * 60_000,
+    });
+    const staleTask = {
+      ...snapshotTask,
+      endedAt: now - 8 * 24 * 60 * 60_000,
+      lastEventAt: now - 8 * 24 * 60 * 60_000,
+      cleanupAfter: now - 1,
+    };
+    const currentTask = {
+      ...staleTask,
+      cleanupAfter: now + 60_000,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, currentTask]]);
+    const { sweepTaskRegistry } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await sweepTaskRegistry()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "succeeded",
+      cleanupAfter: now + 60_000,
     });
   });
 
