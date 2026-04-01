@@ -4,13 +4,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
+import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
-import {
-  resolveOutboundTarget,
-  resolveSessionDeliveryTarget,
-} from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
@@ -34,6 +31,24 @@ export type DeliveryTargetResolution =
       mode: "explicit" | "implicit";
       error: Error;
     };
+
+let targetsRuntimePromise:
+  | Promise<typeof import("../../infra/outbound/targets.runtime.js")>
+  | undefined;
+
+async function loadTargetsRuntime() {
+  targetsRuntimePromise ??= import("../../infra/outbound/targets.runtime.js");
+  return await targetsRuntimePromise;
+}
+
+let channelSelectionRuntimePromise:
+  | Promise<typeof import("../../infra/outbound/channel-selection.runtime.js")>
+  | undefined;
+
+async function loadChannelSelectionRuntime() {
+  channelSelectionRuntimePromise ??= import("../../infra/outbound/channel-selection.runtime.js");
+  return await channelSelectionRuntimePromise;
+}
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -77,6 +92,7 @@ export async function resolveDeliveryTarget(
       fallbackChannel = preliminary.lastChannel;
     } else {
       try {
+        const { resolveMessageChannelSelection } = await loadChannelSelectionRuntime();
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
       } catch (err) {
@@ -166,7 +182,7 @@ export async function resolveDeliveryTarget(
   const effectiveAllowFrom = mode === "implicit" ? allowFromOverride : undefined;
 
   if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
-    const currentTargetResolution = resolveOutboundTarget({
+    let currentTargetResolution = tryResolveLoadedOutboundTarget({
       channel,
       to: toCandidate,
       cfg,
@@ -174,12 +190,23 @@ export async function resolveDeliveryTarget(
       mode,
       allowFrom: effectiveAllowFrom,
     });
+    if (!currentTargetResolution) {
+      const { resolveOutboundTarget } = await loadTargetsRuntime();
+      currentTargetResolution = resolveOutboundTarget({
+        channel,
+        to: toCandidate,
+        cfg,
+        accountId,
+        mode,
+        allowFrom: effectiveAllowFrom,
+      });
+    }
     if (!currentTargetResolution.ok) {
       toCandidate = allowFromOverride[0];
     }
   }
 
-  const docked = resolveOutboundTarget({
+  let docked = tryResolveLoadedOutboundTarget({
     channel,
     to: toCandidate,
     cfg,
@@ -187,6 +214,17 @@ export async function resolveDeliveryTarget(
     mode,
     allowFrom: effectiveAllowFrom,
   });
+  if (!docked) {
+    const { resolveOutboundTarget } = await loadTargetsRuntime();
+    docked = resolveOutboundTarget({
+      channel,
+      to: toCandidate,
+      cfg,
+      accountId,
+      mode,
+      allowFrom: effectiveAllowFrom,
+    });
+  }
   if (!docked.ok) {
     return {
       ok: false,
