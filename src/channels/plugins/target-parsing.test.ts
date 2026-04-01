@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { parseExplicitTargetForChannel } from "./target-parsing.js";
+import {
+  comparableChannelTargetsMatch,
+  comparableChannelTargetsShareRoute,
+  parseExplicitTargetForChannel,
+  resolveComparableTargetForChannel,
+} from "./target-parsing.js";
 
 function parseTelegramTargetForTest(raw: string): {
   to: string;
@@ -110,5 +115,43 @@ describe("parseExplicitTargetForChannel", () => {
       to: "TEAM-ROOM",
       chatType: "direct",
     });
+  });
+
+  it("builds comparable targets from plugin-owned grammar", () => {
+    expect(
+      resolveComparableTargetForChannel({
+        channel: "telegram",
+        rawTarget: "telegram:group:-100123:topic:77",
+      }),
+    ).toEqual({
+      rawTo: "telegram:group:-100123:topic:77",
+      to: "-100123",
+      threadId: 77,
+      chatType: "group",
+    });
+  });
+
+  it("matches comparable targets when only the plugin grammar differs", () => {
+    const topicTarget = resolveComparableTargetForChannel({
+      channel: "telegram",
+      rawTarget: "telegram:-100123:topic:77",
+    });
+    const bareTarget = resolveComparableTargetForChannel({
+      channel: "telegram",
+      rawTarget: "-100123",
+    });
+
+    expect(
+      comparableChannelTargetsMatch({
+        left: topicTarget,
+        right: bareTarget,
+      }),
+    ).toBe(false);
+    expect(
+      comparableChannelTargetsShareRoute({
+        left: topicTarget,
+        right: bareTarget,
+      }),
+    ).toBe(true);
   });
 });
