@@ -59,7 +59,7 @@ export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   });
 }
 
-function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
+export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "telegram");
   if (boundDefault) {
     return boundDefault;
