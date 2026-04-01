@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.1-beta.1",
+  "version": "2026.4.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -882,6 +882,10 @@
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/string-normalization-runtime": {
+      "types": "./dist/plugin-sdk/string-normalization-runtime.d.ts",
+      "default": "./dist/plugin-sdk/string-normalization-runtime.js"
     },
     "./plugin-sdk/state-paths": {
       "types": "./dist/plugin-sdk/state-paths.d.ts",

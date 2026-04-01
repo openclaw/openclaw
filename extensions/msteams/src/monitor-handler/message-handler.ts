@@ -369,6 +369,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      teamId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
@@ -645,9 +646,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.error("dispatch failed", { error: String(err) });
       runtime.error?.(`msteams dispatch failed: ${String(err)}`);
       try {
-        await context.sendActivity(
-          `⚠️ Agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
         // Best effort.
       }
