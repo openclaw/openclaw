@@ -127,6 +127,7 @@ describe("resolveCronSession", () => {
           sessionId: "old-session-id",
           updatedAt: NOW_MS - 86_400_000, // 1 day ago
           systemSent: true,
+          sessionFile: "/custom/sessions/old-session-id.jsonl",
           modelOverride: "gpt-4.1-mini",
           providerOverride: "openai",
           sendPolicy: "allow",
@@ -137,6 +138,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
       expect(result.systemSent).toBe(false);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
