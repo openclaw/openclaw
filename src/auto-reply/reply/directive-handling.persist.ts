@@ -30,6 +30,7 @@ export async function persistInlineDirectives(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  senderIsOwner?: boolean;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   defaultProvider: string;
@@ -95,6 +96,10 @@ export async function persistInlineDirectives(params: {
 
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
+      updated = true;
+    }
+    if (directives.hasFastDirective && directives.fastMode !== undefined && params.senderIsOwner) {
+      sessionEntry.fastMode = directives.fastMode;
       updated = true;
     }
     if (

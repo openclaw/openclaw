@@ -202,6 +202,38 @@ describe("normalizeStoredCronJobs", () => {
     expect(schedule.atMs).toBeUndefined();
   });
 
+  it("preserves legacy top-level delivery fields for non-agentTurn payloads", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-system-delivery",
+        deliver: true,
+        channel: " Telegram ",
+        to: " 12345 ",
+        threadId: " 77 ",
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "12345",
+      threadId: "77",
+    });
+  });
+
+  it("canonicalizes schedule.kind casing and whitespace", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-noncanonical-kind",
+        schedule: { kind: " Every ", everyMs: 60_000 },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect((job.schedule as Record<string, unknown>).kind).toBe("every");
+  });
+
   it("preserves stored custom session targets", () => {
     const { job } = normalizeOneJob(
       makeLegacyJob({

@@ -218,6 +218,11 @@ export async function handleDirectiveOnly(
       text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: status, on, off.`,
     };
   }
+  if (directives.hasFastDirective && directives.fastMode !== undefined && !command.senderIsOwner) {
+    return {
+      text: "Fast mode can only be changed by the session owner.",
+    };
+  }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
     if (!directives.rawReasoningLevel) {
       const level = currentReasoningLevel ?? "off";
@@ -363,7 +368,7 @@ export async function handleDirectiveOnly(
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
     }
-    if (directives.hasFastDirective && directives.fastMode !== undefined) {
+    if (directives.hasFastDirective && directives.fastMode !== undefined && command.senderIsOwner) {
       sessionEntry.fastMode = directives.fastMode;
     }
     if (shouldDowngradeXHigh) {

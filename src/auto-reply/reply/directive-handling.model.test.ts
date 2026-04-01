@@ -495,6 +495,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       model: "claude-opus-4-6",
       initialModelLabel: "anthropic/claude-opus-4-6",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      command: { senderIsOwner: true },
       ...rest,
       sessionEntry: entry,
       sessionStore: store,
@@ -664,6 +665,21 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.execAsk).toBe("always");
     expect(sessionEntry.execNode).toBe("worker-1");
   });
+
+  it("blocks fast-mode changes from non-owner directive-only senders", async () => {
+    const directives = parseInlineDirectives("/fast on");
+    const sessionEntry = createSessionEntry({ fastMode: false });
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        command: { senderIsOwner: false },
+      }),
+    );
+
+    expect(result?.text).toContain("session owner");
+    expect(sessionEntry.fastMode).toBe(false);
+  });
 });
 
 describe("persistInlineDirectives internal exec scope gate", () => {
@@ -773,5 +789,39 @@ describe("persistInlineDirectives internal exec scope gate", () => {
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("skips fast-mode persistence for non-owner callers", async () => {
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const directives = parseInlineDirectives("/fast on");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      fastMode: false,
+    } as SessionEntry;
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+      senderIsOwner: false,
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: undefined,
+    });
+
+    expect(sessionEntry.fastMode).toBe(false);
   });
 });

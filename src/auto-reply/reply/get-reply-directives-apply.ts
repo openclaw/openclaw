@@ -318,6 +318,7 @@ export async function applyInlineDirectiveOverrides(params: {
     sessionStore,
     sessionKey,
     storePath,
+    senderIsOwner: command.senderIsOwner,
     elevatedEnabled,
     elevatedAllowed,
     defaultProvider,

@@ -312,7 +312,7 @@ export function normalizeStoredCronJobs(
           trackIssue("legacyPayloadKind");
         }
       }
-      if (payloadRecord.kind === "agentTurn" && copyTopLevelAgentTurnFields(raw, payloadRecord)) {
+      if (copyTopLevelAgentTurnFields(raw, payloadRecord)) {
         mutated = true;
       }
     }
@@ -358,7 +358,12 @@ export function normalizeStoredCronJobs(
     const schedule = raw.schedule;
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
-      const kind = typeof sched.kind === "string" ? sched.kind.trim().toLowerCase() : "";
+      const rawKind = typeof sched.kind === "string" ? sched.kind : "";
+      const kind = rawKind.trim().toLowerCase();
+      if (kind && rawKind !== kind) {
+        sched.kind = kind;
+        mutated = true;
+      }
       if (!kind && ("at" in sched || "atMs" in sched)) {
         sched.kind = "at";
         mutated = true;
