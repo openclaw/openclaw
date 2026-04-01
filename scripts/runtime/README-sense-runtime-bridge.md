@@ -70,3 +70,50 @@ Notes:
 - `401 unauthorized` still propagates as a hard failure
 - `provider` and `model` may remain `unknown`; remediation does not branch on them yet
 - the next natural step is to bind `recommended_action` values to richer automatic provider/GPU remediation workflows
+
+# Sense Runtime Tool
+
+Routing loop:
+
+- `sense-runtime-routing-loop.sh`
+- `sense_runtime_routing_loop.py`
+
+Flow:
+
+- decision
+- remediation
+- next_step evaluation
+- runtime task execution
+
+Loop behavior:
+
+- max attempts is capped (`--max-attempts`, default `3`)
+- repeated identical decision signatures stop the loop
+- unmapped next steps stop safely
+
+Handled next steps:
+
+- `sense_runtime_start`
+- `sense_runtime_status`
+- `inspect_gpu_runtime`
+- `run_runtime_task`
+
+Manager-facing output:
+
+```json
+{
+  "final_state": "stopped_repeated_decision",
+  "executed_steps": [...],
+  "last_decision": {...},
+  "last_remediation": {...},
+  "next_step": "sense_runtime_start"
+}
+```
+
+Example:
+
+```bash
+scripts/runtime/sense-runtime-routing-loop.sh \
+  --token "$SENSE_WORKER_TOKEN" \
+  --sandbox-name sense-wsl-agent
+```
