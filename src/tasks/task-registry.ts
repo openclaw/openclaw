@@ -68,6 +68,31 @@ type TaskDeliveryOwner = {
   flowId?: string;
 };
 
+export type ParentFlowLinkErrorCode =
+  | "scope_kind_not_session"
+  | "parent_flow_not_found"
+  | "owner_key_mismatch"
+  | "cancel_requested"
+  | "terminal";
+
+export class ParentFlowLinkError extends Error {
+  constructor(
+    public readonly code: ParentFlowLinkErrorCode,
+    message: string,
+    public readonly details?: {
+      flowId?: string;
+      status?: FlowRecord["status"];
+    },
+  ) {
+    super(message);
+    this.name = "ParentFlowLinkError";
+  }
+}
+
+export function isParentFlowLinkError(error: unknown): error is ParentFlowLinkError {
+  return error instanceof ParentFlowLinkError;
+}
+
 function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
@@ -100,20 +125,37 @@ function assertParentFlowLinkAllowed(params: {
     return;
   }
   if (params.scopeKind !== "session") {
-    throw new Error("Only session-scoped tasks can link to flows.");
+    throw new ParentFlowLinkError(
+      "scope_kind_not_session",
+      "Only session-scoped tasks can link to flows.",
+      { flowId },
+    );
   }
   const flow = getFlowById(flowId);
   if (!flow) {
-    throw new Error(`Parent flow not found: ${flowId}`);
+    throw new ParentFlowLinkError("parent_flow_not_found", `Parent flow not found: ${flowId}`, {
+      flowId,
+    });
   }
   if (normalizeOwnerKey(flow.ownerKey) !== normalizeOwnerKey(params.ownerKey)) {
-    throw new Error("Task ownerKey must match parent flow ownerKey.");
+    throw new ParentFlowLinkError(
+      "owner_key_mismatch",
+      "Task ownerKey must match parent flow ownerKey.",
+      { flowId },
+    );
   }
   if (flow.cancelRequestedAt != null) {
-    throw new Error("Parent flow cancellation has already been requested.");
+    throw new ParentFlowLinkError(
+      "cancel_requested",
+      "Parent flow cancellation has already been requested.",
+      { flowId, status: flow.status },
+    );
   }
   if (isTerminalFlowStatus(flow.status)) {
-    throw new Error(`Parent flow is already ${flow.status}.`);
+    throw new ParentFlowLinkError("terminal", `Parent flow is already ${flow.status}.`, {
+      flowId,
+      status: flow.status,
+    });
   }
 }
 

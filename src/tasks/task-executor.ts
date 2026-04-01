@@ -13,6 +13,7 @@ import {
   cancelTaskById,
   createTaskRecord,
   findLatestTaskForFlowId,
+  isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
   markTaskLostById,
@@ -448,6 +449,40 @@ function cancelManagedFlowAfterChildrenSettle(
   };
 }
 
+function mapRunTaskInFlowCreateError(params: {
+  error: unknown;
+  flowId: string;
+}): RunTaskInFlowResult {
+  const flow = getFlowById(params.flowId);
+  if (isParentFlowLinkError(params.error)) {
+    if (params.error.code === "cancel_requested") {
+      return {
+        found: true,
+        created: false,
+        reason: "Flow cancellation has already been requested.",
+        ...(flow ? { flow } : {}),
+      };
+    }
+    if (params.error.code === "terminal") {
+      const terminalStatus = flow?.status ?? params.error.details?.status ?? "terminal";
+      return {
+        found: true,
+        created: false,
+        reason: `Flow is already ${terminalStatus}.`,
+        ...(flow ? { flow } : {}),
+      };
+    }
+    if (params.error.code === "parent_flow_not_found") {
+      return {
+        found: false,
+        created: false,
+        reason: "Flow not found.",
+      };
+    }
+  }
+  throw params.error;
+}
+
 export function runTaskInFlow(params: {
   flowId: string;
   runtime: TaskRuntime;
@@ -516,15 +551,23 @@ export function runTaskInFlow(params: {
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus ?? "pending",
   };
-  const task =
-    params.status === "running"
-      ? createRunningTaskRun({
-          ...common,
-          startedAt: params.startedAt,
-          lastEventAt: params.lastEventAt,
-          progressSummary: params.progressSummary,
-        })
-      : createQueuedTaskRun(common);
+  let task: TaskRecord;
+  try {
+    task =
+      params.status === "running"
+        ? createRunningTaskRun({
+            ...common,
+            startedAt: params.startedAt,
+            lastEventAt: params.lastEventAt,
+            progressSummary: params.progressSummary,
+          })
+        : createQueuedTaskRun(common);
+  } catch (error) {
+    return mapRunTaskInFlowCreateError({
+      error,
+      flowId: flow.flowId,
+    });
+  }
 
   return {
     found: true,

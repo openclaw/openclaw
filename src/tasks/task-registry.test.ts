@@ -19,6 +19,7 @@ import {
   findTaskByRunId,
   getTaskById,
   getTaskRegistrySummary,
+  isParentFlowLinkError,
   listTasksForOwnerKey,
   listTaskRecords,
   linkTaskToFlowById,
@@ -392,7 +393,7 @@ describe("task-registry", () => {
         cancelRequestedAt: 42,
       });
 
-      expect(() =>
+      try {
         createTaskRecord({
           runtime: "acp",
           ownerKey: "agent:main:main",
@@ -400,8 +401,15 @@ describe("task-registry", () => {
           parentFlowId: flow.flowId,
           runId: "cancel-requested-link",
           task: "Should be denied",
-        }),
-      ).toThrow("Parent flow cancellation has already been requested.");
+        });
+        throw new Error("Expected createTaskRecord to throw.");
+      } catch (error) {
+        expect(isParentFlowLinkError(error)).toBe(true);
+        expect(error).toMatchObject({
+          code: "cancel_requested",
+          message: "Parent flow cancellation has already been requested.",
+        });
+      }
     });
   });
 
