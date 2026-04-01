@@ -10,6 +10,7 @@ import { __testing as loaderTesting } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 
 const catalog = [
   {
@@ -33,8 +34,6 @@ vi.mock("../agents/model-catalog.js", async () => {
 });
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
-let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
-let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
 let resolveAutoImageModel: typeof import("./runner.js").resolveAutoImageModel;
 let runCapability: typeof import("./runner.js").runCapability;
 
@@ -73,13 +72,16 @@ function setCompatibleActiveMediaUnderstandingRegistry(
 
 describe("runCapability image skip", () => {
   beforeAll(async () => {
-    ({
-      buildProviderRegistry,
-      createMediaAttachmentCache,
-      normalizeMediaAttachments,
-      resolveAutoImageModel,
-      runCapability,
-    } = await import("./runner.js"));
+    vi.doMock("../agents/model-catalog.js", async () => {
+      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
+        "../agents/model-catalog.js",
+      );
+      return {
+        ...actual,
+        loadModelCatalog,
+      };
+    });
+    ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
   });
 
   beforeEach(() => {
