@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/nodes: stop pinning live node commands to the approved node-pair record. Node pairing remains a trust/token flow, while per-node `system.run` policy stays in that node's exec approvals config. Fixes #58824.
 - WebChat/exec approvals: use native approval UI guidance in agent system prompts instead of telling agents to paste manual `/approve` commands in webchat sessions. Thanks @vincentkoc.
 - Plugins/install: forward `--dangerously-force-unsafe-install` through archive and npm-spec plugin installs so the documented override reaches the security scanner on those install paths. (#58879) Thanks @ryanlee-gemini.
+- Chat/error replies: stop leaking raw provider/runtime failures into external chat channels, return a friendly retry message instead, and add a specific `/new` hint for Bedrock toolResult/toolUse session mismatches. (#58831) Thanks @ImLukeF.
 
 ## 2026.3.31
 
