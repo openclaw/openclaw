@@ -831,6 +831,33 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
   </Accordion>
 </AccordionGroup>
 
+## Error reply controls
+
+When the agent encounters a delivery or provider error, Telegram can either reply with the error text or suppress it. Two config keys control this behavior:
+
+| Key | Values | Default | Description |
+| --- | ------ | ------- | ----------- |
+| `channels.telegram.errorPolicy` | `reply`, `silent` | `reply` | `reply` sends a friendly error message to the chat. `silent` suppresses error replies entirely. |
+| `channels.telegram.errorCooldownMs` | number (ms) | `60000` | Minimum time between error replies to the same chat. Prevents error spam during outages. |
+
+Per-account, per-group, and per-topic overrides are supported (same inheritance as other Telegram config keys).
+
+```json5
+{
+  channels: {
+    telegram: {
+      errorPolicy: "reply",
+      errorCooldownMs: 120000,
+      groups: {
+        "-1001234567890": {
+          errorPolicy: "silent", // suppress errors in this group
+        },
+      },
+    },
+  },
+}
+```
+
 ## Troubleshooting
 
 <AccordionGroup>
@@ -963,6 +990,8 @@ Primary reference:
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
+- `channels.telegram.errorPolicy`: `reply | silent` — control error reply behavior (default: `reply`). Per-account/group/topic overrides supported.
+- `channels.telegram.errorCooldownMs`: minimum ms between error replies to the same chat (default: `60000`). Prevents error spam during outages.
 
 - [Configuration reference - Telegram](/gateway/configuration-reference#telegram)
 
@@ -979,6 +1008,7 @@ Telegram-specific high-signal fields:
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
+- errors: `errorPolicy`, `errorCooldownMs`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 
 ## Related

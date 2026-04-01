@@ -415,9 +415,10 @@ resolved approver list for authorization even when native approval delivery is d
 
 ### Native approval delivery
 
-Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
+Discord, Slack, and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
+- Slack: uses shared `approvals.exec.targets` with `channel: "slack"` and renders Block Kit approval buttons when interactivity is enabled
 - Telegram: `channels.telegram.execApprovals.*`
 
 These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
