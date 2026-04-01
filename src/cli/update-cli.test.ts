@@ -443,6 +443,24 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it("falls back to in-process post-update work when the fresh process exits non-zero", async () => {
+    setupUpdatedRootRefresh();
+    spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      queueMicrotask(() => {
+        child.emit("exit", 2, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(2);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+  });
+
   it("post-core resume mode skips the core update and only runs post-update tasks", async () => {
     await withEnvAsync(
       {
