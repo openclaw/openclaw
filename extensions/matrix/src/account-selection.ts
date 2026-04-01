@@ -10,12 +10,24 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { listMatrixEnvAccountIds } from "./env-vars.js";
-import { hasExplicitMatrixAccountConfig } from "./matrix/account-config.js";
-import type { CoreConfig } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasConfiguredDefaultMatrixAccountSource(channel: Record<string, unknown> | null): boolean {
+  if (!channel) {
+    return false;
+  }
+  // Top-level Matrix config can provide shared defaults for named accounts. Only
+  // count fields that are actually default-account-specific auth/identity input.
+  return (
+    typeof channel.userId === "string" ||
+    hasConfiguredSecretInput(channel.accessToken) ||
+    hasConfiguredSecretInput(channel.password)
+  );
 }
 
 export function resolveMatrixChannelConfig(cfg: OpenClawConfig): Record<string, unknown> | null {
@@ -48,7 +60,7 @@ export function resolveConfiguredMatrixAccountIds(
     accounts: channel && isRecord(channel.accounts) ? channel.accounts : undefined,
     normalizeAccountId,
   });
-  if (channel && hasExplicitMatrixAccountConfig(cfg as CoreConfig, DEFAULT_ACCOUNT_ID)) {
+  if (hasConfiguredDefaultMatrixAccountSource(channel)) {
     configuredAccountIds.push(DEFAULT_ACCOUNT_ID);
   }
   return listCombinedAccountIds({

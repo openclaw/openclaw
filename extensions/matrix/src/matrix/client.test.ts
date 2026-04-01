@@ -378,6 +378,44 @@ describe("resolveMatrixConfig", () => {
     );
   });
 
+  it("does not materialize a default account from shared top-level defaults alone", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          name: "Shared Defaults",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveImplicitMatrixAccountId(cfg, {} as NodeJS.ProcessEnv)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
+  });
+
+  it("honors injected env when implicit Matrix account selection becomes ambiguous", () => {
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_ACCESS_TOKEN: "default-token",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBeNull();
+    expect(() => resolveMatrixAuthContext({ cfg, env })).toThrow(
+      /channels\.matrix\.defaultAccount.*--account <id>/i,
+    );
+  });
+
   it("rejects explicit non-default account ids that are neither configured nor scoped in env", () => {
     const cfg = {
       channels: {

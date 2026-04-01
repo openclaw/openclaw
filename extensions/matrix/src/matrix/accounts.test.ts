@@ -280,6 +280,26 @@ describe("resolveMatrixAccount", () => {
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
   });
 
+  it("does not materialize a default account from shared top-level defaults alone", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          name: "Shared Defaults",
+          enabled: true,
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listMatrixAccountIds(cfg)).toEqual(["ops"]);
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("ops");
+  });
+
   it('uses the synthetic "default" account when multiple named accounts need explicit selection', () => {
     const cfg: CoreConfig = {
       channels: {
