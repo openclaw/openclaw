@@ -422,6 +422,34 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
   });
 
+  it("non-default agent inherits agents.defaults.workspace when no explicit workspace set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared/workspace" },
+        list: [
+          { id: "main", default: true },
+          { id: "my-agent" }, // no workspace set
+        ],
+      },
+    };
+    const workspace = resolveAgentWorkspaceDir(cfg, "my-agent");
+    expect(workspace).toBe(path.resolve("/shared/workspace"));
+  });
+
+  it("non-default agent uses explicit workspace over defaults.workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared/workspace" },
+        list: [
+          { id: "main", default: true },
+          { id: "my-agent", workspace: "/custom/workspace" },
+        ],
+      },
+    };
+    const workspace = resolveAgentWorkspaceDir(cfg, "my-agent");
+    expect(workspace).toBe(path.resolve("/custom/workspace"));
+  });
+
   it("uses OPENCLAW_HOME for default agentDir", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
     vi.stubEnv("OPENCLAW_HOME", home);

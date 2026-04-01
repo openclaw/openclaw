@@ -271,12 +271,17 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   if (configured) {
     return stripNullBytes(resolveUserPath(configured));
   }
+  // Check agents.defaults.workspace before falling back to the per-agent
+  // convention (~/.openclaw/workspace-{id}). This allows non-default agents
+  // to inherit the shared workspace when no explicit override is set,
+  // which is essential for multi-agent setups where all agents share
+  // the same persona/context files but operate in different directories.
+  const defaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
+  if (defaultWorkspace) {
+    return stripNullBytes(resolveUserPath(defaultWorkspace));
+  }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
-    const fallback = cfg.agents?.defaults?.workspace?.trim();
-    if (fallback) {
-      return stripNullBytes(resolveUserPath(fallback));
-    }
     return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
   }
   const stateDir = resolveStateDir(process.env);
