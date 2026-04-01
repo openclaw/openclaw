@@ -1,4 +1,4 @@
-import { matchesExactOrPrefix } from "../plugin-sdk/provider-model-shared.js";
+import { matchesExactOrPrefix } from "../plugins/provider-model-helpers.js";
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
