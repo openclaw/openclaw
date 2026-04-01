@@ -93,7 +93,21 @@ function isSilentReplyLeadFragment(text: string): boolean {
   return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
-function appendUniqueSuffix(base: string, suffix: string): string {
+/**
+ * Maximum overlap window for delta dedup.  Streaming deltas are rarely
+ * longer than a few hundred characters, so a genuine overlap between the
+ * accumulated buffer and the incoming suffix should always be found within
+ * this window.  Capping the search prevents an O(n*m) freeze when long
+ * runs of repeated characters (e.g. box-drawing table borders from Haiku)
+ * cause the naive scan to test thousands of false-positive positions.
+ *
+ * If a delta genuinely overlaps by more than this amount, the worst case is
+ * a small duplicate fragment in the intermediate UI — corrected on the next
+ * full-text event via the `resolveMergedAssistantText` fast path.
+ */
+export const MAX_DELTA_OVERLAP = 256;
+
+export function appendUniqueSuffix(base: string, suffix: string): string {
   if (!suffix) {
     return base;
   }
@@ -103,7 +117,7 @@ function appendUniqueSuffix(base: string, suffix: string): string {
   if (base.endsWith(suffix)) {
     return base;
   }
-  const maxOverlap = Math.min(base.length, suffix.length);
+  const maxOverlap = Math.min(base.length, suffix.length, MAX_DELTA_OVERLAP);
   for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
     if (base.slice(-overlap) === suffix.slice(0, overlap)) {
       return base + suffix.slice(overlap);
@@ -112,7 +126,7 @@ function appendUniqueSuffix(base: string, suffix: string): string {
   return base + suffix;
 }
 
-function resolveMergedAssistantText(params: {
+export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
