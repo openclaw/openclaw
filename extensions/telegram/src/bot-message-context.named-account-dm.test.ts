@@ -229,4 +229,44 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
     expect(ctx?.ctxPayload?.SenderAgentId).toBe("atlas-agent");
   });
+
+  it("omits senderAgentId when the bot id is owned by multiple agents", async () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          agentId: "atlas-agent",
+          match: { channel: "telegram", accountId: "atlas" },
+        },
+        {
+          agentId: "ops-agent",
+          match: { channel: "telegram", accountId: "ops" },
+        },
+      ],
+      channels: {
+        telegram: {
+          botToken: "7:shared-token",
+          accounts: {
+            atlas: {},
+            ops: {},
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      accountId: "atlas",
+      message: {
+        message_id: 1,
+        chat: { id: 814912386, type: "private" },
+        date: 1700000000,
+        text: "hello from shared bot",
+        from: { id: 7, first_name: "SharedBot", is_bot: true },
+      },
+    });
+
+    expect(ctx?.ctxPayload?.SenderAgentId).toBeUndefined();
+  });
 });

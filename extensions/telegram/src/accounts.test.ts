@@ -5,6 +5,7 @@ import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
   listTelegramAccountIds,
   resetMissingDefaultWarnFlag,
+  resolveConfiguredTelegramBotAgentIdsByBotId,
   resolveTelegramPollActionGateState,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
@@ -414,5 +415,59 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     });
 
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+});
+
+describe("resolveConfiguredTelegramBotAgentIdsByBotId", () => {
+  it("fails closed when one bot id resolves to multiple owners", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "atlas-agent",
+          match: { channel: "telegram", accountId: "atlas" },
+        },
+        {
+          agentId: "ops-agent",
+          match: { channel: "telegram", accountId: "ops" },
+        },
+      ],
+      channels: {
+        telegram: {
+          botToken: "7:shared-token",
+          accounts: {
+            atlas: {},
+            ops: {},
+          },
+        },
+      },
+    };
+
+    expect(resolveConfiguredTelegramBotAgentIdsByBotId(cfg).get("7")).toBeUndefined();
+  });
+
+  it("keeps a bot id when duplicate accounts resolve to the same owner", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "atlas-agent",
+          match: { channel: "telegram", accountId: "atlas" },
+        },
+        {
+          agentId: "atlas-agent",
+          match: { channel: "telegram", accountId: "ops" },
+        },
+      ],
+      channels: {
+        telegram: {
+          botToken: "7:shared-token",
+          accounts: {
+            atlas: {},
+            ops: {},
+          },
+        },
+      },
+    };
+
+    expect(resolveConfiguredTelegramBotAgentIdsByBotId(cfg).get("7")).toBe("atlas-agent");
   });
 });
