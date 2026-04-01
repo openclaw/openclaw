@@ -261,6 +261,8 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
+        "scripts/npm-runner.mjs",
+        "scripts/postinstall-bundled-plugins.mjs",
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
@@ -282,6 +284,8 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
+        "scripts/npm-runner.mjs",
+        "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
         "dist/channel-catalog.json",

@@ -224,6 +224,9 @@ importers:
       oxlint-tsgolint:
         specifier: ^0.18.1
         version: 0.18.1
+      semver:
+        specifier: 7.7.4
+        version: 7.7.4
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
