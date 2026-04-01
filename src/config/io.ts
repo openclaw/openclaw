@@ -31,7 +31,6 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
-import { normalizeLegacyWebSearchConfig } from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -2134,7 +2133,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // persisted to disk (issue #56772).
     // Apply legacy web-search normalization so that migration results are still
     // persisted even though we bypass validated.config.
-    let cfgToWrite = normalizeLegacyWebSearchConfig(persistCandidate) as OpenClawConfig;
+    let cfgToWrite = persistCandidate as OpenClawConfig;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");

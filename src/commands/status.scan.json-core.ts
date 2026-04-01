@@ -1,12 +1,10 @@
-import {
-  createEmptyTaskAuditSummary,
-  createEmptyTaskRegistrySummary,
-} from "openclaw/plugin-sdk/tasks-empty-summary";
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { loggingState } from "../logging/state.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
 import {

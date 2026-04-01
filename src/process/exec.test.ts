@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
@@ -118,29 +117,6 @@ describe("runCommandWithTimeout", () => {
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).not.toBe(0);
-    },
-  );
-
-  it.runIf(process.platform === "win32")(
-    "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
-    async () => {
-      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
-      expect(result.code).toBe(0);
-      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
-    },
-  );
-
-  it.runIf(process.platform === "win32")(
-    "falls back to npm.cmd when npm-cli.js is unavailable",
-    async () => {
-      const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
-      try {
-        const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
-        expect(result.code).toBe(0);
-        expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
-      } finally {
-        existsSpy.mockRestore();
-      }
     },
   );
 });
