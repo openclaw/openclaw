@@ -1,109 +1,50 @@
 ---
-summary: "ClawFlow workflow orchestration for background tasks and detached runs"
+summary: "Compatibility note for older ClawFlow references in release notes and docs"
 read_when:
-  - You want a flow to own one or more detached tasks
-  - You want to inspect or cancel a background job as a unit
-  - You want to understand how flows relate to tasks and background work
+  - You encounter ClawFlow or openclaw flows in older release notes or docs
+  - You want to understand what ClawFlow terminology maps to in the current CLI
+  - You want to translate older flow references into the supported task commands
 title: "ClawFlow"
 ---
 
 # ClawFlow
 
-ClawFlow is the flow layer above [Background Tasks](/automation/tasks). Tasks still track detached work. ClawFlow groups those task runs into a single job, keeps the parent owner context, and gives you a flow-level control surface.
+`ClawFlow` appears in some older OpenClaw release notes and documentation as if it were a user-facing runtime with its own `openclaw flows` command surface.
 
-Use ClawFlow when the work is more than a single detached run. A flow can still be one task, but it can also coordinate multiple tasks in a simple linear sequence.
+That is not the current operator-facing surface in this repository.
 
-## TL;DR
+Today, the supported CLI surface for inspecting and managing detached work is [`openclaw tasks`](/automation/tasks).
 
-- Tasks are the execution records.
-- ClawFlow is the job-level wrapper above tasks.
-- A flow keeps one owner/session context for the whole job.
-- Use `openclaw flows list`, `openclaw flows show`, and `openclaw flows cancel` to inspect or manage flows.
+## What to use today
 
-## Quick start
+- `openclaw tasks list` shows tracked detached runs
+- `openclaw tasks show <lookup>` shows one task by task id, run id, or session key
+- `openclaw tasks cancel <lookup>` cancels a running task
+- `openclaw tasks audit` surfaces stale or broken task runs
 
 ```bash
-openclaw flows list
-openclaw flows show <flow-id-or-owner-session>
-openclaw flows cancel <flow-id-or-owner-session>
+openclaw tasks list
+openclaw tasks show <lookup>
+openclaw tasks cancel <lookup>
 ```
 
-## How it relates to tasks
+## What this means for older references
 
-Background tasks still do the low-level work:
+If you see `ClawFlow` or `openclaw flows` in:
 
-- ACP runs
-- subagent runs
-- cron executions
-- CLI-initiated runs
+- old release notes
+- issue threads
+- stale search results
+- outdated local notes
 
-ClawFlow sits above that ledger:
+translate those instructions to the current task CLI:
 
-- it keeps related task runs under one flow id
-- it tracks the flow state separately from the individual task state
-- it makes blocked or multi-step work easier to inspect from one place
-
-For a single detached run, the flow can be a one-task flow. For more structured work, ClawFlow can keep multiple task runs under the same job.
-
-## Runtime substrate
-
-ClawFlow is the runtime substrate, not a workflow language.
-
-It owns:
-
-- the flow id
-- the owner session and return context
-- waiting state
-- small persisted outputs
-- finish, fail, cancel, and blocked state
-
-It does **not** own branching or business logic. Put that in the authoring layer that sits above it:
-
-- Lobster
-- acpx
-- plain TypeScript helpers
-- bundled skills
-
-In practice, authoring layers target a small runtime surface:
-
-- `createFlow(...)`
-- `runTaskInFlow(...)`
-- `setFlowWaiting(...)`
-- `setFlowOutput(...)`
-- `appendFlowOutput(...)`
-- `emitFlowUpdate(...)`
-- `resumeFlow(...)`
-- `finishFlow(...)`
-- `failFlow(...)`
-
-That keeps flow ownership and return-to-thread behavior in core without forcing a single DSL on top of it.
-
-## Authoring pattern
-
-The intended shape is linear:
-
-1. Create one flow for the job.
-2. Run one detached task under that flow.
-3. Wait for the child task or outside event.
-4. Resume the flow in the caller.
-5. Spawn the next child task or finish.
-
-ClawFlow persists the minimal state needed to resume that job: the current step, the task it is waiting on, and a small output bag for handoff between steps.
-
-## CLI surface
-
-The flow CLI is intentionally small:
-
-- `openclaw flows list` shows active and recent flows
-- `openclaw flows show <lookup>` shows one flow and its linked tasks
-- `openclaw flows cancel <lookup>` cancels the flow and any active child tasks
-
-`flows show` also surfaces the current wait target and any stored output keys, which is often enough to answer "what is this job waiting on?" without digging into every child task.
-
-The lookup token accepts either a flow id or the owner session key.
+- `openclaw flows list` -> `openclaw tasks list`
+- `openclaw flows show <lookup>` -> `openclaw tasks show <lookup>`
+- `openclaw flows cancel <lookup>` -> `openclaw tasks cancel <lookup>`
 
 ## Related
 
 - [Background Tasks](/automation/tasks) — detached work ledger
-- [CLI: flows](/cli/flows) — flow inspection and control commands
+- [CLI: flows](/cli/flows) — compatibility note for the mistaken command name
 - [Cron Jobs](/automation/cron-jobs) — scheduled jobs that may create tasks
