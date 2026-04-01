@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -16,7 +17,7 @@ const WARNING_BYTES = 500 * 1024 * 1024;
 
 /**
  * Format a byte count into a human-readable string (B / KB / MB / GB).
- * Uses Math.floor for MB values to avoid rounding up past a decision
+ * Uses Math.floor for MB/KB values to avoid rounding up past a decision
  * threshold (e.g. 99.6 MB should display as "99 MB", not "100 MB").
  * Exported for testing.
  */
@@ -37,8 +38,42 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
+ * Walk up from `dirPath` to find the nearest existing ancestor directory.
+ * Returns the directory itself if it exists, otherwise tries parent
+ * directories up to the filesystem root. Returns `null` only if no
+ * ancestor exists (should not happen in practice).
+ * Exported for testing.
+ */
+export function findExistingAncestor(dirPath: string): string | null {
+  let current = path.resolve(dirPath);
+  // Safety bound: stop after a reasonable depth to avoid infinite loops
+  // on pathological inputs (e.g. circular symlinks resolved to long paths).
+  const maxDepth = 64;
+  for (let i = 0; i < maxDepth; i++) {
+    try {
+      const stat = fs.statSync(current);
+      if (stat.isDirectory()) {
+        return current;
+      }
+    } catch {
+      // directory does not exist — try parent
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      // reached filesystem root
+      return null;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+/**
  * Read available bytes on the partition that contains `dirPath`.
- * Returns `null` when the directory does not exist or `statfsSync` fails
+ * If `dirPath` does not exist, walks up to the nearest existing ancestor
+ * so that disk pressure is still reported even before the state directory
+ * is created (e.g. on first run).
+ * Returns `null` when no ancestor exists or `statfsSync` fails
  * (for example on a platform where it is unsupported).
  */
 export function getAvailableBytes(
@@ -46,8 +81,9 @@ export function getAvailableBytes(
   deps?: { statfsSync?: (p: string) => fs.StatsFs },
 ): number | null {
   const statfs = deps?.statfsSync ?? fs.statfsSync;
+  const probePath = findExistingAncestor(dirPath) ?? dirPath;
   try {
-    const stats = statfs(dirPath);
+    const stats = statfs(probePath);
     // `bavail` is the number of free blocks available to unprivileged users.
     // Multiply by `bsize` (optimal transfer / filesystem block size in Node's
     // StatsFs, equal to `f_bsize` from the underlying statfs syscall) to get
@@ -107,7 +143,7 @@ export function noteDiskSpace(
   const availableBytes = getAvailableBytes(stateDir, {
     statfsSync: deps?.statfsSync,
   });
-  // If we cannot determine free space (directory missing, unsupported FS,
+  // If we cannot determine free space (no existing ancestor, unsupported FS,
   // or permission error), skip silently — other contributions already
   // handle missing directories.
   if (availableBytes === null) {
