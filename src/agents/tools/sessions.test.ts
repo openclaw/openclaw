@@ -529,6 +529,53 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
+  it("blocks label + agentId cross-agent sends when agent-to-agent is disabled", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-label-a2a-disabled", {
+      label: "alex-main",
+      agentId: "other",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect((result.details as { error?: string } | undefined)?.error).toContain(
+      "targeting another agent, but agent-to-agent access is disabled",
+    );
+    expect((result.details as { error?: string } | undefined)?.error).toContain(
+      "tools.agentToAgent.enabled=true",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks label + agentId cross-agent sends when agent-to-agent allowlist denies the pair", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["main"] },
+      },
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-label-a2a-denied", {
+      label: "alex-main",
+      agentId: "other",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect((result.details as { error?: string } | undefined)?.error).toContain(
+      "does not permit this agent pair",
+    );
+    expect((result.details as { error?: string } | undefined)?.error).toContain(
+      "tools.agentToAgent.allow",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("blocks cross-agent sends with an actionable visibility message", async () => {
     const tool = createMainSessionsSendTool();
 

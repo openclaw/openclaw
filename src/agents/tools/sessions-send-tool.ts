@@ -146,14 +146,15 @@ export function createSessionsSendTool(opts?: {
               runId: crypto.randomUUID(),
               status: "forbidden",
               error:
-                "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+                "Blocked: session send is targeting another agent, but agent-to-agent access is disabled. To allow this, set tools.agentToAgent.enabled=true.",
             });
           }
           if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+              error:
+                "Blocked: session send is targeting another agent, but tools.agentToAgent.allow does not permit this agent pair. Add both agent IDs (or a matching pattern) to tools.agentToAgent.allow.",
             });
           }
         }
