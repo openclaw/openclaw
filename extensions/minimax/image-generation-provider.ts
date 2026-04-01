@@ -159,25 +159,31 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         throw new Error(`MiniMax image generation returned no images: ${reason}`);
       }
 
-      const images = useUrl
-        ? imageUrls
-            .map((url, index) => {
+      // Fall back to base64 when URL list is empty (e.g., backend returns base64 despite url mode)
+      const sourceUrls = useUrl && imageUrls.length > 0 ? imageUrls : base64Images;
+      const useSourceUrl = useUrl && imageUrls.length > 0;
+
+      const images = sourceUrls
+          .map((item, index) => {
+            if (useSourceUrl) {
+              const url = item as string | undefined;
               if (!url) return null;
               return {
                 url,
                 mimeType: DEFAULT_OUTPUT_MIME,
                 fileName: `image-${index + 1}.png`,
               };
-            })
-            .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-        : base64Images
-            .map((b64, index) => {
+            } else {
+              const b64 = item as string | undefined;
               if (!b64) return null;
               return {
                 buffer: Buffer.from(b64, "base64"),
                 mimeType: DEFAULT_OUTPUT_MIME,
                 fileName: `image-${index + 1}.png`,
               };
+            }
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
             })
             .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
@@ -196,3 +202,4 @@ export function buildMinimaxImageGenerationProvider(): ImageGenerationProvider {
 export function buildMinimaxPortalImageGenerationProvider(): ImageGenerationProvider {
   return buildMinimaxImageProvider("minimax-portal");
 }
+
