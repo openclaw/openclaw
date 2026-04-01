@@ -1402,6 +1402,35 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).not.toContain("INTERNAL second prompt");
   });
 
+  it("falls back to individual followups when collect items have no display payload", async () => {
+    const key = `test-collect-no-display-fallback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "internal one" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "internal two" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.execution.agentPrompt).toBe("internal one");
+    expect(calls[1]?.execution.agentPrompt).toBe("internal two");
+  });
+
   it("retries collect-mode batches without losing queued items", async () => {
     const key = `test-collect-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1540,7 +1569,7 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(staleCalls).toHaveLength(0);
     expect(freshCalls).toHaveLength(1);
-    expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
+    expect(freshCalls[0]?.execution.agentPrompt).toBe("after-empty-schedule");
   });
 
   it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
@@ -1625,9 +1654,9 @@ describe("followup queue drain restart after idle window", () => {
     await secondProcessed.promise;
 
     expect(staleCalls).toHaveLength(1);
-    expect(staleCalls[0]?.prompt).toBe("before-idle");
+    expect(staleCalls[0]?.execution.agentPrompt).toBe("before-idle");
     expect(freshCalls).toHaveLength(1);
-    expect(freshCalls[0]?.prompt).toBe("after-idle");
+    expect(freshCalls[0]?.execution.agentPrompt).toBe("after-idle");
   });
 
   it("does not auto-start a drain when a busy run only refreshes the callback", async () => {
@@ -1661,7 +1690,7 @@ describe("followup queue drain restart after idle window", () => {
     });
 
     expect(staleCalls).toHaveLength(0);
-    expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
+    expect(freshCalls[0]?.execution.agentPrompt).toBe("queued-while-busy");
   });
 
   it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
