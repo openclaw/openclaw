@@ -56,6 +56,7 @@ export function createDiscordGatewayReconnectController(params: {
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let reconnectInFlight: Promise<void> | undefined;
+  let disconnectInFlight: Promise<void> | undefined;
   let consecutiveHelloStalls = 0;
 
   const shouldStop = () => params.isLifecycleStopping() || params.abortSignal?.aborted;
@@ -133,6 +134,13 @@ export function createDiscordGatewayReconnectController(params: {
     });
   };
   const disconnectGatewaySocketWithoutAutoReconnect = async () => {
+    // Deduplicate concurrent disconnect calls. If onAbort fires while a
+    // reconnect-driven disconnect is already awaiting the socket close event,
+    // a second call would strip the first call's close listener, causing the
+    // first promise to hang indefinitely and the lifecycle to time out.
+    if (disconnectInFlight) {
+      return await disconnectInFlight;
+    }
     if (!params.gateway) {
       return;
     }
@@ -143,6 +151,7 @@ export function createDiscordGatewayReconnectController(params: {
       return;
     }
 
+    const doDisconnect = async () => {
     // Carbon reconnects from the socket close handler even for intentional
     // disconnects. Drop the current socket's close/error listeners so a forced
     // reconnect does not race the old socket's automatic resume path.
@@ -267,6 +276,11 @@ export function createDiscordGatewayReconnectController(params: {
       socket.on("close", onClose);
       gateway.disconnect();
     });
+    };
+    disconnectInFlight = doDisconnect().finally(() => {
+      disconnectInFlight = undefined;
+    });
+    return await disconnectInFlight;
   };
   const reconnectGateway = async (reconnectParams: {
     resume: boolean;
