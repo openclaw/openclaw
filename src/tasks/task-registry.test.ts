@@ -1026,7 +1026,7 @@ describe("task-registry", () => {
         lastEventAt: now - 10 * 60_000,
       });
 
-      expect(runTaskRegistryMaintenance()).toEqual({
+      expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 1,
         cleanupStamped: 0,
         pruned: 0,
@@ -1061,7 +1061,7 @@ describe("task-registry", () => {
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
 
-      expect(sweepTaskRegistry()).toEqual({
+      expect(await sweepTaskRegistry()).toEqual({
         reconciled: 0,
         cleanupStamped: 0,
         pruned: 1,
@@ -1110,7 +1110,7 @@ describe("task-registry", () => {
         pruned: 0,
       });
 
-      expect(runTaskRegistryMaintenance()).toEqual({
+      expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 0,
         cleanupStamped: 1,
         pruned: 0,
