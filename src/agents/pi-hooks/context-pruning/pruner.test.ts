@@ -123,6 +123,77 @@ describe("pruneContextMessages", () => {
     expect(result).toHaveLength(2);
   });
 
+  it("counts thinkingSignature bytes when estimating assistant message size", () => {
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeAssistant([
+        {
+          type: "thinking",
+          thinking: "[redacted]",
+          thinkingSignature: "S".repeat(40_000),
+          redacted: true,
+        } as unknown as AssistantContentBlock,
+        { type: "text", text: "done" },
+      ]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.5,
+        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+      },
+      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
+      isToolPrunable: () => true,
+    });
+
+    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[Tool result trimmed:");
+  });
+
+  it("counts redacted_thinking data bytes when estimating assistant message size", () => {
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeAssistant([
+        {
+          type: "redacted_thinking",
+          data: "D".repeat(40_000),
+          thinkingSignature: "sig",
+        } as unknown as AssistantContentBlock,
+        { type: "text", text: "done" },
+      ]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.5,
+        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+      },
+      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
+      isToolPrunable: () => true,
+    });
+
+    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[Tool result trimmed:");
+  });
+
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),

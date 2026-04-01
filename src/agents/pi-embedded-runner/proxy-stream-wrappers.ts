@@ -71,17 +71,32 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
       const messages = payloadObj.messages;
       if (Array.isArray(messages)) {
         for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
-          if (msg.role !== "system" && msg.role !== "developer") {
+          if (msg.role === "system" || msg.role === "developer") {
+            if (typeof msg.content === "string") {
+              msg.content = [
+                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
+              ];
+            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+              const last = msg.content[msg.content.length - 1];
+              if (last && typeof last === "object") {
+                const record = last as Record<string, unknown>;
+                if (record.type !== "thinking" && record.type !== "redacted_thinking") {
+                  record.cache_control = { type: "ephemeral" };
+                }
+              }
+            }
             continue;
           }
-          if (typeof msg.content === "string") {
-            msg.content = [
-              { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-            ];
-          } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-            const last = msg.content[msg.content.length - 1];
-            if (last && typeof last === "object") {
-              (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+
+          if (msg.role === "assistant" && Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+              if (!block || typeof block !== "object") {
+                continue;
+              }
+              const record = block as Record<string, unknown>;
+              if (record.type === "thinking" || record.type === "redacted_thinking") {
+                delete record.cache_control;
+              }
             }
           }
         }
