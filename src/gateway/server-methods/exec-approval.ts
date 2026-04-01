@@ -3,7 +3,8 @@ import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-comma
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
-  isExecApprovalDecisionAllowed,
+  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
 import {
@@ -150,6 +151,7 @@ export function createExecApprovalHandlers(
         host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
@@ -328,13 +330,8 @@ export function createExecApprovalHandlers(
       }
       const approvalId = resolvedId.id;
       const snapshot = manager.getSnapshot(approvalId);
-      if (
-        snapshot &&
-        !isExecApprovalDecisionAllowed({
-          decision,
-          ask: snapshot.request.ask,
-        })
-      ) {
+      const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot?.request);
+      if (snapshot && !allowedDecisions.includes(decision)) {
         respond(
           false,
           undefined,

@@ -81,6 +81,7 @@ export type ExecApprovalRequestPayload = {
   host?: string | null;
   security?: string | null;
   ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
@@ -159,7 +160,7 @@ export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
-const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
+export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
@@ -469,7 +470,7 @@ export function resolveExecApprovalsFromFile(params: {
   const wildcard = file.agents?.["*"] ?? {};
   const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
-  const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
+  const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
   const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(defaults.security, fallbackSecurity),
@@ -673,6 +674,19 @@ export function resolveExecApprovalAllowedDecisions(params?: {
     return ["allow-once", "deny"];
   }
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
+}
+
+export function resolveExecApprovalRequestAllowedDecisions(params?: {
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+}): readonly ExecApprovalDecision[] {
+  const explicit = Array.isArray(params?.allowedDecisions)
+    ? params.allowedDecisions.filter(
+        (decision): decision is ExecApprovalDecision =>
+          decision === "allow-once" || decision === "allow-always" || decision === "deny",
+      )
+    : [];
+  return explicit.length > 0 ? explicit : resolveExecApprovalAllowedDecisions({ ask: params?.ask });
 }
 
 export function isExecApprovalDecisionAllowed(params: {

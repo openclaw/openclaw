@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
-import { resolveExecPolicyScopeSummary } from "../infra/exec-approvals-effective.js";
+import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
@@ -31,7 +31,7 @@ type ConfigSnapshotLike = {
 };
 type ApprovalsTargetSource = "gateway" | "node" | "local";
 type EffectivePolicyReport = {
-  scopes: ReturnType<typeof collectExecPolicySummaries>;
+  scopes: ReturnType<typeof collectExecPolicySnapshots>;
   note?: string;
 };
 
@@ -172,15 +172,16 @@ async function loadConfigForApprovalsTarget(params: {
   return snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null;
 }
 
-function collectExecPolicySummaries(params: { cfg: OpenClawConfig; approvals: ExecApprovalsFile }) {
-  const summaries = [
-    resolveExecPolicyScopeSummary({
+function collectExecPolicySnapshots(params: { cfg: OpenClawConfig; approvals: ExecApprovalsFile }) {
+  const snapshots = [
+    resolveExecPolicyScopeSnapshot({
       approvals: params.approvals,
-      execConfig: params.cfg.tools?.exec,
+      scopeExecConfig: params.cfg.tools?.exec,
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
     }),
   ];
+  const globalExecConfig = params.cfg.tools?.exec;
   const configAgentIds = new Set((params.cfg.agents?.list ?? []).map((agent) => agent.id));
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
     (agentId) => agentId !== "*" && agentId !== "default",
@@ -188,17 +189,18 @@ function collectExecPolicySummaries(params: { cfg: OpenClawConfig; approvals: Ex
   const agentIds = Array.from(new Set([...configAgentIds, ...approvalAgentIds])).toSorted();
   for (const agentId of agentIds) {
     const agentConfig = params.cfg.agents?.list?.find((agent) => agent.id === agentId);
-    summaries.push(
-      resolveExecPolicyScopeSummary({
+    snapshots.push(
+      resolveExecPolicyScopeSnapshot({
         approvals: params.approvals,
-        execConfig: agentConfig?.tools?.exec,
+        scopeExecConfig: agentConfig?.tools?.exec,
+        globalExecConfig,
         configPath: `agents.list.${agentId}.tools.exec`,
         scopeLabel: `agent:${agentId}`,
         agentId,
       }),
     );
   }
-  return summaries;
+  return snapshots;
 }
 
 function buildEffectivePolicyReport(params: {
@@ -219,7 +221,7 @@ function buildEffectivePolicyReport(params: {
     };
   }
   return {
-    scopes: collectExecPolicySummaries({
+    scopes: collectExecPolicySnapshots({
       cfg: params.cfg,
       approvals: params.approvals,
     }),

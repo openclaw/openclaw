@@ -23,7 +23,7 @@ import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-displ
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
 import {
-  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "./exec-approvals.js";
@@ -200,7 +200,7 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
 }
 
 function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
-  const allowedDecisions = resolveExecApprovalAllowedDecisions({ ask: request.request.ask });
+  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const command = formatApprovalCommand(
@@ -349,7 +349,7 @@ function buildExecPendingPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     text: buildRequestMessage(params.request, params.nowMs),
-    allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: params.request.request.ask }),
+    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
   });
 }
 
