@@ -119,7 +119,53 @@ def summarize_capabilities(sandbox_payload: dict) -> dict:
         'runtime_name': sandbox_status.get('runtime_name'),
         'openshell_status': sandbox_status.get('openshell_status'),
         'nim_status': sandbox_status.get('nim_status'),
+        'provider': sandbox_status.get('provider'),
+        'model': sandbox_status.get('model'),
     }
+
+
+def infer_missing_requirements(provider_status: dict, start_result: dict | None) -> list[str]:
+    missing: list[str] = []
+    provider = str(provider_status.get('provider') or 'unknown')
+    model = str(provider_status.get('model') or 'unknown')
+    nim_status = str(provider_status.get('nim_status') or 'unknown')
+    gpu_enabled = provider_status.get('gpu_enabled')
+
+    if provider in {'', 'unknown'}:
+        missing.append('provider configuration missing')
+    if model in {'', 'unknown'}:
+        missing.append('model configuration missing')
+    if nim_status.lower() != 'running':
+        missing.append('nim is not running')
+    if gpu_enabled is False:
+        missing.append('gpu runtime not enabled')
+
+    if isinstance(start_result, dict):
+        haystacks = []
+        summary = start_result.get('summary')
+        if isinstance(summary, str):
+            haystacks.append(summary.lower())
+        for item in start_result.get('key_points') if isinstance(start_result.get('key_points'), list) else []:
+            if isinstance(item, str):
+                haystacks.append(item.lower())
+        text = ' '.join(haystacks)
+        if 'api key required' in text or 'nvidia api key' in text:
+            missing.append('API key may be required')
+
+    deduped: list[str] = []
+    for item in missing:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def build_provider_status(provider_status: dict, start_result: dict | None) -> dict:
+    status = dict(provider_status)
+    missing = infer_missing_requirements(status, start_result)
+    provider_ready = len(missing) == 0
+    status['provider_ready'] = provider_ready
+    status['missing_requirements'] = missing
+    return status
 
 
 def main() -> int:
@@ -139,12 +185,19 @@ def main() -> int:
     }
 
     if recommended_action == 'check_runtime_provider':
+        sandbox_payload = get_sandbox_status(script_dir, args)
+        provider_signals = summarize_capabilities(sandbox_payload)
         start_result = run_runtime_start(script_dir, args)
         followup_status = get_decision(script_dir, args)
-        response['remediation_result'] = 'triggered sense runtime start'
+        provider_status = build_provider_status(provider_signals, start_result)
+        response['remediation_result'] = 'checked provider readiness and triggered sense runtime start'
+        response['provider_status'] = provider_status
         response['start_result'] = start_result
         response['followup_status'] = followup_status
-        response['next_step'] = followup_status.get('next_step') or response['next_step']
+        if provider_status.get('provider_ready') is False:
+            response['next_step'] = 'configure_provider'
+        else:
+            response['next_step'] = followup_status.get('next_step') or response['next_step']
     elif recommended_action == 'check_gpu_runtime':
         sandbox_payload = get_sandbox_status(script_dir, args)
         response['remediation_result'] = 'captured gpu runtime status'

@@ -117,3 +117,39 @@ scripts/runtime/sense-runtime-routing-loop.sh \
   --token "$SENSE_WORKER_TOKEN" \
   --sandbox-name sense-wsl-agent
 ```
+
+# Sense Runtime Tool
+
+Provider remediation notes:
+
+- `check_runtime_provider` no longer means only `sense runtime start`
+- it now collects provider-related signals from:
+  - structured sandbox status
+  - start result summary/key_points
+  - follow-up readiness decision
+- it returns `provider_status` with:
+  - `provider`
+  - `model`
+  - `nim_status`
+  - `gpu_enabled`
+  - `provider_ready`
+  - `missing_requirements[]`
+
+Possible `missing_requirements` values include:
+
+- `provider configuration missing`
+- `model configuration missing`
+- `nim is not running`
+- `gpu runtime not enabled`
+- `API key may be required`
+
+Routing loop behavior change:
+
+- if remediation returns `provider_status.provider_ready == false`
+- the loop stops with:
+  - `final_state = provider_not_ready`
+  - `next_step = configure_provider`
+- this avoids repeatedly calling `sense_runtime_start` without new signals
+
+This is still a minimal remediation layer.
+Provider and model may remain `unknown`, and the current logic uses them only to build `missing_requirements`, not to guess a concrete provider configuration automatically.
