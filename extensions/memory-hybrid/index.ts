@@ -62,18 +62,8 @@ const memoryPlugin = {
     const workingMemory = new WorkingMemoryBuffer(50, 0.7, 3);
     const conversationStack = new ConversationStack(30);
 
-    const bufferPath = api.resolvePath("working_memory.jsonl");
-    workingMemory.load(bufferPath, api.logger).catch((err) => {
-      api.logger.warn(`memory-hybrid: load working memory failed: ${String(err)}`);
-    });
-
     // 3. Initialize Shared Services
     const dreamService = new DreamService(api, db, embeddings, graphDB, chatModel, tracer);
-
-    // 4. Load Graph (Background)
-    graphDB.load().catch((err) => {
-      api.logger.warn(`memory-hybrid: graph load failed: ${String(err)}`);
-    });
 
     // 5. Register Components
     const deps = {
@@ -95,23 +85,46 @@ const memoryPlugin = {
     // 6. Define Plugin Service
     api.registerService({
       id: "memory-hybrid",
-      start: () => {
-        api.logger.info(`memory-hybrid: started (model: ${cfg.embedding.model})`);
+      start: async () => {
+        api.logger.info(`memory-hybrid: starting (model: ${cfg.embedding.model})...`);
+        try {
+          const bufferPath = api.resolvePath("working_memory.jsonl");
+          await workingMemory.load(bufferPath, api.logger);
+        } catch (err) {
+          api.logger.warn(`memory-hybrid: load working memory failed: ${String(err)}`);
+        }
+        try {
+          await graphDB.load();
+        } catch (err) {
+          api.logger.warn(`memory-hybrid: graph load failed: ${String(err)}`);
+        }
         dreamService.start();
+        api.logger.info(`memory-hybrid: started successfully`);
       },
-      stop: () => {
+      stop: async () => {
         dreamService.stop();
         hooksHandle.cleanup();
-        workingMemory.save(bufferPath, api.logger).catch((err) => {
+
+        const bufferPath = api.resolvePath("working_memory.jsonl");
+        try {
+          await workingMemory.save(bufferPath, api.logger);
+        } catch (err) {
           api.logger.warn(`memory-hybrid: save working memory failed: ${String(err)}`);
-        });
-        // Flush recall counts before closing to prevent data loss
-        db.flushRecallCounts().catch((err) => {
+        }
+
+        try {
+          // Flush recall counts before closing to prevent data loss
+          await db.flushRecallCounts();
+        } catch (err) {
           api.logger.warn(`memory-hybrid: final recall flush failed: ${String(err)}`);
-        });
-        db.close().catch((err) => {
+        }
+
+        try {
+          await db.close();
+        } catch (err) {
           api.logger.warn(`memory-hybrid: db close failed: ${String(err)}`);
-        });
+        }
+
         api.logger.info("memory-hybrid: stopped");
       },
     });

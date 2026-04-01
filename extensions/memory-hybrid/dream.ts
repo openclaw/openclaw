@@ -139,7 +139,8 @@ export class DreamService {
     });
 
     // Now safe to delete old profiles (new one is already persisted)
-    const oldProfiles = await this.db.getMemoriesByCategory(["preference"], 200);
+    // We fetch a larger amount (1000) instead of 200 to prevent old [EMPATHY PROFILE] memory leaks
+    const oldProfiles = await this.db.getMemoriesByCategory(["preference"], 1000);
     for (const m of oldProfiles) {
       if (
         m.text.startsWith("[EMPATHY PROFILE]") &&

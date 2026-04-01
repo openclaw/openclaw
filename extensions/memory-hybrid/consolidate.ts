@@ -161,18 +161,16 @@ export async function mergeFactsBatch(
   chatModel: ChatModel,
   priority = TaskPriority.LOW,
   logger?: Logger,
-): Promise<string[]> {
+): Promise<(string | null)[]> {
   if (clusters.length === 0) return [];
 
-  const results: string[] = [];
+  const results: (string | null)[] = [];
   if (logger) logger.info(`[memory-hybrid] Merging ${clusters.length} clusters...`);
 
   // If only one cluster, use the single mergeFacts function
   if (clusters.length === 1) {
     const merged = await mergeFacts(clusters[0], chatModel, priority);
-    if (merged) {
-      results.push(merged);
-    }
+    results.push(merged);
     return results;
   }
 
@@ -199,9 +197,7 @@ ${formattedClusters}`;
       .trim();
     const data = JSON.parse(cleanJson);
 
-    return Array.isArray(data)
-      ? data.filter((f: unknown): f is string => typeof f === "string")
-      : [];
+    return Array.isArray(data) ? data.map((f: unknown) => (typeof f === "string" ? f : null)) : [];
   } catch (error) {
     if (logger) {
       logger.warn(`[memory-hybrid][consolidate] mergeFactsBatch JSON parse failed: ${error}`);

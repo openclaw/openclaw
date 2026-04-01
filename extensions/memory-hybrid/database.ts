@@ -526,23 +526,21 @@ export class MemoryDB {
 
       const flushedIds: string[] = [];
 
-      // Use Promise.all to update in parallel for efficiency
-      await Promise.all(
-        existingRows.map(async (row) => {
-          const id = row.id;
-          const deltaTuple = entriesToFlush.find(([eid]) => eid === id);
-          const delta = deltaTuple ? deltaTuple[1] : 0;
-          if (delta <= 0) return;
+      // Use sequential updates to prevent LanceDB MVCC concurrent commit conflict
+      for (const row of existingRows) {
+        const id = row.id;
+        const deltaTuple = entriesToFlush.find(([eid]) => eid === id);
+        const delta = deltaTuple ? deltaTuple[1] : 0;
+        if (delta <= 0) continue;
 
-          const newCount = (row.recallCount ?? 0) + delta;
+        const newCount = (row.recallCount ?? 0) + delta;
 
-          await this.table!.update({
-            where: `id = '${id}'`,
-            values: { recallCount: newCount },
-          });
-          flushedIds.push(id);
-        }),
-      );
+        await this.table!.update({
+          where: `id = '${id}'`,
+          values: { recallCount: newCount },
+        });
+        flushedIds.push(id);
+      }
 
       // Successfully updated — carefully deduct snapshotted counts from deltas
       for (const [id, countAtStart] of entriesToFlush) {
