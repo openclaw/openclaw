@@ -11,6 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
@@ -39,6 +40,10 @@ vi.mock("../../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock("../../gateway/call.runtime.js", () => ({
+  callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
+}));
+
 vi.mock("../../logger.js", () => ({
   logWarn: vi.fn(),
   logError: vi.fn(),
@@ -57,6 +62,7 @@ vi.mock("./subagent-followup.js", () => ({
 
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import { callGateway } from "../../gateway/call.runtime.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
@@ -388,6 +394,33 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
+  });
+
+  it("cleans up the direct cron session after a silent reply when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    params.job.deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+      }),
+    );
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
