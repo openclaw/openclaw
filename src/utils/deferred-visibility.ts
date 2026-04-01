@@ -43,6 +43,12 @@ export function assertDeferredDisplayPayload<T extends DeferredDisplayPayload>(
       `Invalid ${context}: expected display visibility, got ${(payload as { visibility?: string }).visibility}`,
     );
   }
+  if (payload.visibility === "summary-only") {
+    if (!payload.summaryLine?.trim()) {
+      throw new Error(`Invalid ${context}: summary-only payload requires summaryLine`);
+    }
+    return payload;
+  }
   if (!hasDeferredDisplayContent(payload)) {
     throw new Error(`Invalid ${context}: missing text or summaryLine`);
   }

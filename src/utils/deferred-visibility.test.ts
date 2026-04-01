@@ -33,13 +33,22 @@ describe("deferred-visibility", () => {
     );
     expect(() =>
       assertDeferredDisplayPayload({ visibility: "summary-only", text: "  ", summaryLine: "" }),
-    ).toThrow(/missing text or summaryLine/);
+    ).toThrow(/summary-only payload requires summaryLine/);
     expect(() =>
       assertDeferredDisplayPayload({
         visibility: "internal",
         agentPrompt: "hidden",
       } as never),
     ).toThrow(/expected display visibility/);
+  });
+
+  it("requires summaryLine for summary-only payloads even if text exists", () => {
+    expect(() =>
+      assertDeferredDisplayPayload({
+        visibility: "summary-only",
+        text: "hidden but not render-safe",
+      }),
+    ).toThrow(/summary-only payload requires summaryLine/);
   });
 
   it("rejects non-user-visible payloads at the user-visible assertion boundary", () => {

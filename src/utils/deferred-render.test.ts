@@ -39,5 +39,11 @@ describe("deferred-render", () => {
         items: [{ visibility: "user-visible", text: "   " }],
       }),
     ).toThrow(/renderable deferred item #1/);
+    expect(() =>
+      renderDeferredBatch({
+        title: "[Queued messages while agent was busy]",
+        items: [{ visibility: "summary-only", text: "hidden without summary" }],
+      }),
+    ).toThrow(/summary-only payload requires summaryLine/);
   });
 });

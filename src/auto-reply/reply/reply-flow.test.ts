@@ -1431,6 +1431,114 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.execution.agentPrompt).toBe("internal two");
   });
 
+  it("preserves non-display runs when collect queues mix display and hidden items", async () => {
+    const key = `test-collect-mixed-display-fallback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "internal one", displayText: "visible one" }),
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "internal two" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.execution.agentPrompt).toBe("internal one");
+    expect(calls[1]?.execution.agentPrompt).toBe("internal two");
+  });
+
+  it("preserves collect overflow summaries when falling back to individual drain", async () => {
+    const key = `test-collect-summary-fallback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first hidden item" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second hidden item" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
+    expect(calls[0]?.execution.agentPrompt).toContain("- first hidden item");
+    expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
+  });
+
+  it("does not retry already-run collect fallback items after a later failure", async () => {
+    const key = `test-collect-fallback-progress-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    let attempt = 0;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      attempt += 1;
+      if (attempt === 2) {
+        throw new Error("boom");
+      }
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first hidden item" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second hidden item" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(calls.map((call) => call.execution.agentPrompt)).toEqual([
+      "first hidden item",
+      "second hidden item",
+    ]);
+
+    const done = createDeferred<void>();
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls.map((call) => call.execution.agentPrompt)).toEqual([
+      "first hidden item",
+      "second hidden item",
+      "second hidden item",
+    ]);
+  });
+
   it("retries collect-mode batches without losing queued items", async () => {
     const key = `test-collect-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1491,7 +1599,9 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.execution.agentPrompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
     expect(calls[0]?.execution.agentPrompt).toContain("- first");
   });
 
@@ -1540,7 +1650,9 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:C1");
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
-    expect(calls[0]?.execution.agentPrompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
   });
 });
 
