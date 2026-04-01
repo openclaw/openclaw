@@ -1,10 +1,14 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
+  isInterSessionInputProvenance,
 } from "../sessions/input-provenance.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+
+const log = createSubsystemLogger("agents/isolation-audit");
 
 export type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
@@ -29,6 +33,16 @@ export function guardSessionManager(
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
     return sessionManager as GuardedSessionManager;
+  }
+
+  // Audit: log inter-session message delivery for isolation observability
+  if (opts?.inputProvenance && isInterSessionInputProvenance(opts.inputProvenance)) {
+    log.info("inter_session_delivery", {
+      from: opts.inputProvenance.sourceSessionKey,
+      to: opts?.sessionKey,
+      channel: opts.inputProvenance.sourceChannel,
+      tool: opts.inputProvenance.sourceTool,
+    });
   }
 
   const hookRunner = getGlobalHookRunner();
