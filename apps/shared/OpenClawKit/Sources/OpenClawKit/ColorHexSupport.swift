@@ -1,5 +1,8 @@
 import SwiftUI
+
+#if os(macOS)
 import AppKit
+#endif
 
 public enum ColorHexSupport {
     public static func color(fromHex hex: String) -> Color? {
@@ -48,6 +51,7 @@ public enum ColorHexSupport {
         #endif
     }
 
+    #if os(macOS)
     public static func contrastingTextColor(for backgroundColor: Color) -> Color {
         let nsColor = NSColor(backgroundColor)
         guard let rgbColor = nsColor.usingColorSpace(.deviceRGB) else {
@@ -67,4 +71,5 @@ public enum ColorHexSupport {
 
         return luminance > 0.5 ? Color.black : Color.white
     }
+    #endif
 }
