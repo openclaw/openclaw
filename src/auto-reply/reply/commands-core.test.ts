@@ -4,6 +4,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const fsMocks = vi.hoisted(() => ({
   readFile: vi.fn(),
+  readdir: vi.fn(),
 }));
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const hookRunnerMocks = vi.hoisted(() => ({
 vi.mock("node:fs/promises", () => ({
   default: {
     readFile: fsMocks.readFile,
+    readdir: fsMocks.readdir,
   },
 }));
 
@@ -57,11 +59,13 @@ describe("emitResetCommandHooks", () => {
 
   beforeEach(() => {
     fsMocks.readFile.mockReset();
+    fsMocks.readdir.mockReset();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
     fsMocks.readFile.mockResolvedValue("");
+    fsMocks.readdir.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -98,8 +102,16 @@ describe("emitResetCommandHooks", () => {
     });
   });
 
-  it("still fires before_reset when the original transcript path has already been archived", async () => {
+  it("recovers the archived transcript when the original reset transcript path is gone", async () => {
     fsMocks.readFile.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    fsMocks.readdir.mockResolvedValueOnce(["prev-session.jsonl.reset.2026-02-16T22-26-33.000Z"]);
+    fsMocks.readFile.mockResolvedValueOnce(
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "Recovered from archive" },
+      })}\n`,
+    );
     const command = {
       surface: "telegram",
       senderId: "vac",
@@ -125,8 +137,8 @@ describe("emitResetCommandHooks", () => {
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
     expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFile: "/tmp/prev-session.jsonl",
-        messages: [],
+        sessionFile: "/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z",
+        messages: [{ role: "user", content: "Recovered from archive" }],
         reason: "new",
       }),
       expect.objectContaining({
