@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDiskSpaceWarnings,
+  findExistingAncestor,
   formatBytes,
   getAvailableBytes,
   noteDiskSpace,
@@ -44,12 +45,33 @@ describe("formatBytes", () => {
   });
 });
 
+describe("findExistingAncestor", () => {
+  it("returns the path itself when it exists", () => {
+    const result = findExistingAncestor("/tmp");
+    expect(result).toBe("/tmp");
+  });
+
+  it("returns parent when child does not exist", () => {
+    const result = findExistingAncestor("/tmp/nonexistent-openclaw-test-dir-12345");
+    expect(result).toBe("/tmp");
+  });
+
+  it("walks up multiple levels", () => {
+    const result = findExistingAncestor("/tmp/nonexistent-a/nonexistent-b/nonexistent-c");
+    expect(result).toBe("/tmp");
+  });
+
+  it("returns root for deeply nonexistent paths", () => {
+    const result = findExistingAncestor("/nonexistent-openclaw-root-test/deep/path");
+    expect(result).toBe("/");
+  });
+});
+
 describe("getAvailableBytes", () => {
   it("returns available bytes from statfsSync", () => {
     const mockStatfs = vi.fn().mockReturnValue({ bavail: 1000n, bsize: 4096n });
     const result = getAvailableBytes("/some/path", { statfsSync: mockStatfs });
     expect(result).toBe(4096000);
-    expect(mockStatfs).toHaveBeenCalledWith("/some/path");
   });
 
   it("returns null when statfsSync throws", () => {
@@ -58,6 +80,16 @@ describe("getAvailableBytes", () => {
     });
     const result = getAvailableBytes("/missing/path", { statfsSync: mockStatfs });
     expect(result).toBeNull();
+  });
+
+  it("probes ancestor when target dir does not exist", () => {
+    const mockStatfs = vi.fn().mockReturnValue({ bavail: 500n, bsize: 4096n });
+    const result = getAvailableBytes("/tmp/nonexistent-openclaw-test-dir-67890", {
+      statfsSync: mockStatfs,
+    });
+    expect(result).toBe(2048000);
+    // Should have been called with /tmp (the existing ancestor), not the nonexistent path
+    expect(mockStatfs).toHaveBeenCalledWith("/tmp");
   });
 });
 
