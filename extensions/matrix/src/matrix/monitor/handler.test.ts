@@ -303,14 +303,17 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("accepts room messages from configured Matrix bot accounts when allowBots is true", async () => {
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
+      configuredBotAccountIdsByUserId: new Map([["@ops:example.org", "ops"]]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
       },
       getMemberDisplayName: async () => "ops-bot",
+      finalizeInboundContext,
     });
 
     await handler(
@@ -323,6 +326,11 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).toHaveBeenCalled();
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderManagedAccountId: "ops",
+      }),
+    );
   });
 
   it("does not treat unconfigured Matrix users as bots when allowBots is off", async () => {

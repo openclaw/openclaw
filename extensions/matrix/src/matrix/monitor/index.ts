@@ -10,7 +10,11 @@ import {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
-import { resolveConfiguredMatrixBotUserIds, resolveMatrixAccount } from "../accounts.js";
+import {
+  resolveConfiguredMatrixBotAccountIdsByUserId,
+  resolveConfiguredMatrixBotUserIds,
+  resolveMatrixAccount,
+} from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
@@ -92,6 +96,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
   let needsRoomAliasesForConfig = false;
   const configuredBotUserIds = resolveConfiguredMatrixBotUserIds({
+    cfg,
+    accountId: effectiveAccountId,
+  });
+  const configuredBotAccountIdsByUserId = resolveConfiguredMatrixBotAccountIdsByUserId({
     cfg,
     accountId: effectiveAccountId,
   });
@@ -260,6 +268,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds,
+    configuredBotAccountIdsByUserId,
     groupPolicy,
     replyToMode,
     threadReplies,

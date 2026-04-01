@@ -21,6 +21,7 @@ import {
   toInternalMessageReceivedContext,
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
+  withResolvedInboundSenderAgentId,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -233,7 +234,10 @@ export async function dispatchReplyFromConfig(params: {
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
+  const hookContext = withResolvedInboundSenderAgentId(
+    deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook }),
+    cfg,
+  );
   const { isGroup, groupId } = hookContext;
   const inboundClaimContext = toPluginInboundClaimContext(hookContext);
   const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {

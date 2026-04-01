@@ -40,7 +40,10 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordAccount } from "../accounts.js";
+import {
+  rememberDiscordManagedBotIdentity,
+  resolveDiscordAccount,
+} from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -966,6 +969,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           gateway: lifecycleGateway,
           details,
         }),
+    });
+    rememberDiscordManagedBotIdentity({
+      accountId: account.accountId,
+      botUserId,
     });
     let voiceManager: DiscordVoiceManager | null = null;
 

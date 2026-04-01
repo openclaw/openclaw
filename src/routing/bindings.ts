@@ -112,3 +112,30 @@ export function resolvePreferredAccountId(params: {
   }
   return params.defaultAccountId;
 }
+
+export function resolveBoundAgentIdForChannelAccount(
+  cfg: OpenClawConfig,
+  channelId: string,
+  accountId?: string | null,
+): string | null {
+  const normalizedChannel = normalizeBindingChannelId(channelId);
+  if (!normalizedChannel) {
+    return null;
+  }
+  const normalizedAccountId = normalizeAccountId(accountId);
+  if (!normalizedAccountId) {
+    return null;
+  }
+  for (const binding of listBindings(cfg)) {
+    const resolved = resolveNormalizedBindingMatch(binding);
+    if (
+      !resolved ||
+      resolved.channelId !== normalizedChannel ||
+      resolved.accountId !== normalizedAccountId
+    ) {
+      continue;
+    }
+    return resolved.agentId;
+  }
+  return null;
+}

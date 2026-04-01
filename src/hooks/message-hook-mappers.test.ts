@@ -13,6 +13,7 @@ import {
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
   toPluginMessageSentEvent,
+  withResolvedInboundSenderAgentId,
 } from "./message-hook-mappers.js";
 
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
@@ -125,6 +126,35 @@ describe("message hook mappers", () => {
         senderE164: "+15551234567",
       }),
     });
+  });
+
+  it("resolves senderAgentId from senderManagedAccountId using bindings", () => {
+    const cfg = {
+      bindings: [{ agentId: "ops-agent", match: { channel: "telegram", accountId: "ops" } }],
+    } as OpenClawConfig;
+    const canonical = withResolvedInboundSenderAgentId(
+      deriveInboundMessageHookContext(
+        makeInboundCtx({
+          SenderManagedAccountId: "ops",
+        }),
+      ),
+      cfg,
+    );
+
+    expect(toPluginMessageReceivedEvent(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          senderAgentId: "ops-agent",
+        }),
+      }),
+    );
+    expect(toInternalMessageReceivedContext(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          senderAgentId: "ops-agent",
+        }),
+      }),
+    );
   });
 
   it("normalizes Discord channel targets for inbound claim contexts", () => {

@@ -2222,6 +2222,51 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("emits senderAgentId when inbound sender maps to a managed account binding", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const cfg = {
+      bindings: [{ agentId: "ops-agent", match: { channel: "telegram", accountId: "ops" } }],
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:ops-agent:thread-1",
+      AccountId: "default",
+      SenderId: "user-1",
+      SenderManagedAccountId: "ops",
+      MessageSid: "msg-managed-1",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          senderAgentId: "ops-agent",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      expect.any(String),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          senderAgentId: "ops-agent",
+        }),
+      }),
+    );
+  });
+
   it("does not broadcast inbound claims without a core-owned plugin binding", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(

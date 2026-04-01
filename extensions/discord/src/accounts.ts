@@ -21,6 +21,8 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("di
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
+const discordManagedAccountIdByBotUserId = new Map<string, string>();
+
 export function resolveDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -91,3 +93,31 @@ export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscord
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
 }
+
+export function rememberDiscordManagedBotIdentity(params: {
+  accountId?: string | null;
+  botUserId?: string | null;
+}) {
+  const accountId = normalizeAccountId(params.accountId);
+  const botUserId = params.botUserId?.trim();
+  if (!accountId || !botUserId) {
+    return;
+  }
+  discordManagedAccountIdByBotUserId.set(botUserId, accountId);
+}
+
+export function resolveDiscordManagedAccountIdByBotUserId(
+  botUserId?: string | null,
+): string | undefined {
+  const normalizedBotUserId = botUserId?.trim();
+  if (!normalizedBotUserId) {
+    return undefined;
+  }
+  return discordManagedAccountIdByBotUserId.get(normalizedBotUserId);
+}
+
+export const __testing = {
+  resetManagedBotIdentityMap() {
+    discordManagedAccountIdByBotUserId.clear();
+  },
+};

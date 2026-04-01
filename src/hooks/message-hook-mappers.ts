@@ -1,5 +1,6 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveBoundAgentIdForChannelAccount } from "../routing/bindings.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -28,6 +29,8 @@ export type CanonicalInboundMessageHookContext = {
   messageId?: string;
   senderId?: string;
   senderName?: string;
+  senderManagedAccountId?: string;
+  senderAgentId?: string;
   senderUsername?: string;
   senderE164?: string;
   provider?: string;
@@ -109,6 +112,7 @@ export function deriveInboundMessageHookContext(
       ctx.MessageSidLast,
     senderId: ctx.SenderId,
     senderName: ctx.SenderName,
+    senderManagedAccountId: ctx.SenderManagedAccountId,
     senderUsername: ctx.SenderUsername,
     senderE164: ctx.SenderE164,
     provider: ctx.Provider,
@@ -125,6 +129,21 @@ export function deriveInboundMessageHookContext(
     isGroup,
     groupId: isGroup ? conversationId : undefined,
   };
+}
+
+export function withResolvedInboundSenderAgentId(
+  canonical: CanonicalInboundMessageHookContext,
+  cfg: OpenClawConfig,
+): CanonicalInboundMessageHookContext {
+  if (canonical.senderAgentId) {
+    return canonical;
+  }
+  const senderAgentId = resolveBoundAgentIdForChannelAccount(
+    cfg,
+    canonical.channelId,
+    canonical.senderManagedAccountId,
+  );
+  return senderAgentId ? { ...canonical, senderAgentId } : canonical;
 }
 
 export function buildCanonicalSentMessageHookContext(params: {
@@ -311,6 +330,7 @@ export function toPluginMessageReceivedEvent(
       originatingTo: canonical.originatingTo,
       messageId: canonical.messageId,
       senderId: canonical.senderId,
+      senderAgentId: canonical.senderAgentId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
@@ -348,6 +368,7 @@ export function toInternalMessageReceivedContext(
       surface: canonical.surface,
       threadId: canonical.threadId,
       senderId: canonical.senderId,
+      senderAgentId: canonical.senderAgentId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,

@@ -81,6 +81,8 @@ let createBaseDiscordMessageContext: typeof import("./message-handler.test-harne
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
 let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
+let discordAccountTesting: typeof import("../accounts.js").__testing;
+let rememberDiscordManagedBotIdentity: typeof import("../accounts.js").rememberDiscordManagedBotIdentity;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 
 const sendModule = await import("../send.js");
@@ -204,6 +206,8 @@ beforeAll(async () => {
   vi.useRealTimers();
   ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
     await import("./message-handler.test-harness.js"));
+  ({ __testing: discordAccountTesting, rememberDiscordManagedBotIdentity } =
+    await import("../accounts.js"));
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
@@ -224,6 +228,7 @@ beforeEach(() => {
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+  discordAccountTesting.resetManagedBotIdentityMap();
   threadBindingTesting.resetThreadBindingsForTests();
 });
 
@@ -245,11 +250,21 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      SenderManagedAccountId?: string;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          SenderManagedAccountId?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -289,6 +304,34 @@ function expectSinglePreviewEdit() {
 }
 
 describe("processDiscordMessage ack reactions", () => {
+  it("adds SenderManagedAccountId when the sender is another configured Discord bot", async () => {
+    rememberDiscordManagedBotIdentity({
+      accountId: "ops",
+      botUserId: "bot-peer",
+    });
+    const ctx = await createBaseContext({
+      author: {
+        id: "bot-peer",
+        username: "ops-bot",
+        discriminator: "0",
+        globalName: "Ops Bot",
+      },
+      sender: {
+        id: "bot-peer",
+        label: "ops-bot",
+        name: "Ops Bot",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchCtx()).toEqual(
+      expect.objectContaining({
+        SenderManagedAccountId: "ops",
+      }),
+    );
+  });
+
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,

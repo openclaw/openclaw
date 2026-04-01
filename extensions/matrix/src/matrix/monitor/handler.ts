@@ -78,6 +78,7 @@ export type MatrixMonitorHandlerParams = {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: ReadonlySet<string>;
+  configuredBotAccountIdsByUserId?: ReadonlyMap<string, string>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -196,6 +197,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds = new Set<string>(),
+    configuredBotAccountIdsByUserId = new Map<string, string>(),
     groupPolicy,
     replyToMode,
     threadReplies,
@@ -422,7 +424,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             })
           : undefined;
         const roomConfig = roomConfigInfo?.config;
-        const allowBotsMode = resolveMatrixAllowBotsMode(roomConfig?.allowBots ?? accountAllowBots);
+        const allowBotsMode = resolveMatrixAllowBotsMode(
+          roomConfig?.allowBots ?? accountAllowBots,
+        );
         const isConfiguredBotSender = configuredBotUserIds.has(senderId);
         const roomMatchMeta = roomConfigInfo
           ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
@@ -991,6 +995,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         body: textWithId,
       });
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
+      const senderManagedAccountId = configuredBotAccountIdsByUserId.get(senderId);
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
         RawBody: bodyText,
@@ -1003,6 +1008,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ChatType: isDirectMessage ? "direct" : "channel",
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
+        SenderManagedAccountId: senderManagedAccountId,
         SenderId: senderId,
         SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,

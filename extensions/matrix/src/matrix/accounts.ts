@@ -59,13 +59,21 @@ export function resolveConfiguredMatrixBotUserIds(params: {
   accountId?: string | null;
   env?: NodeJS.ProcessEnv;
 }): Set<string> {
+  return new Set(resolveConfiguredMatrixBotAccountIdsByUserId(params).keys());
+}
+
+export function resolveConfiguredMatrixBotAccountIdsByUserId(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Map<string, string> {
   const env = params.env ?? process.env;
   const currentAccountId = normalizeAccountId(params.accountId);
   const accountIds = new Set(resolveConfiguredMatrixAccountIds(params.cfg, env));
   if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID, env }).configured) {
     accountIds.add(DEFAULT_ACCOUNT_ID);
   }
-  const ids = new Set<string>();
+  const accountIdByUserId = new Map<string, string>();
 
   for (const accountId of accountIds) {
     if (normalizeAccountId(accountId) === currentAccountId) {
@@ -80,11 +88,11 @@ export function resolveConfiguredMatrixBotUserIds(params: {
       env,
     });
     if (userId) {
-      ids.add(userId);
+      accountIdByUserId.set(userId, normalizeAccountId(accountId));
     }
   }
 
-  return ids;
+  return accountIdByUserId;
 }
 
 export function resolveMatrixAccount(params: {
