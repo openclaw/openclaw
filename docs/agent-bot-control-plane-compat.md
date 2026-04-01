@@ -20,6 +20,20 @@ existing `agent-bot-task-a` architecture:
 - `iq/openclaw` becomes the runtime plane
 - `control ui` is intentionally left unchanged
 
+## Terminology (aligned with control plane docs)
+
+Canonical Chinese + API mapping lives in `agent-bot-task-a` at
+`docs/02-基座平台规划.md` section **七、术语表**. Short English summary:
+
+| Term                                | Meaning                                                                                                                                                                                                  |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Training candidate**              | `releaseStage: candidate` — training/workbench mapping only, not end-user serving.                                                                                                                       |
+| **Submit for review**               | `POST /api/portal/training/runs/:trainingRunId/publish` on the base — starts review flow, **not** production serving.                                                                                    |
+| **Release to production / serving** | Base `POST /api/agent-versions/:id/publish` (primary); portal may call `POST /api/portal/agents/:agentId/publish` for serving sync. End-user chat uses **serving** (`mode=chat`, `released` + deployed). |
+| **Runtime health**                  | Base `GET /api/portal/instances/:id/runtime-context` (forwards to `GET /__control-plane/runtime-context` here).                                                                                          |
+
+Cross-repo smoke script (read-only by default): in `agent-bot-task-a`, `npm run verify:cross-plane -- --help`.
+
 ## How To Run
 
 From `/Users/lidongdong/iq/openclaw`:
@@ -206,8 +220,8 @@ After upgrading upstream, validate this exact flow:
 3. `POST /__control-plane/skills/snapshot/apply`
 4. `POST /__control-plane/agents/sync`
 5. create a portal session
-6. send one serving message
-7. send one training message that triggers approval
+6. send one **serving** (`chat` mode) message
+7. send one **training** message that triggers approval
 8. resolve the approval from the base
 
 If these pass, the current `agent-bot-task-a` integration should still work.
