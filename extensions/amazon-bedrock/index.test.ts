@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { buildPluginApi } from "../../src/plugins/api-builder.js";
 import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
