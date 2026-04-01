@@ -391,6 +391,11 @@ export async function buildActivity(
     ];
   }
 
+  // Thread targeting: set replyToId so proactive sends land in the correct thread.
+  if (conversationRef.replyToId) {
+    activity.replyToId = conversationRef.replyToId;
+  }
+
   return activity;
 }
 

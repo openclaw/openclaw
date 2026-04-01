@@ -555,4 +555,29 @@ describe("msteams messenger", () => {
       expect(channelData.feedbackLoopEnabled).toBe(false);
     });
   });
+
+  describe("buildActivity replyToId thread targeting", () => {
+    const baseRef: StoredConversationReference = {
+      conversation: { id: "19:abc@thread.tacv2", conversationType: "channel" },
+      serviceUrl: "https://smba.trafficmanager.net/teams/",
+      channelId: "msteams",
+    };
+
+    it("sets activity.replyToId when conversationRef has replyToId", async () => {
+      const ref: StoredConversationReference = { ...baseRef, replyToId: "1234567890" };
+      const activity = await buildActivity({ text: "hello" }, ref);
+      expect(activity.replyToId).toBe("1234567890");
+    });
+
+    it("does not set activity.replyToId when conversationRef has no replyToId", async () => {
+      const activity = await buildActivity({ text: "hello" }, baseRef);
+      expect(activity.replyToId).toBeUndefined();
+    });
+
+    it("does not set activity.replyToId when replyToId is empty string", async () => {
+      const ref: StoredConversationReference = { ...baseRef, replyToId: "" };
+      const activity = await buildActivity({ text: "hello" }, ref);
+      expect(activity.replyToId).toBeUndefined();
+    });
+  });
 });
