@@ -382,7 +382,7 @@ describe("legacy config detection", () => {
       expect(res.ok, provider).toBe(true);
       if (res.ok) {
         const channel = getChannelConfig(res.config, provider);
-        expect(channel?.dmPolicy, provider).toBe("pairing");
+        expect(channel?.dmPolicy, provider).toBe(provider === "whatsapp" ? "silent" : "pairing");
         expect(channel?.groupPolicy, provider).toBe("allowlist");
         if (provider === "telegram") {
           expect(channel?.streaming, provider).toBe("partial");

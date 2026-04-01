@@ -363,7 +363,10 @@ async function processMessage(
     config,
   );
   const storeAllowFrom =
-    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeCommandAuth)
+    !isGroup &&
+    dmPolicy !== "allowlist" &&
+    dmPolicy !== "silent" &&
+    (dmPolicy !== "open" || shouldComputeCommandAuth)
       ? await pairing.readAllowFromStore().catch(() => [])
       : [];
   const accessDecision = resolveDmGroupAccessWithLists({

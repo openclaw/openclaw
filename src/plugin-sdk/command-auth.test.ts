@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSenderCommandAuthorization } from "./command-auth.js";
 
@@ -51,5 +51,28 @@ describe("plugin-sdk/command-auth", () => {
       expect(result.effectiveAllowFrom).toEqual(["dm-owner"]);
       expect(result.effectiveGroupAllowFrom).toEqual(["group-owner"]);
     }
+  });
+
+  it("keeps silent DMs strict without pairing-store fallback", async () => {
+    const readAllowFromStore = vi.fn(async () => ["paired-user"]);
+
+    const result = await resolveSenderCommandAuthorization({
+      cfg: baseCfg,
+      rawBody: "/status",
+      isGroup: false,
+      dmPolicy: "silent",
+      configuredAllowFrom: ["dm-owner"],
+      senderId: "paired-user",
+      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      readAllowFromStore,
+      shouldComputeCommandAuthorized: () => true,
+      resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
+        useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+    });
+
+    expect(readAllowFromStore).not.toHaveBeenCalled();
+    expect(result.effectiveAllowFrom).toEqual(["dm-owner"]);
+    expect(result.senderAllowedForCommands).toBe(false);
+    expect(result.commandAuthorized).toBe(false);
   });
 });

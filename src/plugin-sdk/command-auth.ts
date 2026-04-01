@@ -161,6 +161,7 @@ export async function resolveSenderCommandAuthorization(
   const storeAllowFrom =
     !params.isGroup &&
     params.dmPolicy !== "allowlist" &&
+    params.dmPolicy !== "silent" &&
     (params.dmPolicy !== "open" || shouldComputeAuth)
       ? await params.readAllowFromStore().catch(() => [])
       : [];

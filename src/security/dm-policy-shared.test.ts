@@ -330,7 +330,7 @@ describe("security/dm-policy-shared", () => {
   type ParityCase = {
     name: string;
     isGroup: boolean;
-    dmPolicy: "open" | "allowlist" | "pairing" | "disabled";
+    dmPolicy: "open" | "allowlist" | "pairing" | "disabled" | "silent";
     groupPolicy: "open" | "allowlist" | "disabled";
     allowFrom: string[];
     groupAllowFrom: string[];
@@ -396,6 +396,12 @@ describe("security/dm-policy-shared", () => {
         createParityCase({
           name: "dmPolicy=disabled",
           dmPolicy: "disabled",
+          expectedDecision: "block",
+          expectedReactionAllowed: false,
+        }),
+        createParityCase({
+          name: "dmPolicy=silent",
+          dmPolicy: "silent",
           expectedDecision: "block",
           expectedReactionAllowed: false,
         }),

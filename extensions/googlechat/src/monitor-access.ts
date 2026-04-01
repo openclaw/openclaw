@@ -280,7 +280,10 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
-    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
+    !isGroup &&
+    dmPolicy !== "allowlist" &&
+    dmPolicy !== "silent" &&
+    (dmPolicy !== "open" || shouldComputeAuth)
       ? await pairing.readAllowFromStore().catch(() => [])
       : [];
   const access = resolveDmGroupAccessWithLists({

@@ -88,6 +88,7 @@ describe("web monitor inbox", () => {
       channels: {
         whatsapp: {
           // Only allow +111
+          dmPolicy: "pairing",
           allowFrom: ["+111"],
         },
       },

@@ -397,7 +397,11 @@ export async function handleFeishuMessage(params: {
       })
     : null;
   const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
+  const dmPolicy = (feishuCfg?.dmPolicy ?? "pairing") as
+    | "open"
+    | "pairing"
+    | "allowlist"
+    | "silent";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const rawBroadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
@@ -511,6 +515,7 @@ export async function handleFeishuMessage(params: {
     const storeAllowFrom =
       !isGroup &&
       dmPolicy !== "allowlist" &&
+      dmPolicy !== "silent" &&
       (dmPolicy !== "open" || shouldComputeCommandAuthorized)
         ? await pairing.readAllowFromStore().catch(() => [])
         : [];

@@ -78,7 +78,11 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
     commentId: turn.commentId,
   });
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
+  const dmPolicy = (feishuCfg?.dmPolicy ?? "pairing") as
+    | "open"
+    | "pairing"
+    | "allowlist"
+    | "silent";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const pairing = createChannelPairingController({
     core,
@@ -86,7 +90,7 @@ export async function handleFeishuCommentEvent(
     accountId: account.accountId,
   });
   const storeAllowFrom =
-    dmPolicy !== "allowlist" && dmPolicy !== "open"
+    dmPolicy !== "allowlist" && dmPolicy !== "silent" && dmPolicy !== "open"
       ? await pairing.readAllowFromStore().catch(() => [])
       : [];
   const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
