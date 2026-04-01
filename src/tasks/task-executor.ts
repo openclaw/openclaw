@@ -534,6 +534,56 @@ export function runTaskInFlow(params: {
   };
 }
 
+export function runTaskInFlowForOwner(params: {
+  flowId: string;
+  callerOwnerKey: string;
+  runtime: TaskRuntime;
+  sourceId?: string;
+  childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
+  runId?: string;
+  label?: string;
+  task: string;
+  preferMetadata?: boolean;
+  notifyPolicy?: TaskNotifyPolicy;
+  deliveryStatus?: TaskDeliveryStatus;
+  status?: "queued" | "running";
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+}): RunTaskInFlowResult {
+  const flow = getFlowByIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.callerOwnerKey,
+  });
+  if (!flow) {
+    return {
+      found: false,
+      created: false,
+      reason: "Flow not found.",
+    };
+  }
+  return runTaskInFlow({
+    flowId: flow.flowId,
+    runtime: params.runtime,
+    sourceId: params.sourceId,
+    childSessionKey: params.childSessionKey,
+    parentTaskId: params.parentTaskId,
+    agentId: params.agentId,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
+    preferMetadata: params.preferMetadata,
+    notifyPolicy: params.notifyPolicy,
+    deliveryStatus: params.deliveryStatus,
+    status: params.status,
+    startedAt: params.startedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+  });
+}
+
 export async function cancelFlowById(params: {
   cfg: OpenClawConfig;
   flowId: string;

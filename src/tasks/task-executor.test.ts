@@ -17,6 +17,7 @@ import {
   recordTaskRunProgressByRunId,
   retryBlockedFlowAsQueuedTaskRun,
   runTaskInFlow,
+  runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
@@ -487,6 +488,32 @@ describe("task-executor", () => {
         flowId: flow.flowId,
         status: "queued",
       });
+    });
+  });
+
+  it("denies cross-owner managed flow child spawning through the owner-scoped wrapper", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+
+      const created = runTaskInFlowForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:other",
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-cross-owner",
+        task: "Should be denied",
+      });
+
+      expect(created).toMatchObject({
+        found: false,
+        created: false,
+        reason: "Flow not found.",
+      });
+      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
     });
   });
 

@@ -109,6 +109,12 @@ function assertParentFlowLinkAllowed(params: {
   if (normalizeOwnerKey(flow.ownerKey) !== normalizeOwnerKey(params.ownerKey)) {
     throw new Error("Task ownerKey must match parent flow ownerKey.");
   }
+  if (flow.cancelRequestedAt != null) {
+    throw new Error("Parent flow cancellation has already been requested.");
+  }
+  if (isTerminalFlowStatus(flow.status)) {
+    throw new Error(`Parent flow is already ${flow.status}.`);
+  }
 }
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
