@@ -264,6 +264,15 @@ describe("retryAsync", () => {
     expect(delays[0]).toBe(500);
   });
 
+  it("parses retry-after-ms key hints in rate-limit style messages as milliseconds", async () => {
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 5000,
+      error: new Error("rate limited, retry-after-ms=500"),
+    });
+    expect(delays[0]).toBe(500);
+  });
+
   it("parses fractional second retry after hints in rate-limit style messages", async () => {
     const delays = await runRetryAfterCase({
       minDelayMs: 0,

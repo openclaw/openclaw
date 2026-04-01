@@ -31,7 +31,7 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 const RATE_LIMIT_RETRY_AFTER_RE =
-  /retry[- ]after[^\d]*(\d+(?:\.\d+)?)\s*(milliseconds?|msecs?|ms|seconds?|secs?|s)?/i;
+  /retry[- ]after(?:[- _]?(ms|milliseconds?|msecs?|s|seconds?|secs?))?[^\d]*(\d+(?:\.\d+)?)\s*(milliseconds?|msecs?|ms|seconds?|secs?|s)?/i;
 const RATE_LIMIT_MESSAGE_RE =
   /\b(?:429|too many requests|rate[_ -]?limit(?:ed)?|throttl(?:ed|ing)|resource exhausted)\b/i;
 
@@ -139,9 +139,9 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const retryAfterMatch = RATE_LIMIT_RETRY_AFTER_RE.exec(message);
   if (retryAfterMatch) {
-    const amount = Number(retryAfterMatch[1]);
+    const amount = Number(retryAfterMatch[2]);
     if (Number.isFinite(amount)) {
-      const unit = retryAfterMatch[2]?.toLowerCase();
+      const unit = (retryAfterMatch[3] ?? retryAfterMatch[1])?.toLowerCase();
       if (!unit || unit.startsWith("s")) {
         return Math.max(0, Math.round(amount * 1000));
       }
