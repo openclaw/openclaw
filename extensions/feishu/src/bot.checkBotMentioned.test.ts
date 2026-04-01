@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { checkBotMentioned } from "./bot-content.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 
 // Helper to build a minimal FeishuMessageEvent for testing
@@ -189,5 +190,26 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
+  });
+
+  it("returns mentionedBot=false for @_all when respondToAtAll defaults to false", () => {
+    const event = makeEvent("group", [], "@_all hello");
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("checkBotMentioned returns true for @_all when respondToAtAll is true", () => {
+    const event = makeEvent("group", [], "@_all hello");
+    expect(checkBotMentioned(event, BOT_OPEN_ID, true)).toBe(true);
+  });
+
+  it("checkBotMentioned returns false for @_all when respondToAtAll is false", () => {
+    const event = makeEvent("group", [], "@_all hello");
+    expect(checkBotMentioned(event, BOT_OPEN_ID, false)).toBe(false);
+  });
+
+  it("checkBotMentioned returns false for @_all when botOpenId is undefined", () => {
+    const event = makeEvent("group", [], "@_all hello");
+    expect(checkBotMentioned(event, undefined, true)).toBe(false);
   });
 });

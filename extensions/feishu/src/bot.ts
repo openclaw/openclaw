@@ -464,13 +464,21 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    ({ requireMention } = resolveFeishuReplyPolicy({
+    let respondToAtAll: boolean;
+    ({ requireMention, respondToAtAll } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
       cfg,
       accountId: account.accountId,
       groupId: ctx.chatId,
       groupPolicy,
     }));
+
+    // Re-evaluate mentionedBot with respondToAtAll config taken into account.
+    // parseFeishuMessageEvent uses the safe default (respondToAtAll=false),
+    // so @_all is only treated as a bot mention when the config opts in.
+    if (respondToAtAll && !ctx.mentionedBot) {
+      ctx.mentionedBot = checkBotMentioned(event, botOpenId, true);
+    }
 
     if (requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);

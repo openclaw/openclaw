@@ -228,11 +228,15 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   return lines.join("\n");
 }
 
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
+export function checkBotMentioned(
+  event: FeishuMessageLike,
+  botOpenId?: string,
+  respondToAtAll = false,
+): boolean {
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
+  if (respondToAtAll && (event.message.content ?? "").includes("@_all")) {
     return true;
   }
   const mentions = event.message.mentions ?? [];

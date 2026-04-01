@@ -119,9 +119,9 @@ export function resolveFeishuReplyPolicy(params: {
    * @-mentions are still delivered to the agent.
    */
   groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
-}): { requireMention: boolean } {
+}): { requireMention: boolean; respondToAtAll: boolean } {
   if (params.isDirectMessage) {
-    return { requireMention: false };
+    return { requireMention: false, respondToAtAll: false };
   }
 
   const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
@@ -132,10 +132,13 @@ export function resolveFeishuReplyPolicy(params: {
     normalizeAccountId,
     omitKeys: ["defaultAccount"],
   });
-  const groupRequireMention = resolveFeishuGroupConfig({
+  const groupConfig = resolveFeishuGroupConfig({
     cfg: resolvedCfg,
     groupId: params.groupId,
-  })?.requireMention;
+  });
+  const groupRequireMention = groupConfig?.requireMention;
+
+  const groupRespondToAtAll = groupConfig?.respondToAtAll;
 
   return {
     requireMention:
@@ -146,5 +149,11 @@ export function resolveFeishuReplyPolicy(params: {
           : params.groupPolicy === "open"
             ? false
             : true,
+    respondToAtAll:
+      typeof groupRespondToAtAll === "boolean"
+        ? groupRespondToAtAll
+        : typeof resolvedCfg.respondToAtAll === "boolean"
+          ? resolvedCfg.respondToAtAll
+          : false,
   };
 }
