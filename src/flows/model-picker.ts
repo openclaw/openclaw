@@ -231,9 +231,12 @@ async function maybeFilterModelsByProvider(params: {
     }
   }
   if (hasPreferredProvider && params.preferredProvider) {
-    next = next.filter((entry) =>
+    const filtered = next.filter((entry) =>
       matchesPreferredProvider(entry.provider, params.preferredProvider!),
     );
+    if (filtered.length > 0) {
+      next = filtered;
+    }
   }
   return next;
 }
