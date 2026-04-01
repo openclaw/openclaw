@@ -36,8 +36,7 @@ import {
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
 } from "../model-auth.js";
-import { parseModelRef } from "../model-selection.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId, parseModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
