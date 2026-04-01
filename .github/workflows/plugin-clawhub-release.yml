@@ -36,7 +36,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.23.0"
-  CLAWHUB_CLI_VERSION: "0.9.0"
+  CLAWHUB_CLI_VERSION: "0.10.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
 
 jobs:
@@ -142,7 +142,7 @@ jobs:
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-clawhub-release-plan.json
 
       - name: Fail manual publish when target versions already exist
-        if: github.event_name == 'workflow_dispatch' && steps.plan.outputs.skipped_published_count != '0'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'
         run: |
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
@@ -174,7 +174,7 @@ jobs:
           install-deps: "false"
 
       - name: Install ClawHub CLI
-        run: npm install --global "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
+        run: npm install --global --ignore-scripts "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
 
       - name: Preview publish command
         env:
@@ -182,7 +182,9 @@ jobs:
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
           SOURCE_REF: ${{ github.ref }}
-        run: bash scripts/plugin-clawhub-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+        run: bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
 
   publish_plugins_clawhub:
     needs: [preview_plugins_clawhub, preview_plugin_pack]
@@ -213,7 +215,7 @@ jobs:
           install-deps: "false"
 
       - name: Install ClawHub CLI
-        run: npm install --global "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
+        run: npm install --global --ignore-scripts "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
 
       - name: Ensure version is not already published
         env:
@@ -226,7 +228,7 @@ jobs:
           encoded_version="$(node -e 'console.log(encodeURIComponent(process.env.PACKAGE_VERSION ?? ""))')"
           url="${CLAWHUB_REGISTRY%/}/api/v1/packages/${encoded_name}/versions/${encoded_version}"
           status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${url}")"
-          if [[ "${status}" == "200" ]]; then
+          if [[ "${status}" =~ ^2 ]]; then
             echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on ClawHub."
             exit 1
           fi
@@ -241,4 +243,6 @@ jobs:
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
           SOURCE_REF: ${{ github.ref }}
-        run: bash scripts/plugin-clawhub-publish.sh --publish "${{ matrix.plugin.packageDir }}"
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+        run: bash scripts/plugin-clawhub-publish.sh --publish "${PACKAGE_DIR}"

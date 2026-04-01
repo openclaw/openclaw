@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
   collectClawHubVersionGateErrors,
+  collectPluginClawHubReleasePathsFromGitRange,
   collectPluginClawHubReleasePlan,
   resolveChangedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
@@ -60,6 +61,16 @@ describe("collectClawHubPublishablePluginPackages", () => {
 
     expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
       "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+    );
+  });
+
+  it("rejects unsafe extension directory names", () => {
+    const repoDir = createTempPluginRepo({
+      extensionId: "Demo Plugin",
+    });
+
+    expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
+      "Demo Plugin: extension directory name must match",
     );
   });
 });
@@ -194,23 +205,42 @@ describe("collectPluginClawHubReleasePlan", () => {
   });
 });
 
+describe("collectPluginClawHubReleasePathsFromGitRange", () => {
+  it("rejects unsafe git refs", () => {
+    const repoDir = createTempPluginRepo();
+    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    expect(() =>
+      collectPluginClawHubReleasePathsFromGitRange({
+        rootDir: repoDir,
+        gitRange: {
+          baseRef: "--not-a-ref",
+          headRef,
+        },
+      }),
+    ).toThrow("baseRef must be a normal git ref or commit SHA.");
+  });
+});
+
 function createTempPluginRepo(
   options: {
+    extensionId?: string;
     publishToClawHub?: boolean;
     includeClawHubContract?: boolean;
   } = {},
 ) {
   const repoDir = mkdtempSync(join(tmpdir(), "openclaw-clawhub-release-"));
   tempDirs.push(repoDir);
+  const extensionId = options.extensionId ?? "demo-plugin";
 
-  mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+  mkdirSync(join(repoDir, "extensions", extensionId), { recursive: true });
   writeFileSync(
     join(repoDir, "package.json"),
     JSON.stringify({ name: "openclaw-test-root" }, null, 2),
   );
   writeFileSync(join(repoDir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(
-    join(repoDir, "extensions", "demo-plugin", "package.json"),
+    join(repoDir, "extensions", extensionId, "package.json"),
     JSON.stringify(
       {
         name: "@openclaw/demo-plugin",
@@ -236,7 +266,7 @@ function createTempPluginRepo(
       2,
     ),
   );
-  writeFileSync(join(repoDir, "extensions", "demo-plugin", "index.ts"), "export const demo = 1;\n");
+  writeFileSync(join(repoDir, "extensions", extensionId, "index.ts"), "export const demo = 1;\n");
 
   git(repoDir, ["init", "-b", "main"]);
   git(repoDir, ["add", "."]);

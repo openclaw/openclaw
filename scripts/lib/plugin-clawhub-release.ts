@@ -72,6 +72,8 @@ export type PluginReleasePlan = {
 };
 
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
+const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
 function readPluginPackageJson(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
 }
@@ -82,6 +84,35 @@ function normalizePath(path: string) {
 
 function isNullGitRef(ref: string | undefined): boolean {
   return !ref || /^0+$/.test(ref);
+}
+
+function assertSafeGitRef(ref: string, label: string) {
+  const trimmed = ref.trim();
+  if (!trimmed || isNullGitRef(trimmed)) {
+    throw new Error(`${label} is required.`);
+  }
+  if (
+    trimmed.startsWith("-") ||
+    trimmed.includes("\u0000") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n")
+  ) {
+    throw new Error(`${label} must be a normal git ref or commit SHA.`);
+  }
+  return trimmed;
+}
+
+function resolveGitCommitSha(rootDir: string, ref: string, label: string) {
+  const safeRef = assertSafeGitRef(ref, label);
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", "--quiet", `${safeRef}^{commit}`], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    throw new Error(`${label} is not a valid git commit ref: ${safeRef}`);
+  }
 }
 
 function getRegistryBaseUrl(explicit?: string) {
@@ -116,6 +147,12 @@ export function collectClawHubPublishablePluginPackages(
     }
 
     if (packageJson.openclaw?.release?.publishToClawHub !== true) {
+      continue;
+    }
+    if (!SAFE_EXTENSION_ID_RE.test(dir.name)) {
+      validationErrors.push(
+        `${dir.name}: extension directory name must match ^[a-z0-9][a-z0-9._-]*$ for ClawHub publish.`,
+      );
       continue;
     }
 
@@ -175,9 +212,12 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
     return [];
   }
 
+  const baseSha = resolveGitCommitSha(rootDir, baseRef, "baseRef");
+  const headSha = resolveGitCommitSha(rootDir, headRef, "headRef");
+
   return execFileSync(
     "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseRef, headRef, "--", "extensions"],
+    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", "extensions"],
     {
       cwd: rootDir,
       encoding: "utf8",
@@ -233,9 +273,10 @@ function readPackageManifestAtGitRef(params: {
   ref: string;
   packageDir: string;
 }): PluginPackageJson | null {
+  const rootDir = params.rootDir ?? resolve(".");
+  const commitSha = resolveGitCommitSha(rootDir, params.ref, "ref");
   try {
-    const rootDir = params.rootDir ?? resolve(".");
-    const raw = execFileSync("git", ["show", `${params.ref}:${params.packageDir}/package.json`], {
+    const raw = execFileSync("git", ["show", `${commitSha}:${params.packageDir}/package.json`], {
       cwd: rootDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
