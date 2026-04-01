@@ -104,6 +104,18 @@ describe("resolveMSTeamsInboundMedia", () => {
     expect(downloadMSTeamsGraphMediaMock).not.toHaveBeenCalled();
   });
 
+  it("skips graph fallback for mention-only html attachments when htmlSummary is omitted", async () => {
+    const media = await resolveMSTeamsInboundMedia(
+      buildParams({
+        attachments: [{ contentType: "text/html", content: "<div><at>Bot</at> hello</div>" }],
+      }),
+    );
+
+    expect(media).toEqual([]);
+    expect(buildMSTeamsGraphMessageUrlsMock).not.toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMediaMock).not.toHaveBeenCalled();
+  });
+
   it("uses graph fallback when html attachments include attachment tags", async () => {
     const media = await resolveMSTeamsInboundMedia(
       buildParams({
@@ -111,6 +123,20 @@ describe("resolveMSTeamsInboundMedia", () => {
           { contentType: "text/html", content: '<div><attachment id="att-1"></attachment></div>' },
         ],
         htmlSummary: createHtmlSummary({ attachmentTags: 1, attachmentIds: ["att-1"] }),
+      }),
+    );
+
+    expect(buildMSTeamsGraphMessageUrlsMock).toHaveBeenCalledOnce();
+    expect(downloadMSTeamsGraphMediaMock).toHaveBeenCalledOnce();
+    expect(media).toEqual(DOWNLOADED_MEDIA);
+  });
+
+  it("uses graph fallback for cid-hosted html images without attachment tags", async () => {
+    const media = await resolveMSTeamsInboundMedia(
+      buildParams({
+        attachments: [
+          { contentType: "text/html", content: '<div><img src="cid:image-1" /></div>' },
+        ],
       }),
     );
 

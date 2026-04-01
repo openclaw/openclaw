@@ -57,9 +57,10 @@ export async function resolveMSTeamsInboundMedia(params: {
     const onlyHtmlAttachments =
       attachments.length > 0 &&
       attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
-    const hasAttachmentTags = (effectiveHtmlSummary?.attachmentTags ?? 0) > 0;
+    const hasGraphMediaHints =
+      (effectiveHtmlSummary?.attachmentTags ?? 0) > 0 || (effectiveHtmlSummary?.cidImages ?? 0) > 0;
 
-    if (onlyHtmlAttachments && hasAttachmentTags) {
+    if (onlyHtmlAttachments && hasGraphMediaHints) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
