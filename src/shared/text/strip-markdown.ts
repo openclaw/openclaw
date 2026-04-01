@@ -5,6 +5,10 @@
 export function stripMarkdown(text: string): string {
   let result = text;
 
+  // Remove fenced code blocks: ```lang\ncode\n``` — must run before inline-code
+  // stripping so triple-backtick fences don't get partially consumed
+  result = result.replace(/```(?:[^\n]*)?\n?([\s\S]*?)```/g, "$1");
+
   result = result.replace(/\*\*(.+?)\*\*/g, "$1");
   result = result.replace(/__(.+?)__/g, "$1");
 
