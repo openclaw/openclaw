@@ -6,6 +6,7 @@ import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
 const allowedNonExtensionTests = new Set<string>([
+  "src/agents/pi-embedded-runner-extraparams.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
 ]);
 
