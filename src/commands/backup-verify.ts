@@ -1,6 +1,6 @@
 import path from "node:path";
 import * as tar from "tar";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
@@ -319,6 +319,10 @@ export async function backupVerifyCommand(
     entryCount: rawEntries.length,
   };
 
-  runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));
+  if (opts.json) {
+    writeRuntimeJson(runtime, result);
+  } else {
+    runtime.log(formatResult(result));
+  }
   return result;
 }

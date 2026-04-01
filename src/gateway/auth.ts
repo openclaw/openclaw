@@ -14,12 +14,12 @@ import {
 } from "./auth-rate-limit.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
-  isLocalishHost,
   isLoopbackAddress,
   resolveRequestClientIp,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
+import { checkBrowserOrigin } from "./origin-check.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
@@ -82,6 +82,13 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
+  /** Optional browser-origin policy for trusted-proxy HTTP requests. */
+  browserOriginPolicy?: {
+    requestHost?: string;
+    origin?: string;
+    allowedOrigins?: string[];
+    allowHostHeaderOriginFallback?: boolean;
+  };
 };
 
 type TailscaleUser = {
@@ -115,25 +122,25 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
 
 export function isLocalDirectRequest(
   req?: IncomingMessage,
-  trustedProxies?: string[],
-  allowRealIpFallback = false,
+  _trustedProxies?: string[],
+  _allowRealIpFallback = false,
 ): boolean {
   if (!req) {
     return false;
   }
-  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
-  if (!isLoopbackAddress(clientIp)) {
-    return false;
-  }
 
   const hasForwarded = Boolean(
+    req.headers?.forwarded ||
     req.headers?.["x-forwarded-for"] ||
+    req.headers?.["x-forwarded-proto"] ||
     req.headers?.["x-real-ip"] ||
     req.headers?.["x-forwarded-host"],
   );
 
-  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
+  if (!hasForwarded) {
+    return isLoopbackAddress(req.socket?.remoteAddress);
+  }
+  return false;
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -241,7 +248,6 @@ export function resolveGatewayAuth(params: {
     configToken: tokenRef ? undefined : authConfig.token,
     configPassword: passwordRef ? undefined : authConfig.password,
     env,
-    includeLegacyEnv: false,
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });
@@ -316,6 +322,11 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
     }
+    if (auth.token) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but a shared token is also configured; remove gateway.auth.token / OPENCLAW_GATEWAY_TOKEN because trusted-proxy and token auth are mutually exclusive",
+      );
+    }
   }
 }
 
@@ -337,6 +348,9 @@ function authorizeTrustedProxy(params: {
   const remoteAddr = req.socket?.remoteAddress;
   if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
     return { reason: "trusted_proxy_untrusted_source" };
+  }
+  if (isLoopbackAddress(remoteAddr)) {
+    return { reason: "trusted_proxy_loopback_source" };
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
@@ -366,6 +380,56 @@ function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolea
   return authSurface === "ws-control-ui";
 }
 
+function authorizeTrustedProxyBrowserOrigin(params: {
+  authSurface: GatewayAuthSurface;
+  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+}): { ok: false; reason: string } | null {
+  if (params.authSurface !== "http") {
+    return null;
+  }
+
+  const origin = params.browserOriginPolicy?.origin?.trim();
+  if (!origin) {
+    return null;
+  }
+
+  const originCheck = checkBrowserOrigin({
+    requestHost: params.browserOriginPolicy?.requestHost,
+    origin,
+    allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
+    allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
+    isLocalClient: false,
+  });
+  if (originCheck.ok) {
+    return null;
+  }
+  return { ok: false, reason: "trusted_proxy_origin_not_allowed" };
+}
+
+function authorizeTokenAuth(params: {
+  authToken?: string;
+  connectToken?: string;
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+}): GatewayAuthResult {
+  if (!params.authToken) {
+    return { ok: false, reason: "token_missing_config" };
+  }
+  if (!params.connectToken) {
+    // Don't burn rate-limit slots for missing credentials — the client
+    // simply hasn't provided a token yet (e.g. bare browser open).
+    // Only actual *wrong* credentials should count as failures.
+    return { ok: false, reason: "token_missing" };
+  }
+  if (!safeEqualSecret(params.connectToken, params.authToken)) {
+    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
+    return { ok: false, reason: "token_mismatch" };
+  }
+  params.limiter?.reset(params.ip, params.rateLimitScope);
+  return { ok: true, method: "token" };
+}
+
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
@@ -373,6 +437,12 @@ export async function authorizeGatewayConnect(
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const authSurface = params.authSurface ?? "http";
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const limiter = params.rateLimiter;
+  const ip =
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
+  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   const localDirect = isLocalDirectRequest(
     req,
     trustedProxies,
@@ -380,6 +450,9 @@ export async function authorizeGatewayConnect(
   );
 
   if (auth.mode === "trusted-proxy") {
+    // Same-host reverse proxies may forward identity headers without a full
+    // forwarded chain; keep those on the trusted-proxy path so allowUsers and
+    // requiredHeaders still apply.
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
     }
@@ -394,6 +467,13 @@ export async function authorizeGatewayConnect(
     });
 
     if ("user" in result) {
+      const originResult = authorizeTrustedProxyBrowserOrigin({
+        authSurface,
+        browserOriginPolicy: params.browserOriginPolicy,
+      });
+      if (originResult) {
+        return originResult;
+      }
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     return { ok: false, reason: result.reason };
@@ -403,12 +483,6 @@ export async function authorizeGatewayConnect(
     return { ok: true, method: "none" };
   }
 
-  const limiter = params.rateLimiter;
-  const ip =
-    params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
-    req?.socket?.remoteAddress;
-  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
     if (!rlCheck.allowed) {
@@ -437,21 +511,13 @@ export async function authorizeGatewayConnect(
   }
 
   if (auth.mode === "token") {
-    if (!auth.token) {
-      return { ok: false, reason: "token_missing_config" };
-    }
-    if (!connectAuth?.token) {
-      // Don't burn rate-limit slots for missing credentials — the client
-      // simply hasn't provided a token yet (e.g. bare browser open).
-      // Only actual *wrong* credentials should count as failures.
-      return { ok: false, reason: "token_missing" };
-    }
-    if (!safeEqualSecret(connectAuth.token, auth.token)) {
-      limiter?.recordFailure(ip, rateLimitScope);
-      return { ok: false, reason: "token_mismatch" };
-    }
-    limiter?.reset(ip, rateLimitScope);
-    return { ok: true, method: "token" };
+    return authorizeTokenAuth({
+      authToken: auth.token,
+      connectToken: connectAuth?.token,
+      limiter,
+      ip,
+      rateLimitScope,
+    });
   }
 
   if (auth.mode === "password") {

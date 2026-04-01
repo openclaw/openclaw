@@ -1,21 +1,42 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
-import {
-  resetTelegramNetworkConfigStateForTests,
-  resolveTelegramAutoSelectFamilyDecision,
-  resolveTelegramDnsResultOrderDecision,
-} from "./network-config.js";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock isWSL2Sync at the top level
-vi.mock("../../../src/infra/wsl.js", () => ({
-  isWSL2Sync: vi.fn(() => false),
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    isWSL2Sync: vi.fn(() => false),
+  };
+});
 
-import { isWSL2Sync } from "../../../src/infra/wsl.js";
+let isWSL2Sync: typeof import("openclaw/plugin-sdk/runtime-env").isWSL2Sync;
+let resetTelegramNetworkConfigStateForTests: typeof import("./network-config.js").resetTelegramNetworkConfigStateForTests;
+let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js").resolveTelegramAutoSelectFamilyDecision;
+let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
+
+async function loadModule() {
+  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
+  ({
+    resetTelegramNetworkConfigStateForTests,
+    resolveTelegramAutoSelectFamilyDecision,
+    resolveTelegramDnsResultOrderDecision,
+  } = await import("./network-config.js"));
+}
 
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
-  afterEach(() => {
+  beforeAll(async () => {
+    await loadModule();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
     vi.restoreAllMocks();
+    if (!resetTelegramNetworkConfigStateForTests) {
+      await loadModule();
+    }
     resetTelegramNetworkConfigStateForTests();
   });
 
@@ -64,6 +85,9 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
       expected: { value: true, source: "config" },
     },
   ])("$name", ({ env, network, expected }) => {
+    if (!resolveTelegramAutoSelectFamilyDecision) {
+      throw new Error("network-config module not loaded");
+    }
     const decision = resolveTelegramAutoSelectFamilyDecision({
       env,
       network,
@@ -110,6 +134,9 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
         expected: { value: true, source: "default-node22" },
       },
     ])("$name", ({ env, network, expected, wsl2 = true }) => {
+      if (!isWSL2Sync) {
+        throw new Error("runtime-env mock not loaded");
+      }
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
       const decision = resolveTelegramAutoSelectFamilyDecision({
         env,
@@ -131,6 +158,10 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 });
 
 describe("resolveTelegramDnsResultOrderDecision", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it.each([
     {
       name: "uses env override when provided",

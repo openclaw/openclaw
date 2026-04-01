@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -99,7 +98,7 @@ function normalizeShellName(value: string): string {
 }
 
 export function detectRuntimeShell(): string | undefined {
-  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
+  const overrideShell = process.env.OPENCLAW_SHELL?.trim();
   if (overrideShell) {
     const name = normalizeShellName(overrideShell);
     if (name) {
@@ -165,28 +164,4 @@ export function sanitizeBinaryOutput(text: string): string {
     chunks.push(char);
   }
   return chunks.join("");
-}
-
-export function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
-    try {
-      spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-        stdio: "ignore",
-        detached: true,
-      });
-    } catch {
-      // ignore errors if taskkill fails
-    }
-    return;
-  }
-
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // process already dead
-    }
-  }
 }

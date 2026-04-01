@@ -1,20 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
-  isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
-  wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -1382,6 +1383,128 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(result).toBe(finalMessage);
   });
 
+  it("repairs tool arguments when malformed tool-call preamble appears before JSON", async () => {
+    const partialToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '.functions.write:8  \n{"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(result).toBe(finalMessage);
+  });
+  it("preserves anthropic-compatible tool arguments when the streamed JSON is already valid", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "}",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not repair tool arguments when leading text is not tool-call metadata", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: 'please use {"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
+  });
+
   it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
     const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
     const partialMessage = { role: "assistant", content: [partialToolCall] };
@@ -1484,6 +1607,45 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
   });
+
+  it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "oops",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
+  });
 });
 
 describe("isOllamaCompatProvider", () => {
@@ -1545,29 +1707,6 @@ describe("isOllamaCompatProvider", () => {
         baseUrl: "http://example.com:11434/v1",
       }),
     ).toBe(false);
-  });
-});
-
-describe("resolveOllamaBaseUrlForRun", () => {
-  it("prefers provider baseUrl over model baseUrl", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-        providerBaseUrl: "http://provider-host:11434",
-      }),
-    ).toBe("http://provider-host:11434");
-  });
-
-  it("falls back to model baseUrl when provider baseUrl is missing", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-      }),
-    ).toBe("http://model-host:11434");
-  });
-
-  it("falls back to native default when neither baseUrl is configured", () => {
-    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
   });
 });
 
@@ -1713,7 +1852,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1725,11 +1864,11 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy).toMatchObject({
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
 
-  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -1749,7 +1888,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1759,11 +1898,14 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
-    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
+    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
+    // so that context engines (including third-party ones) receive the correct
+    // compaction model in the runtime context.
     expect(legacy).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      // Auth profile dropped because provider changed from openai-codex to openrouter
+      authProfileId: undefined,
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -1778,7 +1920,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1791,7 +1933,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy).toMatchObject({
       authProfileId: "openai:p1",
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
     });
@@ -1813,7 +1955,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",

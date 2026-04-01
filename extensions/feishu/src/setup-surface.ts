@@ -3,12 +3,12 @@ import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
+  createTopLevelChannelParsedAllowFromPrompt,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
   patchTopLevelChannelConfigSection,
-  promptParsedAllowFromForAccount,
   promptSingleChannelSecretInput,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
@@ -16,7 +16,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { listFeishuAccountIds, resolveFeishuCredentials } from "./accounts.js";
+import { inspectFeishuCredentials, listFeishuAccountIds } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import type { FeishuConfig } from "./types.js";
@@ -93,30 +93,22 @@ function isFeishuConfigured(cfg: OpenClawConfig): boolean {
   return topLevelConfigured || accountConfigured;
 }
 
-async function promptFeishuAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
-}): Promise<OpenClawConfig> {
-  return await promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    defaultAccountId: DEFAULT_ACCOUNT_ID,
-    prompter: params.prompter,
-    noteTitle: "Feishu allowlist",
-    noteLines: [
-      "Allowlist Feishu DMs by open_id or user_id.",
-      "You can find user open_id in Feishu admin console or via API.",
-      "Examples:",
-      "- ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "- on_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    ],
-    message: "Feishu allowFrom (user open_ids)",
-    placeholder: "ou_xxxxx, ou_yyyyy",
-    parseEntries: (raw) => ({ entries: splitSetupEntries(raw) }),
-    getExistingAllowFrom: ({ cfg }) => cfg.channels?.feishu?.allowFrom ?? [],
-    mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
-    applyAllowFrom: ({ cfg, allowFrom }) => setFeishuAllowFrom(cfg, allowFrom),
-  });
-}
+const promptFeishuAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
+  channel,
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  noteTitle: "Feishu allowlist",
+  noteLines: [
+    "Allowlist Feishu DMs by open_id or user_id.",
+    "You can find user open_id in Feishu admin console or via API.",
+    "Examples:",
+    "- ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "- on_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  ],
+  message: "Feishu allowFrom (user open_ids)",
+  placeholder: "ou_xxxxx, ou_yyyyy",
+  parseEntries: (raw) => ({ entries: splitSetupEntries(raw) }),
+  mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
+});
 
 async function noteFeishuCredentialHelp(
   prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"],
@@ -173,9 +165,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     resolveConfigured: ({ cfg }) => isFeishuConfigured(cfg),
     resolveStatusLines: async ({ cfg, configured }) => {
       const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-      const resolvedCredentials = resolveFeishuCredentials(feishuCfg, {
-        allowUnresolvedSecretRef: true,
-      });
+      const resolvedCredentials = inspectFeishuCredentials(feishuCfg);
       let probeResult = null;
       if (configured && resolvedCredentials) {
         try {
@@ -194,9 +184,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   credentials: [],
   finalize: async ({ cfg, prompter, options }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-    const resolved = resolveFeishuCredentials(feishuCfg, {
-      allowUnresolvedSecretRef: true,
-    });
+    const resolved = inspectFeishuCredentials(feishuCfg);
     const hasConfigSecret = hasConfiguredSecretInput(feishuCfg?.appSecret);
     const hasConfigCreds = Boolean(
       typeof feishuCfg?.appId === "string" && feishuCfg.appId.trim() && hasConfigSecret,

@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { buildElevenLabsSpeechProvider } from "openclaw/plugin-sdk/speech";
+import { buildElevenLabsSpeechProvider } from "./speech-provider.js";
 
 export default definePluginEntry({
   id: "elevenlabs",

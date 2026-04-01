@@ -1,14 +1,15 @@
 import {
   createAllowFromSection,
+  createTopLevelChannelDmPolicy,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
   patchChannelConfigForAccount,
-  setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
@@ -75,24 +76,19 @@ function buildTelegramDmAccessWarningLines(accountId: string): string[] {
   ];
 }
 
-const dmPolicy: ChannelSetupDmPolicy = {
+const dmPolicy = createTopLevelChannelDmPolicy({
   label: "Telegram",
   channel,
   policyKey: "channels.telegram.dmPolicy",
   allowFromKey: "channels.telegram.allowFrom",
   getCurrent: (cfg) => cfg.channels?.telegram?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) =>
-    setChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
   promptAllowFrom: promptTelegramAllowFromForAccount,
-};
+});
 
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Telegram",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token",
     configuredHint: "recommended · configured",
@@ -104,7 +100,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         const account = inspectTelegramAccount({ cfg, accountId });
         return account.configured;
       }),
-  },
+  }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
     credentialValues,

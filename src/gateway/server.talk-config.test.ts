@@ -9,6 +9,7 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
 import {
@@ -273,7 +274,7 @@ describe("gateway talk.config", () => {
       }
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(fetchMock);
 
     try {
       await withServer(async (ws) => {
@@ -327,7 +328,7 @@ describe("gateway talk.config", () => {
       fetchUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       return new Response(new Uint8Array([4, 5, 6]), { status: 200 });
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(fetchMock);
 
     try {
       await withServer(async (ws) => {

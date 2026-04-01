@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOAuthPath } from "../../config/paths.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import {
@@ -11,7 +11,12 @@ import {
 } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
-import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredentials,
+  ProfileUsageStats,
+} from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
@@ -176,6 +181,22 @@ function writeCachedAuthProfileStore(
   });
 }
 
+function normalizeSecretBackedField(params: {
+  entry: Record<string, unknown>;
+  valueField: "key" | "token";
+  refField: "keyRef" | "tokenRef";
+}): void {
+  const value = params.entry[params.valueField];
+  if (value == null || typeof value === "string") {
+    return;
+  }
+  const ref = coerceSecretRef(value);
+  if (ref && !coerceSecretRef(params.entry[params.refField])) {
+    params.entry[params.refField] = ref;
+  }
+  delete params.entry[params.valueField];
+}
+
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   updater: (store: AuthProfileStore) => boolean;
@@ -185,7 +206,10 @@ export async function updateAuthProfileStoreWithLock(params: {
 
   try {
     return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = ensureAuthProfileStore(params.agentDir);
+      // Locked writers must reload from disk, not from any runtime snapshot.
+      // Otherwise a live gateway can overwrite fresher CLI/config-auth writes
+      // with stale in-memory auth state during usage/cooldown updates.
+      const store = loadAuthProfileStoreForAgent(params.agentDir);
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
@@ -216,6 +240,15 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (!("key" in entry) && typeof entry["apiKey"] === "string") {
     entry["key"] = entry["apiKey"];
   }
+  // Ensure `key` is a string.  Users sometimes write a SecretRef object into
+  // the `key` field instead of `keyRef`.  When that happens every downstream
+  // consumer that calls `cred.key?.trim()` throws a TypeError because the
+  // value is truthy (an object) but has no `.trim()` method.  Migrate the
+  // misplaced ref to `keyRef` so the secret-resolution pipeline can pick it
+  // up, and clear the invalid `key` so callers never see a non-string value.
+  normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
+  // Same treatment for `token` on TokenCredential entries.
+  normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
   return entry as Partial<AuthProfileCredential>;
 }
 
@@ -614,7 +647,7 @@ export function ensureAuthProfileStore(
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
-  const key = resolveRuntimeStoreKey(agentDir);
+  const runtimeKey = resolveRuntimeStoreKey(agentDir);
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
       if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
@@ -639,9 +672,11 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
   const newMtime = readAuthStoreMtimeMs(authPath);
-  if (newMtime !== null) {
-    runtimeSnapshotMtimes.set(key, newMtime);
-  }
-  runtimeAuthStoreSnapshots.set(key, cloneAuthProfileStore(store));
   writeCachedAuthProfileStore(authPath, newMtime, payload);
+  if (newMtime !== null) {
+    runtimeSnapshotMtimes.set(runtimeKey, newMtime);
+  }
+  if (runtimeAuthStoreSnapshots.has(runtimeKey)) {
+    runtimeAuthStoreSnapshots.set(runtimeKey, cloneAuthProfileStore(payload));
+  }
 }

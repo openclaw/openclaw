@@ -1,19 +1,13 @@
 export {
   buildComputedAccountStatusSnapshot,
-  DEFAULT_ACCOUNT_ID,
-  looksLikeSlackTargetId,
-  normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromRequiredCredentialStatuses,
-  type ChannelPlugin,
-  type OpenClawConfig,
-  type SlackAccountConfig,
-} from "openclaw/plugin-sdk/slack";
-export {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "./directory-config.js";
+} from "openclaw/plugin-sdk/channel-status";
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/slack";
+export { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./targets.js";
+export type { ChannelPlugin, OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/slack";
 export {
   buildChannelConfigSchema,
   getChatChannelMeta,
@@ -26,4 +20,3 @@ export {
   SlackConfigSchema,
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/slack-core";
-export { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";

@@ -1,9 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks } from "./blocks-render.js";
-import { readNumberParam, readStringParam } from "./runtime-api.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -196,6 +196,36 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+    );
+  }
+
+  if (action === "upload-file") {
+    const to = readStringParam(actionParams, "to") ?? resolveChannelId();
+    const filePath =
+      readStringParam(actionParams, "filePath", { trim: false }) ??
+      readStringParam(actionParams, "path", { trim: false }) ??
+      readStringParam(actionParams, "media", { trim: false });
+    if (!filePath) {
+      throw new Error("upload-file requires filePath, path, or media");
+    }
+    const threadId =
+      readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+    return await invoke(
+      {
+        action: "uploadFile",
+        to,
+        filePath,
+        initialComment:
+          readStringParam(actionParams, "initialComment", { allowEmpty: true }) ??
+          readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          "",
+        filename: readStringParam(actionParams, "filename"),
+        title: readStringParam(actionParams, "title"),
+        threadTs: threadId ?? undefined,
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
     );
   }
 

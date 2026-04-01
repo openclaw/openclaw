@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveReactionLevel } from "./reaction-level.js";
 
 describe("resolveReactionLevel", () => {
-  const cases = [
+  it.each([
     {
       name: "defaults when value is missing",
       input: {
@@ -55,11 +55,7 @@ describe("resolveReactionLevel", () => {
         agentReactionGuidance: "minimal",
       },
     },
-  ] as const;
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(resolveReactionLevel(testCase.input)).toEqual(testCase.expected);
-    });
-  }
+  ] as const)("$name", ({ input, expected }) => {
+    expect(resolveReactionLevel(input)).toEqual(expected);
+  });
 });

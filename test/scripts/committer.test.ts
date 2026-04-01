@@ -99,4 +99,20 @@ describe("scripts/committer", () => {
       expect(committedPaths(repo)).toEqual(testCase.expected);
     }
   });
+
+  it("commits changelog-only changes without pulling in unrelated dirty files", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "CHANGELOG.md", "initial\n");
+    writeRepoFile(repo, "unrelated.ts", "export const ok = true;\n");
+    git(repo, "add", "CHANGELOG.md", "unrelated.ts");
+    git(repo, "commit", "-qm", "seed extra files");
+
+    writeRepoFile(repo, "CHANGELOG.md", "breaking note\n");
+    writeRepoFile(repo, "unrelated.ts", "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n");
+
+    commitWithHelper(repo, "docs(changelog): note breaking change", "CHANGELOG.md");
+
+    expect(committedPaths(repo)).toEqual(["CHANGELOG.md"]);
+    expect(git(repo, "status", "--short")).toContain("M unrelated.ts");
+  });
 });
