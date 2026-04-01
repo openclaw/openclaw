@@ -1,5 +1,6 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
+import { readLocalFileSafely } from "openclaw/plugin-sdk/infra-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -167,7 +168,20 @@ async function downloadAndSaveTelegramFile(params: {
   apiRoot?: string;
 }) {
   if (path.isAbsolute(params.filePath)) {
-    return { path: params.filePath, contentType: params.mimeType };
+    // Local Bot API returns absolute filesystem paths. Save them into OpenClaw's
+    // inbound media store so downstream media-understanding can read them from an
+    // allowed root instead of the Bot API cache directory.
+    const localFile = await readLocalFileSafely({
+      filePath: params.filePath,
+      maxBytes: params.maxBytes,
+    });
+    return await saveMediaBuffer(
+      localFile.buffer,
+      params.mimeType,
+      "inbound",
+      params.maxBytes,
+      params.telegramFileName ?? path.basename(params.filePath),
+    );
   }
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
