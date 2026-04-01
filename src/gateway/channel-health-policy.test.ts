@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-health-policy.js";
 
-function evaluateDiscordHealth(
-  account: Record<string, unknown>,
-  now = 100_000,
-  channelId = "discord",
-) {
+function evaluateSlackHealth(account: Record<string, unknown>, now = 100_000, channelId = "slack") {
   return evaluateChannelHealth(account, {
     channelId,
     now,
@@ -177,7 +173,7 @@ describe("evaluateChannelHealth", () => {
   });
 
   it("skips stale-socket detection for channels in webhook mode", () => {
-    const evaluation = evaluateDiscordHealth({
+    const evaluation = evaluateSlackHealth({
       running: true,
       connected: true,
       enabled: true,
@@ -190,7 +186,7 @@ describe("evaluateChannelHealth", () => {
   });
 
   it("does not flag stale sockets for channels without event tracking", () => {
-    const evaluation = evaluateDiscordHealth({
+    const evaluation = evaluateSlackHealth({
       running: true,
       connected: true,
       enabled: true,
@@ -202,7 +198,7 @@ describe("evaluateChannelHealth", () => {
   });
 
   it("does not flag stale sockets without an active connected socket", () => {
-    const evaluation = evaluateDiscordHealth(
+    const evaluation = evaluateSlackHealth(
       {
         running: true,
         enabled: true,
@@ -217,7 +213,7 @@ describe("evaluateChannelHealth", () => {
   });
 
   it("ignores inherited event timestamps from a previous lifecycle", () => {
-    const evaluation = evaluateDiscordHealth(
+    const evaluation = evaluateSlackHealth(
       {
         running: true,
         connected: true,
