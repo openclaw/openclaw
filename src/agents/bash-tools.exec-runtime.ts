@@ -249,7 +249,7 @@ export function resolveExecTarget(params: {
   ) {
     throw new Error(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configure tools.exec.host=${renderExecTargetLabel(configuredTarget)} to allow).`,
+        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
