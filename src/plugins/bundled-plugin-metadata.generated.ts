@@ -1043,44 +1043,6 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
-    dirName: "github-copilot",
-    idHint: "github-copilot",
-    source: {
-      source: "./index.ts",
-      built: "index.js",
-    },
-    packageName: "@openclaw/github-copilot-provider",
-    packageVersion: "2026.3.22",
-    packageDescription: "OpenClaw GitHub Copilot provider plugin",
-    packageManifest: {
-      extensions: ["./index.ts"],
-    },
-    manifest: {
-      id: "github-copilot",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      providers: ["github-copilot"],
-      providerAuthEnvVars: {
-        "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
-      },
-      providerAuthChoices: [
-        {
-          provider: "github-copilot",
-          method: "device",
-          choiceId: "github-copilot",
-          choiceLabel: "GitHub Copilot",
-          choiceHint: "Device login with your GitHub account",
-          groupId: "copilot",
-          groupLabel: "Copilot",
-          groupHint: "GitHub + local proxy",
-        },
-      ],
-    },
-  },
-  {
     dirName: "google",
     idHint: "google-plugin",
     source: {

@@ -485,6 +485,56 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
+  // When the inferred kind didn't match (e.g. "god" defaulted to "group" but
+  // is actually a username), try the opposite kind before giving up.
+  if (!params.preferredKind) {
+    const alternateKind = kind === "user" ? "group" : "user";
+    const altEntries = await getDirectoryEntries({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      kind: alternateKind === "user" ? "user" : "group",
+      query,
+      runtime: params.runtime,
+      preferLiveOnMiss: true,
+    });
+    const altMatch = resolveMatch({ channel: params.channel, entries: altEntries, query });
+    if (altMatch.kind === "single") {
+      const entry = altMatch.entry;
+      return {
+        ok: true,
+        target: {
+          to: normalizeDirectoryEntryId(params.channel, entry),
+          kind: alternateKind,
+          display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
+          source: "directory",
+        },
+      };
+    }
+    if (altMatch.kind === "ambiguous") {
+      const mode = params.resolveAmbiguous ?? "error";
+      if (mode !== "error") {
+        const best = pickAmbiguousMatch(altMatch.entries, mode);
+        if (best) {
+          return {
+            ok: true,
+            target: {
+              to: normalizeDirectoryEntryId(params.channel, best),
+              kind: alternateKind,
+              display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
+              source: "directory",
+            },
+          };
+        }
+      }
+      return {
+        ok: false,
+        error: ambiguousTargetError(providerLabel, raw, hint),
+        candidates: altMatch.entries,
+      };
+    }
+  }
+
   const resolvedFallbackTarget = await maybeResolvePluginTarget({
     cfg: params.cfg,
     channel: params.channel,

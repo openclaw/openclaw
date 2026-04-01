@@ -455,10 +455,32 @@ export async function createMattermostPost(
   if (params.props) {
     payload.props = params.props;
   }
-  return await client.request<MattermostPost>("/posts", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  try {
+    return await client.request<MattermostPost>("/posts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    // When the thread root post was deleted or is otherwise invalid,
+    // fall back to a channel-level post so the message still gets delivered.
+    if (params.rootId && err instanceof Error && err.message.includes("Invalid RootId")) {
+      const fallbackPayload: Record<string, unknown> = {
+        channel_id: params.channelId,
+        message: params.message,
+      };
+      if (params.fileIds?.length) {
+        fallbackPayload.file_ids = params.fileIds;
+      }
+      if (params.props) {
+        fallbackPayload.props = params.props;
+      }
+      return await client.request<MattermostPost>("/posts", {
+        method: "POST",
+        body: JSON.stringify(fallbackPayload),
+      });
+    }
+    throw err;
+  }
 }
 
 export type MattermostTeam = {
