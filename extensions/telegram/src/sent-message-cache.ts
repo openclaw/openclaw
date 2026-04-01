@@ -68,6 +68,16 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   return entry.has(idKey);
 }
 
+export function hasSentMessagesInChat(chatId: number | string): boolean {
+  const scopeKey = String(chatId);
+  const entry = getSentMessages().get(scopeKey);
+  if (!entry) {
+    return false;
+  }
+  cleanupExpired(scopeKey, entry, Date.now());
+  return entry.size > 0;
+}
+
 /**
  * Clear all cached entries (for testing).
  */

@@ -6,7 +6,12 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
-import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  clearSentMessageCache,
+  hasSentMessagesInChat,
+  recordSentMessage,
+  wasSentByBot,
+} from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -121,6 +126,16 @@ describe("sent-message-cache", () => {
 
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
+  });
+
+  it("reports per-chat sent-message presence", () => {
+    expect(hasSentMessagesInChat(123)).toBe(false);
+    expect(hasSentMessagesInChat(456)).toBe(false);
+    recordSentMessage(123, 1);
+    expect(hasSentMessagesInChat(123)).toBe(true);
+    expect(hasSentMessagesInChat(456)).toBe(false);
+    clearSentMessageCache();
+    expect(hasSentMessagesInChat(123)).toBe(false);
   });
 
   it("shares sent-message state across distinct module instances", async () => {
