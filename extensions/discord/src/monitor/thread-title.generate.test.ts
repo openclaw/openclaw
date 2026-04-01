@@ -191,4 +191,17 @@ describe("generateThreadTitle", () => {
 
     expect(result).toBeNull();
   });
+
+  it("returns null when extractAssistantText returns an empty string (thinking-model reasoning-only response)", async () => {
+    extractAssistantTextMock.mockReturnValueOnce("");
+
+    const result = await generateThreadTitle({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      messageText: "Need a title.",
+    });
+
+    expect(result).toBeNull();
+  });
 });
+
