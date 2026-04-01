@@ -29,10 +29,12 @@ const configSpy = vi.spyOn(configModule, "loadConfig");
 function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
   configSpy.mockReturnValue({
     agents: {
+      list: [{ id: "chief", default: true }],
       defaults: {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      ...overrides?.agents,
     },
     session: {
       store: storePath,
@@ -136,6 +138,51 @@ describe("agentCliCommand", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("forwards explicit sessionKey to the gateway request", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:chief:main",
+          agent: "chief",
+        },
+        runtime,
+      );
+
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { sessionKey?: string };
+      };
+      expect(request.params?.sessionKey).toBe("agent:chief:main");
+    });
+  });
+
+  it("forces embedded execution when internal receipt recovery flags are present", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "continue",
+          sessionKey: "agent:chief:main",
+          agent: "chief",
+          receiptId: "telegram|default|123|main|456|chief",
+          sourceMessageId: "456",
+        },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
+        sessionKey: "agent:chief:main",
+        inboundReceiptId: "telegram|default|123|main|456|chief",
+        sourceMessageId: "456",
+      });
     });
   });
 });

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { parseByteSize } from "../../cli/parse-bytes.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -42,6 +43,9 @@ import {
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { buildMemoryFlushPlan as buildDefaultMemoryFlushPlan } from "../../../extensions/memory-core/src/flush-plan.js";
+
+type CompactionTriggerReason = "budget" | "transcript_bytes" | "stale_usage" | "forced_recovery";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
   const trimmed = prompt?.trim();
@@ -230,6 +234,9 @@ async function rotateSessionAfterFailedForcedMemoryFlush(params: {
     fallbackNoticeReason: undefined,
     contextTokens: undefined,
     memoryFlushAt: updatedAt,
+    lastMemoryFlushReason: "forced_recovery",
+    lastTranscriptBytesBefore: params.transcriptByteSize,
+    lastSessionRotateReason: "forced_recovery",
     memoryFlushCompactionCount: undefined,
     memoryFlushContextHash: undefined,
     systemPromptReport: undefined,
@@ -343,6 +350,71 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
   }
 }
 
+function resolveConfiguredForceFlushTranscriptBytes(cfg: OpenClawConfig): number | undefined {
+  const raw = cfg.agents?.defaults?.compaction?.memoryFlush?.forceFlushTranscriptBytes;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = parseByteSize(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveConfiguredForceCompactionTranscriptBytes(
+  cfg: OpenClawConfig,
+): number | undefined {
+  const raw = cfg.agents?.defaults?.compaction?.forceCompactionTranscriptBytes;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = parseByteSize(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveEffectiveMemoryFlushPlan(params: {
+  cfg: OpenClawConfig;
+  nowMs?: number;
+}) {
+  return (
+    resolveMemoryFlushPlan({
+      cfg: params.cfg,
+      nowMs: params.nowMs,
+    }) ??
+    buildDefaultMemoryFlushPlan({
+      cfg: params.cfg,
+      nowMs: params.nowMs,
+    })
+  );
+}
+
+function resolvePreflightSoftThresholdTokens(params: {
+  cfg: OpenClawConfig;
+  memoryFlushPlan?: { softThresholdTokens: number } | null;
+}): number {
+  const configured = params.cfg.agents?.defaults?.compaction?.preflightSoftThresholdTokens;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+  const fallback = params.memoryFlushPlan?.softThresholdTokens;
+  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback >= 0) {
+    return Math.floor(fallback);
+  }
+  return 4_000;
+}
+
 function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   storePath?: string;
@@ -416,16 +488,32 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  const preflightTranscriptBytesThreshold = (() => {
+    if (params.cfg.agents?.defaults?.compaction?.truncateAfterCompaction !== true) {
+      return undefined;
+    }
+    const effectiveMemoryFlushPlan = resolveEffectiveMemoryFlushPlan({ cfg: params.cfg });
+    const threshold =
+      resolveConfiguredForceCompactionTranscriptBytes(params.cfg) ??
+      effectiveMemoryFlushPlan?.forceFlushTranscriptBytes ??
+      resolveConfiguredForceFlushTranscriptBytes(params.cfg);
+    return typeof threshold === "number" && Number.isFinite(threshold) && threshold > 0
+      ? Math.floor(threshold)
+      : undefined;
+  })();
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveEffectiveMemoryFlushPlan({ cfg: params.cfg });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
     20_000;
-  const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
+  const softThresholdTokens = resolvePreflightSoftThresholdTokens({
+    cfg: params.cfg,
+    memoryFlushPlan,
+  });
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
   const hasPersistedTotalTokens =
@@ -433,7 +521,27 @@ export async function runPreflightCompactionIfNeeded(params: {
     Number.isFinite(persistedTotalTokens) &&
     persistedTotalTokens > 0;
   const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
+  const shouldCheckTranscriptSize =
+    typeof preflightTranscriptBytesThreshold === "number" && preflightTranscriptBytesThreshold > 0;
+  if (!shouldUseTranscriptFallback && !shouldCheckTranscriptSize) {
+    return entry ?? params.sessionEntry;
+  }
+  const sessionLogSnapshot = shouldCheckTranscriptSize
+    ? await readSessionLogSnapshot({
+        sessionId: entry.sessionId,
+        sessionEntry: entry,
+        sessionKey: params.sessionKey,
+        opts: { storePath: params.storePath },
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    : undefined;
+  const transcriptByteSize = sessionLogSnapshot?.byteSize;
+  const shouldCompactByTranscriptSize =
+    typeof transcriptByteSize === "number" &&
+    typeof preflightTranscriptBytesThreshold === "number" &&
+    transcriptByteSize >= preflightTranscriptBytesThreshold;
+  if (!shouldUseTranscriptFallback && !shouldCompactByTranscriptSize) {
     return entry ?? params.sessionEntry;
   }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
@@ -466,24 +574,36 @@ export async function runPreflightCompactionIfNeeded(params: {
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
-      `promptTokensEst=${promptTokenEstimate ?? "undefined"}`,
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} ` +
+      `transcriptBytes=${transcriptByteSize ?? "undefined"} ` +
+      `preflightTranscriptBytesThreshold=${preflightTranscriptBytesThreshold ?? "undefined"} ` +
+      `shouldCompactByTranscriptSize=${shouldCompactByTranscriptSize}`,
   );
 
-  const shouldCompact = shouldRunPreflightCompaction({
+  const shouldCompactByBudget = shouldRunPreflightCompaction({
     entry,
     tokenCount: tokenCountForCompaction,
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
   });
+  const shouldCompact = shouldCompactByBudget || shouldCompactByTranscriptSize;
   if (!shouldCompact) {
     return entry ?? params.sessionEntry;
   }
 
+  const compactionReason: CompactionTriggerReason = shouldCompactByTranscriptSize
+    ? "transcript_bytes"
+    : shouldUseTranscriptFallback
+      ? "stale_usage"
+      : "budget";
+
   logVerbose(
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
-      `threshold=${threshold}`,
+      `threshold=${threshold} ` +
+      `reason=${compactionReason} ` +
+      `transcriptBytes=${transcriptByteSize ?? "undefined"}`,
   );
 
   const sessionFile = resolveSessionLogPath(
@@ -527,7 +647,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+    reason: compactionReason,
+    tokensBefore:
+      result.result?.tokensBefore ??
+      tokenCountForCompaction ??
+      freshPersistedTokens ??
+      transcriptPromptTokens,
     tokensAfter: result.result?.tokensAfter,
+    transcriptBytesBefore: transcriptByteSize,
   });
   await appendPostCompactionRefreshPrompt({
     cfg: params.cfg,
@@ -552,7 +679,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveEffectiveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
     return params.sessionEntry;
   }
@@ -734,8 +861,14 @@ export async function runMemoryFlushIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  const memoryFlushReason: CompactionTriggerReason = shouldForceFlushByTranscriptSize
+    ? "transcript_bytes"
+    : !hasFreshPromptTokensSnapshot
+      ? "stale_usage"
+      : "budget";
+
   logVerbose(
-    `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
+    `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold} reason=${memoryFlushReason}`,
   );
 
   let activeSessionEntry = entry ?? params.sessionEntry;
@@ -754,7 +887,7 @@ export async function runMemoryFlushIfNeeded(params: {
   let memoryCompactionCompleted = false;
   const memoryFlushNowMs = Date.now();
   const activeMemoryFlushPlan =
-    resolveMemoryFlushPlan({
+    resolveEffectiveMemoryFlushPlan({
       cfg: params.cfg,
       nowMs: memoryFlushNowMs,
     }) ?? memoryFlushPlan;
@@ -822,6 +955,14 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         newSessionId: postCompactionSessionId,
+        sessionRotateReason:
+          postCompactionSessionId &&
+          postCompactionSessionId !== previousSessionId
+            ? "memory_flush_compaction"
+            : undefined,
+        reason: memoryFlushReason,
+        tokensBefore: tokenCountForFlush,
+        transcriptBytesBefore: transcriptByteSize,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {
@@ -850,8 +991,11 @@ export async function runMemoryFlushIfNeeded(params: {
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           update: async () => ({
-            memoryFlushAt: Date.now(),
+            memoryFlushAt: memoryFlushNowMs,
             memoryFlushCompactionCount,
+            lastMemoryFlushReason: memoryFlushReason,
+            lastTranscriptBytesBefore: transcriptByteSize,
+            totalTokensFresh: memoryCompactionCompleted ? undefined : false,
           }),
         });
         if (updatedEntry) {

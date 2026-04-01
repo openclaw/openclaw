@@ -7,6 +7,7 @@ import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
   DEFAULT_LOG_DIR,
+  __test__,
   resetLogger,
   setLoggerOverride,
   stripRedundantSubsystemPrefixForConsole,
@@ -19,6 +20,7 @@ describe("logger helpers", () => {
     setLoggerOverride(null);
     setVerbose(false);
     setYes(false);
+    delete process.env.TZ;
   });
 
   it("formats messages through runtime log/error", () => {
@@ -91,6 +93,15 @@ describe("logger helpers", () => {
     expect(fs.existsSync(oldPath)).toBe(false);
 
     cleanup(todayPath);
+  });
+
+  it("uses TZ when resolving daily rolling log filename", async () => {
+    process.env.TZ = "Asia/Bangkok";
+    resetLogger();
+    setLoggerOverride({ level: "info" });
+    const date = new Date("2026-03-31T18:30:00.000Z");
+    const expectedPath = path.join(DEFAULT_LOG_DIR, "openclaw-2026-04-01.log");
+    expect(__test__.defaultRollingPathForDateForTest(date)).toBe(expectedPath);
   });
 });
 

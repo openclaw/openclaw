@@ -1,13 +1,12 @@
 import { type Bot, GrammyError } from "grammy";
+import type { TelegramInlineButtons } from "../button-types.js";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
-import { buildInlineKeyboard } from "../send.js";
+import { buildInlineKeyboard, sendMessageTelegram } from "../send.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js";
 
-const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
@@ -101,6 +100,7 @@ export async function sendTelegramText(
   text: string,
   runtime: RuntimeEnv,
   opts?: {
+    accountId?: string;
     replyToMessageId?: number;
     replyQuoteText?: string;
     thread?: TelegramThreadSpec | null;
@@ -111,71 +111,67 @@ export async function sendTelegramText(
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
-  const baseParams = buildTelegramSendParams({
-    replyToMessageId: opts?.replyToMessageId,
-    thread: opts?.thread,
-    silent: opts?.silent,
-  });
-  // Add link_preview_options when link preview is disabled.
-  const linkPreviewEnabled = opts?.linkPreview ?? true;
-  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
-  const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
+  const renderedText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const hasFallbackText = fallbackText.trim().length > 0;
-  const sendPlainFallback = async () => {
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendMessage",
-      runtime,
-      thread: opts?.thread,
-      requestParams: baseParams,
-      send: (effectiveParams) =>
-        bot.api.sendMessage(chatId, fallbackText, {
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
-    });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
-    return res.message_id;
-  };
-
-  // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
-  if (!htmlText.trim()) {
-    if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
-    }
-    return await sendPlainFallback();
+  const hasRenderedText = renderedText.trim().length > 0;
+  if (!hasRenderedText && !hasFallbackText) {
+    throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
   }
+
+  const buttons =
+    opts?.replyMarkup?.inline_keyboard?.map((row) =>
+      row.flatMap((button) => {
+        const candidate = button as {
+          text?: unknown;
+          callback_data?: unknown;
+          style?: unknown;
+        };
+        if (
+          typeof candidate.text !== "string" ||
+          typeof candidate.callback_data !== "string"
+        ) {
+          return [];
+        }
+        return [
+          {
+            text: candidate.text,
+            callback_data: candidate.callback_data,
+            ...(typeof candidate.style === "string" ? { style: candidate.style } : {}),
+          },
+        ];
+      }),
+    )?.filter((row) => row.length > 0) as TelegramInlineButtons | undefined;
+
+  const textToSend = hasRenderedText ? text : fallbackText;
+  let result: Awaited<ReturnType<typeof sendMessageTelegram>>;
   try {
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendMessage",
-      runtime,
-      thread: opts?.thread,
-      requestParams: baseParams,
-      shouldLog: (err) => {
-        const errText = formatErrorMessage(err);
-        return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
-      },
-      send: (effectiveParams) =>
-        bot.api.sendMessage(chatId, htmlText, {
-          parse_mode: "HTML",
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
+    result = await sendMessageTelegram(String(chatId), textToSend, {
+      api: bot.api,
+      accountId: opts?.accountId,
+      verbose: false,
+      textMode,
+      plainText: fallbackText,
+      linkPreview: opts?.linkPreview,
+      silent: opts?.silent,
+      messageThreadId: opts?.thread?.id,
+      threadScope:
+        opts?.thread?.scope === "dm" || opts?.thread?.scope === "forum"
+          ? opts.thread.scope
+          : undefined,
+      threadlessFallback: opts?.thread == null || opts.thread.scope !== "forum",
+      replyToMessageId: opts?.replyToMessageId,
+      buttons,
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
   } catch (err) {
-    const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
-      if (!hasFallbackText) {
-        throw err;
-      }
-      runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
-      return await sendPlainFallback();
-    }
+    runtime.error?.(`telegram sendMessage failed: ${formatErrorMessage(err)}`);
     throw err;
   }
+  const messageId = Number.parseInt(result.messageId, 10);
+  if (!Number.isFinite(messageId)) {
+    throw new Error(`telegram sendMessage returned invalid message id: ${result.messageId}`);
+  }
+  runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${messageId}`);
+  return messageId;
 }

@@ -26,6 +26,13 @@ const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
 
+function formatLifecycleError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack || err.message;
+  }
+  return String(err);
+}
+
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
@@ -36,13 +43,19 @@ export async function runGatewayLoop(params: {
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
 
-  const cleanupSignals = () => {
+  const cleanupSignalListeners = () => {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGUSR1", onSigusr1);
   };
+  const cleanupDiagnosticListeners = () => {
+    process.removeListener("beforeExit", onBeforeExit);
+    process.removeListener("exit", onExit);
+    process.removeListener("uncaughtExceptionMonitor", onUncaughtExceptionMonitor);
+    process.removeListener("unhandledRejection", onUnhandledRejection);
+  };
   const exitProcess = (code: number) => {
-    cleanupSignals();
+    cleanupSignalListeners();
     params.runtime.exit(code);
   };
   const releaseLockIfHeld = async (): Promise<boolean> => {
@@ -207,10 +220,33 @@ export async function runGatewayLoop(params: {
     markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
+  const onBeforeExit = (code: number) => {
+    gatewayLog.warn(
+      `process beforeExit code=${code} shuttingDown=${shuttingDown} activeTasks=${getActiveTaskCount()} activeEmbeddedRuns=${getActiveEmbeddedRunCount()}`,
+    );
+  };
+  const onExit = (code: number) => {
+    gatewayLog.warn(
+      `process exit code=${code} shuttingDown=${shuttingDown} activeTasks=${getActiveTaskCount()} activeEmbeddedRuns=${getActiveEmbeddedRunCount()}`,
+    );
+  };
+  const onUncaughtExceptionMonitor = (
+    err: Error,
+    origin: NodeJS.UncaughtExceptionOrigin,
+  ) => {
+    gatewayLog.error(`uncaught exception (${origin}): ${formatLifecycleError(err)}`);
+  };
+  const onUnhandledRejection = (reason: unknown) => {
+    gatewayLog.error(`unhandled rejection: ${formatLifecycleError(reason)}`);
+  };
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
   process.on("SIGUSR1", onSigusr1);
+  process.on("beforeExit", onBeforeExit);
+  process.on("exit", onExit);
+  process.on("uncaughtExceptionMonitor", onUncaughtExceptionMonitor);
+  process.on("unhandledRejection", onUnhandledRejection);
 
   try {
     const onIteration = createRestartIterationHook(() => {
@@ -258,6 +294,7 @@ export async function runGatewayLoop(params: {
     }
   } finally {
     await releaseLockIfHeld();
-    cleanupSignals();
+    cleanupSignalListeners();
+    cleanupDiagnosticListeners();
   }
 }

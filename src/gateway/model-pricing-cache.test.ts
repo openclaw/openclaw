@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
@@ -7,6 +7,7 @@ import {
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
+  startGatewayModelPricingRefresh,
 } from "./model-pricing-cache.js";
 
 describe("model-pricing-cache", () => {
@@ -241,5 +242,60 @@ describe("model-pricing-cache", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
+  });
+
+  it("retries after bootstrap timeout without surfacing a warning-level failure", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "anthropic/claude-opus-4.6",
+                pricing: {
+                  prompt: "0.000005",
+                  completion: "0.000025",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+    await vi.runAllTicks();
+
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("pricing bootstrap failed"));
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(
+      getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+
+    stop();
+    vi.useRealTimers();
   });
 });

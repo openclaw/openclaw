@@ -19,6 +19,8 @@ function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
   delete process.env.VITEST;
   process.env.NODE_ENV = "development";
+  process.env.OPENCLAW_BONJOUR_WATCHDOG_STARTUP_GRACE_MS = "0";
+  process.env.OPENCLAW_BONJOUR_STUCK_ANNOUNCING_MS = "8000";
   vi.spyOn(os, "hostname").mockReturnValue(hostname);
   process.env.OPENCLAW_MDNS_HOSTNAME = hostname;
 }
@@ -438,6 +440,38 @@ describe("gateway bonjour advertiser", () => {
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
+  it("does not repair during watchdog startup grace", async () => {
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    process.env.OPENCLAW_BONJOUR_WATCHDOG_STARTUP_GRACE_MS = "30000";
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+    process.env.OPENCLAW_MDNS_HOSTNAME = "test-host";
+    vi.useFakeTimers();
+
+    const stateRef = { value: "probing" };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(advertise).toHaveBeenCalledTimes(1);
+    expect(createService).toHaveBeenCalledTimes(1);
+    expect(logWarn).not.toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(logWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("watchdog detected non-announced service"),
+    );
 
     await started.stop();
   });

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { normalizeSessionRouteChannel } from "../utils/message-channel.js";
 
 export type ClaudeChannelMode = "off" | "on" | "auto";
 
@@ -147,7 +147,7 @@ export function summarizeResult(
 }
 
 export function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeMessageChannel(
+  return normalizeSessionRouteChannel(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??

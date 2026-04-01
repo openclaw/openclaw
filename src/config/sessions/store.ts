@@ -14,6 +14,7 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
+import { normalizeSessionRouteChannel } from "../../utils/message-channel.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
@@ -90,6 +91,42 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
+function normalizeSessionEntryOrigin(entry: SessionEntry): SessionEntry {
+  const provider = normalizeSessionRouteChannel(entry.origin?.provider);
+  const existingProvider = entry.origin?.provider;
+  const origin = entry.origin;
+  if (!origin) {
+    return entry;
+  }
+  const shouldStripRouteFields = !provider;
+  const routeFieldsAlreadyClear =
+    origin.from === undefined &&
+    origin.to === undefined &&
+    origin.accountId === undefined &&
+    origin.threadId === undefined;
+  if (existingProvider === provider && (!shouldStripRouteFields || routeFieldsAlreadyClear)) {
+    return entry;
+  }
+  const nextOrigin = { ...origin };
+  if (provider) {
+    nextOrigin.provider = provider;
+  } else {
+    delete nextOrigin.provider;
+    delete nextOrigin.from;
+    delete nextOrigin.to;
+    delete nextOrigin.accountId;
+    delete nextOrigin.threadId;
+  }
+  if (Object.keys(nextOrigin).length === 0) {
+    const { origin: _origin, ...rest } = entry;
+    return rest;
+  }
+  return {
+    ...entry,
+    origin: nextOrigin,
+  };
+}
+
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context || context.threadId == null) {
     return context;
@@ -149,7 +186,9 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
     if (!entry) {
       continue;
     }
-    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
+    const normalized = normalizeSessionEntryDelivery(
+      normalizeSessionEntryOrigin(normalizeSessionRuntimeModelFields(entry)),
+    );
     if (normalized !== entry) {
       store[key] = normalized;
     }
@@ -264,6 +303,7 @@ export function loadSessionStore(
   }
 
   applySessionStoreMigrations(store);
+  normalizeSessionStore(store);
 
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {

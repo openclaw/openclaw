@@ -67,7 +67,8 @@ type ConsoleLogFn = (...args: unknown[]) => void;
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
-const STUCK_ANNOUNCING_MS = 8_000;
+const DEFAULT_STUCK_ANNOUNCING_MS = 30_000;
+const DEFAULT_WATCHDOG_STARTUP_GRACE_MS = 25_000;
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
 
@@ -133,6 +134,30 @@ function installCiaoConsoleNoiseFilter(): () => void {
     }
     console.log = originalConsoleLog;
   };
+}
+
+function getWatchdogStartupGraceMs(): number {
+  const raw = process.env.OPENCLAW_BONJOUR_WATCHDOG_STARTUP_GRACE_MS?.trim();
+  if (!raw) {
+    return DEFAULT_WATCHDOG_STARTUP_GRACE_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_WATCHDOG_STARTUP_GRACE_MS;
+  }
+  return parsed;
+}
+
+function getStuckAnnouncingMs(): number {
+  const raw = process.env.OPENCLAW_BONJOUR_STUCK_ANNOUNCING_MS?.trim();
+  if (!raw) {
+    return DEFAULT_STUCK_ANNOUNCING_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1_000) {
+    return DEFAULT_STUCK_ANNOUNCING_MS;
+  }
+  return parsed;
 }
 
 export async function startGatewayBonjourAdvertiser(
@@ -303,7 +328,10 @@ export async function startGatewayBonjourAdvertiser(
 
     let stopped = false;
     let recreatePromise: Promise<void> | null = null;
+    const startupGraceMs = getWatchdogStartupGraceMs();
+    const stuckAnnouncingMs = getStuckAnnouncingMs();
     let cycle = createCycle();
+    let cycleStartedAtMs = Date.now();
     const stateTracker = new Map<string, ServiceStateTracker>();
     attachConflictListeners(cycle.services);
     startAdvertising(cycle.services);
@@ -336,6 +364,7 @@ export async function startGatewayBonjourAdvertiser(
         const previous = cycle;
         await stopCycle(previous);
         cycle = createCycle();
+        cycleStartedAtMs = Date.now();
         stateTracker.clear();
         attachConflictListeners(cycle.services);
         startAdvertising(cycle.services);
@@ -353,6 +382,9 @@ export async function startGatewayBonjourAdvertiser(
         return;
       }
       updateStateTrackers(cycle.services);
+      if (Date.now() - cycleStartedAtMs < startupGraceMs) {
+        return;
+      }
       for (const { label, svc } of cycle.services) {
         const stateUnknown = (svc as { serviceState?: unknown }).serviceState;
         if (typeof stateUnknown !== "string") {
@@ -362,7 +394,7 @@ export async function startGatewayBonjourAdvertiser(
         if (
           stateUnknown !== "announced" &&
           tracked &&
-          Date.now() - tracked.sinceMs >= STUCK_ANNOUNCING_MS
+          Date.now() - tracked.sinceMs >= stuckAnnouncingMs
         ) {
           void recreateAdvertiser(
             `service stuck in ${stateUnknown} for ${Date.now() - tracked.sinceMs}ms (${serviceSummary(

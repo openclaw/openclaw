@@ -155,8 +155,16 @@ export async function incrementCompactionCount(params: {
   amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
+  /** Token count before compaction. */
+  tokensBefore?: number;
+  /** Trigger reason for this compaction cycle. */
+  reason?: SessionEntry["lastCompactionReason"];
+  /** Transcript size snapshot captured before compaction. */
+  transcriptBytesBefore?: number;
   /** Session id after compaction, when the runtime rotated transcripts. */
   newSessionId?: string;
+  /** Human-readable rotation reason when a new session id is created. */
+  sessionRotateReason?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -166,7 +174,11 @@ export async function incrementCompactionCount(params: {
     now = Date.now(),
     amount = 1,
     tokensAfter,
+    tokensBefore,
+    reason,
+    transcriptBytesBefore,
     newSessionId,
+    sessionRotateReason,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -181,7 +193,21 @@ export async function incrementCompactionCount(params: {
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
+    lastCompactionAt: now,
   };
+  if (reason) {
+    updates.lastCompactionReason = reason;
+  }
+  if (typeof tokensBefore === "number" && Number.isFinite(tokensBefore) && tokensBefore > 0) {
+    updates.lastCompactionTokensBefore = Math.floor(tokensBefore);
+  }
+  if (
+    typeof transcriptBytesBefore === "number" &&
+    Number.isFinite(transcriptBytesBefore) &&
+    transcriptBytesBefore >= 0
+  ) {
+    updates.lastTranscriptBytesBefore = Math.floor(transcriptBytesBefore);
+  }
   if (newSessionId && newSessionId !== entry.sessionId) {
     updates.sessionId = newSessionId;
     updates.sessionFile = resolveCompactionSessionFile({
@@ -190,11 +216,15 @@ export async function incrementCompactionCount(params: {
       storePath,
       newSessionId,
     });
+    if (sessionRotateReason) {
+      updates.lastSessionRotateReason = sessionRotateReason;
+    }
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
     updates.totalTokensFresh = true;
+    updates.lastCompactionTokensAfter = Math.floor(tokensAfter);
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;

@@ -51,6 +51,8 @@ export type MsgContext = {
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
+  /** Durable inbound receipt id for no-miss recovery and replay. */
+  InboundReceiptId?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;

@@ -95,6 +95,7 @@ function markDelivered(progress: DeliveryProgress): void {
 async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   thread?: TelegramThreadSpec | null;
   chunkText: ChunkTextFn;
@@ -123,6 +124,7 @@ async function deliverTextReply(params: {
         chunk.html,
         params.runtime,
         {
+          accountId: params.accountId,
           replyToMessageId,
           replyQuoteText,
           thread: params.thread,
@@ -144,6 +146,7 @@ async function deliverTextReply(params: {
 async function sendPendingFollowUpText(params: {
   bot: Bot;
   chatId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   thread?: TelegramThreadSpec | null;
   chunkText: ChunkTextFn;
@@ -164,6 +167,7 @@ async function sendPendingFollowUpText(params: {
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
       await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
+        accountId: params.accountId,
         replyToMessageId,
         thread: params.thread,
         textMode: "html",
@@ -193,6 +197,7 @@ function isCaptionTooLong(err: unknown): boolean {
 async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
@@ -211,6 +216,7 @@ async function sendTelegramVoiceFallbackText(opts: {
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
+      accountId: opts.accountId,
       replyToMessageId: replyToForChunk,
       replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
       thread: opts.thread,
@@ -235,6 +241,7 @@ async function deliverMediaReply(params: {
   mediaList: string[];
   bot: Bot;
   chatId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
@@ -377,6 +384,7 @@ async function deliverMediaReply(params: {
             const fallbackMessageId = await sendTelegramVoiceFallbackText({
               bot: params.bot,
               chatId: params.chatId,
+              accountId: params.accountId,
               runtime: params.runtime,
               text: fallbackText,
               chunkText: params.chunkText,
@@ -407,6 +415,7 @@ async function deliverMediaReply(params: {
               await sendTelegramVoiceFallbackText({
                 bot: params.bot,
                 chatId: params.chatId,
+                accountId: params.accountId,
                 runtime: params.runtime,
                 text: fallbackText,
                 chunkText: params.chunkText,
@@ -455,6 +464,7 @@ async function deliverMediaReply(params: {
       await sendPendingFollowUpText({
         bot: params.bot,
         chatId: params.chatId,
+        accountId: params.accountId,
         runtime: params.runtime,
         thread: params.thread,
         chunkText: params.chunkText,
@@ -660,6 +670,7 @@ export async function deliverReplies(params: {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
           chatId: params.chatId,
+          accountId: params.accountId,
           runtime: params.runtime,
           thread: params.thread,
           chunkText,
@@ -678,6 +689,7 @@ export async function deliverReplies(params: {
           mediaList,
           bot: params.bot,
           chatId: params.chatId,
+          accountId: params.accountId,
           runtime: params.runtime,
           thread: params.thread,
           tableMode: params.tableMode,

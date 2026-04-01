@@ -1,4 +1,4 @@
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { normalizeSessionRouteChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
@@ -127,7 +127,7 @@ export function resolveChannelResetConfig(params: {
   if (!resetByChannel) {
     return undefined;
   }
-  const normalized = normalizeMessageChannel(params.channel);
+  const normalized = normalizeSessionRouteChannel(params.channel);
   const fallback = params.channel?.trim().toLowerCase();
   const key = normalized ?? fallback;
   if (!key) {

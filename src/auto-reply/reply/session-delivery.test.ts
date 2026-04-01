@@ -58,4 +58,32 @@ describe("session delivery direct-session routing overrides", () => {
       }),
     ).toBe("group:12345");
   });
+
+  it("does not persist synthetic heartbeat routes when no external route exists", () => {
+    expect(
+      resolveLastChannelRaw({
+        persistedLastChannel: "heartbeat",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveLastToRaw({
+        toRaw: "heartbeat",
+        persistedLastChannel: "heartbeat",
+        persistedLastTo: "heartbeat",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the previous external target during heartbeat-style internal turns", () => {
+    expect(
+      resolveLastToRaw({
+        toRaw: "heartbeat",
+        persistedLastChannel: "telegram",
+        persistedLastTo: "123456",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("123456");
+  });
 });

@@ -15,7 +15,7 @@ import {
 } from "./response-prefix-template.js";
 import { compileSlackInteractiveReplies } from "./slack-directives.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "internal_review";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -28,6 +28,29 @@ export type NormalizeReplyOptions = {
   silentToken?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
+
+const INTERNAL_REVIEW_LEAK_PATTERNS = [
+  /\bpaperclip_update_safe\b/i,
+  /\bcan_finalize\b/i,
+  /\bscope_or_logic_issues\b/i,
+  /\brequired_revisions\b/i,
+  /^\s*what still needs to be addressed\b/i,
+  /^\s*i can'?t finalize this safely yet\b/i,
+  /^\s*mình chưa thể chốt an toàn ở thời điểm này\b/i,
+  /\buser-facing response\b/i,
+  /\binternal-status artifact\b/i,
+  /^\s*the draft\b/i,
+  /^\s*the candidate\b/i,
+  /^\s*candidate\b/i,
+];
+
+function looksLikeInternalReviewLeak(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  return INTERNAL_REVIEW_LEAK_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export function normalizeReplyPayload(
   payload: ReplyPayload,
@@ -89,6 +112,10 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+  }
+  if (text && looksLikeInternalReviewLeak(text)) {
+    opts.onSkip?.("internal_review");
+    return null;
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");

@@ -461,6 +461,27 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       err instanceof GatewayLockError ||
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
+      const ownedGatewayHealth = await (async () => {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            return false;
+          }
+          const payload = (await response.json().catch(() => null)) as
+            | { ok?: boolean; status?: string }
+            | null;
+          return payload?.ok === true && payload?.status === "live";
+        } catch {
+          return false;
+        }
+      })();
+      if (ownedGatewayHealth) {
+        gatewayLog.info("gateway already running; startup skipped because an owner is already live");
+        defaultRuntime.exit(0);
+        return;
+      }
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,

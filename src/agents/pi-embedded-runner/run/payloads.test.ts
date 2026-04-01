@@ -90,4 +90,32 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       didSendDeterministicApprovalPrompt: true,
     });
   });
+
+  it("recovers the final assistant text from the message snapshot when lastAssistant is transcript-only", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [],
+      } as never,
+      messagesSnapshot: [
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [],
+        },
+        {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-test",
+          content: [{ type: "text", text: "Đã mở task mới và đang tiếp tục xử lý." }],
+        },
+      ] as never,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("Đã mở task mới và đang tiếp tục xử lý.");
+  });
 });

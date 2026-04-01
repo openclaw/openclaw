@@ -327,6 +327,28 @@ describe("shouldRunPreflightCompaction", () => {
       }),
     ).toBe(true);
   });
+
+  it("can use a later threshold than memory flush for staged compaction", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 10, totalTokensFresh: false },
+        tokenCount: 170_000,
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 12_000,
+        softThresholdTokens: 16_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 10, totalTokensFresh: false },
+        tokenCount: 172_000,
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 12_000,
+        softThresholdTokens: 16_000,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {

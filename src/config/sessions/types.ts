@@ -170,6 +170,13 @@ export type SessionEntry = {
   contextTokens?: number;
   compactionCount?: number;
   memoryFlushAt?: number;
+  lastCompactionAt?: number;
+  lastCompactionReason?: "budget" | "transcript_bytes" | "stale_usage" | "forced_recovery";
+  lastCompactionTokensBefore?: number;
+  lastCompactionTokensAfter?: number;
+  lastMemoryFlushReason?: "budget" | "transcript_bytes" | "stale_usage" | "forced_recovery";
+  lastTranscriptBytesBefore?: number;
+  lastSessionRotateReason?: string;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;

@@ -18,18 +18,7 @@ export const CLAUDE_PARAM_GROUPS = {
     { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
     { keys: ["content"], label: "content" },
   ],
-  edit: [
-    { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
-    {
-      keys: ["oldText", "old_string", "old_text", "oldString"],
-      label: "oldText alias",
-    },
-    {
-      keys: ["newText", "new_string", "new_text", "newString"],
-      label: "newText alias",
-      allowEmpty: true,
-    },
-  ],
+  edit: [{ keys: ["path", "file_path", "filePath", "file"], label: "path alias" }],
 } as const;
 
 type ClaudeParamAlias = {
@@ -108,6 +97,62 @@ function normalizeClaudeParamAliases(record: Record<string, unknown>) {
   }
 }
 
+function normalizeEditEntries(record: Record<string, unknown>) {
+  if (!Array.isArray(record.edits)) {
+    return;
+  }
+  record.edits = record.edits.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return entry;
+    }
+    const normalized = { ...(entry as Record<string, unknown>) };
+    normalizeClaudeParamAliases(normalized);
+    normalizeTextLikeParam(normalized, "oldText");
+    normalizeTextLikeParam(normalized, "newText");
+    return normalized;
+  });
+}
+
+function normalizeEditModeParams(record: Record<string, unknown>) {
+  normalizeEditEntries(record);
+
+  const hasTopLevelSingleMode = "oldText" in record || "newText" in record;
+  if (!Array.isArray(record.edits)) {
+    return;
+  }
+
+  if (record.edits.length === 0) {
+    if (hasTopLevelSingleMode) {
+      delete record.edits;
+    }
+    return;
+  }
+
+  if (hasTopLevelSingleMode) {
+    delete record.oldText;
+    delete record.newText;
+  }
+}
+
+function hasSingleReplacementPayload(record: Record<string, unknown>) {
+  return typeof record.oldText === "string" && typeof record.newText === "string";
+}
+
+function hasMultiEditPayload(record: Record<string, unknown>) {
+  return Array.isArray(record.edits) && record.edits.length > 0;
+}
+
+function assertEditToolParams(record: Record<string, unknown> | undefined, toolName: string): void {
+  assertRequiredParams(record, CLAUDE_PARAM_GROUPS.edit, toolName);
+  if (!record) {
+    return;
+  }
+  if (hasSingleReplacementPayload(record) || hasMultiEditPayload(record)) {
+    return;
+  }
+  throw parameterValidationError("Missing required parameter: edit payload (oldText/newText or edits)");
+}
+
 function addClaudeParamAliasesToSchema(params: {
   properties: Record<string, unknown>;
   required: string[];
@@ -145,6 +190,7 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+  normalizeEditModeParams(normalized);
   return normalized;
 }
 
@@ -229,7 +275,9 @@ export function wrapToolParamNormalization(
       const record =
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
-      if (requiredParamGroups?.length) {
+      if (tool.name === "edit") {
+        assertEditToolParams(record, tool.name);
+      } else if (requiredParamGroups?.length) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);

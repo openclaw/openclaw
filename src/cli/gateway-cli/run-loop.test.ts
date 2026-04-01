@@ -72,6 +72,13 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type LoopSignal = (typeof LOOP_SIGNALS)[number];
+const LOOP_PROCESS_EVENTS = [
+  "beforeExit",
+  "exit",
+  "uncaughtExceptionMonitor",
+  "unhandledRejection",
+] as const;
+type LoopProcessEvent = (typeof LOOP_PROCESS_EVENTS)[number];
 
 function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
   for (const listener of process.listeners(signal)) {
@@ -96,6 +103,18 @@ function addedSignalListener(
   return null;
 }
 
+function removeNewProcessListeners(
+  event: LoopProcessEvent,
+  existing: Set<(...args: unknown[]) => void>,
+) {
+  for (const listener of process.listeners(event)) {
+    const fn = listener as (...args: unknown[]) => void;
+    if (!existing.has(fn)) {
+      process.removeListener(event, fn);
+    }
+  }
+}
+
 async function withIsolatedSignals(
   run: (helpers: { captureSignal: (signal: LoopSignal) => () => void }) => Promise<void>,
 ) {
@@ -105,6 +124,12 @@ async function withIsolatedSignals(
       new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>),
     ]),
   ) as Record<LoopSignal, Set<(...args: unknown[]) => void>>;
+  const existingProcessListeners = Object.fromEntries(
+    LOOP_PROCESS_EVENTS.map((event) => [
+      event,
+      new Set(process.listeners(event) as Array<(...args: unknown[]) => void>),
+    ]),
+  ) as Record<LoopProcessEvent, Set<(...args: unknown[]) => void>>;
   const captureSignal = (signal: LoopSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
     if (!listener) {
@@ -117,6 +142,9 @@ async function withIsolatedSignals(
   } finally {
     for (const signal of LOOP_SIGNALS) {
       removeNewSignalListeners(signal, existingListeners[signal]);
+    }
+    for (const event of LOOP_PROCESS_EVENTS) {
+      removeNewProcessListeners(event, existingProcessListeners[event]);
     }
   }
 }

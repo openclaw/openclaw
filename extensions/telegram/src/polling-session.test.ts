@@ -438,6 +438,71 @@ describe("TelegramPollingSession", () => {
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
   });
 
+  it("rebuilds the transport after a recoverable webhook cleanup error", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable webhook cleanup error");
+    const transport1 = makeTelegramTransport();
+    const transport2 = makeTelegramTransport();
+    const createTelegramTransport = vi.fn(() => transport2);
+    const firstBot = makeBot();
+    const secondBot = makeBot();
+    firstBot.api.deleteWebhook.mockRejectedValueOnce(recoverableError);
+    createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    }));
+
+    const session = createPollingSessionWithTransportRestart({
+      abortSignal: abort.signal,
+      telegramTransport: transport1,
+      createTelegramTransport,
+    });
+
+    await session.runUntilAbort();
+
+    expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
+    expect(firstBot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expect(secondBot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expectTelegramBotTransportSequence(transport1, transport2);
+    expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds the transport after a recoverable setup-time bot creation error", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable setup error");
+    const transport1 = makeTelegramTransport();
+    const transport2 = makeTelegramTransport();
+    const createTelegramTransport = vi.fn(() => transport2);
+    createTelegramBotMock
+      .mockImplementationOnce(() => {
+        throw recoverableError;
+      })
+      .mockReturnValueOnce(makeBot());
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    }));
+
+    const session = createPollingSessionWithTransportRestart({
+      abortSignal: abort.signal,
+      telegramTransport: transport1,
+      createTelegramTransport,
+    });
+
+    await session.runUntilAbort();
+
+    expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
+    expectTelegramBotTransportSequence(transport1, transport2);
+    expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses the transport after a getUpdates conflict", async () => {
     const abort = new AbortController();
     const conflictError = Object.assign(

@@ -1,5 +1,9 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  agentCommandFromIngress,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
@@ -7,6 +11,15 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildPaperclipTrackedIssueDescription,
+  createPaperclipTrackedIssue,
+  findInboundReceiptByMessageId,
+  getInboundReceiptRecord,
+  recordChannelActivity,
+  recordInboundReceiptContinuity,
+  recordInboundReceiptStatus,
+} from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildCommandsMessagePaginated,
   buildCommandsPaginationKeyboard,
@@ -98,6 +111,33 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+const TASK_NEW_CALLBACK_RE = /^task:new:(approve|reuse|defer)(?::(.+))?$/;
+
+export function resolveTelegramCallbackConversationContext(params: {
+  chatId: number | string;
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  dmThreadId?: number;
+}): {
+  threadId?: number;
+  conversationId: string;
+  parentConversationId?: string;
+} {
+  const threadId = params.resolvedThreadId ?? params.dmThreadId;
+  if (params.isGroup) {
+    return {
+      threadId,
+      conversationId: buildTelegramGroupPeerId(params.chatId, threadId),
+      parentConversationId: threadId != null ? String(params.chatId) : undefined,
+    };
+  }
+  return {
+    threadId,
+    conversationId: String(params.chatId),
+    parentConversationId: undefined,
+  };
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1103,8 +1143,9 @@ export const registerTelegramHandlers = ({
       const editCallbackMessage = async (
         text: string,
         params?: Parameters<typeof bot.api.editMessageText>[3],
-      ) =>
-        typeof ctx.editMessageText === "function"
+      ) => {
+        const result =
+          typeof ctx.editMessageText === "function"
           ? ctx.editMessageText(text, params)
           : bot.api.editMessageText(
               callbackMessage.chat.id,
@@ -1112,6 +1153,14 @@ export const registerTelegramHandlers = ({
               text,
               params,
             );
+        await result;
+        recordChannelActivity({
+          channel: "telegram",
+          accountId,
+          direction: "outbound",
+        });
+        return result;
+      };
       const clearCallbackButtons = async () => {
         const emptyKeyboard = { inline_keyboard: [] };
         const replyMarkup = { reply_markup: emptyKeyboard };
@@ -1148,10 +1197,19 @@ export const registerTelegramHandlers = ({
       const replyToCallbackChat = async (
         text: string,
         params?: Parameters<typeof bot.api.sendMessage>[2],
-      ) =>
-        typeof ctx.reply === "function"
+      ) => {
+        const result =
+          typeof ctx.reply === "function"
           ? ctx.reply(text, params)
           : bot.api.sendMessage(callbackMessage.chat.id, text, params);
+        await result;
+        recordChannelActivity({
+          channel: "telegram",
+          accountId,
+          direction: "outbound",
+        });
+        return result;
+      };
 
       const chatId = callbackMessage.chat.id;
       const isGroup =
@@ -1195,6 +1253,14 @@ export const registerTelegramHandlers = ({
         messageThreadId,
       });
       const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
+      const callbackConversation = resolveTelegramCallbackConversationContext({
+        chatId,
+        isGroup,
+        resolvedThreadId,
+        dmThreadId,
+      });
+      const callbackThreadId = callbackConversation.threadId;
+      const callbackConversationId = callbackConversation.conversationId;
       const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;
       if (!isGroup && requireTopic === true && dmThreadId == null) {
         logVerbose(
@@ -1222,9 +1288,188 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const callbackThreadId = resolvedThreadId ?? dmThreadId;
-      const callbackConversationId =
-        callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
+      const sessionState = resolveTelegramSessionState({
+        chatId,
+        isGroup,
+        isForum,
+        messageThreadId,
+        resolvedThreadId,
+        senderId,
+      });
+      const taskNewCallback = data.match(TASK_NEW_CALLBACK_RE);
+      if (taskNewCallback) {
+        const decision = taskNewCallback[1];
+        const receiptId = taskNewCallback[2]?.trim();
+        const receipt =
+          receiptId
+            ? await getInboundReceiptRecord({
+                cfg,
+                agentId: "chief",
+                receiptId,
+              })
+            : await findInboundReceiptByMessageId({
+                cfg,
+                agentId: "chief",
+                messageId: String(callbackMessage.message_id),
+                threadKey: sessionState.sessionKey,
+              });
+        const resolvedReceipt =
+          receipt ??
+          (receiptId
+            ? null
+            : await findInboundReceiptByMessageId({
+                cfg,
+                agentId: "chief",
+                messageId: String(callbackMessage.message_id),
+              }));
+        if (!resolvedReceipt) {
+          await replyToCallbackChat(
+            "Kh\u00f4ng t\u00ecm th\u1ea5y receipt \u0111\u1ec3 x\u1eed l\u00fd ti\u1ebfp.",
+          );
+          return;
+        }
+        const resolvedReceiptId = resolvedReceipt.receiptId;
+        if (resolvedReceipt.senderId && senderId && resolvedReceipt.senderId !== senderId) {
+          await replyToCallbackChat(
+            "Ch\u1ec9 ng\u01b0\u1eddi g\u1eedi y\u00eau c\u1ea7u g\u1ed1c m\u1edbi \u0111\u01b0\u1ee3c x\u00e1c nh\u1eadn task n\u00e0y.",
+          );
+          return;
+        }
+        const originalMessage = resolvedReceipt.bodyText?.trim() || resolvedReceipt.bodyPreview?.trim();
+        if (!originalMessage) {
+          await replyToCallbackChat(
+            "Kh\u00f4ng c\u00f2n n\u1ed9i dung g\u1ed1c \u0111\u1ec3 ti\u1ebfp t\u1ee5c task n\u00e0y.",
+          );
+          return;
+        }
+        if (decision === "defer") {
+          await clearCallbackButtons();
+          await recordInboundReceiptContinuity({
+            cfg,
+            agentId: "chief",
+            receiptId: resolvedReceiptId,
+            continuityDecision: "new_task_candidate",
+            proposalStatus: "declined",
+            proposedTaskIntentKey: resolvedReceipt.proposedTaskIntentKey,
+            matchedTaskId: resolvedReceipt.matchedTaskId,
+            matchedPaperclipIssueId: resolvedReceipt.matchedPaperclipIssueId,
+            openIntentKey: resolvedReceipt.openIntentKey,
+            continuityReasonCodes: resolvedReceipt.continuityReasonCodes,
+            continuityConfidence: resolvedReceipt.continuityConfidence,
+          });
+          await recordInboundReceiptStatus({
+            cfg,
+            agentId: "chief",
+            receiptId: resolvedReceiptId,
+            status: "awaiting_input",
+            proposalStatus: "declined",
+          });
+          await editCallbackMessage(
+            "\u0110\u00e3 \u0111\u1ec3 task n\u00e0y l\u1ea1i. Khi anh mu\u1ed1n m\u1edf task m\u1edbi, ch\u1ec9 c\u1ea7n x\u00e1c nh\u1eadn l\u1ea1i.",
+          );
+          return;
+        }
+
+        let matchedTaskId = resolvedReceipt.matchedTaskId;
+        let paperclipIssueId = resolvedReceipt.matchedPaperclipIssueId;
+        let continuityDecision: "attach_existing_task" | "new_task_candidate" =
+          decision === "reuse" ? "attach_existing_task" : "new_task_candidate";
+        let createdByApproval = false;
+
+        if (decision === "approve") {
+          matchedTaskId = undefined;
+          const createdIssue = await createPaperclipTrackedIssue({
+            title: resolvedReceipt.bodyPreview ?? "Tracked work",
+            description: buildPaperclipTrackedIssueDescription({
+              receiptId: resolvedReceipt.receiptId,
+              bodyText: resolvedReceipt.bodyText,
+              threadKey: resolvedReceipt.threadKey,
+              openIntentKey: resolvedReceipt.openIntentKey,
+              intentSummary: resolvedReceipt.bodyPreview,
+              originChannel: "telegram",
+              originMessageId: resolvedReceipt.sourceMessageId ?? resolvedReceipt.messageId,
+              createdByApproval: true,
+            }),
+          });
+          paperclipIssueId = createdIssue.id;
+          createdByApproval = true;
+        } else if (!matchedTaskId) {
+          await replyToCallbackChat(
+            "Kh\u00f4ng t\u00ecm th\u1ea5y task c\u0169 \u0111\u1ee7 kh\u1edbp \u0111\u1ec3 ti\u1ebfp t\u1ee5c. Anh c\u00f3 th\u1ec3 m\u1edf task m\u1edbi thay v\u00ec reuse.",
+          );
+          return;
+        }
+
+        await clearCallbackButtons();
+        await recordInboundReceiptContinuity({
+          cfg,
+          agentId: "chief",
+          receiptId: resolvedReceiptId,
+          continuityDecision,
+          proposalStatus: "approved",
+          proposedTaskIntentKey: resolvedReceipt.proposedTaskIntentKey,
+          matchedTaskId,
+          matchedPaperclipIssueId: paperclipIssueId,
+          openIntentKey: resolvedReceipt.openIntentKey,
+          continuityReasonCodes: resolvedReceipt.continuityReasonCodes,
+          continuityConfidence: resolvedReceipt.continuityConfidence,
+        });
+        await recordInboundReceiptStatus({
+          cfg,
+          agentId: "chief",
+          receiptId: resolvedReceiptId,
+          status: "task_created",
+          proposalStatus: "approved",
+        });
+        await editCallbackMessage(
+          decision === "approve"
+            ? "\u0110ang m\u1edf task m\u1edbi v\u00e0 chuy\u1ec3n sang th\u1ef1c thi."
+            : "\u0110ang g\u1eafn message n\u00e0y v\u00e0o task \u0111ang m\u1edf \u0111\u1ec3 ti\u1ebfp t\u1ee5c x\u1eed l\u00fd.",
+        );
+        try {
+          await agentCommandFromIngress(
+            {
+              message: originalMessage,
+              agentId: resolvedReceipt.agentId || "chief",
+              sessionKey: resolvedReceipt.sessionKey || sessionState.sessionKey,
+              replyTo: String(chatId),
+              replyChannel: "telegram",
+              channel: "telegram",
+              replyAccountId: accountId,
+              accountId,
+              threadId: callbackThreadId,
+              deliver: true,
+              inboundReceiptId: resolvedReceipt.receiptId,
+              sourceMessageId: resolvedReceipt.sourceMessageId ?? resolvedReceipt.messageId,
+              matchedTaskId,
+              paperclipIssueId,
+              threadKey: resolvedReceipt.threadKey || sessionState.sessionKey,
+              openIntentKey: resolvedReceipt.openIntentKey,
+              intentSummary: resolvedReceipt.bodyPreview,
+              currentGoal: resolvedReceipt.bodyPreview,
+              continuityDecision,
+              createdByApproval,
+              senderIsOwner: false,
+              allowModelOverride: false,
+            },
+            runtime,
+          );
+        } catch (err) {
+          await recordInboundReceiptError({
+            cfg,
+            agentId: "chief",
+            receiptId: resolvedReceiptId,
+            error: err,
+          });
+          await editCallbackMessage(
+            decision === "approve"
+              ? "M\u1edf task m\u1edbi ch\u01b0a kh\u1edfi \u0111\u1ed9ng \u0111\u01b0\u1ee3c. T\u00f4i \u0111\u00e3 gi\u1eef receipt m\u1edf \u0111\u1ec3 recovery ti\u1ebfp t\u1ee5c x\u1eed l\u00fd."
+              : "G\u1eafn v\u00e0o task c\u0169 ch\u01b0a kh\u1edfi \u0111\u1ed9ng \u0111\u01b0\u1ee3c. T\u00f4i \u0111\u00e3 gi\u1eef receipt m\u1edf \u0111\u1ec3 recovery ti\u1ebfp t\u1ee5c x\u1eed l\u00fd.",
+          );
+          throw err;
+        }
+        return;
+      }
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         const resolved = await resolvePluginConversationBindingApproval({
@@ -1236,7 +1481,7 @@ export const registerTelegramHandlers = ({
         await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
         return;
       }
-      const pluginCallback = await dispatchPluginInteractiveHandler({
+        const pluginCallback = await dispatchPluginInteractiveHandler({
         channel: "telegram",
         data,
         callbackId: callback.id,
@@ -1244,7 +1489,7 @@ export const registerTelegramHandlers = ({
           accountId,
           callbackId: callback.id,
           conversationId: callbackConversationId,
-          parentConversationId: callbackThreadId != null ? String(chatId) : undefined,
+          parentConversationId: callbackConversation.parentConversationId,
           senderId: senderId || undefined,
           senderUsername: senderUsername || undefined,
           threadId: callbackThreadId,

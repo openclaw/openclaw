@@ -5,6 +5,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   isMarkdownCapableMessageChannel,
   resolveGatewayMessageChannel,
+  normalizeSessionRouteChannel,
 } from "./message-channel.js";
 
 const emptyRegistry = createTestRegistry([]);
@@ -47,6 +48,14 @@ describe("message-channel", () => {
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+  });
+
+  it("drops synthetic heartbeat-style channels from persisted session routes", () => {
+    expect(normalizeSessionRouteChannel("heartbeat")).toBeUndefined();
+    expect(normalizeSessionRouteChannel("cron-event")).toBeUndefined();
+    expect(normalizeSessionRouteChannel("exec-event")).toBeUndefined();
+    expect(normalizeSessionRouteChannel("discord")).toBe("discord");
+    expect(normalizeSessionRouteChannel("demo-custom")).toBe("demo-custom");
   });
 
   it("normalizes plugin aliases when registered", () => {

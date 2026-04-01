@@ -191,4 +191,26 @@ describe("delivery context helpers", () => {
     expect(normalized.lastAccountId).toBeUndefined();
     expect(normalized.lastThreadId).toBeUndefined();
   });
+
+  it("drops synthetic or channel-less persisted session routes", () => {
+    expect(
+      normalizeSessionDeliveryFields({
+        lastChannel: "heartbeat",
+        lastTo: "heartbeat",
+      }),
+    ).toEqual({
+      deliveryContext: undefined,
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+      lastThreadId: undefined,
+    });
+
+    expect(
+      deliveryContextFromSession({
+        origin: { provider: "heartbeat" },
+        lastTo: "heartbeat",
+      }),
+    ).toBeUndefined();
+  });
 });

@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "./account-id.js";
-import { normalizeMessageChannel } from "./message-channel.js";
+import { normalizeMessageChannel, normalizeSessionRouteChannel } from "./message-channel.js";
 
 export type DeliveryContext = {
   channel?: string;
@@ -140,17 +140,24 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     };
   }
 
+  const primaryChannel = normalizeSessionRouteChannel(source.lastChannel ?? source.channel);
+  const fallbackDeliveryContext = source.deliveryContext
+    ? {
+        ...source.deliveryContext,
+        channel: normalizeSessionRouteChannel(source.deliveryContext.channel),
+      }
+    : undefined;
   const merged = mergeDeliveryContext(
     normalizeDeliveryContext({
-      channel: source.lastChannel ?? source.channel,
+      channel: primaryChannel,
       to: source.lastTo,
       accountId: source.lastAccountId,
       threadId: source.lastThreadId,
     }),
-    normalizeDeliveryContext(source.deliveryContext),
+    normalizeDeliveryContext(fallbackDeliveryContext),
   );
 
-  if (!merged) {
+  if (!merged?.channel) {
     return {
       deliveryContext: undefined,
       lastChannel: undefined,
@@ -176,13 +183,18 @@ export function deliveryContextFromSession(
     return undefined;
   }
   const source: DeliveryContextSessionSource = {
-    channel: entry.channel ?? entry.origin?.provider,
-    lastChannel: entry.lastChannel,
+    channel: normalizeSessionRouteChannel(entry.channel ?? entry.origin?.provider),
+    lastChannel: normalizeSessionRouteChannel(entry.lastChannel),
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
     lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
     origin: entry.origin,
-    deliveryContext: entry.deliveryContext,
+    deliveryContext: entry.deliveryContext
+      ? {
+          ...entry.deliveryContext,
+          channel: normalizeSessionRouteChannel(entry.deliveryContext.channel),
+        }
+      : undefined,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;
 }

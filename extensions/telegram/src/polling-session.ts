@@ -135,6 +135,7 @@ export class TelegramPollingSession {
     if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
       throw err;
     }
+    this.#transportState.markDirty();
     return this.#waitBeforeRestart(
       (delay) => `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${delay}.`,
     );

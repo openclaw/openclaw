@@ -109,6 +109,14 @@ describe("normalizeReplyPayload", () => {
     }
   });
 
+  it("keeps legitimate architectural text that mentions quality_guard", () => {
+    const result = normalizeReplyPayload({
+      text: "chief là người điều phối, còn quality_guard là người phản biện cuối.",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("quality_guard");
+  });
+
   it("strips NO_REPLY from mixed emoji message (#30916)", () => {
     const result = normalizeReplyPayload({ text: "😄 NO_REPLY" });
     expect(result).not.toBeNull();

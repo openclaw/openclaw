@@ -66,6 +66,9 @@ export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+export const mockedPrepareProviderExtraParams = vi.fn(() => undefined);
+export const mockedResolveProviderCapabilitiesWithPlugin = vi.fn(() => undefined);
+export const mockedWrapProviderStreamFn = vi.fn((params: { streamFn?: unknown } = {}) => params.streamFn);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
@@ -213,6 +216,14 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedEnsureRuntimePluginsLoaded.mockReset();
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
+  mockedPrepareProviderExtraParams.mockReset();
+  mockedPrepareProviderExtraParams.mockReturnValue(undefined);
+  mockedResolveProviderCapabilitiesWithPlugin.mockReset();
+  mockedResolveProviderCapabilitiesWithPlugin.mockReturnValue(undefined);
+  mockedWrapProviderStreamFn.mockReset();
+  mockedWrapProviderStreamFn.mockImplementation(
+    (params: { streamFn?: unknown } = {}) => params.streamFn,
+  );
   mockedRunEmbeddedAttempt.mockReset();
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
@@ -334,6 +345,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
+    prepareProviderExtraParams: mockedPrepareProviderExtraParams,
+    resolveProviderCapabilitiesWithPlugin: mockedResolveProviderCapabilitiesWithPlugin,
+    wrapProviderStreamFn: mockedWrapProviderStreamFn,
   }));
 
   vi.doMock("../auth-profiles.js", () => ({
@@ -431,6 +445,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("../../utils/message-channel.js", () => ({

@@ -328,18 +328,43 @@ export function registerLogTransport(transport: LogTransport): () => void {
 
 export const __test__ = {
   shouldSkipMutatingLoggingConfigRead,
+  defaultRollingPathForDateForTest,
 };
 
-function formatLocalDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function resolveRollingLogTimeZone(): string | undefined {
+  const explicit = process.env.TZ?.trim();
+  if (!explicit) {
+    return undefined;
+  }
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: explicit });
+    return explicit;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatRollingLocalDate(date: Date): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: resolveRollingLogTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(date);
+}
+
+function defaultRollingPathForDate(date: Date): string {
+  const today = formatRollingLocalDate(date);
+  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+}
+
+function defaultRollingPathForDateForTest(date: Date): string {
+  return defaultRollingPathForDate(date);
 }
 
 function defaultRollingPathForToday(): string {
-  const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+  return defaultRollingPathForDate(new Date());
 }
 
 function isRollingPath(file: string): boolean {

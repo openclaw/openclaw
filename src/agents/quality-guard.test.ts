@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBlockedFinalizationMessage,
-  detectQualityGuardLanguage,
   isLikelyTrivialChiefReply,
   parseQualityGuardReview,
   shouldRequireChiefQualityGuardReview,
@@ -42,15 +41,6 @@ describe("quality guard heuristics", () => {
       }),
     ).toBe(false);
   });
-
-  it("detects Vietnamese requests for final-review language control", () => {
-    expect(
-      detectQualityGuardLanguage({
-        originalPrompt: "Kiểm tra lại giúp mình và chốt câu trả lời cuối.",
-        candidateText: "Mình đang rà lại toàn bộ trước khi chốt.",
-      }),
-    ).toBe("vi");
-  });
 });
 
 describe("quality guard contract parsing", () => {
@@ -76,14 +66,33 @@ describe("quality guard contract parsing", () => {
     expect(parsed.findings[0]).toContain("invalid review contract");
   });
 
-  it("builds a Vietnamese blocked message without leaking English review bullets", () => {
+  it("filters internal review phrases out of blocked user-facing fallback", () => {
     const message = buildBlockedFinalizationMessage({
-      language: "vi",
       review: {
         verdict: "block",
         severity: "high",
         findings: ["The draft still overclaims without verified evidence."],
         missing_evidence: ["Missing proof from the current stack."],
+        scope_or_logic_issues: ["quality_guard requires another internal review pass."],
+        required_revisions: ["required_revisions: add more proof before can_finalize=true."],
+        paperclip_update_safe: false,
+        can_finalize: false,
+      },
+    });
+    expect(message).toContain("Mình chưa thể chốt an toàn");
+    expect(message).toContain("Những gì còn cần xử lý");
+    expect(message).not.toContain("The draft still overclaims");
+    expect(message).not.toContain("quality_guard");
+    expect(message).not.toContain("can_finalize");
+  });
+
+  it("keeps non-internal review bullets when they are already user-facing", () => {
+    const message = buildBlockedFinalizationMessage({
+      review: {
+        verdict: "block",
+        severity: "high",
+        findings: ["Cần thêm bằng chứng trực tiếp từ runtime hiện tại."],
+        missing_evidence: [],
         scope_or_logic_issues: [],
         required_revisions: [],
         paperclip_update_safe: false,
@@ -91,8 +100,6 @@ describe("quality guard contract parsing", () => {
       },
     });
     expect(message).toContain("Mình chưa thể chốt an toàn");
-    expect(message).toContain("Những gì còn cần xử lý");
-    expect(message).not.toContain("What still needs to be addressed");
-    expect(message).not.toContain("The draft still overclaims");
+    expect(message).toContain("Cần thêm bằng chứng trực tiếp từ runtime hiện tại.");
   });
 });

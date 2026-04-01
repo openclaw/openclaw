@@ -355,6 +355,34 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
   });
 
+  it("loadSessionStore strips persisted synthetic heartbeat routing metadata", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "loadSessionStoreSyntheticHeartbeat",
+      entries: {
+        [sessionKey]: buildMainSessionEntry({
+          origin: {
+            provider: "heartbeat",
+            from: "heartbeat",
+            to: "heartbeat",
+          },
+          deliveryContext: {
+            channel: "heartbeat",
+            to: "heartbeat",
+          },
+          lastChannel: "heartbeat",
+          lastTo: "heartbeat",
+        }),
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.origin?.provider).toBeUndefined();
+    expect(store[sessionKey]?.deliveryContext).toBeUndefined();
+    expect(store[sessionKey]?.lastChannel).toBeUndefined();
+    expect(store[sessionKey]?.lastTo).toBeUndefined();
+  });
+
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {
     const sessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({

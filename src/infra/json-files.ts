@@ -1,6 +1,43 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
+const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "ENOTEMPTY", "EEXIST"]);
+const RENAME_RETRY_DELAYS_MS = [25, 75, 150, 300] as const;
+
+function getErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function isRetryableRenameError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return code != null && RETRYABLE_RENAME_CODES.has(code);
+}
+
+async function moveFileIntoPlace(tmp: string, filePath: string) {
+  let lastError: unknown;
+  for (const waitMs of RENAME_RETRY_DELAYS_MS) {
+    try {
+      await fs.rename(tmp, filePath);
+      return;
+    } catch (error) {
+      if (!isRetryableRenameError(error)) {
+        throw error;
+      }
+      lastError = error;
+      await delay(waitMs);
+    }
+  }
+  if (!isRetryableRenameError(lastError)) {
+    throw lastError;
+  }
+  await fs.copyFile(tmp, filePath);
+}
 
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
@@ -52,7 +89,7 @@ export async function writeTextAtomic(
     } catch {
       // best-effort; ignore on platforms without chmod
     }
-    await fs.rename(tmp, filePath);
+    await moveFileIntoPlace(tmp, filePath);
     try {
       const dirHandle = await fs.open(parentDir, "r");
       try {

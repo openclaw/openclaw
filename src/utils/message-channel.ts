@@ -71,6 +71,16 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   return normalizeAnyChannelId(normalized) ?? normalized;
 }
 
+const SESSION_ROUTE_PSEUDO_CHANNELS = new Set(["heartbeat", "cron-event", "exec-event"]);
+
+export function normalizeSessionRouteChannel(raw?: string | null): string | undefined {
+  const normalized = normalizeMessageChannel(raw);
+  if (!normalized || SESSION_ROUTE_PSEUDO_CHANNELS.has(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
 const listPluginChannelIds = (): string[] => {
   return listRegisteredChannelPluginIds();
 };

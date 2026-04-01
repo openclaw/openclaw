@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
@@ -18,6 +19,7 @@ import {
   extractAssistantText,
   extractAssistantThinking,
   formatReasoningMessage,
+  isAssistantMessage,
 } from "../../pi-embedded-utils.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -43,6 +45,37 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "needs",
   "requires",
 ] as const;
+
+function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = typeof message.provider === "string" ? message.provider.trim() : "";
+  const model = typeof message.model === "string" ? message.model.trim() : "";
+  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
+function resolveFallbackAssistantText(params: {
+  lastAssistant?: AssistantMessage;
+  messagesSnapshot?: AgentMessage[];
+}): string {
+  const direct = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  if (direct.trim()) {
+    return direct;
+  }
+  const messages = Array.isArray(params.messagesSnapshot) ? params.messagesSnapshot : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isAssistantMessage(message) || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      continue;
+    }
+    const candidate = extractAssistantText(message);
+    if (candidate.trim()) {
+      return candidate;
+    }
+  }
+  return "";
+}
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = (error ?? "").toLowerCase();
@@ -90,6 +123,7 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  messagesSnapshot?: AgentMessage[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -199,7 +233,10 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackAnswerText = resolveFallbackAssistantText({
+    lastAssistant: params.lastAssistant,
+    messagesSnapshot: params.messagesSnapshot,
+  });
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;

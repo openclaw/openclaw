@@ -1250,6 +1250,7 @@ export async function runEmbeddedPiAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            messagesSnapshot: attempt.messagesSnapshot,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
@@ -1368,6 +1369,41 @@ export async function runEmbeddedPiAgent(
                 successfulCronAdds: attempt.successfulCronAdds,
               };
             }
+
+            const hadMutatingTools = attempt.toolMetas.some((t) =>
+              isLikelyMutatingToolName(t.toolName),
+            );
+            const missingReplyText = params.enforceFinalTag
+              ? hadMutatingTools
+                ? "⚠️ Agent finished without a valid `<final>` answer block. Note: some tool actions may already have been executed — please verify before retrying."
+                : "⚠️ Agent finished without a valid `<final>` answer block. Please retry."
+              : hadMutatingTools
+                ? "⚠️ Agent finished without generating a deliverable reply. Note: some tool actions may already have been executed — please verify before retrying."
+                : "⚠️ Agent finished without generating a deliverable reply. Please retry.";
+            log.warn(
+              `empty terminal reply detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `stopReason=${incompleteStopReason ?? "none"} payloads=0 enforceFinalTag=${params.enforceFinalTag === true}`,
+            );
+            return {
+              payloads: [
+                {
+                  text: missingReplyText,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
           }
 
           log.debug(

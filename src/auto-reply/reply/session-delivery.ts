@@ -10,6 +10,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
+  normalizeSessionRouteChannel,
 } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 
@@ -27,7 +28,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
     return undefined;
   }
-  return normalizeMessageChannel(head);
+  return normalizeSessionRouteChannel(head);
 }
 
 function isMainSessionKey(sessionKey?: string): boolean {
@@ -89,14 +90,14 @@ export function resolveLastChannelRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
-  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const originatingChannel = normalizeSessionRouteChannel(params.originatingChannelRaw);
   // WebChat should own reply routing for direct-session UI turns, but only when
   // the session has no established external delivery route. If the session was
   // created via an external channel (e.g. Telegram, iMessage), webchat/dashboard
   // access must not overwrite the persisted route — doing so causes subagent
   // completion events to be delivered to the dashboard instead of the original
   // channel. See: https://github.com/openclaw/openclaw/issues/47745
-  const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+  const persistedChannel = normalizeSessionRouteChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRoute =
     isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
@@ -105,9 +106,9 @@ export function resolveLastChannelRaw(params: {
     !hasEstablishedExternalRoute &&
     (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey))
   ) {
-    return params.originatingChannelRaw;
+    return originatingChannel;
   }
-  let resolved = params.originatingChannelRaw || params.persistedLastChannel;
+  let resolved = originatingChannel ?? persistedChannel;
   // Internal/non-deliverable sources should not overwrite previously known
   // external delivery routes (or explicit channel hints from the session key).
   if (!isExternalRoutingChannel(originatingChannel)) {
@@ -128,8 +129,8 @@ export function resolveLastToRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
-  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-  const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+  const originatingChannel = normalizeSessionRouteChannel(params.originatingChannelRaw);
+  const persistedChannel = normalizeSessionRouteChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRouteForTo =
     isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
@@ -149,6 +150,7 @@ export function resolveLastToRaw(params: {
     if (hasExternalFallback && params.persistedLastTo) {
       return params.persistedLastTo;
     }
+    return params.originatingToRaw;
   }
 
   return params.originatingToRaw || params.toRaw || params.persistedLastTo;

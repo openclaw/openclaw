@@ -15,6 +15,7 @@ import type { LoggerResolvedSettings, LoggerSettings, PinoLikeLogger } from "./l
 import {
   DEFAULT_LOG_DIR,
   DEFAULT_LOG_FILE,
+  __test__,
   getChildLogger,
   getLogger,
   getResolvedLoggerSettings,
@@ -45,6 +46,7 @@ export {
   normalizeLogLevel,
   DEFAULT_LOG_DIR,
   DEFAULT_LOG_FILE,
+  __test__,
   getChildLogger,
   getLogger,
   getResolvedLoggerSettings,

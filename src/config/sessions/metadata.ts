@@ -2,7 +2,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { normalizeSessionRouteChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
@@ -42,19 +42,21 @@ const mergeOrigin = (
 };
 
 export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
-  const label = resolveConversationLabel(ctx)?.trim();
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
     ctx.Surface ||
     ctx.Provider;
-  const provider = normalizeMessageChannel(providerRaw);
+  const provider = normalizeSessionRouteChannel(providerRaw);
+  const label = provider ? resolveConversationLabel(ctx)?.trim() : undefined;
   const surface = ctx.Surface?.trim().toLowerCase();
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
-  const from = ctx.From?.trim();
+  const from = provider ? ctx.From?.trim() : undefined;
   const to =
-    (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
-  const accountId = ctx.AccountId?.trim();
-  const threadId = ctx.MessageThreadId ?? undefined;
+    provider
+      ? ((typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined)
+      : undefined;
+  const accountId = provider ? ctx.AccountId?.trim() : undefined;
+  const threadId = provider ? (ctx.MessageThreadId ?? undefined) : undefined;
 
   const origin: SessionOrigin = {};
   if (label) {

@@ -63,10 +63,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     sessionId,
     updatedAt: Date.now(),
   };
+  const finishedAt = Date.now();
   const next: SessionEntry = {
     ...entry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: finishedAt,
     contextTokens,
   };
   setSessionRuntimeModel(next, {
@@ -85,6 +86,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   next.abortedLastRun = result.meta.aborted ?? false;
+  next.status = result.meta.aborted ? "timeout" : "done";
+  next.endedAt = finishedAt;
+  if (typeof next.startedAt === "number" && Number.isFinite(next.startedAt) && next.startedAt > 0) {
+    next.runtimeMs = Math.max(0, finishedAt - next.startedAt);
+  }
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }

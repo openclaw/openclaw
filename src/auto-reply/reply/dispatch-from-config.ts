@@ -22,6 +22,7 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { recordInboundReceiptIgnored } from "../../infra/inbound-receipt-ledger.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -210,6 +211,18 @@ export async function dispatchReplyFromConfig(params: {
   };
 
   if (shouldSkipDuplicateInbound(ctx)) {
+    if (ctx.InboundReceiptId) {
+      const receiptAgentId = resolveSessionAgentId({
+        sessionKey: ctx.SessionKey,
+        config: cfg,
+      });
+      await recordInboundReceiptIgnored({
+        cfg,
+        agentId: receiptAgentId,
+        receiptId: ctx.InboundReceiptId,
+        ignoreReason: "duplicate_inbound",
+      });
+    }
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }

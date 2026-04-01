@@ -588,6 +588,13 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    sessionEntry.lastCompactionAt = undefined;
+    sessionEntry.lastCompactionReason = undefined;
+    sessionEntry.lastCompactionTokensBefore = undefined;
+    sessionEntry.lastCompactionTokensAfter = undefined;
+    sessionEntry.lastMemoryFlushReason = undefined;
+    sessionEntry.lastTranscriptBytesBefore = undefined;
+    sessionEntry.lastSessionRotateReason = undefined;
     // Clear stale context hash so the first flush in the new session is not
     // incorrectly skipped due to a hash match with the old transcript (#30115).
     sessionEntry.memoryFlushContextHash = undefined;

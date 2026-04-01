@@ -35,6 +35,7 @@ export { getCachedGatewayModelPricing };
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
+const RETRY_TTL_MS = 5 * 60 * 1000;
 const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   "google-gemini-cli": "google",
   kimi: "moonshotai",
@@ -360,13 +361,52 @@ function resolveCatalogPricingForRef(params: {
 }
 
 function scheduleRefresh(params: { config: OpenClawConfig; fetchImpl: typeof fetch }): void {
+  scheduleRefreshWithDelay(params, CACHE_TTL_MS);
+}
+
+function scheduleRefreshWithDelay(
+  params: { config: OpenClawConfig; fetchImpl: typeof fetch },
+  delayMs: number,
+): void {
   clearRefreshTimer();
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
-    void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-      log.warn(`pricing refresh failed: ${String(error)}`);
-    });
-  }, CACHE_TTL_MS);
+    void runGatewayModelPricingRefresh(params, "refresh");
+  }, delayMs);
+}
+
+function isTimeoutLikeError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      return true;
+    }
+    return /timeout|aborted due to timeout/i.test(error.message);
+  }
+  return /timeout|aborted due to timeout/i.test(String(error));
+}
+
+async function runGatewayModelPricingRefresh(
+  params: { config: OpenClawConfig; fetchImpl?: typeof fetch },
+  mode: "bootstrap" | "refresh",
+): Promise<void> {
+  try {
+    await refreshGatewayModelPricingCache(params);
+  } catch (error: unknown) {
+    if (mode === "bootstrap" && isTimeoutLikeError(error)) {
+      log.info(
+        `pricing bootstrap timed out; continuing without live pricing cache and retrying in ${Math.round(RETRY_TTL_MS / 60_000)}m`,
+      );
+    } else {
+      log.warn(`pricing ${mode} failed: ${String(error)}`);
+    }
+    scheduleRefreshWithDelay(
+      {
+        config: params.config,
+        fetchImpl: params.fetchImpl ?? fetch,
+      },
+      RETRY_TTL_MS,
+    );
+  }
 }
 
 export async function refreshGatewayModelPricingCache(params: {
@@ -423,9 +463,7 @@ export function startGatewayModelPricingRefresh(params: {
   config: OpenClawConfig;
   fetchImpl?: typeof fetch;
 }): () => void {
-  void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-    log.warn(`pricing bootstrap failed: ${String(error)}`);
-  });
+  void runGatewayModelPricingRefresh(params, "bootstrap");
   return () => {
     clearRefreshTimer();
   };

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
 
 async function withTempBase<T>(run: (base: string) => Promise<T>): Promise<T> {
@@ -11,6 +11,10 @@ async function withTempBase<T>(run: (base: string) => Promise<T>): Promise<T> {
 }
 
 describe("json file helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     {
       name: "reads valid json",
@@ -65,6 +69,22 @@ describe("json file helpers", () => {
       const filePath = path.join(base, "nested", "note.txt");
       await writeTextAtomic(filePath, input, { appendTrailingNewline: true });
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it("falls back to copy when rename keeps failing with a retryable Windows-style error", async () => {
+    await withTempBase(async (base) => {
+      const filePath = path.join(base, "nested", "ledger.json");
+      const renameSpy = vi.spyOn(fs, "rename").mockRejectedValue(
+        Object.assign(new Error("rename blocked"), { code: "EPERM" }),
+      );
+      const copySpy = vi.spyOn(fs, "copyFile");
+
+      await writeJsonAtomic(filePath, { ok: true }, { trailingNewline: true });
+
+      expect(renameSpy).toHaveBeenCalled();
+      expect(copySpy).toHaveBeenCalledOnce();
+      await expect(fs.readFile(filePath, "utf8")).resolves.toContain('"ok": true');
     });
   });
 
