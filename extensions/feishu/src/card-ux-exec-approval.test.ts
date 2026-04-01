@@ -143,7 +143,7 @@ describe("createExecApprovalResolvedCard", () => {
     });
 
     const body = card.body as { elements: Array<Record<string, unknown>> };
-    expect(body.elements[0].content).toContain("<at id=user@feishu></at>");
+    expect(body.elements[0].content).toContain('<at id="user@feishu"></at>');
   });
 
   it("omits command and cwd when not provided", () => {

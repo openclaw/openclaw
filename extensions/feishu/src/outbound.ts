@@ -125,7 +125,7 @@ async function sendOutboundText(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   ...createAttachedChannelResultAdapter({
