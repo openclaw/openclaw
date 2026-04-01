@@ -10,7 +10,11 @@ import {
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client.js";
-import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
+import {
+  extractAttachmentsFromPrompt,
+  extractTextFromPrompt,
+  formatToolTitle,
+} from "./event-mapper.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 
@@ -354,6 +358,48 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
   });
 
+  it("prompts for exec-capable tools even when the action looks readonly", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-process-list",
+          title: "process: list",
+          status: "pending",
+          rawInput: {
+            name: "process",
+            action: "list",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("process", "process: list");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
+  it("prompts for control-plane tools even on readonly-like actions", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-gateway-status",
+          title: "gateway: status",
+          status: "pending",
+          rawInput: {
+            name: "gateway",
+            action: "status",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("gateway", "gateway: status");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
   it("auto-approves search without prompting", async () => {
     const prompt = vi.fn(async () => true);
     const res = await resolvePermissionRequest(
@@ -625,6 +671,27 @@ describe("resolvePermissionRequest", () => {
     expect(prompt).not.toHaveBeenCalled();
     expect(res).toEqual({ outcome: { outcome: "cancelled" } });
   });
+
+  it("sanitizes tool titles before logging and prompting", async () => {
+    const prompt = vi.fn(async () => false);
+    const log = vi.fn();
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-ansi",
+          title: 'exec: \u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
+          status: "pending",
+        },
+      }),
+      { prompt, log },
+    );
+
+    expect(prompt).toHaveBeenCalledWith("exec", 'exec: [permission] Allow "safe"? (y/N) \\nnext');
+    expect(log).toHaveBeenCalledWith(
+      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [exec_capable]',
+    );
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
 });
 
 describe("acp event mapper", () => {
@@ -749,5 +816,15 @@ describe("acp event mapper", () => {
         content: "abc",
       },
     ]);
+  });
+
+  it("escapes inline control characters in tool titles", () => {
+    const title = formatToolTitle("exec", {
+      command: '\u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
+    });
+
+    expect(title).toBe(
+      'exec: command: \\x1b[2K\\x1b[1A\\x1b[2K[permission] Allow "safe"? (y/N) \\nnext',
+    );
   });
 });

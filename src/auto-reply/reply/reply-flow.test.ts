@@ -719,6 +719,58 @@ describe("parseSlackDirectives", () => {
     ]);
   });
 
+  it("parses optional Slack button styles without truncating callback values", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_buttons: Approve:pluginbind:approval-123:o:primary, Reject:deny:danger, Skip:skip:secondary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            value: "pluginbind:approval-123:o",
+            style: "primary",
+          },
+          {
+            label: "Reject",
+            value: "deny",
+            style: "danger",
+          },
+          {
+            label: "Skip",
+            value: "skip",
+            style: "secondary",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves slack_select values that end in style-like suffixes", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose one | Queue:queue:danger, Archive:archive:primary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Choose one",
+        options: [
+          {
+            label: "Queue",
+            value: "queue:danger",
+          },
+          {
+            label: "Archive",
+            value: "archive:primary",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps existing interactive blocks when compiling additional Slack directives", () => {
     const result = parseSlackDirectives({
       text: "Choose [[slack_buttons: Retry:retry]]",
@@ -1454,7 +1506,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
   });
 
-  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+  it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
     const key = `test-idle-window-race-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -1485,10 +1537,16 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Simulate the race: a new message arrives AFTER the drain finished and
-    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
-    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    // deleted the queue. The next enqueue refreshes the callback and should
+    // kick a new idle drain automatically.
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      runFollowup,
+    );
 
-    // kickFollowupDrainIfIdle should have restarted the drain automatically.
     await secondProcessed.promise;
 
     expect(calls).toHaveLength(2);
@@ -1569,7 +1627,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
   });
 
-  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+  it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
       "./queue/drain.js?scope=restart-a",
@@ -1600,7 +1658,13 @@ describe("followup queue drain restart after idle window", () => {
 
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+      enqueueB.enqueueFollowupRun(
+        key,
+        createRun({ prompt: "after-idle" }),
+        settings,
+        "message-id",
+        runFollowup,
+      );
 
       await vi.waitFor(
         () => {
@@ -1852,7 +1916,6 @@ describe("createReplyDispatcher", () => {
 
   it("delays block replies after the first when humanDelay is natural", async () => {
     vi.useFakeTimers();
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
       deliver,
@@ -1867,14 +1930,12 @@ describe("createReplyDispatcher", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(799);
+    await vi.advanceTimersByTimeAsync(2499);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(2);
-
-    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 

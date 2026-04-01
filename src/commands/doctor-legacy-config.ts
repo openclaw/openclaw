@@ -11,7 +11,8 @@ import {
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
 import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
-import { DEFAULT_TALK_PROVIDER, normalizeTalkSection } from "../config/talk.js";
+import { LEGACY_TALK_PROVIDER_ID, normalizeTalkSection } from "../config/talk.js";
+import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
@@ -579,6 +580,12 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
     if (!hasGoogleApiKey && legacyApiKey) {
       rawGoogle.apiKey = legacyApiKey;
+      if (!rawGoogle.baseUrl) {
+        rawGoogle.baseUrl = DEFAULT_GOOGLE_API_BASE_URL;
+      }
+      if (!Array.isArray(rawGoogle.models)) {
+        rawGoogle.models = [];
+      }
       rawProviders.google = rawGoogle;
       rawModels.providers = rawProviders as NonNullable<OpenClawConfig["models"]>["providers"];
       next = {
@@ -644,9 +651,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
-    changes.push(
-      `Moved legacy talk flat fields → talk.provider/talk.providers.${DEFAULT_TALK_PROVIDER}.`,
-    );
+    changes.push(`Moved legacy talk flat fields → talk.providers.${LEGACY_TALK_PROVIDER_ID}.`);
   };
 
   const normalizeLegacyCrossContextMessageConfig = () => {

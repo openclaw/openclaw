@@ -24,6 +24,15 @@ type FeishuBotInfoResponse = {
   data?: { bot?: { bot_name?: string; open_id?: string } };
 };
 
+type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
+  request(params: {
+    method: "GET";
+    url: string;
+    data: Record<string, never>;
+    timeout: number;
+  }): Promise<FeishuBotInfoResponse>;
+};
+
 function setCachedProbeResult(
   cacheKey: string,
   result: FeishuProbeResult,
@@ -70,16 +79,15 @@ export async function probeFeishu(
   }
 
   try {
-    const client = createFeishuClient(creds);
+    const client = createFeishuClient(creds) as FeishuRequestClient;
     // Use bot/v3/info API to get bot information
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK generic request method
     const responseResult = await raceWithTimeoutAndAbort<FeishuBotInfoResponse>(
-      (client as any).request({
+      client.request({
         method: "GET",
         url: "/open-apis/bot/v3/info",
         data: {},
         timeout: timeoutMs,
-      }) as Promise<FeishuBotInfoResponse>,
+      }),
       {
         timeoutMs,
         abortSignal: options.abortSignal,

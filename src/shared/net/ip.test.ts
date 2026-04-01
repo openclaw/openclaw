@@ -57,6 +57,10 @@ describe("shared ip helpers", () => {
 
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:db8::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:2::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("100::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
     }

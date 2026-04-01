@@ -3,6 +3,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -11,7 +12,8 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { logWarn } from "../../logger.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
@@ -61,13 +63,7 @@ export function matchesMessagingToolDeliveryTarget(
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
-  if (typeof job.delivery?.bestEffort === "boolean") {
-    return job.delivery.bestEffort;
-  }
-  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
-    return job.payload.bestEffortDeliver;
-  }
-  return false;
+  return job.delivery?.bestEffort === true;
 }
 
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -128,6 +124,7 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unknown channel/i,
   /chat not found/i,
   /user not found/i,
+  /bot.*not.*member/i,
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
@@ -226,6 +223,49 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+}
+
+function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
+  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
+  // their existing behavior, and best-effort sends may only partially deliver.
+  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+}
+
+function resolveCronAwarenessMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string {
+  return params.cfg.session?.scope === "global"
+    ? resolveMainSessionKey(params.cfg)
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+}
+
+function queueCronAwarenessSystemEvent(params: {
+  cfg: OpenClawConfig;
+  jobId: string;
+  agentId: string;
+  deliveryIdempotencyKey: string;
+  outputText?: string;
+  synthesizedText?: string;
+}): void {
+  const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
+  if (!text) {
+    return;
+  }
+
+  try {
+    enqueueSystemEvent(text, {
+      sessionKey: resolveCronAwarenessMainSessionKey({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
+      contextKey: params.deliveryIdempotencyKey,
+    });
+  } catch (err) {
+    logWarn(
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 export function resetCompletedDirectCronDeliveriesForTests() {
@@ -389,6 +429,19 @@ export async function dispatchCronDelivery(
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
+
+      // Track bestEffort partial failures so we can log them and avoid
+      // marking the job as delivered when payloads were silently dropped.
+      let hadPartialFailure = false;
+      const onError = params.deliveryBestEffort
+        ? (err: unknown, _payload: unknown) => {
+            hadPartialFailure = true;
+            logError(
+              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        : undefined;
+
       const runDelivery = async () =>
         await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
@@ -402,6 +455,7 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          onError,
           // Isolated cron direct delivery uses its own transient retry loop.
           // Keep all attempts out of the write-ahead delivery queue so a
           // late-successful first send cannot leave behind a failed queue
@@ -416,7 +470,21 @@ export async function dispatchCronDelivery(
             run: runDelivery,
           })
         : await runDelivery();
-      delivered = deliveryResults.length > 0;
+      // Only mark delivered when ALL payloads succeeded (no partial failure).
+      delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      // Intentionally leave partial success uncached: replay may duplicate the
+      // successful subset, but caching it here would permanently drop the
+      // failed payloads by converting the replay into delivered=true.
+      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+        queueCronAwarenessSystemEvent({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey,
+          outputText,
+          synthesizedText,
+        });
+      }
       if (delivered) {
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }
@@ -432,6 +500,9 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      logError(
+        `[cron:${params.job.id}] delivery failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+      );
       return null;
     }
   };

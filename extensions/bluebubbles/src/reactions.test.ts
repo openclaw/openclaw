@@ -1,5 +1,6 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesReaction } from "./reactions.js";
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
 vi.mock("./accounts.js", async () => {
   const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
@@ -7,17 +8,16 @@ vi.mock("./accounts.js", async () => {
 });
 
 const mockFetch = vi.fn();
+const noopPrivateApiStatusMock = {
+  mockReturnValue: () => {},
+};
+
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: noopPrivateApiStatusMock,
+});
 
 describe("reactions", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    mockFetch.mockReset();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   describe("sendBlueBubblesReaction", () => {
     async function expectRemovedReaction(emoji: string, expectedReaction = "-love") {
       mockFetch.mockResolvedValueOnce({

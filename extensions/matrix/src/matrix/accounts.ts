@@ -1,17 +1,61 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../account-selection.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  hasConfiguredSecretInput,
-  normalizeAccountId,
-} from "../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
-import { resolveMatrixBaseConfig } from "./account-config.js";
+import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
+
+type MatrixRoomEntries = Record<string, NonNullable<MatrixConfig["groups"]>[string]>;
+
+function selectInheritedMatrixRoomEntries(params: {
+  entries: MatrixRoomEntries | undefined;
+  accountId: string;
+}): MatrixRoomEntries | undefined {
+  const entries = params.entries;
+  if (!entries) {
+    return undefined;
+  }
+  const selected = Object.fromEntries(
+    Object.entries(entries).filter(([, value]) => {
+      const scopedAccount =
+        typeof value?.account === "string" ? normalizeAccountId(value.account) : undefined;
+      return scopedAccount === undefined || scopedAccount === params.accountId;
+    }),
+  ) as MatrixRoomEntries;
+  return Object.keys(selected).length > 0 ? selected : undefined;
+}
+
+function mergeMatrixRoomEntries(
+  inherited: MatrixRoomEntries | undefined,
+  accountEntries: MatrixRoomEntries | undefined,
+  hasAccountOverride: boolean,
+): MatrixRoomEntries | undefined {
+  if (!inherited && !accountEntries) {
+    return undefined;
+  }
+  if (hasAccountOverride && Object.keys(accountEntries ?? {}).length === 0) {
+    return undefined;
+  }
+  const merged: MatrixRoomEntries = {
+    ...(inherited ?? {}),
+  };
+  for (const [key, value] of Object.entries(accountEntries ?? {})) {
+    const inheritedValue = merged[key];
+    merged[key] =
+      inheritedValue && value
+        ? {
+            ...inheritedValue,
+            ...value,
+          }
+        : (value ?? inheritedValue);
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
 
 export type ResolvedMatrixAccount = {
   accountId: string;
@@ -65,7 +109,7 @@ export function resolveConfiguredMatrixBotUserIds(params: {
   const env = params.env ?? process.env;
   const currentAccountId = normalizeAccountId(params.accountId);
   const accountIds = new Set(resolveConfiguredMatrixAccountIds(params.cfg, env));
-  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID }).configured) {
+  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID, env }).configured) {
     accountIds.add(DEFAULT_ACCOUNT_ID);
   }
   const ids = new Set<string>();
@@ -74,7 +118,7 @@ export function resolveConfiguredMatrixBotUserIds(params: {
     if (normalizeAccountId(accountId) === currentAccountId) {
       continue;
     }
-    if (!resolveMatrixAccount({ cfg: params.cfg, accountId }).configured) {
+    if (!resolveMatrixAccount({ cfg: params.cfg, accountId, env }).configured) {
       continue;
     }
     const userId = resolveMatrixAccountUserId({
@@ -93,19 +137,27 @@ export function resolveConfiguredMatrixBotUserIds(params: {
 export function resolveMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
 }): ResolvedMatrixAccount {
+  const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
-  const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
+  const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId, env });
+  const explicitAuthConfig =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? base
+      : (findMatrixAccountConfig(params.cfg, accountId) ?? {});
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
-  const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, process.env);
+  const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, env);
   const hasHomeserver = Boolean(resolved.homeserver);
   const hasUserId = Boolean(resolved.userId);
-  const hasAccessToken = Boolean(resolved.accessToken);
+  const hasAccessToken =
+    Boolean(resolved.accessToken) || hasConfiguredSecretInput(explicitAuthConfig.accessToken);
   const hasPassword = Boolean(resolved.password);
-  const hasPasswordAuth = hasUserId && (hasPassword || hasConfiguredSecretInput(base.password));
-  const stored = loadMatrixCredentials(process.env, accountId);
+  const hasPasswordAuth =
+    hasUserId && (hasPassword || hasConfiguredSecretInput(explicitAuthConfig.password));
+  const stored = loadMatrixCredentials(env, accountId);
   const hasStored =
     stored && resolved.homeserver
       ? credentialsMatchConfig(stored, {
@@ -128,10 +180,13 @@ export function resolveMatrixAccount(params: {
 export function resolveMatrixAccountConfig(params: {
   cfg: CoreConfig;
   accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
 }): MatrixConfig {
+  const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
-  return resolveMergedAccountConfig<MatrixConfig>({
-    channelConfig: resolveMatrixBaseConfig(params.cfg),
+  const base = resolveMatrixBaseConfig(params.cfg);
+  const merged = resolveMergedAccountConfig<MatrixConfig>({
+    channelConfig: base,
     accounts: params.cfg.channels?.matrix?.accounts as
       | Record<string, Partial<MatrixConfig>>
       | undefined,
@@ -139,4 +194,28 @@ export function resolveMatrixAccountConfig(params: {
     normalizeAccountId,
     nestedObjectKeys: ["dm", "actions"],
   });
+  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
+  const groups = mergeMatrixRoomEntries(
+    selectInheritedMatrixRoomEntries({
+      entries: base.groups,
+      accountId,
+    }),
+    accountConfig?.groups,
+    Boolean(accountConfig && Object.hasOwn(accountConfig, "groups")),
+  );
+  const rooms = mergeMatrixRoomEntries(
+    selectInheritedMatrixRoomEntries({
+      entries: base.rooms,
+      accountId,
+    }),
+    accountConfig?.rooms,
+    Boolean(accountConfig && Object.hasOwn(accountConfig, "rooms")),
+  );
+  // Room maps need custom scoping, so keep the generic merge for all other fields.
+  const { groups: _ignoredGroups, rooms: _ignoredRooms, ...rest } = merged;
+  return {
+    ...rest,
+    ...(groups ? { groups } : {}),
+    ...(rooms ? { rooms } : {}),
+  };
 }

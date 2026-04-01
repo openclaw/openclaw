@@ -5,11 +5,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { channelTestRoots } from "../vitest.channel-paths.mjs";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
+import { loadTestRunnerBehavior } from "./test-runner-manifest.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const pnpm = "pnpm";
+const testRunnerBehavior = loadTestRunnerBehavior();
 
 function runGit(args, options = {}) {
   return execFileSync("git", args, {
@@ -108,11 +114,11 @@ function listChangedPaths(base, head = "HEAD") {
 }
 
 function hasExtensionPackage(extensionId) {
-  return fs.existsSync(path.join(repoRoot, "extensions", extensionId, "package.json"));
+  return fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json"));
 }
 
 export function listAvailableExtensionIds() {
-  const extensionsDir = path.join(repoRoot, "extensions");
+  const extensionsDir = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
   if (!fs.existsSync(extensionsDir)) {
     return [];
   }
@@ -134,7 +140,9 @@ export function detectChangedExtensionIds(changedPaths) {
       continue;
     }
 
-    const extensionMatch = relativePath.match(/^extensions\/([^/]+)(?:\/|$)/);
+    const extensionMatch = relativePath.match(
+      new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX.replace("/", "\\/")}([^/]+)(?:/|$)`),
+    );
     if (extensionMatch) {
       const extensionId = extensionMatch[1];
       if (hasExtensionPackage(extensionId)) {
@@ -177,20 +185,20 @@ function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
       return asGiven;
     }
 
-    const byName = path.join(repoRoot, "extensions", targetArg);
+    const byName = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, targetArg);
     if (fs.existsSync(path.join(byName, "package.json"))) {
       return byName;
     }
 
     throw new Error(
-      `Unknown extension target "${targetArg}". Use an extension name like "slack" or a path under extensions/.`,
+      `Unknown extension target "${targetArg}". Use a plugin name like "slack" or a path inside the bundled plugin workspace tree.`,
     );
   }
 
   let current = cwd;
   while (true) {
     if (
-      normalizeRelative(path.relative(repoRoot, current)).startsWith("extensions/") &&
+      normalizeRelative(path.relative(repoRoot, current)).startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
       fs.existsSync(path.join(current, "package.json"))
     ) {
       return current;
@@ -203,7 +211,7 @@ function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
   }
 
   throw new Error(
-    "No extension target provided, and current working directory is not inside extensions/.",
+    "No extension target provided, and current working directory is not inside the bundled plugin workspace tree.",
   );
 }
 
@@ -225,15 +233,67 @@ export function resolveExtensionTestPlan(params = {}) {
 
   const usesChannelConfig = roots.some((root) => channelTestRoots.includes(root));
   const config = usesChannelConfig ? "vitest.channels.config.ts" : "vitest.extensions.config.ts";
-  const testFiles = roots.flatMap((root) => collectTestFiles(path.join(repoRoot, root)));
+  const testFiles = roots
+    .flatMap((root) => collectTestFiles(path.join(repoRoot, root)))
+    .map((filePath) => normalizeRelative(path.relative(repoRoot, filePath)));
+  const { isolatedTestFiles, sharedTestFiles } = partitionExtensionTestFiles({ config, testFiles });
 
   return {
     config,
     extensionDir: relativeExtensionDir,
     extensionId,
+    isolatedTestFiles,
     roots,
-    testFiles: testFiles.map((filePath) => normalizeRelative(path.relative(repoRoot, filePath))),
+    sharedTestFiles,
+    testFiles,
   };
+}
+
+export function partitionExtensionTestFiles(params) {
+  const testFiles = params.testFiles.map((filePath) => normalizeRelative(filePath));
+  let isolatedEntries = [];
+  let isolatedPrefixes = [];
+
+  if (params.config === "vitest.channels.config.ts") {
+    isolatedEntries = testRunnerBehavior.channels.isolated;
+    isolatedPrefixes = testRunnerBehavior.channels.isolatedPrefixes;
+  } else if (params.config === "vitest.extensions.config.ts") {
+    isolatedEntries = testRunnerBehavior.extensions.isolated;
+  }
+
+  const isolatedEntrySet = new Set(isolatedEntries.map((entry) => entry.file));
+  const isolatedTestFiles = testFiles.filter(
+    (file) =>
+      isolatedEntrySet.has(file) || isolatedPrefixes.some((prefix) => file.startsWith(prefix)),
+  );
+  const isolatedTestFileSet = new Set(isolatedTestFiles);
+  const sharedTestFiles = testFiles.filter((file) => !isolatedTestFileSet.has(file));
+
+  return { isolatedTestFiles, sharedTestFiles };
+}
+
+async function runVitestBatch(params) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(
+      pnpm,
+      ["exec", "vitest", "run", "--config", params.config, ...params.files, ...params.args],
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+        shell: process.platform === "win32",
+        env: params.env,
+      },
+    );
+
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      resolve(code ?? 1);
+    });
+  });
 }
 
 function printUsage() {
@@ -352,6 +412,8 @@ async function run() {
       console.log(`config: ${plan.config}`);
       console.log(`roots: ${plan.roots.join(", ")}`);
       console.log(`tests: ${plan.testFiles.length}`);
+      console.log(`shared: ${plan.sharedTestFiles.length}`);
+      console.log(`isolated: ${plan.isolatedTestFiles.length}`);
     }
     return;
   }
@@ -364,24 +426,35 @@ async function run() {
     `[test-extension] Running ${plan.testFiles.length} test files for ${plan.extensionId} with ${plan.config}`,
   );
 
-  const child = spawn(
-    pnpm,
-    ["exec", "vitest", "run", "--config", plan.config, ...plan.testFiles, ...passthroughArgs],
-    {
-      cwd: repoRoot,
-      stdio: "inherit",
-      shell: process.platform === "win32",
-      env: process.env,
-    },
-  );
+  if (plan.sharedTestFiles.length > 0 && plan.isolatedTestFiles.length > 0) {
+    console.log(
+      `[test-extension] Split into ${plan.sharedTestFiles.length} shared and ${plan.isolatedTestFiles.length} isolated files`,
+    );
+  }
 
-  child.on("exit", (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
+  if (plan.sharedTestFiles.length > 0) {
+    const sharedExitCode = await runVitestBatch({
+      args: passthroughArgs,
+      config: plan.config,
+      env: process.env,
+      files: plan.sharedTestFiles,
+    });
+    if (sharedExitCode !== 0) {
+      process.exit(sharedExitCode);
     }
-    process.exit(code ?? 1);
-  });
+  }
+
+  if (plan.isolatedTestFiles.length > 0) {
+    const isolatedExitCode = await runVitestBatch({
+      args: passthroughArgs,
+      config: plan.config,
+      env: { ...process.env, OPENCLAW_TEST_ISOLATE: "1" },
+      files: plan.isolatedTestFiles,
+    });
+    process.exit(isolatedExitCode);
+  }
+
+  process.exit(0);
 }
 
 const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";

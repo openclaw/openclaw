@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
@@ -57,7 +57,7 @@ describe("diffs tool", () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("../../assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -352,7 +352,7 @@ describe("diffs tool", () => {
   it("prefers explicit tool params over configured defaults", async () => {
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("../../assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({

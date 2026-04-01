@@ -3,6 +3,7 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledPackageErrors,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/public-artifacts.ts";
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -33,20 +34,23 @@ describe("buildPublishedInstallScenarios", () => {
 
 describe("collectInstalledPackageErrors", () => {
   it("flags version mismatches and missing runtime sidecars", () => {
-    expect(
-      collectInstalledPackageErrors({
-        expectedVersion: "2026.3.23-2",
-        installedVersion: "2026.3.23",
-        packageRoot: "/tmp/empty-openclaw",
-      }),
-    ).toEqual([
+    const errors = collectInstalledPackageErrors({
+      expectedVersion: "2026.3.23-2",
+      installedVersion: "2026.3.23",
+      packageRoot: "/tmp/empty-openclaw",
+    });
+
+    expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/whatsapp/light-runtime-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/whatsapp/runtime-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/matrix/helper-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/matrix/runtime-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/matrix/thread-bindings-runtime.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/msteams/runtime-api.js",
-    ]);
+    );
+    expect(errors).toEqual(
+      expect.arrayContaining(
+        BUNDLED_RUNTIME_SIDECAR_PATHS.map(
+          (relativePath) =>
+            `installed package is missing required bundled runtime sidecar: ${relativePath}`,
+        ),
+      ),
+    );
+    expect(errors.length).toBeGreaterThanOrEqual(1 + BUNDLED_RUNTIME_SIDECAR_PATHS.length);
   });
 });

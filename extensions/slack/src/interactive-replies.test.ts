@@ -1,12 +1,13 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 
 describe("isSlackInteractiveRepliesEnabled", () => {
-  it("fails closed when accountId is unknown and multiple accounts exist", () => {
+  it("uses the configured default account when accountId is unknown and multiple accounts exist", () => {
     const cfg = {
       channels: {
         slack: {
+          defaultAccount: "one",
           accounts: {
             one: {
               capabilities: { interactiveReplies: true },
@@ -17,7 +18,7 @@ describe("isSlackInteractiveRepliesEnabled", () => {
       },
     } as OpenClawConfig;
 
-    expect(isSlackInteractiveRepliesEnabled({ cfg, accountId: undefined })).toBe(false);
+    expect(isSlackInteractiveRepliesEnabled({ cfg, accountId: undefined })).toBe(true);
   });
 
   it("uses the only configured account when accountId is unknown", () => {
