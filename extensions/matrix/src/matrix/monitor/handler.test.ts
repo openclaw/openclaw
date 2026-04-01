@@ -325,6 +325,34 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it("passes configured bot senderAgentId through finalized inbound context", async () => {
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      configuredBotAgentIdsByUserId: new Map([["@ops:example.org", "ops-agent"]]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-agent-id",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderAgentId: "ops-agent",
+      }),
+    );
+  });
+
   it("does not treat unconfigured Matrix users as bots when allowBots is off", async () => {
     const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,

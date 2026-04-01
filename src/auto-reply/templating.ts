@@ -135,6 +135,8 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Resolved managed agent identity for the inbound sender, when known. */
+  SenderAgentId?: string;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;

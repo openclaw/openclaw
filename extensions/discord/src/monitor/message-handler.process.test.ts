@@ -82,6 +82,8 @@ let createDiscordDirectMessageContextOverrides: typeof import("./message-handler
 let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+let discordAccountTesting: typeof import("../accounts.js").__testing;
+let rememberDiscordSenderAgentIdentity: typeof import("../accounts.js").rememberDiscordSenderAgentIdentity;
 
 const sendModule = await import("../send.js");
 vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(
@@ -204,6 +206,8 @@ beforeAll(async () => {
   vi.useRealTimers();
   ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
     await import("./message-handler.test-harness.js"));
+  ({ __testing: discordAccountTesting, rememberDiscordSenderAgentIdentity } =
+    await import("../accounts.js"));
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
@@ -220,6 +224,7 @@ beforeEach(() => {
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
+  discordAccountTesting.resetSenderAgentIdentityMap();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
@@ -245,11 +250,11 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | { SessionKey?: string; MessageThreadId?: string | number; SenderAgentId?: string }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number; SenderAgentId?: string } }
     | undefined;
   return params?.ctx;
 }
@@ -277,6 +282,38 @@ function createMockDraftStreamForTest() {
   createDiscordDraftStream.mockReturnValueOnce(draftStream);
   return draftStream;
 }
+
+describe("processDiscordMessage sender ownership", () => {
+  it("passes provider-resolved senderAgentId through inbound dispatch", async () => {
+    rememberDiscordSenderAgentIdentity({
+      botUserId: "BOT-OPS",
+      senderAgentId: "ops-agent",
+    });
+
+    const ctx = await createBaseContext({
+      author: {
+        id: "BOT-OPS",
+        username: "opsbot",
+        discriminator: "0",
+        globalName: "Ops Bot",
+      },
+      sender: {
+        id: "BOT-OPS",
+        label: "ops-bot",
+        name: "Ops Bot",
+        tag: "ops-bot",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchCtx()).toEqual(
+      expect.objectContaining({
+        SenderAgentId: "ops-agent",
+      }),
+    );
+  });
+});
 
 function expectSinglePreviewEdit() {
   expect(editMessageDiscord).toHaveBeenCalledWith(

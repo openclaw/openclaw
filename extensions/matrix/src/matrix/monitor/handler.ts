@@ -78,6 +78,7 @@ export type MatrixMonitorHandlerParams = {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: ReadonlySet<string>;
+  configuredBotAgentIdsByUserId?: ReadonlyMap<string, string>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -196,6 +197,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds = new Set<string>(),
+    configuredBotAgentIdsByUserId = new Map<string, string>(),
     groupPolicy,
     replyToMode,
     threadReplies,
@@ -326,6 +328,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (!senderId) {
         return;
       }
+      const senderAgentId = configuredBotAgentIdsByUserId.get(senderId);
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
       const commitInboundEventIfClaimed = async () => {
@@ -1004,6 +1007,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
         SenderId: senderId,
+        SenderAgentId: senderAgentId,
         SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
         GroupId: isRoom ? roomId : undefined,

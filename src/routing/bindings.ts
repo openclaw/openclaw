@@ -45,6 +45,46 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   };
 }
 
+function isScopedBinding(binding: AgentRouteBinding): boolean {
+  const match = binding.match;
+  if (!match || typeof match !== "object") {
+    return false;
+  }
+  return Boolean(
+    match.peer ||
+      (typeof match.guildId === "string" && match.guildId.trim()) ||
+      (typeof match.teamId === "string" && match.teamId.trim()) ||
+      (Array.isArray(match.roles) && match.roles.some((role) => typeof role === "string" && role.trim())),
+  );
+}
+
+function resolveOwnershipBindingMatch(binding: AgentRouteBinding): {
+  agentId: string;
+  accountId: string;
+  channelId: string;
+  isWildcard: boolean;
+} | null {
+  if (!binding || typeof binding !== "object" || isScopedBinding(binding)) {
+    return null;
+  }
+  const match = binding.match;
+  if (!match || typeof match !== "object") {
+    return null;
+  }
+  const channelId = normalizeBindingChannelId(match.channel);
+  if (!channelId) {
+    return null;
+  }
+  const rawAccountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+  const isWildcard = rawAccountId === "*";
+  return {
+    agentId: normalizeAgentId(binding.agentId),
+    accountId: isWildcard ? "*" : normalizeAccountId(rawAccountId),
+    channelId,
+    isWildcard,
+  };
+}
+
 export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const normalizedChannel = normalizeBindingChannelId(channelId);
   if (!normalizedChannel) {
@@ -82,6 +122,33 @@ export function resolveDefaultAgentBoundAccountId(
     return resolved.accountId;
   }
   return null;
+}
+
+export function resolveOwningAgentIdForChannelAccount(
+  cfg: OpenClawConfig,
+  channelId: string,
+  accountId?: string | null,
+): string | null {
+  const normalizedChannel = normalizeBindingChannelId(channelId);
+  if (!normalizedChannel) {
+    return null;
+  }
+  const normalizedAccountId = normalizeAccountId(accountId);
+  let wildcardAgentId: string | null = null;
+  for (const binding of listBindings(cfg)) {
+    const resolved = resolveOwnershipBindingMatch(binding);
+    if (!resolved || resolved.channelId !== normalizedChannel) {
+      continue;
+    }
+    if (resolved.isWildcard) {
+      wildcardAgentId ??= resolved.agentId;
+      continue;
+    }
+    if (resolved.accountId === normalizedAccountId) {
+      return resolved.agentId;
+    }
+  }
+  return wildcardAgentId;
 }
 
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {

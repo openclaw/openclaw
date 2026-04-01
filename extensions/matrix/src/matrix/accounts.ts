@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { resolveOwningAgentIdForChannelAccount } from "openclaw/plugin-sdk/routing";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   resolveConfiguredMatrixAccountIds,
@@ -81,6 +82,40 @@ export function resolveConfiguredMatrixBotUserIds(params: {
     });
     if (userId) {
       ids.add(userId);
+    }
+  }
+
+  return ids;
+}
+
+export function resolveConfiguredMatrixBotAgentIdsByUserId(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Map<string, string> {
+  const env = params.env ?? process.env;
+  const currentAccountId = normalizeAccountId(params.accountId);
+  const accountIds = new Set(resolveConfiguredMatrixAccountIds(params.cfg, env));
+  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID, env }).configured) {
+    accountIds.add(DEFAULT_ACCOUNT_ID);
+  }
+  const ids = new Map<string, string>();
+
+  for (const accountId of accountIds) {
+    if (normalizeAccountId(accountId) === currentAccountId) {
+      continue;
+    }
+    if (!resolveMatrixAccount({ cfg: params.cfg, accountId, env }).configured) {
+      continue;
+    }
+    const userId = resolveMatrixAccountUserId({
+      cfg: params.cfg,
+      accountId,
+      env,
+    });
+    const senderAgentId = resolveOwningAgentIdForChannelAccount(params.cfg, "matrix", accountId);
+    if (userId && senderAgentId) {
+      ids.set(userId, senderAgentId);
     }
   }
 
