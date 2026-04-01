@@ -252,6 +252,30 @@ describe("gateway config methods", () => {
     expect(res.error?.message).toBe("config schema path not found");
   });
 
+  it("returns noop for config.patch when config is unchanged", async () => {
+    const current = await rpcReq<{
+      config?: Record<string, unknown>;
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+
+    // Patch with the same config — no actual changes
+    const res = await rpcReq<{
+      ok?: boolean;
+      noop?: boolean;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.patch", {
+      raw: JSON.stringify(current.payload?.config ?? {}),
+      baseHash: current.payload?.hash,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.noop).toBe(true);
+    // Config hash should not change (no file write)
+    const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    expect(after.payload?.hash).toBe(current.payload?.hash);
+  });
+
   it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "null",
