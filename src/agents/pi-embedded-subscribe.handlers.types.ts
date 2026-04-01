@@ -37,6 +37,14 @@ export type EmbeddedPiSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
+  consecutiveToolErrors: {
+    toolName: string;
+    errorSignature: string;
+    argSig: string;
+    count: number;
+    tripped: boolean;
+    probeDetected: boolean;
+  } | null;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
@@ -144,6 +152,7 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
+  | "onConsecutiveToolError"
 >;
 
 export type ToolHandlerState = Pick<
@@ -152,6 +161,7 @@ export type ToolHandlerState = Pick<
   | "toolMetas"
   | "toolSummaryById"
   | "lastToolError"
+  | "consecutiveToolErrors"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"

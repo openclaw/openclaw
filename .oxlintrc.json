@@ -23,6 +23,7 @@
     "unicorn/require-post-message-target-origin": "off"
   },
   "ignorePatterns": [
+    "agent-monitor/",
     "assets/",
     "dist/",
     "docs/_layouts/",

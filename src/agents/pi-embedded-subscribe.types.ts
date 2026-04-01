@@ -31,6 +31,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /** Called after N consecutive identical tool errors (circuit breaker). */
+  onConsecutiveToolError?: (toolName: string, count: number, errorMsg: string) => void;
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */

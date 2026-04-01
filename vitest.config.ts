@@ -80,6 +80,7 @@ export default defineConfig({
       BUNDLED_PLUGIN_TEST_GLOB,
       "packages/**/*.test.ts",
       "test/**/*.test.ts",
+      "ui/src/ui/presenter.test.ts",
       "ui/src/ui/app-chat.test.ts",
       "ui/src/ui/chat/**/*.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",

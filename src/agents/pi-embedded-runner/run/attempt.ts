@@ -1281,6 +1281,7 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      let steerFn: ((text: string) => Promise<void>) | undefined;
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1306,6 +1307,20 @@ export async function runEmbeddedAttempt(
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
         agentId: sessionAgentId,
+        onConsecutiveToolError: (toolName, count, _errorMsg) => {
+          if (!steerFn) {
+            return;
+          }
+          // Do not embed raw tool error text — it is attacker-controlled and could be used for
+          // prompt injection. The model already has the error in its tool-result context.
+          const steerMsg =
+            `[SYSTEM \u2014 circuit breaker] The tool "${toolName}" has failed ${count} times in a row ` +
+            `with the same error.\n` +
+            `STOP calling "${toolName}" with the same arguments. ` +
+            `Use a completely different approach to accomplish your goal.`;
+          log.warn(`circuit-breaker: steering session away from ${toolName} loop (count=${count})`);
+          void steerFn(steerMsg);
+        },
       });
 
       const {
@@ -1333,6 +1348,7 @@ export async function runEmbeddedAttempt(
         abort: abortRun,
       };
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+      steerFn = queueHandle.queueMessage;
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;

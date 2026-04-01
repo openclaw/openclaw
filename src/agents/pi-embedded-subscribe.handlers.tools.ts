@@ -4,6 +4,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import { isPlainObject } from "../infra/plain-object.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -76,6 +77,72 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   }
   const suffix = flags.join(" · ");
   return meta ? `${meta} · ${suffix}` : suffix;
+}
+
+/**
+ * Stable JSON serialization with recursively sorted object keys so that
+ * identical args in different key-insertion order produce the same string.
+ * Array element order is preserved (arrays are ordered by definition).
+ */
+function stableJsonStringify(val: unknown): string {
+  return JSON.stringify(val, (_key, v: unknown) => {
+    if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+      const obj = v as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.entries(obj).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      );
+    }
+    return v;
+  });
+}
+
+/**
+ * Build a circuit-breaker arg signature from raw tool args.
+ *
+ * Three paths:
+ *   1. exec/bash  — full command text (the only meaningful field).
+ *   2. action present — stable JSON fingerprint of all non-action args
+ *      (includes request, target, node, and any other routing fields).
+ *   3. no action  — stable JSON fingerprint of all args.
+ *
+ * JSON fingerprints handle any field type and any future tool without
+ * requiring individual whitelisting.
+ */
+function buildCircuitBreakerArgSig(toolName: string, args: unknown): string {
+  const record = isPlainObject(args) ? args : {};
+  const norm = toolName.trim().toLowerCase();
+
+  // exec/bash: key off the full command text so distinct commands are never collapsed.
+  if (norm === "exec" || norm === "bash") {
+    const cmd = record.command ?? record.cmd;
+    return typeof cmd === "string" ? cmd : "";
+  }
+
+  const actionVal = typeof record.action === "string" ? record.action.trim().slice(0, 50) : null;
+  if (actionVal !== null) {
+    // Stable JSON fingerprint of all non-action args (includes request, target, node, etc.).
+    // No special-casing for request: stableJsonStringify handles it alongside top-level
+    // routing fields so that calls differing only in target (host vs sandbox) get distinct sigs.
+    const { action: _action, ...restArgs } = record;
+    if (Object.keys(restArgs).length > 0) {
+      try {
+        return `action=${actionVal},args=${stableJsonStringify(restArgs)}`;
+      } catch {
+        // ignore — unstringifiable args fall through to bare action signature
+      }
+    }
+    return `action=${actionVal}`;
+  }
+
+  // Non-action tools: stable JSON fingerprint of all args.
+  if (Object.keys(record).length > 0) {
+    try {
+      return stableJsonStringify(record);
+    } catch {
+      // ignore
+    }
+  }
+  return "";
 }
 
 function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
@@ -466,6 +533,7 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const errorMessage = isToolError ? extractToolErrorMessage(sanitizedResult) : undefined;
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
@@ -475,7 +543,6 @@ export async function handleToolExecutionEnd(
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
-    const errorMessage = extractToolErrorMessage(sanitizedResult);
     ctx.state.lastToolError = {
       toolName,
       meta,
@@ -497,6 +564,62 @@ export async function handleToolExecutionEnd(
       }
     } else {
       ctx.state.lastToolError = undefined;
+    }
+  }
+
+  // Retrieve hook-adjusted params before computing the circuit-breaker signature so that
+  // the signature reflects the args the tool actually executed with, not the pre-hook args.
+  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const effectiveArgs =
+    adjustedArgs && typeof adjustedArgs === "object" ? adjustedArgs : startData?.args;
+
+  // Circuit breaker: track consecutive identical tool errors and fire callback at threshold.
+  // Include arg-derived signature so calls with different params don't share a count.
+  const CONSECUTIVE_ERROR_THRESHOLD = 3;
+  if (isToolError) {
+    const argSig = buildCircuitBreakerArgSig(toolName, effectiveArgs);
+    const errorSig = `${argSig}|${(errorMessage ?? "").slice(0, 120)}`;
+    const prev = ctx.state.consecutiveToolErrors;
+    if (prev && prev.toolName === toolName && prev.errorSignature === errorSig) {
+      prev.count += 1;
+    } else {
+      ctx.state.consecutiveToolErrors = {
+        toolName,
+        errorSignature: errorSig,
+        argSig,
+        count: 1,
+        tripped: false,
+        probeDetected: false,
+      };
+    }
+    const consecutive = ctx.state.consecutiveToolErrors;
+    if (consecutive) {
+      if (!consecutive.tripped && consecutive.count === CONSECUTIVE_ERROR_THRESHOLD) {
+        // First trip: fire once.
+        consecutive.tripped = true;
+        ctx.params.onConsecutiveToolError?.(toolName, consecutive.count, errorMessage ?? "");
+      } else if (consecutive.tripped && consecutive.probeDetected) {
+        // Re-fire only after a probe was detected (a success that didn't reset the circuit).
+        // This avoids flooding the context with duplicate steer messages on plain consecutive failures.
+        consecutive.probeDetected = false;
+        ctx.params.onConsecutiveToolError?.(toolName, consecutive.count, errorMessage ?? "");
+      }
+    }
+  } else {
+    if (ctx.state.consecutiveToolErrors) {
+      const { toolName: prevTool, argSig: prevArgSig, tripped } = ctx.state.consecutiveToolErrors;
+      // After tripping, a probe command on the same tool (e.g. "echo test" after exec failed)
+      // must not reset the circuit — the original problem isn't solved yet.
+      // Only reset when: a different tool succeeds (real change of approach), OR
+      // the exact same tool+args that was failing now succeeds (problem resolved).
+      const argSig = buildCircuitBreakerArgSig(toolName, effectiveArgs);
+      const isProbe = tripped && toolName === prevTool && argSig !== prevArgSig;
+      if (isProbe) {
+        // Mark that a probe occurred so the next failure re-fires the steer exactly once.
+        ctx.state.consecutiveToolErrors.probeDetected = true;
+      } else {
+        ctx.state.consecutiveToolErrors = null;
+      }
     }
   }
 
@@ -525,7 +648,6 @@ export async function handleToolExecutionEnd(
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
       : {};
-  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
   const afterToolCallArgs =
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
