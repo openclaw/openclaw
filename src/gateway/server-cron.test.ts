@@ -489,11 +489,62 @@ describe("buildGatewayCronService", () => {
         "fetch request",
       );
       expect(request.url).toBe("http://127.0.0.1:8080/cron-finished");
+      expect(request.policy).toBeUndefined();
       const init = requireRecord(request.init, "fetch init");
       expect(init.method).toBe("POST");
       expect(init.headers).toEqual({ "Content-Type": "application/json" });
       expect(String(init.body)).toContain('"action":"finished"');
       expect(init.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("passes allowPrivateNetwork policy when webhookAllowPrivateNetwork is true", async () => {
+    const cfg = createCronConfig("server-cron-ssrf-allowed");
+    const cfgWithAllowPrivate = {
+      ...cfg,
+      cron: {
+        ...cfg.cron,
+        webhookAllowPrivateNetwork: true,
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfgWithAllowPrivate);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
+
+    const state = buildGatewayCronService({
+      cfg: cfgWithAllowPrivate,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "ssrf-webhook-allowed",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+        delivery: {
+          mode: "webhook",
+          to: "http://127.0.0.1:8080/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      const allowedRequest = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
+        "fetch request",
+      );
+      expect(allowedRequest.url).toBe("http://127.0.0.1:8080/cron-finished");
+      expect(allowedRequest.policy).toEqual({ allowPrivateNetwork: true });
+      const allowedInit = requireRecord(allowedRequest.init, "fetch init");
+      expect(allowedInit.method).toBe("POST");
+      expect(allowedInit.headers).toEqual({ "Content-Type": "application/json" });
+      expect(String(allowedInit.body)).toContain('"action":"finished"');
+      expect(allowedInit.signal).toBeInstanceOf(AbortSignal);
     } finally {
       state.cron.stop();
     }

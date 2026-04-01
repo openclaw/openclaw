@@ -42,6 +42,13 @@ export type CronConfig = {
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /**
+   * Allow cron webhook delivery to loopback and private-network URLs.
+   * Default: `false` (SSRF guard blocks private/loopback targets).
+   * Set to `true` only when the webhook endpoint is intentionally on a
+   * private network and you accept that cron jobs may POST to internal IPs.
+   */
+  webhookAllowPrivateNetwork?: boolean;
+  /**
    * How long to retain completed cron run sessions before automatic pruning.
    * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.
    * Default: "24h".
