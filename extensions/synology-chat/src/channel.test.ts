@@ -490,6 +490,27 @@ describe("createSynologyChatPlugin", () => {
       expect(registerMock).not.toHaveBeenCalled();
     });
 
+    it("startAccount logs a warning when allowInsecureSsl is enabled", async () => {
+      const registerMock = registerSynologyWebhookRouteMock;
+      registerMock.mockClear();
+      const plugin = createSynologyChatPlugin();
+      const { ctx, abortController } = makeStartAccountCtx({
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        dmPolicy: "allowlist",
+        allowedUserIds: ["123"],
+        allowInsecureSsl: true,
+      });
+
+      const result = plugin.gateway.startAccount(ctx);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining("allowInsecureSsl=true"));
+      expect(registerMock).toHaveBeenCalledTimes(1);
+      abortController.abort();
+      await result;
+    });
+
     it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
       const registerMock = registerSynologyWebhookRouteMock;
       const plugin = createSynologyChatPlugin();

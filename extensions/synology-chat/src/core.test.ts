@@ -42,6 +42,15 @@ describe("synology-chat core", () => {
     expect(properties.dangerouslyAllowNameMatching?.type).toBe("boolean");
   });
 
+  it("exports allowInsecureSsl in the JSON schema", () => {
+    const properties = (SynologyChatChannelConfigSchema.schema.properties ?? {}) as Record<
+      string,
+      { type?: string }
+    >;
+
+    expect(properties.allowInsecureSsl?.type).toBe("boolean");
+  });
+
   it("keeps the schema open for plugin-specific passthrough fields", () => {
     expect([true, {}]).toContainEqual(SynologyChatChannelConfigSchema.schema.additionalProperties);
   });
@@ -295,6 +304,22 @@ describe("synology-chat account resolution", () => {
 
     process.env.SYNOLOGY_RATE_LIMIT = "0abc";
     expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+  });
+
+  it("only enables insecure SSL for explicit boolean true", () => {
+    const enabled = resolveAccount({
+      channels: {
+        "synology-chat": { allowInsecureSsl: true },
+      },
+    });
+    expect(enabled.allowInsecureSsl).toBe(true);
+
+    const invalidShape = {
+      channels: {
+        "synology-chat": { allowInsecureSsl: "true" },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveAccount(invalidShape).allowInsecureSsl).toBe(false);
   });
 });
 

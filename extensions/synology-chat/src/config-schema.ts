@@ -6,6 +6,7 @@ export const SynologyChatChannelConfigSchema = buildChannelConfigSchema(
     .object({
       dangerouslyAllowNameMatching: z.boolean().optional(),
       dangerouslyAllowInheritedWebhookPath: z.boolean().optional(),
+      allowInsecureSsl: z.boolean().optional(),
     })
     .passthrough(),
 );

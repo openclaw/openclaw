@@ -142,6 +142,6 @@ export function resolveAccount(
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
     rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,
     botName: merged.botName ?? envBotName,
-    allowInsecureSsl: merged.allowInsecureSsl ?? false,
+    allowInsecureSsl: merged.allowInsecureSsl === true,
   };
 }

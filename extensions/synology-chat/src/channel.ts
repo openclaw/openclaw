@@ -33,6 +33,8 @@ import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surfa
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
+const INSECURE_SSL_STARTUP_WARNING =
+  "Synology Chat account has SSL verification disabled (allowInsecureSsl=true). This disables TLS certificate validation and should only be used with trusted self-signed certificates.";
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -248,6 +250,9 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         startAccount: async (ctx: SynologyChannelGatewayContext) => {
           const { cfg, accountId, log, abortSignal } = ctx;
           const account = resolveAccount(cfg, accountId);
+          if (account.enabled && account.allowInsecureSsl) {
+            log?.warn?.(`Synology Chat account ${accountId}: ${INSECURE_SSL_STARTUP_WARNING}`);
+          }
           if (!validateSynologyGatewayAccountStartup({ cfg, account, accountId, log }).ok) {
             return waitUntilAbort(abortSignal);
           }

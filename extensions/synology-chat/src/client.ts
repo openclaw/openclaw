@@ -10,6 +10,10 @@ import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
+const INSECURE_SSL_WARNING_CODE = "OPENCLAW_SYNOLOGY_INSECURE_SSL";
+const INSECURE_SSL_WARNING_MESSAGE =
+  "Synology Chat SSL verification is disabled (allowInsecureSsl=true). This disables TLS certificate validation and should only be used with trusted self-signed certificates.";
+let insecureSslWarningEmitted = false;
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -82,7 +86,7 @@ export async function sendMessage(
   incomingUrl: string,
   text: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
@@ -123,7 +127,7 @@ export async function sendFileUrl(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
@@ -145,9 +149,10 @@ export async function sendFileUrl(
  */
 export async function fetchChatUsers(
   incomingUrl: string,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
 ): Promise<ChatUser[]> {
+  warnInsecureSslIfEnabled(allowInsecureSsl);
   const now = Date.now();
   const listUrl = incomingUrl.replace(/method=\w+/, "method=user_list");
   const cached = chatUserCache.get(listUrl);
@@ -246,8 +251,10 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   return Number.isNaN(numericId) ? undefined : numericId;
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
+function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
   return new Promise((resolve, reject) => {
+    warnInsecureSslIfEnabled(allowInsecureSsl);
+
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
@@ -293,4 +300,14 @@ function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boo
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function warnInsecureSslIfEnabled(allowInsecureSsl: boolean): void {
+  if (!allowInsecureSsl || insecureSslWarningEmitted) {
+    return;
+  }
+  insecureSslWarningEmitted = true;
+  process.emitWarning(INSECURE_SSL_WARNING_MESSAGE, {
+    code: INSECURE_SSL_WARNING_CODE,
+  });
 }

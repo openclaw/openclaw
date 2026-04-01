@@ -95,6 +95,50 @@ describe("sendMessage", () => {
     const callArgs = httpsRequest.mock.calls[0];
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
+
+  it("verifies TLS certificates by default", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest).toHaveBeenCalled();
+    const callArgs = httpsRequest.mock.calls[0];
+    expect(callArgs[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("can skip TLS verification when explicitly enabled", async () => {
+    const emitWarningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      mockSuccessResponse();
+      await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
+
+      const httpsRequest = vi.mocked(https.request);
+      expect(httpsRequest).toHaveBeenCalled();
+      const callArgs = httpsRequest.mock.calls[0];
+      expect(callArgs[1]).toMatchObject({ rejectUnauthorized: false });
+      expect(emitWarningSpy).toHaveBeenCalledWith(
+        expect.stringContaining("allowInsecureSsl=true"),
+        expect.objectContaining({ code: "OPENCLAW_SYNOLOGY_INSECURE_SSL" }),
+      );
+    } finally {
+      emitWarningSpy.mockRestore();
+    }
+  });
+
+  it("emits insecure SSL warning only once per module load", async () => {
+    const emitWarningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      mockSuccessResponse();
+      await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
+
+      mockSuccessResponse();
+      await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello again", 42, true));
+
+      expect(emitWarningSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      emitWarningSpy.mockRestore();
+    }
+  });
 });
 
 describe("sendFileUrl", () => {
@@ -114,6 +158,44 @@ describe("sendFileUrl", () => {
       sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(false);
+  });
+
+  it("verifies TLS certificates by default", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest).toHaveBeenCalled();
+    const callArgs = httpsRequest.mock.calls[0];
+    expect(callArgs[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("can skip TLS verification when explicitly enabled", async () => {
+    const emitWarningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      mockSuccessResponse();
+      await settleTimers(
+        sendFileUrl(
+          "https://nas.example.com/incoming",
+          "https://example.com/file.png",
+          undefined,
+          true,
+        ),
+      );
+
+      const httpsRequest = vi.mocked(https.request);
+      expect(httpsRequest).toHaveBeenCalled();
+      const callArgs = httpsRequest.mock.calls[0];
+      expect(callArgs[1]).toMatchObject({ rejectUnauthorized: false });
+      expect(emitWarningSpy).toHaveBeenCalledWith(
+        expect.stringContaining("allowInsecureSsl=true"),
+        expect.objectContaining({ code: "OPENCLAW_SYNOLOGY_INSECURE_SSL" }),
+      );
+    } finally {
+      emitWarningSpy.mockRestore();
+    }
   });
 });
 
@@ -293,5 +375,41 @@ describe("fetchChatUsers", () => {
     );
 
     expect(users).toEqual([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+  });
+
+  it("verifies TLS certificates by default", async () => {
+    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+
+    await fetchChatUsers(
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22tls-default%22",
+    );
+
+    const httpsGet = vi.mocked((https as any).get);
+    expect(httpsGet).toHaveBeenCalled();
+    const callArgs = httpsGet.mock.calls[0];
+    expect(callArgs[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("can skip TLS verification when explicitly enabled", async () => {
+    const emitWarningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+
+      await fetchChatUsers(
+        "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22tls-insecure%22",
+        true,
+      );
+
+      const httpsGet = vi.mocked((https as any).get);
+      expect(httpsGet).toHaveBeenCalled();
+      const callArgs = httpsGet.mock.calls[0];
+      expect(callArgs[1]).toMatchObject({ rejectUnauthorized: false });
+      expect(emitWarningSpy).toHaveBeenCalledWith(
+        expect.stringContaining("allowInsecureSsl=true"),
+        expect.objectContaining({ code: "OPENCLAW_SYNOLOGY_INSECURE_SSL" }),
+      );
+    } finally {
+      emitWarningSpy.mockRestore();
+    }
   });
 });
