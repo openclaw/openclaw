@@ -6,7 +6,6 @@ import { typedCases } from "../../test-utils/typed-cases.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
 import type { OutboundDeliveryJson } from "./format.js";
-import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -126,5 +125,3 @@ describe("buildOutboundResultEnvelope", () => {
     expect(buildOutboundResultEnvelope(input)).toEqual(expected);
   });
 });
-
-runResolveOutboundTargetCoreTests();
