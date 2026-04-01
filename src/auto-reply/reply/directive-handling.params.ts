@@ -45,6 +45,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
 export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {
   commandAuthorized: boolean;
   ctx: MsgContext;
+  senderIsOwner?: boolean;
   agentId?: string;
   isGroup: boolean;
   agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];

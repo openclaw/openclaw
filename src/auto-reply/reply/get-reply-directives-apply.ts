@@ -156,6 +156,7 @@ export async function applyInlineDirectiveOverrides(params: {
     model,
     initialModelLabel,
     formatModelSwitchEvent,
+    senderIsOwner: command.senderIsOwner,
   });
 
   let directiveAck: ReplyPayload | undefined;
@@ -296,6 +297,7 @@ export async function applyInlineDirectiveOverrides(params: {
       model,
       initialModelLabel,
       formatModelSwitchEvent,
+      senderIsOwner: command.senderIsOwner,
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
