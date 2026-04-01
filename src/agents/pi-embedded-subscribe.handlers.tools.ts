@@ -257,6 +257,8 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    const previousPromptSent = ctx.state.deterministicApprovalPromptSent;
+    const previousVisibleOutput = ctx.state.visibleOutputEmittedThisTurn;
     ctx.state.deterministicApprovalPromptSent = true;
     ctx.state.visibleOutputEmittedThisTurn = true;
     try {
@@ -273,6 +275,8 @@ async function emitToolResultOutput(params: {
         }),
       );
     } catch {
+      ctx.state.deterministicApprovalPromptSent = previousPromptSent;
+      ctx.state.visibleOutputEmittedThisTurn = previousVisibleOutput;
       // ignore delivery failures
     }
     return;
@@ -283,6 +287,8 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    const previousPromptSent = ctx.state.deterministicApprovalPromptSent;
+    const previousVisibleOutput = ctx.state.visibleOutputEmittedThisTurn;
     ctx.state.deterministicApprovalPromptSent = true;
     ctx.state.visibleOutputEmittedThisTurn = true;
     try {
@@ -295,6 +301,8 @@ async function emitToolResultOutput(params: {
         }),
       );
     } catch {
+      ctx.state.deterministicApprovalPromptSent = previousPromptSent;
+      ctx.state.visibleOutputEmittedThisTurn = previousVisibleOutput;
       // ignore delivery failures
     }
     return;
