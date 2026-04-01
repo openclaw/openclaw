@@ -1081,16 +1081,34 @@ export const registerTelegramHandlers = ({
       : [];
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const senderUsername = msg.from?.username ?? "";
+    const isDirectChat = msg.chat.type === "private";
+    const isLinkedOwnerSender = isSenderAllowed({
+      allow: ownerAllowFrom,
+      senderId,
+      senderUsername,
+    });
+    const isOwnerDirectChat = isLinkedOwnerSender && isDirectChat;
+    const shouldTriggerTakeover = isLinkedOwnerSender && !isDirectChat;
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
+    if (humanTakeover.enabled) {
+      logVerbose(
+        `telegram human takeover check session=${conversationKey} chatType=${msg.chat.type} sender=${senderId || "unknown"} ownerSender=${String(isLinkedOwnerSender)} ownerDirectChat=${String(isOwnerDirectChat)} trigger=${String(shouldTriggerTakeover)}`,
+      );
+    }
     const takeoverDecision = decideHumanTakeover({
       sessionKey: `telegram:${accountId ?? "default"}:${conversationKey}`,
       enabled: humanTakeover.enabled,
       cooldownMs: humanTakeover.cooldownMs,
-      isOwnerMessage: isSenderAllowed({ allow: ownerAllowFrom, senderId, senderUsername }),
+      isOwnerMessage: shouldTriggerTakeover,
       isCommandLike: Boolean((msg.text ?? msg.caption ?? "").trim().startsWith("/")),
     });
+    if (humanTakeover.enabled) {
+      logVerbose(
+        `telegram human takeover decision session=${conversationKey} ownerMessage=${String(shouldTriggerTakeover)} skip=${String(takeoverDecision.skipAutoReply)} reason=${takeoverDecision.reason ?? "none"} remainingMs=${String(takeoverDecision.remainingMs ?? 0)}`,
+      );
+    }
     if (takeoverDecision.skipAutoReply) {
       if (takeoverDecision.reason === "owner-message") {
         logVerbose(

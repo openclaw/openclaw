@@ -72,7 +72,9 @@ export async function checkInboundAccessControl(params: {
   const dmAllowFrom = configuredAllowFrom.length > 0 ? configuredAllowFrom : defaultAllowFrom;
   const groupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
-  const isSamePhone = params.from === params.selfE164;
+  const normalizedFrom = normalizeE164(params.from);
+  const normalizedSelf = params.selfE164 ? normalizeE164(params.selfE164) : null;
+  const isSamePhone = Boolean(normalizedSelf && normalizedFrom === normalizedSelf);
   const isSelfChat = account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom);
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0

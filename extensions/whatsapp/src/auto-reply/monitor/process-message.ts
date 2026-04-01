@@ -219,6 +219,11 @@ export async function processMessage(params: {
   }
 
   const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg);
+  const normalizedSelfE164 = self.e164 ? normalizeE164(self.e164) : null;
+  const isDirectSelfChat =
+    params.msg.chatType !== "group" &&
+    Boolean(normalizedSelfE164 && sender.e164 && normalizeE164(sender.e164) === normalizedSelfE164);
   const normalizedOwnerAllowFrom = new Set(
     (account.allowFrom ?? [])
       .map((entry) => normalizeE164(String(entry)))
@@ -226,11 +231,17 @@ export async function processMessage(params: {
   );
   const senderE164 = sender.e164 ? normalizeE164(sender.e164) : null;
   const ownerTriggeredTakeover =
-    Boolean(params.msg.fromMe) || Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164));
+    !isDirectSelfChat &&
+    (Boolean(params.msg.fromMe) || Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164)));
   const humanTakeover = resolveHumanTakeoverConfig({
     channelConfig: params.cfg.channels?.whatsapp,
     accountConfig: account,
   });
+  if (humanTakeover.enabled && shouldLogVerbose()) {
+    logVerbose(
+      `WhatsApp human takeover check session=${params.route.sessionKey} fromMe=${String(Boolean(params.msg.fromMe))} isDirectSelfChat=${String(isDirectSelfChat)} sender=${senderE164 ?? "unknown"} ownerAllowlisted=${String(Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164)))}`,
+    );
+  }
   const takeoverDecision = decideHumanTakeover({
     sessionKey: params.route.sessionKey,
     enabled: humanTakeover.enabled,
@@ -238,6 +249,11 @@ export async function processMessage(params: {
     isOwnerMessage: ownerTriggeredTakeover,
     isCommandLike: params.msg.body.trim().startsWith("/"),
   });
+  if (humanTakeover.enabled && shouldLogVerbose()) {
+    logVerbose(
+      `WhatsApp human takeover decision session=${params.route.sessionKey} ownerMessage=${String(ownerTriggeredTakeover)} skip=${String(takeoverDecision.skipAutoReply)} reason=${takeoverDecision.reason ?? "none"} remainingMs=${String(takeoverDecision.remainingMs ?? 0)}`,
+    );
+  }
   if (takeoverDecision.skipAutoReply) {
     if (takeoverDecision.reason === "owner-message") {
       logVerbose(
@@ -287,7 +303,6 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
-  const self = getSelfIdentity(params.msg);
   const replyTo = getReplyContext(params.msg);
   const dmRouteTarget =
     params.msg.chatType !== "group"
