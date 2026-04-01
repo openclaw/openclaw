@@ -71,6 +71,7 @@ const SlackCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -81,6 +82,8 @@ export const TelegramTopicSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -96,6 +99,8 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -121,6 +126,8 @@ export const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
   })
@@ -293,6 +300,8 @@ export const TelegramAccountSchemaBase = z
     silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
   })
@@ -866,6 +875,16 @@ export const SlackAccountSchema = z
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -1517,6 +1536,7 @@ export const MSTeamsConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),

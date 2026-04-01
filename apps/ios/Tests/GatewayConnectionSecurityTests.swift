@@ -5,6 +5,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
+    @MainActor
     private func makeController() -> GatewayConnectionController {
         GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
     }
@@ -32,8 +33,7 @@ import Testing
     }
 
     private func clearTLSFingerprint(stableID: String) {
-        let suite = UserDefaults(suiteName: "ai.openclaw.shared") ?? .standard
-        suite.removeObject(forKey: "gateway.tls.\(stableID)")
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
     }
 
     @Test @MainActor func discoveredTLSParams_prefersStoredPinOverAdvertisedTXT() async {
@@ -125,5 +125,22 @@ import Testing
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net.", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
+    }
+
+    @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
+        let stableID1 = "test|\(UUID().uuidString)"
+        let stableID2 = "test|\(UUID().uuidString)"
+        defer { GatewayTLSStore.clearAllFingerprints() }
+
+        GatewayTLSStore.saveFingerprint("11", stableID: stableID1)
+        GatewayTLSStore.saveFingerprint("22", stableID: stableID2)
+
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == "11")
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == "22")
+
+        GatewayTLSStore.clearAllFingerprints()
+
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == nil)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
 }

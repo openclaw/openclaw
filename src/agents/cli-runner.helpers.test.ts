@@ -1,7 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import { loadPromptRefImages } from "./cli-runner/helpers.js";
+import { buildCliArgs, loadPromptRefImages } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import * as toolImages from "./tool-images.js";
@@ -100,5 +100,21 @@ describe("loadPromptRefImages", () => {
       maxBytes: MAX_IMAGE_BYTES,
     });
     expect(result).toEqual([loadedImage]);
+  });
+});
+
+describe("buildCliArgs", () => {
+  it("keeps passing model overrides on resumed CLI sessions", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "codex",
+          modelArg: "--model",
+        },
+        baseArgs: ["exec", "resume", "thread-123"],
+        modelId: "gpt-5.4",
+        useResume: true,
+      }),
+    ).toEqual(["exec", "resume", "thread-123", "--model", "gpt-5.4"]);
   });
 });

@@ -1,4 +1,6 @@
 import { resolveMatrixTargets } from "../../resolve-targets.js";
+import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { normalizeMatrixUserId } from "./allowlist.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -6,9 +8,7 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
   type RuntimeEnv,
-} from "../../runtime-api.js";
-import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
-import { normalizeMatrixUserId } from "./allowlist.js";
+} from "./runtime-api.js";
 
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
 type ResolveMatrixTargetsFn = typeof resolveMatrixTargets;

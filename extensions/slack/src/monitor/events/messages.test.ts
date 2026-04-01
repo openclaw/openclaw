@@ -7,13 +7,18 @@ import {
 const messageQueueMock = vi.fn();
 const messageAllowMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+async function createChannelRuntimeMock(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
   };
-});
+}
+
+vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
@@ -53,6 +58,7 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ registerSlackMessageEvents } = await import("./messages.js"));
 });
 

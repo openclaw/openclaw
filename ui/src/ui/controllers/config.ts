@@ -78,7 +78,11 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
 
 export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
   state.configSnapshot = snapshot;
-  const rawFromSnapshot =
+  const rawAvailable = typeof snapshot.raw === "string";
+  if (!rawAvailable && state.configFormMode === "raw") {
+    state.configFormMode = "form";
+  }
+  const rawFromSnapshot: string =
     typeof snapshot.raw === "string"
       ? snapshot.raw
       : snapshot.config && typeof snapshot.config === "object"
@@ -117,6 +121,9 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
+  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
+    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
+  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }

@@ -6,6 +6,7 @@ import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget, createChatForHandle } from "./send.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
+  createBlueBubblesFetchGuardPassthroughInstaller,
   installBlueBubblesFetchTestHooks,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
@@ -13,6 +14,7 @@ import { _setFetchGuardForTesting, type BlueBubblesSendTarget } from "./types.js
 
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
+const setFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
 
 installBlueBubblesFetchTestHooks({
   mockFetch,
@@ -62,29 +64,8 @@ function mockNewChatSendResponse(guid: string) {
 }
 
 function installSsrFPolicyCapture(policies: unknown[]) {
-  _setFetchGuardForTesting(async (params) => {
-    policies.push(params.policy);
-    const raw = await globalThis.fetch(params.url, params.init);
-    let body: ArrayBuffer;
-    if (typeof raw.arrayBuffer === "function") {
-      body = await raw.arrayBuffer();
-    } else {
-      const text =
-        typeof (raw as { text?: () => Promise<string> }).text === "function"
-          ? await (raw as { text: () => Promise<string> }).text()
-          : typeof (raw as { json?: () => Promise<unknown> }).json === "function"
-            ? JSON.stringify(await (raw as { json: () => Promise<unknown> }).json())
-            : "";
-      body = new TextEncoder().encode(text).buffer;
-    }
-    return {
-      response: new Response(body, {
-        status: (raw as { status?: number }).status ?? 200,
-        headers: (raw as { headers?: HeadersInit }).headers,
-      }),
-      release: async () => {},
-      finalUrl: params.url,
-    };
+  setFetchGuardPassthrough((policy) => {
+    policies.push(policy);
   });
 }
 

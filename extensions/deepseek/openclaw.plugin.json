@@ -1,5 +1,6 @@
 {
   "id": "deepseek",
+  "enabledByDefault": true,
   "providers": ["deepseek"],
   "providerAuthEnvVars": {
     "deepseek": ["DEEPSEEK_API_KEY"]
