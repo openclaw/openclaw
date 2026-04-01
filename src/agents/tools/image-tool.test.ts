@@ -15,6 +15,7 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
 type PiToolsModule = typeof import("../pi-tools.js");
@@ -1095,7 +1096,9 @@ describe("image tool implicit imageModel config", () => {
         sandbox,
         workspaceDir: sandboxRoot,
       });
-      const imageTool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
+      const imageTool = requireImageTool(
+        tools.find((candidate: { name: string }) => candidate.name === "image"),
+      );
 
       await expect(
         imageTool.execute("t-allow", {
