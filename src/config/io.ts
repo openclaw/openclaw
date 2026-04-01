@@ -18,17 +18,6 @@ import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { getFileStatSnapshot } from "./cache-utils.js";
-import {
-  applyCompactionDefaults,
-  applyContextPruningDefaults,
-  applyAgentDefaults,
-  applyLoggingDefaults,
-  applyMessageDefaults,
-  applyModelDefaults,
-  applySessionDefaults,
-  applyTalkConfigNormalization,
-  applyTalkApiKey,
-} from "./defaults.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -2589,6 +2578,31 @@ function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
  * is returning a stale object that doesn't match the current on-disk state.
  */
 let configStatFingerprintAtLastLoad: string | null = null;
+type ConfigCacheEntry = {
+  configPath: string;
+  expiresAt: number;
+  config: OpenClawConfig;
+};
+let configCache: ConfigCacheEntry | null = null;
+
+function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
+  if (env.OPENCLAW_DISABLE_CONFIG_CACHE === "1") {
+    return 0;
+  }
+  const raw = env.OPENCLAW_CONFIG_CACHE_MS;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return 0;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
+}
+
+function shouldUseConfigCache(env: NodeJS.ProcessEnv): boolean {
+  return resolveConfigCacheMs(env) > 0;
+}
 
 export function getConfigStatFingerprintAtLastLoad(): string | null {
   return configStatFingerprintAtLastLoad;
@@ -2599,7 +2613,8 @@ export function resetConfigStatFingerprintAtLastLoadForTest(): void {
 }
 
 export function clearConfigCache(): void {
-  // Compat shim: runtime snapshot is the only in-process cache now.
+  configCache = null;
+  resetConfigRuntimeState();
 }
 
 export function registerConfigWriteListener(
@@ -2615,11 +2630,13 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  configCache = null;
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
 }
 
 export function resetConfigRuntimeState(): void {
+  configCache = null;
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
 }
@@ -2695,10 +2712,28 @@ export function setRuntimeConfigSnapshotRefreshHandler(
 }
 
 export function loadConfig(): OpenClawConfig {
+  const io = createConfigIO();
+  const configPath = io.configPath;
+  const now = Date.now();
+  if (shouldUseConfigCache(process.env)) {
+    const cached = configCache;
+    if (cached && cached.configPath === configPath && cached.expiresAt > now) {
+      return cached.config;
+    }
+    const config = io.loadConfig();
+    configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
+    configCache = {
+      configPath,
+      expiresAt: now + resolveConfigCacheMs(process.env),
+      config,
+    };
+    return config;
+  }
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
-  const config = createConfigIO().loadConfig();
+  const config = io.loadConfig();
+  configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.

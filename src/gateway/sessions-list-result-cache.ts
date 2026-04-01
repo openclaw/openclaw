@@ -7,7 +7,6 @@ import {
 import {
   collectResolvedConfigSourceStatFingerprintSync,
   getConfigStatFingerprintAtLastLoad,
-  getRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
 import { getSessionStoreTtl } from "../config/sessions/store-cache.js";
@@ -93,9 +92,6 @@ export function notifySessionsListFullComputation(): void {
  */
 export function isSessionsListResultCacheEligible(params: SessionsListParams): boolean {
   if (!isSessionsListResultCacheEnabled()) {
-    return false;
-  }
-  if (getRuntimeConfigSnapshot()) {
     return false;
   }
   if (params.includeDerivedTitles === true || params.includeLastMessage === true) {
