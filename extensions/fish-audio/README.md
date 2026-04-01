@@ -8,7 +8,7 @@ Bundled [Fish Audio](https://fish.audio) TTS speech provider for OpenClaw.
 - Dynamic voice listing (user's own cloned/trained voices via `self=true`)
 - Format-aware output: opus for voice notes (Telegram, WhatsApp), mp3 otherwise
 - Inline directives: voice, speed, model, latency, temperature, top_p
-- `voiceCompatible: true` for both formats
+- `voiceCompatible` for Opus voice-note output (Telegram, WhatsApp, etc.)
 
 ## Configuration
 
