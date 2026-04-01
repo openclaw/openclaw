@@ -472,6 +472,10 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     const messageChannel = resolvedDelivery.channel;
     // Per-job payload.fallbacks takes priority over agent-level fallbacks.
+    const hasPayloadModelOverride =
+      params.job.payload.kind === "agentTurn" &&
+      typeof params.job.payload.model === "string" &&
+      params.job.payload.model.trim().length > 0;
     const payloadFallbacks =
       params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
         ? params.job.payload.fallbacks
@@ -488,7 +492,9 @@ export async function runCronIsolatedAgentTurn(params: {
         runId: cronSession.sessionEntry.sessionId,
         agentDir,
         fallbacksOverride:
-          payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+          payloadFallbacks ??
+          resolveAgentModelFallbacksOverride(params.cfg, agentId) ??
+          (hasPayloadModelOverride ? [] : undefined),
         run: async (providerOverride, modelOverride, runOptions) => {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());
