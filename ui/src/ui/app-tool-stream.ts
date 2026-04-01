@@ -298,6 +298,7 @@ function setCompactionComplete(host: CompactionHost, runId: string) {
 export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
+  const completed = data.completed === true;
 
   clearCompactionTimer(host);
 
@@ -311,7 +312,7 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
     return;
   }
   if (phase === "end") {
-    if (data.willRetry === true) {
+    if (data.willRetry === true && completed) {
       // Compaction already succeeded, but the run is still retrying.
       // Keep that distinct state until the matching lifecycle end arrives.
       host.compactionStatus = {
@@ -322,7 +323,11 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       };
       return;
     }
-    setCompactionComplete(host, payload.runId);
+    if (completed) {
+      setCompactionComplete(host, payload.runId);
+      return;
+    }
+    host.compactionStatus = null;
   }
 }
 
