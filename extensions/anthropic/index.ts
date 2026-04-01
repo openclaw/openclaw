@@ -38,6 +38,7 @@ import {
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
 } from "./stream-wrappers.js";
+import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -450,6 +451,7 @@ export default definePluginEntry({
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       },
+      buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;

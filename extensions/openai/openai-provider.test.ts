@@ -172,6 +172,43 @@ describe("buildOpenAIProvider", () => {
     ).toBe(true);
   });
 
+  it("owns replay policy for OpenAI and Codex transports", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "openai",
+        modelApi: "openai",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "images-only",
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "openai",
+        modelApi: "openai-completions",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "images-only",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+    });
+
+    expect(
+      codexProvider.buildReplayPolicy?.({
+        provider: "openai-codex",
+        modelApi: "openai-codex-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "images-only",
+    });
+  });
+
   it("falls back to cached codex oauth credentials on accountId extraction failures", async () => {
     const provider = buildOpenAICodexProviderPlugin();
     const credential = {

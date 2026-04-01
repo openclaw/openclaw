@@ -1,4 +1,5 @@
 // Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
+export { cleanSchemaForGemini } from "../agents/schema/clean-for-gemini.js";
 
 export const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "minLength",
