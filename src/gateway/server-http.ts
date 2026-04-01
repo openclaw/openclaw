@@ -898,11 +898,13 @@ export function createGatewayHttpServer(opts: {
               rateLimiter,
             }),
         },
-        {
+      ];
+      if (configSnapshot.channels?.slack?.enabled === true) {
+        requestStages.push({
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
-        },
-      ];
+        });
+      }
       if (openResponsesEnabled) {
         requestStages.push({
           name: "openresponses",
