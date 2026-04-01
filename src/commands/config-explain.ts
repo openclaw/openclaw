@@ -1,6 +1,6 @@
-import { readConfigFileSnapshot } from "../openclaw/src/config/config.js";
-import type { RuntimeEnv } from "../openclaw/src/runtime.js";
-import { writeRuntimeJson } from "../openclaw/src/runtime.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { writeRuntimeJson } from "../runtime.js";
 
 export async function configExplainCommand(
   opts: { json?: boolean } = {},

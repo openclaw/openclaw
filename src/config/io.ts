@@ -1801,6 +1801,7 @@ function buildConfigProvenance(params: {
   exists: boolean;
   parsed: unknown;
   sourceConfig: OpenClawConfig;
+  failedIncludePaths?: string[];
 }): ConfigProvenanceSnapshot {
   const snapshot = createEmptyConfigProvenance();
   recordConfigEntry(snapshot, {
@@ -1836,11 +1837,12 @@ function buildConfigProvenance(params: {
     }
   };
   collectIncludePaths(params.parsed);
+  const failedIncludePaths = new Set(params.failedIncludePaths ?? []);
   for (const includePath of [...includePaths].sort()) {
     recordConfigEntry(snapshot, {
       path: includePath,
       kind: "include",
-      applied: params.exists,
+      applied: params.exists && !failedIncludePaths.has(includePath),
     });
   }
 
@@ -2217,6 +2219,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               exists: true,
               parsed: effectiveParsed,
               sourceConfig: coerceConfig(effectiveParsed),
+              failedIncludePaths:
+                err instanceof ConfigIncludeError
+                  ? [err.includePath]
+                  : undefined,
             }),
             // Keep the recovered root file payload here when read healing kicked in.
             sourceConfig: coerceConfig(effectiveParsed),
