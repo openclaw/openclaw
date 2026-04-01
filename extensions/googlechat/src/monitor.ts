@@ -155,8 +155,16 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
-  const spaceType = (space.type ?? "").toUpperCase();
-  const isGroup = spaceType !== "DM";
+  // Google Chat API v1 uses `type` ("DM" | "ROOM" | "TYPE_UNSPECIFIED").
+  // The newer API surfaces `spaceType` ("DIRECT_MESSAGE" | "SPACE") and
+  // `singleUserBotDm`.  Fall back through all three fields so that both
+  // legacy and current payloads resolve correctly.  (#58514)
+  const legacyType = (space.type ?? "").toUpperCase();
+  const modernType = (space.spaceType ?? "").toUpperCase();
+  const isGroup =
+    legacyType !== "DM" &&
+    modernType !== "DIRECT_MESSAGE" &&
+    space.singleUserBotDm !== true;
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
