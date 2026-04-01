@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { toUserFacingContent } from "./user-facing-content.js";
 
 describe("user-facing-content", () => {
