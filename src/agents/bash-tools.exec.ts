@@ -730,6 +730,7 @@ export function createExecTool(
           security,
           ask,
           strictInlineEval: defaults?.strictInlineEval,
+          trigger: defaults?.trigger,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           approvalRunningNoticeMs,
@@ -753,6 +754,7 @@ export function createExecTool(
           safeBins,
           safeBinProfiles,
           strictInlineEval: defaults?.strictInlineEval,
+          trigger: defaults?.trigger,
           agentId,
           sessionKey: defaults?.sessionKey,
           turnSourceChannel: defaults?.messageProvider,
@@ -771,6 +773,9 @@ export function createExecTool(
           return gatewayResult.pendingResult;
         }
         execCommandOverride = gatewayResult.execCommandOverride;
+        if (gatewayResult.allowWithoutEnforcedCommand) {
+          execCommandOverride = undefined;
+        }
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;

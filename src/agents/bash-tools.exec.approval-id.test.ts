@@ -195,6 +195,18 @@ function mockPendingApprovalRegistration() {
   });
 }
 
+function mockNoApprovalRouteRegistration() {
+  vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    if (method === "exec.approval.request") {
+      return { id: "approval-id", decision: null };
+    }
+    if (method === "exec.approval.waitDecision") {
+      return { decision: null };
+    }
+    return { ok: true };
+  });
+}
+
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
@@ -789,6 +801,59 @@ describe("exec approvals", () => {
     await expect(tool.execute("call-registration-fail", { command: "echo fail" })).rejects.toThrow(
       "Exec approval registration failed",
     );
+  });
+
+  it("resolves cron no-route approvals inline when askFallback permits trusted automation", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "full" },
+      agents: {},
+    });
+    mockNoApprovalRouteRegistration();
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      trigger: "cron",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-cron-inline-approval", {
+      command: "echo cron-ok",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("cron-ok");
+    expect(vi.mocked(callGatewayTool)).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ expectFinal: false }),
+    );
+    expect(
+      vi
+        .mocked(callGatewayTool)
+        .mock.calls.some(([method]) => method === "exec.approval.waitDecision"),
+    ).toBe(false);
+  });
+
+  it("explains cron no-route denials with a host-policy fix hint", async () => {
+    mockNoApprovalRouteRegistration();
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      trigger: "cron",
+      approvalRunningNoticeMs: 0,
+    });
+
+    await expect(
+      tool.execute("call-cron-denied", {
+        command: "echo cron-denied",
+      }),
+    ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
   });
 
   it("shows a local /approve prompt when discord exec approvals are disabled", async () => {

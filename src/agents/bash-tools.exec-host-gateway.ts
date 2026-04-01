@@ -25,6 +25,7 @@ import {
 } from "./bash-tools.exec-approval-request.js";
 import {
   buildDefaultExecApprovalRequestArgs,
+  buildHeadlessExecApprovalDeniedMessage,
   buildExecApprovalFollowupTarget,
   buildExecApprovalPendingToolResult,
   createExecApprovalDecisionState,
@@ -32,6 +33,7 @@ import {
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
+  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -54,6 +56,7 @@ export type ProcessGatewayAllowlistParams = {
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
+  trigger?: string;
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
@@ -71,6 +74,7 @@ export type ProcessGatewayAllowlistParams = {
 
 export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
+  allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
 
@@ -204,6 +208,42 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
+    if (
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: params.trigger,
+        unavailableReason,
+        preResolvedDecision,
+      })
+    ) {
+      const { approvedByAsk, deniedReason } = createExecApprovalDecisionState({
+        decision: preResolvedDecision,
+        askFallback,
+        obfuscationDetected: obfuscation.detected,
+      });
+
+      if (deniedReason || !approvedByAsk) {
+        throw new Error(
+          buildHeadlessExecApprovalDeniedMessage({
+            trigger: params.trigger,
+            host: "gateway",
+            security: hostSecurity,
+            ask: hostAsk,
+            askFallback,
+          }),
+        );
+      }
+
+      recordMatchedAllowlistUse(
+        resolveApprovalAuditCandidatePath(
+          allowlistEval.segments[0]?.resolution ?? null,
+          params.workdir,
+        ),
+      );
+      return {
+        execCommandOverride: enforcedCommand,
+        allowWithoutEnforcedCommand: enforcedCommand === undefined,
+      };
+    }
     const resolvedPath = resolveApprovalAuditCandidatePath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
