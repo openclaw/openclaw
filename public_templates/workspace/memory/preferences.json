@@ -1,0 +1,11 @@
+{
+  "response_style": {
+    "tone": "direct",
+    "verbosity": "concise",
+    "avoid_filler": true
+  },
+  "workflow": {
+    "prefer_local_evidence_first": true,
+    "require_verification_for_nontrivial_work": true
+  }
+}

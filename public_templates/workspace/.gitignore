@@ -1,0 +1,6 @@
+dist/
+node_modules/
+memory/private/
+.DS_Store
+__pycache__/
+*.pyc

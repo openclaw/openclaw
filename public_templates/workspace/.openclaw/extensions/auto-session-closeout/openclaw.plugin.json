@@ -1,0 +1,77 @@
+{
+  "id": "auto-session-closeout",
+  "name": "Auto Session Closeout",
+  "description": "Runs the harness closeout pipeline after successful user turns so daily sessions get automatic closeout and structured auto-memory capture.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agentIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "triggers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "pythonBin": {
+        "type": "string"
+      },
+      "harnessPath": {
+        "type": "string"
+      },
+      "minItems": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "applyCloseout": {
+        "type": "boolean"
+      },
+      "applyMemory": {
+        "type": "boolean"
+      },
+      "timeoutSeconds": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  },
+  "uiHints": {
+    "agentIds": {
+      "label": "Agent IDs",
+      "help": "Only run automatic closeout for these agent ids. Empty means all agents."
+    },
+    "triggers": {
+      "label": "Triggers",
+      "help": "Only run for these trigger kinds. Default: user."
+    },
+    "pythonBin": {
+      "label": "Python Binary",
+      "help": "Python executable used to call scripts/openclaw_harness.py."
+    },
+    "harnessPath": {
+      "label": "Harness Path",
+      "help": "Override the harness script path when it is not at <workspace>/scripts/openclaw_harness.py."
+    },
+    "minItems": {
+      "label": "Min Memory Items",
+      "help": "Minimum extracted memory signal required before auto-memory writes are applied."
+    },
+    "applyCloseout": {
+      "label": "Persist Closeout",
+      "help": "Write the generated closeout JSON and markdown files under memory/closeouts."
+    },
+    "applyMemory": {
+      "label": "Apply Memory",
+      "help": "Allow the closeout auto-memory step to write structured memory when it passes thresholds."
+    },
+    "timeoutSeconds": {
+      "label": "Timeout Seconds",
+      "help": "Maximum time to wait for the harness command before skipping this closeout."
+    }
+  }
+}

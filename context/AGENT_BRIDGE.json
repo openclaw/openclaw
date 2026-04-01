@@ -1,0 +1,19 @@
+{
+  "default_agent": "main",
+  "role_to_agent": {
+    "coordinator": "coordinator",
+    "Explore": "explore",
+    "Plan": "plan",
+    "general-purpose": "general-purpose",
+    "Verification": "verification",
+    "main": "main"
+  },
+  "role_to_thinking": {
+    "coordinator": "low",
+    "Explore": "low",
+    "Plan": "medium",
+    "general-purpose": "medium",
+    "Verification": "high",
+    "main": "low"
+  }
+}
