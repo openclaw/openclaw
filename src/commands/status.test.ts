@@ -467,7 +467,7 @@ vi.mock("../daemon/node-service.js", () => ({
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
-vi.mock("openclaw/plugin-sdk/tasks", () => ({
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary: mocks.getInspectableTaskAuditSummary,
 }));

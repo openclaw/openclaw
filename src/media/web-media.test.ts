@@ -133,4 +133,42 @@ describe("loadWebMedia", () => {
   ] as const)("$name", async (testCase) => {
     await expectRejectedWebMediaWithoutFilesystemAccess(testCase);
   });
+
+  describe("workspaceDir relative path resolution", () => {
+    it("resolves a bare filename against workspaceDir", async () => {
+      const result = await loadWebMedia("tiny.png", {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: fixtureRoot,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("resolves a dot-relative path against workspaceDir", async () => {
+      const result = await loadWebMedia("./tiny.png", {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: fixtureRoot,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("resolves a MEDIA:-prefixed relative path against workspaceDir", async () => {
+      const result = await loadWebMedia("MEDIA:tiny.png", {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: fixtureRoot,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("leaves absolute paths unchanged when workspaceDir is set", async () => {
+      const result = await loadWebMedia(tinyPngFile, {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: "/some/other/dir",
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+  });
 });

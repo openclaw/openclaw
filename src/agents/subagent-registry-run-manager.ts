@@ -1,7 +1,7 @@
-import { createRunningTaskRun } from "openclaw/plugin-sdk/tasks";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
@@ -323,7 +323,8 @@ export function createSubagentRunManager(params: {
       createRunningTaskRun({
         runtime: "subagent",
         sourceId: registerParams.runId,
-        requesterSessionKey: registerParams.requesterSessionKey,
+        ownerKey: registerParams.requesterSessionKey,
+        scopeKind: "session",
         requesterOrigin,
         childSessionKey: registerParams.childSessionKey,
         runId: registerParams.runId,
