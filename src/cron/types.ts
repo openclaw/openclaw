@@ -108,7 +108,9 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<CronAgentTurnPayloadFields>;
+} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+    toolsAllow?: string[] | null;
+  };
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
