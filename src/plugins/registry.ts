@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import {
   getRegisteredAgentHarness,
@@ -1491,6 +1492,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerMemoryCapability(record.id, capability);
+              },
+              registerStreamFnWrapper: (wrapper: PluginRegistry["streamFnWrappers"][number]) => {
+                registry.streamFnWrappers.push(wrapper);
               },
               registerMemoryPromptSection: (builder) => {
                 if (!hasKind(record.kind, "memory")) {

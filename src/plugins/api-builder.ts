@@ -53,6 +53,7 @@ export type BuildPluginApiParams = {
       | "registerCodexAppServerExtensionFactory"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
+      | "registerStreamFnWrapper"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
       | "registerMemoryCorpusSupplement"
@@ -110,6 +111,7 @@ const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCod
   () => {};
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
+const noopRegisterStreamFnWrapper: OpenClawPluginApi["registerStreamFnWrapper"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
   () => {};
@@ -184,6 +186,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
+    registerStreamFnWrapper: handlers.registerStreamFnWrapper ?? noopRegisterStreamFnWrapper,
     registerMemoryPromptSection:
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
     registerMemoryPromptSupplement:

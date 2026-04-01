@@ -25,6 +25,7 @@ import {
   extractModelCompat,
   resolveToolCallArgumentsEncoding,
 } from "../../../plugins/provider-model-compat.js";
+import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
@@ -1614,6 +1615,14 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
         activeSession.agent.streamFn,
       );
+
+      // Apply plugin-registered streamFn wrappers (e.g. per-call model routing).
+      const pluginStreamFnWrappers = getActivePluginRegistry()?.streamFnWrappers;
+      if (pluginStreamFnWrappers?.length) {
+        for (const wrapper of pluginStreamFnWrappers) {
+          activeSession.agent.streamFn = wrapper(activeSession.agent.streamFn);
+        }
+      }
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 

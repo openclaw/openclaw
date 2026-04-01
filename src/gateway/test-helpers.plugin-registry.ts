@@ -35,6 +35,7 @@ function createStubPluginRegistry(): PluginRegistry {
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
+    streamFnWrappers: [],
   };
 }
 

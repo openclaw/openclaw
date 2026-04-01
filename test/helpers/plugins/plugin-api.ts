@@ -46,6 +46,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerCodexAppServerExtensionFactory() {},
     registerDetachedTaskRuntime() {},
     registerMemoryCapability() {},
+    registerStreamFnWrapper() {},
     registerMemoryPromptSection() {},
     registerMemoryPromptSupplement() {},
     registerMemoryCorpusSupplement() {},

@@ -99,6 +99,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   gatewayDiscoveryServices: [],
   conversationBindingResolvedHandlers: [],
   diagnostics,
+  streamFnWrappers: [],
 });
 
 type ServerPluginsModule = typeof import("./server-plugins.js");

@@ -36,5 +36,6 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
+    streamFnWrappers: [],
   };
 }

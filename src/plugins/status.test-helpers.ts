@@ -143,6 +143,7 @@ export function createPluginLoadResult(
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
+    streamFnWrappers: [],
     ...rest,
     gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
     realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
