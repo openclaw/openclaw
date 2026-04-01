@@ -7,14 +7,14 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Tasks/chat: add `/tasks` as a chat-native background task board for the current session, with recent task details and agent-local fallback counts when no linked tasks are visible. Related #54226. Thanks @vincentkoc.
-- Web search/SearXNG: add the bundled SearXNG provider plugin for `web_search` with configurable host support. (#57317)
-- Amazon Bedrock/Guardrails: add Bedrock Guardrails support to the bundled provider. (#58588)
-- macOS/Voice Wake: add the Voice Wake option to trigger Talk Mode. (#58490)
+- Web search/SearXNG: add the bundled SearXNG provider plugin for `web_search` with configurable host support. (#57317) Thanks @cgdusek.
+- Amazon Bedrock/Guardrails: add Bedrock Guardrails support to the bundled provider. (#58588) Thanks @MikeORed.
+- macOS/Voice Wake: add the Voice Wake option to trigger Talk Mode. (#58490) Thanks @SmoothExec.
 - Feishu/comments: add a dedicated Drive comment-event flow with comment-thread context resolution, in-thread replies, and `feishu_drive` comment actions for document collaboration workflows. (#58497) Thanks @wittam-01.
 - Gateway/webchat: make `chat.history` text truncation configurable with `gateway.webchat.chatHistoryMaxChars` and per-request `maxChars`, while preserving silent-reply filtering and existing default payload limits. (#58900)
-- Agents/default params: add `agents.defaults.params` for global default provider parameters. (#58548)
+- Agents/default params: add `agents.defaults.params` for global default provider parameters. (#58548) Thanks @lpender.
 - Agents/failover: cap prompt-side and assistant-side same-provider auth-profile retries for rate-limit failures before cross-provider model fallback, add the `auth.cooldowns.rateLimitedProfileRotations` knob, and document the new fallback behavior. (#58707) Thanks @Forgely3D
-- Cron/tools allowlist: add `openclaw cron --tools` for per-job tool allowlists. (#58504)
+- Cron/tools allowlist: add `openclaw cron --tools` for per-job tool allowlists. (#58504) Thanks @andyk-ms.
 - Channels/session routing: move provider-specific session conversation grammar into plugin-owned session-key surfaces, preserving Telegram topic routing and Feishu scoped inheritance across bootstrap, model override, restart, and tool-policy paths.
 - WhatsApp/reactions: add `reactionLevel` guidance for agent reactions. Thanks @mcaxtr.
 - Telegram/errors: add configurable `errorPolicy` and `errorCooldownMs` controls so Telegram can suppress repeated delivery errors per account, chat, and topic without muting distinct failures. (#51914) Thanks @chinar-amrutkar
@@ -47,8 +47,8 @@ Docs: https://docs.openclaw.ai
 - LINE/runtime: resolve the packaged runtime contract from the built `dist/plugins/runtime` layout so LINE channels start correctly again after global npm installs on `2026.3.31`. (#58799) Thanks @vincentkoc.
 - MiniMax/plugins: auto-enable the bundled MiniMax plugin for API-key auth/config so MiniMax image generation and other plugin-owned capabilities load without manual plugin allowlisting. (#57127) Thanks @tars90percent.
 - Ollama/model picker: show only Ollama models after provider selection in the CLI picker. (#55290) Thanks @Luckymingxuan.
-- CDP/profiles: prefer `cdpPort` over stale WebSocket URLs so browser automation reconnects cleanly. (#58499)
-- Media/paths: resolve relative `MEDIA` paths against the agent workspace so local attachment references keep working. (#58624)
+- CDP/profiles: prefer `cdpPort` over stale WebSocket URLs so browser automation reconnects cleanly. (#58499) Thanks @Mlightsnow.
+- Media/paths: resolve relative `MEDIA` paths against the agent workspace so local attachment references keep working. (#58624) Thanks @aquaright1.
 - Memory/session indexing: keep full reindexes from skipping session transcripts when sync is triggered by `session-start` or `watch`, so restart-driven reindexes preserve session memory. (#39732) Thanks @upupc
 - Memory/QMD: prefer `--mask` over `--glob` when creating QMD collections so default memory collections keep their intended patterns and stop colliding on restart. (#58643) Thanks @GitZhangChi.
 - Subagents/tasks: keep subagent completion and cleanup from crashing when task-registry writes fail, so a corrupt or missing task row no longer takes down the gateway during lifecycle finalization. Thanks @vincentkoc.
