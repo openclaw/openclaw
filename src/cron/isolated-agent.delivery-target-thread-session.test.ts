@@ -7,14 +7,18 @@ const mockStore: Record<string, Record<string, unknown>> = {};
 let resolveDeliveryTarget: typeof import("./isolated-agent/delivery-target.js").resolveDeliveryTarget;
 beforeEach(async () => {
   vi.resetModules();
-  vi.doMock("../config/sessions.js", () => ({
-    loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
+  vi.doMock("../config/sessions/main-session.js", () => ({
     resolveAgentMainSessionKey: vi.fn(
       ({ agentId }: { agentId: string }) => `agent:${agentId}:main`,
     ),
+  }));
+  vi.doMock("../config/sessions/paths.js", () => ({
     resolveStorePath: vi.fn((_store: unknown, _opts: unknown) => "/mock/store.json"),
   }));
-  vi.doMock("../infra/outbound/channel-selection.js", () => ({
+  vi.doMock("../config/sessions/store-load.js", () => ({
+    loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
+  }));
+  vi.doMock("../infra/outbound/channel-selection.runtime.js", () => ({
     resolveMessageChannelSelection: vi.fn(async () => ({ channel: "telegram" })),
   }));
   vi.doMock("../channels/plugins/index.js", () => ({

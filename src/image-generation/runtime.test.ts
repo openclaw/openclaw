@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  generateImage,
-  listRuntimeImageGenerationProviders,
-} from "../../extensions/image-generation-core/runtime-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
 
 const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
   resolveRuntimePluginRegistryMock: vi.fn<
