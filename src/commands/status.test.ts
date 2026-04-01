@@ -448,10 +448,14 @@ vi.mock("../gateway/session-utils.js", async (importOriginal) => {
     ...actual,
   };
 });
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
-  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
+    resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
+  };
+});
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: () => ({
     platform: "darwin",
