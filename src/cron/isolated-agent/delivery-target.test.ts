@@ -4,10 +4,16 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-vi.mock("../../config/sessions.js", () => ({
-  loadSessionStore: vi.fn().mockReturnValue({}),
+vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+}));
+
+vi.mock("../../config/sessions/store.js", () => ({
+  loadSessionStore: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.js", () => ({
@@ -25,13 +31,15 @@ vi.mock("../../pairing/pairing-store.js", () => ({
 }));
 
 const mockedModuleIds = [
-  "../../config/sessions.js",
+  "../../config/sessions/main-session.js",
+  "../../config/sessions/paths.js",
+  "../../config/sessions/store.js",
   "../../infra/outbound/channel-selection.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
 ];
 
-import { loadSessionStore } from "../../config/sessions.js";
+import { loadSessionStore } from "../../config/sessions/store.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
