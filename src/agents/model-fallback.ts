@@ -15,6 +15,7 @@ import {
 } from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
+  FailoverError,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -25,6 +26,7 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -780,6 +782,48 @@ export async function runWithModelFallback<T>(params: {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
+
+      // LiveSessionModelSwitchError during fallback means the session's
+      // persisted model conflicts with this fallback candidate.  Treat it
+      // as a known failover so the chain continues to the next candidate
+      // instead of re-throwing and triggering infinite retry loops in the
+      // outer runner.  (#58466)
+      if (err instanceof LiveSessionModelSwitchError) {
+        const switchMsg = err.message;
+        const switchNormalized = new FailoverError(switchMsg, {
+          reason: "overloaded",
+          provider: candidate.provider,
+          model: candidate.model,
+        });
+        lastError = switchNormalized;
+        const described = describeFailoverError(switchNormalized);
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: described.message,
+          reason: described.reason ?? "unknown",
+          status: described.status,
+          code: described.code,
+        });
+        logModelFallbackDecision({
+          decision: "candidate_failed",
+          runId: params.runId,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          candidate,
+          attempt: i + 1,
+          total: candidates.length,
+          reason: described.reason,
+          status: described.status,
+          code: described.code,
+          error: described.message,
+          nextCandidate: candidates[i + 1],
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+        continue;
+      }
 
       // Even unrecognized errors should not abort the fallback loop when
       // there are remaining candidates.  Only abort/context-overflow errors
