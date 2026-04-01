@@ -42,6 +42,8 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
+  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  workspaceDir?: string;
 };
 
 function resolveWebMediaOptions(params: {
@@ -221,6 +223,7 @@ async function loadWebMediaInternal(
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
+    workspaceDir,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -320,6 +323,13 @@ async function loadWebMediaInternal(
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
+  }
+
+  // Resolve relative MEDIA: paths (e.g. "poker_profit.png", "./subdir/file.png")
+  // against the agent workspace directory so bare filenames written by agents
+  // are found on disk and pass the local-roots allowlist check.
+  if (workspaceDir && !path.isAbsolute(mediaUrl)) {
+    mediaUrl = path.resolve(workspaceDir, mediaUrl);
   }
   try {
     assertNoWindowsNetworkPath(mediaUrl, "Local media path");
