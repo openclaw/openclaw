@@ -1861,8 +1861,38 @@ function buildConfigProvenance(params: {
     });
   }
 
-  const rawJson = JSON.stringify(params.parsed);
-  if (rawJson.includes("${")) {
+  let sawEnvReference = false;
+  const collectEnvReferences = (value: unknown): void => {
+    if (sawEnvReference) {
+      return;
+    }
+    if (typeof value === "string") {
+      if (containsEnvVarReference(value)) {
+        sawEnvReference = true;
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        collectEnvReferences(item);
+        if (sawEnvReference) {
+          return;
+        }
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      collectEnvReferences(nested);
+      if (sawEnvReference) {
+        return;
+      }
+    }
+  };
+  collectEnvReferences(params.parsed);
+  if (sawEnvReference) {
     recordConfigEntry(snapshot, {
       path: "${ENV}",
       kind: "env",
