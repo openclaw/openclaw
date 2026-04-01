@@ -67,7 +67,8 @@ describe("registerFeishuDriveTools", () => {
     );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
     expect(tool?.name).toBe("feishu_drive");
 
     requestMock.mockResolvedValueOnce({
@@ -271,7 +272,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const tool = registerTool.mock.calls[0]?.[0];
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
     const result = await tool.execute("call-5", {
       action: "add_comment",
       file_token: "doc_1",

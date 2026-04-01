@@ -5,10 +5,12 @@ import {
   type RuntimeEnv,
 } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
+import { buildFeishuCommentTarget } from "./comment-target.js";
+import { replyComment } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import {
-  parseFeishuDriveCommentNoticeEventPayload,
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
@@ -27,8 +29,7 @@ type HandleFeishuCommentEventParams = {
 function buildCommentSessionKey(params: {
   core: ReturnType<typeof getFeishuRuntime>;
   route: ResolvedAgentRoute;
-  fileToken: string;
-  commentId: string;
+  commentTarget: string;
 }): string {
   return params.core.channel.routing.buildAgentSessionKey({
     agentId: params.route.agentId,
@@ -36,7 +37,7 @@ function buildCommentSessionKey(params: {
     accountId: params.route.accountId,
     peer: {
       kind: "direct",
-      id: `comment:${params.fileToken}:${params.commentId}`,
+      id: params.commentTarget,
     },
     dmScope: "per-account-channel-peer",
   });
@@ -72,6 +73,11 @@ export async function handleFeishuCommentEvent(
     return;
   }
 
+  const commentTarget = buildFeishuCommentTarget({
+    fileType: turn.fileType,
+    fileToken: turn.fileToken,
+    commentId: turn.commentId,
+  });
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const pairing = createChannelPairingController({
@@ -89,10 +95,37 @@ export async function handleFeishuCommentEvent(
     senderId: turn.senderId,
   }).allowed;
   if (dmPolicy !== "open" && !senderAllowed) {
-    log(
-      `feishu[${account.accountId}]: blocked unauthorized comment sender ${turn.senderId} ` +
-        `(dmPolicy=${dmPolicy}, comment=${turn.commentId})`,
-    );
+    if (dmPolicy === "pairing") {
+      const client = createFeishuClient(account);
+      await pairing.issueChallenge({
+        senderId: turn.senderId,
+        senderIdLine: `Your Feishu user id: ${turn.senderId}`,
+        meta: { name: turn.senderId },
+        onCreated: ({ code }) => {
+          log(
+            `feishu[${account.accountId}]: comment pairing request sender=${turn.senderId} code=${code}`,
+          );
+        },
+        sendPairingReply: async (text) => {
+          await replyComment(client, {
+            file_token: turn.fileToken,
+            file_type: turn.fileType,
+            comment_id: turn.commentId,
+            content: text,
+          });
+        },
+        onReplyError: (err) => {
+          log(
+            `feishu[${account.accountId}]: comment pairing reply failed for ${turn.senderId}: ${String(err)}`,
+          );
+        },
+      });
+    } else {
+      log(
+        `feishu[${account.accountId}]: blocked unauthorized comment sender ${turn.senderId} ` +
+          `(dmPolicy=${dmPolicy}, comment=${turn.commentId})`,
+      );
+    }
     return;
   }
 
@@ -137,8 +170,7 @@ export async function handleFeishuCommentEvent(
   const commentSessionKey = buildCommentSessionKey({
     core,
     route,
-    fileToken: turn.fileToken,
-    commentId: turn.commentId,
+    commentTarget,
   });
   const bodyForAgent = `[message_id: ${turn.messageId}]\n${turn.prompt}`;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -146,8 +178,8 @@ export async function handleFeishuCommentEvent(
     BodyForAgent: bodyForAgent,
     RawBody: turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt,
     CommandBody: turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt,
-    From: `feishu-comment:${turn.senderId}`,
-    To: `comment:${turn.fileToken}:${turn.commentId}`,
+    From: `feishu:${turn.senderId}`,
+    To: commentTarget,
     SessionKey: commentSessionKey,
     AccountId: route.accountId,
     ChatType: "direct",
@@ -162,7 +194,8 @@ export async function handleFeishuCommentEvent(
     Timestamp: parseTimestampMs(turn.timestamp),
     WasMentioned: turn.isMentioned,
     CommandAuthorized: false,
-    OriginatingTo: `comment:${turn.fileToken}:${turn.commentId}`,
+    OriginatingChannel: "feishu",
+    OriginatingTo: commentTarget,
   });
 
   const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {

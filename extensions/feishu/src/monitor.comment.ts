@@ -1,8 +1,8 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import type { FeishuMessageEvent } from "./bot.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_COMMENT_VERIFY_TIMEOUT_MS = 3_000;
@@ -31,7 +31,7 @@ export type FeishuDriveCommentNoticeEvent = {
   type?: string;
 };
 
-type ResolveDriveCommentSyntheticEventParams = {
+type ResolveDriveCommentEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
   event: FeishuDriveCommentNoticeEvent;
@@ -48,7 +48,7 @@ export type ResolvedDriveCommentEventTurn = {
   replyId?: string;
   noticeType: "add_comment" | "add_reply";
   fileToken: string;
-  fileType: "doc" | "docx" | "file" | "sheet" | "slides";
+  fileType: CommentFileType;
   senderId: string;
   timestamp?: string;
   isMentioned?: boolean;
@@ -93,7 +93,6 @@ type FeishuDriveCommentReply = {
 
 type FeishuDriveCommentCard = {
   comment_id?: string;
-  has_more?: boolean;
   quote?: string;
   reply_list?: {
     replies?: FeishuDriveCommentReply[];
@@ -122,18 +121,6 @@ function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function normalizeDriveCommentFileType(
-  value: unknown,
-): "doc" | "docx" | "file" | "sheet" | "slides" | undefined {
-  return value === "doc" ||
-    value === "docx" ||
-    value === "file" ||
-    value === "sheet" ||
-    value === "slides"
-    ? value
-    : undefined;
-}
-
 function encodeQuery(params: Record<string, string | undefined>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -148,8 +135,7 @@ function encodeQuery(params: Record<string, string | undefined>): string {
 
 function buildDriveCommentTargetUrl(params: {
   fileToken: string;
-  commentId: string;
-  fileType: string;
+  fileType: CommentFileType;
 }): string {
   return (
     `/open-apis/drive/v1/files/${encodeURIComponent(params.fileToken)}/comments/batch_query` +
@@ -163,7 +149,7 @@ function buildDriveCommentTargetUrl(params: {
 function buildDriveCommentRepliesUrl(params: {
   fileToken: string;
   commentId: string;
-  fileType: string;
+  fileType: CommentFileType;
   pageToken?: string;
 }): string {
   return (
@@ -251,34 +237,18 @@ function extractReplyText(reply: FeishuDriveCommentReply | undefined): string | 
     return undefined;
   }
   const elements = Array.isArray(reply.content.elements) ? reply.content.elements : [];
-  const parts = elements
+  const text = elements
     .map(extractCommentElementText)
-    .filter((part): part is string => Boolean(part && part.trim()));
-  const text = parts.join("").trim();
+    .filter((part): part is string => Boolean(part && part.trim()))
+    .join("")
+    .trim();
   return text || undefined;
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return JSON.stringify({
-      error: `stringify_failed:${error instanceof Error ? error.message : String(error)}`,
-    });
-  }
-}
-
-function summarizeReplyForLog(reply: FeishuDriveCommentReply | undefined) {
-  return {
-    reply_id: reply?.reply_id,
-    text: extractReplyText(reply),
-  };
 }
 
 async function fetchDriveCommentReplies(params: {
   client: FeishuRequestClient;
   fileToken: string;
-  fileType: "doc" | "docx" | "file" | "sheet" | "slides";
+  fileType: CommentFileType;
   commentId: string;
   timeoutMs: number;
   logger?: (message: string) => void;
@@ -308,10 +278,6 @@ async function fetchDriveCommentReplies(params: {
       }
       break;
     }
-    params.logger?.(
-      `feishu[${params.accountId}]: fetched comment replies page=${page + 1} ` +
-        `comment=${params.commentId} raw=${safeJsonStringify(response?.data?.items ?? [])}`,
-    );
     replies.push(...(response.data?.items ?? []));
     if (response.data?.has_more !== true || !response.data.page_token?.trim()) {
       break;
@@ -324,7 +290,7 @@ async function fetchDriveCommentReplies(params: {
 async function fetchDriveCommentContext(params: {
   client: FeishuRequestClient;
   fileToken: string;
-  fileType: "doc" | "docx" | "file" | "sheet" | "slides";
+  fileType: CommentFileType;
   commentId: string;
   replyId?: string;
   timeoutMs: number;
@@ -355,7 +321,6 @@ async function fetchDriveCommentContext(params: {
       method: "POST",
       url: buildDriveCommentTargetUrl({
         fileToken: params.fileToken,
-        commentId: params.commentId,
         fileType: params.fileType,
       }),
       data: {
@@ -374,10 +339,6 @@ async function fetchDriveCommentContext(params: {
         ) ?? commentResponse.data?.items?.[0])
       : undefined;
   const embeddedReplies = commentCard?.reply_list?.replies ?? [];
-  params.logger?.(
-    `feishu[${params.accountId}]: embedded comment replies comment=${params.commentId} ` +
-      `raw=${safeJsonStringify(embeddedReplies)}`,
-  );
   const embeddedTargetReply = params.replyId
     ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
     : embeddedReplies.at(-1);
@@ -396,24 +357,7 @@ async function fetchDriveCommentContext(params: {
     : undefined;
   const targetReply = params.replyId
     ? (embeddedTargetReply ?? fetchedMatchedReply ?? undefined)
-    : ((replies.at(-1) ?? embeddedTargetReply ?? rootReply) as FeishuDriveCommentReply | undefined);
-  const matchSource = params.replyId
-    ? embeddedTargetReply
-      ? "embedded"
-      : fetchedMatchedReply
-        ? "fetched"
-        : "miss"
-    : targetReply === rootReply
-      ? "fallback_root"
-      : targetReply === embeddedTargetReply
-        ? "embedded_latest"
-        : "fetched_latest";
-  params.logger?.(
-    `feishu[${params.accountId}]: comment reply resolution comment=${params.commentId} ` +
-      `requested_reply=${params.replyId ?? "none"} match_source=${matchSource} ` +
-      `root=${safeJsonStringify(summarizeReplyForLog(rootReply))} ` +
-      `target=${safeJsonStringify(summarizeReplyForLog(targetReply))}`,
-  );
+    : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
   const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
 
   return {
@@ -425,60 +369,9 @@ async function fetchDriveCommentContext(params: {
   };
 }
 
-function buildDriveCommentPrompt(params: {
-  noticeType: "add_comment" | "add_reply";
-  fileType: "doc" | "docx" | "file" | "sheet" | "slides";
-  fileToken: string;
-  isMentioned?: boolean;
-  documentTitle?: string;
-  documentUrl?: string;
-  quoteText?: string;
-  rootCommentText?: string;
-  targetReplyText?: string;
-}): string {
-  const documentLabel = params.documentTitle
-    ? `"${params.documentTitle}"`
-    : `${params.fileType} document ${params.fileToken}`;
-  const actionLabel = params.noticeType === "add_reply" ? "reply" : "comment";
-  const firstLine = params.targetReplyText
-    ? `I added a ${actionLabel} in ${documentLabel}: ${params.targetReplyText}`
-    : `I added a ${actionLabel} in ${documentLabel}.`;
-  const lines = [firstLine];
-  if (
-    params.noticeType === "add_reply" &&
-    params.rootCommentText &&
-    params.rootCommentText !== params.targetReplyText
-  ) {
-    lines.push(`Original comment: ${params.rootCommentText}`);
-  }
-  if (params.quoteText) {
-    lines.push(`Quoted content: ${params.quoteText}`);
-  }
-  if (params.isMentioned === true) {
-    lines.push("This comment mentioned you.");
-  }
-  if (params.documentUrl) {
-    lines.push(`Document link: ${params.documentUrl}`);
-  }
-  lines.push(
-    `Event type: ${params.noticeType}`,
-    `file_token: ${params.fileToken}`,
-    `file_type: ${params.fileType}`,
-    "This is a Feishu document comment event, not a normal instant-message conversation. Do not reply directly in the current Feishu chat, and do not treat this event as something that requires sending an IM text reply.",
-    "If you need to inspect or handle the comment thread, prefer the feishu_drive tools: use list_comments / list_comment_replies to inspect comments, add_comment to add a new comment, and reply_comment to reply in the thread.",
-    "If the user asks a question in the comment, reply with the answer in that comment thread via feishu_drive.reply_comment.",
-    "If you modify the document, after finishing also use feishu_drive.reply_comment in that comment thread to tell the user the update is complete.",
-    "If you decide to add a new comment in the document, use feishu_drive.add_comment; if you decide to reply in the current comment thread, use feishu_drive.reply_comment.",
-    "When you produce a user-visible reply, keep it in the same language as the user's original comment or reply unless they explicitly ask for another language.",
-    "After comment-related tool calls have completed the user-visible action, output only NO_REPLY at the end to avoid sending an extra instant message; do not output the final answer directly as a normal chat reply.",
-  );
-  lines.push(`Decide what to do next based on this document ${actionLabel} event.`);
-  return lines.join("\n");
-}
-
 function buildDriveCommentSurfacePrompt(params: {
   noticeType: "add_comment" | "add_reply";
-  fileType: "doc" | "docx" | "file" | "sheet" | "slides";
+  fileType: CommentFileType;
   fileToken: string;
   commentId: string;
   replyId?: string;
@@ -542,15 +435,13 @@ function buildDriveCommentSurfacePrompt(params: {
   return lines.join("\n");
 }
 
-async function resolveDriveCommentEventCore(
-  params: ResolveDriveCommentSyntheticEventParams,
-): Promise<{
+async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventParams): Promise<{
   eventId: string;
   commentId: string;
   replyId?: string;
   noticeType: "add_comment" | "add_reply";
   fileToken: string;
-  fileType: "doc" | "docx" | "file" | "sheet" | "slides";
+  fileType: CommentFileType;
   senderId: string;
   timestamp?: string;
   isMentioned?: boolean;
@@ -576,36 +467,27 @@ async function resolveDriveCommentEventCore(
   const replyId = event.reply_id?.trim();
   const noticeType = event.notice_meta?.notice_type?.trim();
   const fileToken = event.notice_meta?.file_token?.trim();
-  const fileType = normalizeDriveCommentFileType(event.notice_meta?.file_type);
+  const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
   const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
   if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
     logger?.(
-      `feishu[${accountId}]: drive comment notice missing required fields ` +
-        `event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
+      `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
     );
     return null;
   }
   if (noticeType !== "add_comment" && noticeType !== "add_reply") {
-    logger?.(
-      `feishu[${accountId}]: unsupported drive comment notice type ${noticeType} ` +
-        `for event ${eventId}`,
-    );
+    logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
     return null;
   }
   if (senderId === botOpenId) {
     logger?.(
-      `feishu[${accountId}]: ignoring self-authored drive comment notice ` +
-        `event=${eventId} sender=${senderId}`,
+      `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,
     );
     return null;
   }
 
   const account = resolveFeishuAccount({ cfg, accountId });
   const client = createClient(account);
-  logger?.(
-    `feishu[${accountId}]: fetching drive comment context ` +
-      `event=${eventId} type=${noticeType} file=${fileType}:${fileToken} comment=${commentId} reply=${replyId ?? "none"}`,
-  );
   const context = await fetchDriveCommentContext({
     client,
     fileToken,
@@ -616,12 +498,6 @@ async function resolveDriveCommentEventCore(
     logger,
     accountId,
   });
-  logger?.(
-    `feishu[${accountId}]: drive comment context resolved ` +
-      `event=${eventId} title=${context.documentTitle ?? "unknown"} ` +
-      `quote=${context.quoteText ? "yes" : "no"} root=${context.rootCommentText ? "yes" : "no"} ` +
-      `target=${context.targetReplyText ? "yes" : "no"}`,
-  );
   return {
     eventId,
     commentId,
@@ -675,7 +551,7 @@ export function parseFeishuDriveCommentNoticeEventPayload(
 }
 
 export async function resolveDriveCommentEventTurn(
-  params: ResolveDriveCommentSyntheticEventParams,
+  params: ResolveDriveCommentEventParams,
 ): Promise<ResolvedDriveCommentEventTurn | null> {
   const resolved = await resolveDriveCommentEventCore(params);
   if (!resolved) {
@@ -695,10 +571,6 @@ export async function resolveDriveCommentEventTurn(
     targetReplyText: resolved.context.targetReplyText,
   });
   const preview = prompt.replace(/\s+/g, " ").slice(0, 160);
-  params.logger?.(
-    `feishu[${params.accountId}]: built drive comment prompt ` +
-      `event=${resolved.eventId} preview=${preview}`,
-  );
   return {
     eventId: resolved.eventId,
     messageId: `drive-comment:${resolved.eventId}`,
@@ -717,45 +589,5 @@ export async function resolveDriveCommentEventTurn(
     targetReplyText: resolved.context.targetReplyText,
     prompt,
     preview,
-  };
-}
-
-export async function resolveDriveCommentSyntheticEvent(
-  params: ResolveDriveCommentSyntheticEventParams,
-): Promise<FeishuMessageEvent | null> {
-  const resolved = await resolveDriveCommentEventCore(params);
-  if (!resolved) {
-    return null;
-  }
-  const prompt = buildDriveCommentPrompt({
-    noticeType: resolved.noticeType,
-    fileType: resolved.fileType,
-    fileToken: resolved.fileToken,
-    isMentioned: resolved.isMentioned,
-    documentTitle: resolved.context.documentTitle,
-    documentUrl: resolved.context.documentUrl,
-    quoteText: resolved.context.quoteText,
-    rootCommentText: resolved.context.rootCommentText,
-    targetReplyText: resolved.context.targetReplyText,
-  });
-  const preview = prompt.replace(/\s+/g, " ").slice(0, 160);
-  params.logger?.(
-    `feishu[${params.accountId}]: built drive comment synthetic prompt ` +
-      `event=${resolved.eventId} preview=${preview}`,
-  );
-
-  return {
-    sender: {
-      sender_id: { open_id: resolved.senderId },
-      sender_type: "user",
-    },
-    message: {
-      message_id: `drive-comment:${resolved.eventId}`,
-      chat_id: `p2p:${resolved.senderId}`,
-      chat_type: "p2p",
-      message_type: "text",
-      content: JSON.stringify({ text: prompt }),
-      create_time: resolved.timestamp,
-    },
   };
 }

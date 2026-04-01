@@ -1,6 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
@@ -29,8 +30,6 @@ type FeishuDriveInternalClient = Lark.Client & {
     timeout?: number;
   }): Promise<unknown>;
 };
-
-export type CommentFileType = "doc" | "docx" | "file" | "sheet" | "slides";
 
 type FeishuDriveApiResponse<T> = {
   code: number;
@@ -462,7 +461,7 @@ export async function replyComment(
     comment_id: string;
     content: string;
   },
-) {
+): Promise<{ success: true; reply_id?: string } & Record<string, unknown>> {
   const url =
     `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
       params.comment_id,
@@ -553,46 +552,14 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return jsonToolResult(await moveFile(client, p.file_token, p.type, p.folder_token));
               case "delete":
                 return jsonToolResult(await deleteFile(client, p.file_token, p.type));
-              case "list_comments": {
-                api.logger.info?.(
-                  `feishu_drive: list_comments file=${p.file_type}:${p.file_token} page_token=${p.page_token ?? "none"}`,
-                );
-                const result = await listComments(client, p);
-                api.logger.info?.(
-                  `feishu_drive: list_comments resolved count=${result.comments.length} has_more=${result.has_more ? "yes" : "no"}`,
-                );
-                return jsonToolResult(result);
-              }
-              case "list_comment_replies": {
-                api.logger.info?.(
-                  `feishu_drive: list_comment_replies file=${p.file_type}:${p.file_token} comment=${p.comment_id} page_token=${p.page_token ?? "none"}`,
-                );
-                const result = await listCommentReplies(client, p);
-                api.logger.info?.(
-                  `feishu_drive: list_comment_replies resolved count=${result.replies.length} has_more=${result.has_more ? "yes" : "no"}`,
-                );
-                return jsonToolResult(result);
-              }
-              case "add_comment": {
-                api.logger.info?.(
-                  `feishu_drive: add_comment file=${p.file_type}:${p.file_token} block=${p.block_id ?? "whole"} chars=${p.content.length}`,
-                );
-                const result = await addComment(client, p);
-                api.logger.info?.(
-                  `feishu_drive: add_comment success comment=${String((result as { comment_id?: unknown }).comment_id ?? "unknown")}`,
-                );
-                return jsonToolResult(result);
-              }
-              case "reply_comment": {
-                api.logger.info?.(
-                  `feishu_drive: reply_comment file=${p.file_type}:${p.file_token} comment=${p.comment_id} chars=${p.content.length}`,
-                );
-                const result = await replyComment(client, p);
-                api.logger.info?.(
-                  `feishu_drive: reply_comment success reply=${String((result as { reply_id?: unknown }).reply_id ?? "unknown")}`,
-                );
-                return jsonToolResult(result);
-              }
+              case "list_comments":
+                return jsonToolResult(await listComments(client, p));
+              case "list_comment_replies":
+                return jsonToolResult(await listCommentReplies(client, p));
+              case "add_comment":
+                return jsonToolResult(await addComment(client, p));
+              case "reply_comment":
+                return jsonToolResult(await replyComment(client, p));
               default:
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }

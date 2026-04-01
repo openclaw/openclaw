@@ -7,11 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import type { FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import {
-  resolveDriveCommentSyntheticEvent,
+  resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -235,16 +234,11 @@ async function setupCommentMonitorHandler(): Promise<(data: unknown) => Promise<
   return handler;
 }
 
-function extractSyntheticText(event: FeishuMessageEvent): string {
-  const content = JSON.parse(event.message.content) as { text?: string };
-  return content.text ?? "";
-}
-
-describe("resolveDriveCommentSyntheticEvent", () => {
-  it("builds a synthetic Feishu message for add_comment notices", async () => {
+describe("resolveDriveCommentEventTurn", () => {
+  it("builds a real comment-turn prompt for add_comment notices", async () => {
     const client = makeOpenApiClient({ includeTargetReplyInBatch: true });
 
-    const synthetic = await resolveDriveCommentSyntheticEvent({
+    const turn = await resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent(),
@@ -252,34 +246,20 @@ describe("resolveDriveCommentSyntheticEvent", () => {
       createClient: () => client as never,
     });
 
-    expect(synthetic).not.toBeNull();
-    expect(synthetic?.sender.sender_id.open_id).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
-    expect(synthetic?.message.message_id).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
-    expect(synthetic?.message.chat_id).toBe("p2p:ou_509d4d7ace4a9addec2312676ffcba9b");
-    expect(synthetic?.message.chat_type).toBe("p2p");
-    expect(synthetic?.message.create_time).toBe("1774951528000");
-
-    const text = extractSyntheticText(synthetic as FeishuMessageEvent);
-    expect(text).toContain(
-      'I added a comment in "Comment event handling request": Also send it to the agent after receiving the comment event',
+    expect(turn).not.toBeNull();
+    expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
+    expect(turn?.messageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
+    expect(turn?.fileType).toBe("docx");
+    expect(turn?.fileToken).toBe(TEST_DOC_TOKEN);
+    expect(turn?.prompt).toContain(
+      'The user added a comment in "Comment event handling request": Also send it to the agent after receiving the comment event',
     );
-    expect(text).toContain("Also send it to the agent after receiving the comment event");
-    expect(text).toContain("Quoted content: im.message.receive_v1 message trigger implementation");
-    expect(text).toContain("This comment mentioned you.");
-    expect(text).toContain(
-      "This is a Feishu document comment event, not a normal instant-message conversation.",
+    expect(turn?.prompt).toContain(
+      "This is a Feishu document comment-thread event, not a Feishu IM conversation.",
     );
-    expect(text).toContain("feishu_drive.reply_comment");
-    expect(text).toContain(
-      "reply with the answer in that comment thread via feishu_drive.reply_comment",
-    );
-    expect(text).toContain(
-      "after finishing also use feishu_drive.reply_comment in that comment thread to tell the user the update is complete",
-    );
-    expect(text).toContain(
-      "keep it in the same language as the user's original comment or reply unless they explicitly ask for another language",
-    );
-    expect(text).toContain("output only NO_REPLY at the end");
+    expect(turn?.prompt).toContain("comment_id: 7623358762119646411");
+    expect(turn?.prompt).toContain("reply_id: 7623358762136374451");
+    expect(turn?.prompt).toContain("The system will automatically reply with your final answer");
   });
 
   it("falls back to the replies API to resolve add_reply text", async () => {
@@ -288,7 +268,7 @@ describe("resolveDriveCommentSyntheticEvent", () => {
       targetReplyText: "Please follow up on this comment",
     });
 
-    const synthetic = await resolveDriveCommentSyntheticEvent({
+    const turn = await resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent({
@@ -302,22 +282,18 @@ describe("resolveDriveCommentSyntheticEvent", () => {
       createClient: () => client as never,
     });
 
-    const text = extractSyntheticText(synthetic as FeishuMessageEvent);
-    expect(text).toContain(
-      'I added a reply in "Comment event handling request": Please follow up on this comment',
+    expect(turn?.prompt).toContain(
+      'The user added a reply in "Comment event handling request": Please follow up on this comment',
     );
-    expect(text).toContain(
+    expect(turn?.prompt).toContain(
       "Original comment: Also send it to the agent after receiving the comment event",
     );
-    expect(text).toContain(`file_token: ${TEST_DOC_TOKEN}`);
-    expect(text).toContain("Event type: add_reply");
-    expect(text).toContain(
-      "keep it in the same language as the user's original comment or reply unless they explicitly ask for another language",
-    );
+    expect(turn?.prompt).toContain(`file_token: ${TEST_DOC_TOKEN}`);
+    expect(turn?.prompt).toContain("Event type: add_reply");
   });
 
   it("ignores self-authored comment notices", async () => {
-    const synthetic = await resolveDriveCommentSyntheticEvent({
+    const turn = await resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent({
@@ -330,7 +306,7 @@ describe("resolveDriveCommentSyntheticEvent", () => {
       createClient: () => makeOpenApiClient({}) as never,
     });
 
-    expect(synthetic).toBeNull();
+    expect(turn).toBeNull();
   });
 });
 
