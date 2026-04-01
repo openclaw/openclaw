@@ -109,6 +109,7 @@ enum HostEnvSecurityPolicy {
         "PIP_TRUSTED_HOST",
         "UV_INDEX",
         "UV_INDEX_URL",
+        "UV_PYTHON",
         "UV_EXTRA_INDEX_URL",
         "UV_DEFAULT_INDEX",
         "DOCKER_HOST",
