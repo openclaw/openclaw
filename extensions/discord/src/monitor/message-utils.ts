@@ -5,6 +5,7 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { mergeAbortSignals } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
@@ -57,6 +58,14 @@ export type DiscordMediaInfo = {
   path: string;
   contentType?: string;
   placeholder: string;
+};
+
+type DiscordMediaResolveOptions = {
+  fetchImpl?: FetchLike;
+  ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 };
 
 export type DiscordChannelInfo = {
@@ -209,26 +218,31 @@ export function hasDiscordMessageStickers(message: Message): boolean {
 export async function resolveMediaList(
   message: Message,
   maxBytes: number,
-  fetchImpl?: FetchLike,
-  ssrfPolicy?: SsrFPolicy,
+  options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
   await appendResolvedMediaFromAttachments({
     attachments: message.attachments ?? [],
     maxBytes,
     out,
     errorPrefix: "discord: failed to download attachment",
-    fetchImpl,
+    fetchImpl: options?.fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
   });
   await appendResolvedMediaFromStickers({
     stickers: resolveDiscordMessageStickers(message),
     maxBytes,
     out,
     errorPrefix: "discord: failed to download sticker",
-    fetchImpl,
+    fetchImpl: options?.fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
   });
   return out;
 }
@@ -236,34 +250,94 @@ export async function resolveMediaList(
 export async function resolveForwardedMediaList(
   message: Message,
   maxBytes: number,
-  fetchImpl?: FetchLike,
-  ssrfPolicy?: SsrFPolicy,
+  options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
   if (snapshots.length === 0) {
     return [];
   }
   const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
   for (const snapshot of snapshots) {
     await appendResolvedMediaFromAttachments({
       attachments: snapshot.message?.attachments,
       maxBytes,
       out,
       errorPrefix: "discord: failed to download forwarded attachment",
-      fetchImpl,
+      fetchImpl: options?.fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      readIdleTimeoutMs: options?.readIdleTimeoutMs,
+      totalTimeoutMs: options?.totalTimeoutMs,
+      abortSignal: options?.abortSignal,
     });
     await appendResolvedMediaFromStickers({
       stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
       maxBytes,
       out,
       errorPrefix: "discord: failed to download forwarded sticker",
-      fetchImpl,
+      fetchImpl: options?.fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      readIdleTimeoutMs: options?.readIdleTimeoutMs,
+      totalTimeoutMs: options?.totalTimeoutMs,
+      abortSignal: options?.abortSignal,
     });
   }
   return out;
+}
+
+async function fetchDiscordMedia(params: {
+  url: string;
+  filePathHint: string;
+  maxBytes: number;
+  fetchImpl?: FetchLike;
+  ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}) {
+  // `totalTimeoutMs` is enforced per individual attachment or sticker fetch.
+  // The inbound worker's abort signal remains the outer bound for the message.
+  const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
+  const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fetchPromise = fetchRemoteMedia({
+    url: params.url,
+    filePathHint: params.filePathHint,
+    maxBytes: params.maxBytes,
+    fetchImpl: params.fetchImpl,
+    ssrfPolicy: params.ssrfPolicy,
+    readIdleTimeoutMs: params.readIdleTimeoutMs,
+    ...(signal ? { requestInit: { signal } } : {}),
+  }).catch((error) => {
+    if (timedOut) {
+      // After the timeout wins the race we abort the underlying fetch and keep
+      // this branch pending so the later AbortError does not surface as an
+      // unhandled rejection after Promise.race has already settled.
+      return new Promise<never>(() => {});
+    }
+    throw error;
+  });
+
+  try {
+    if (!params.totalTimeoutMs) {
+      return await fetchPromise;
+    }
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        timeoutAbortController?.abort();
+        reject(new Error(`discord media download timed out after ${params.totalTimeoutMs}ms`));
+      }, params.totalTimeoutMs);
+      timeoutHandle.unref?.();
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 async function appendResolvedMediaFromAttachments(params: {
@@ -273,6 +347,9 @@ async function appendResolvedMediaFromAttachments(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }) {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -280,12 +357,15 @@ async function appendResolvedMediaFromAttachments(params: {
   }
   for (const attachment of attachments) {
     try {
-      const fetched = await fetchRemoteMedia({
+      const fetched = await fetchDiscordMedia({
         url: attachment.url,
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
         ssrfPolicy: params.ssrfPolicy,
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
+        totalTimeoutMs: params.totalTimeoutMs,
+        abortSignal: params.abortSignal,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -383,6 +463,9 @@ async function appendResolvedMediaFromStickers(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }) {
   const stickers = params.stickers;
   if (!stickers || stickers.length === 0) {
@@ -393,12 +476,15 @@ async function appendResolvedMediaFromStickers(params: {
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        const fetched = await fetchRemoteMedia({
+        const fetched = await fetchDiscordMedia({
           url: candidate.url,
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
           ssrfPolicy: params.ssrfPolicy,
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs,
+          abortSignal: params.abortSignal,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
