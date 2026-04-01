@@ -42,14 +42,6 @@ const buildModelsProviderData = vi.hoisted(() =>
   })),
 );
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
-const createChannelReplyPipeline = vi.hoisted(() =>
-  vi.fn(() => ({
-    responsePrefix: undefined,
-    enableSlackInteractiveReplies: undefined,
-    responsePrefixContextProvider: () => ({ identityName: undefined }),
-    onModelSelected: () => undefined,
-  })),
-);
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
@@ -123,8 +115,6 @@ const telegramDepsForTest: TelegramBotDeps = {
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
-  createChannelReplyPipeline:
-    createChannelReplyPipeline as TelegramBotDeps["createChannelReplyPipeline"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
@@ -160,7 +150,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     enqueueSystemEvent.mockClear();
     buildModelsProviderData.mockClear();
     listSkillCommandsForAgents.mockClear();
-    createChannelReplyPipeline.mockClear();
     wasSentByBot.mockClear();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();

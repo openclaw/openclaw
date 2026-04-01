@@ -17,6 +17,3 @@ export function listBundledPluginBuildEntries(
   params?: BundledPluginBuildEntryParams,
 ): Record<string, string>;
 export function listBundledPluginPackArtifacts(params?: BundledPluginBuildEntryParams): string[];
-export function listBundledPluginRuntimeDependencies(
-  params?: BundledPluginBuildEntryParams,
-): string[];

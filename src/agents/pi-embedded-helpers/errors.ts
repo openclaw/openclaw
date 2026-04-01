@@ -544,16 +544,11 @@ export function classifyFailoverReasonFromHttpStatus(
   return null;
 }
 
-function coerceText(value: unknown): string {
-  return typeof value === "string" ? value : value == null ? "" : String(value);
-}
-
-function stripFinalTagsFromText(text: unknown): string {
-  const normalized = coerceText(text);
-  if (!normalized) {
-    return normalized;
+function stripFinalTagsFromText(text: string): string {
+  if (!text) {
+    return text;
   }
-  return normalized.replace(FINAL_TAG_RE, "");
+  return text.replace(FINAL_TAG_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -760,13 +755,12 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
-  const raw = coerceText(text);
-  if (!raw) {
-    return raw;
+export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
+  if (!text) {
+    return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(raw);
+  const stripped = stripFinalTagsFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

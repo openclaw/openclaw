@@ -9,7 +9,6 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
@@ -138,9 +137,7 @@ export type ChannelOutboundContext = {
   text: string;
   mediaUrl?: string;
   audioAsVoice?: boolean;
-  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */
   forceDocument?: boolean;

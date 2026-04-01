@@ -496,5 +496,24 @@ function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenC
       mode: "api-key",
     };
   }
-  return undefined;
+  const grokApiKey = normalizeOptionalSecretInput(params.config?.tools?.web?.search?.grok?.apiKey);
+  if (grokApiKey) {
+    return {
+      apiKey: grokApiKey,
+      source: "tools.web.search.grok.apiKey",
+      mode: "api-key",
+    };
+  }
+  const grokApiKeyRef = coerceSecretRef(params.config?.tools?.web?.search?.grok?.apiKey);
+  if (!grokApiKeyRef) {
+    return undefined;
+  }
+  return {
+    apiKey:
+      grokApiKeyRef.source === "env"
+        ? grokApiKeyRef.id.trim()
+        : resolveNonEnvSecretRefApiKeyMarker(grokApiKeyRef.source),
+    source: "tools.web.search.grok.apiKey",
+    mode: "api-key",
+  };
 }

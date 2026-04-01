@@ -219,52 +219,25 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!model) {
     return undefined;
   }
+  const configuredModels = params.cfg.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
   const normalized = model.toLowerCase();
   const providers = new Set<string>();
-  const addProvider = (provider: string) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    if (!normalizedProvider) {
-      return;
+  for (const key of Object.keys(configuredModels)) {
+    const ref = key.trim();
+    if (!ref || !ref.includes("/")) {
+      continue;
     }
-    providers.add(normalizedProvider);
-  };
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  if (configuredModels) {
-    for (const key of Object.keys(configuredModels)) {
-      const ref = key.trim();
-      if (!ref || !ref.includes("/")) {
-        continue;
-      }
-      const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
-        allowPluginNormalization: false,
-      });
-      if (!parsed) {
-        continue;
-      }
-      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
-        addProvider(parsed.provider);
-        if (providers.size > 1) {
-          return undefined;
-        }
-      }
+    const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
+      allowPluginNormalization: false,
+    });
+    if (!parsed) {
+      continue;
     }
-  }
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders) {
-    for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
-      const models = providerConfig?.models;
-      if (!Array.isArray(models)) {
-        continue;
-      }
-      for (const entry of models) {
-        const modelId = entry?.id?.trim();
-        if (!modelId) {
-          continue;
-        }
-        if (modelId === model || modelId.toLowerCase() === normalized) {
-          addProvider(providerId);
-        }
-      }
+    if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+      providers.add(parsed.provider);
       if (providers.size > 1) {
         return undefined;
       }

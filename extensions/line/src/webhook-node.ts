@@ -31,7 +31,6 @@ export function createLineNodeWebhookHandler(params: {
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
-  onRequestAuthenticated?: () => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
@@ -96,8 +95,6 @@ export function createLineNodeWebhookHandler(params: {
         res.end(JSON.stringify({ error: "Invalid webhook payload" }));
         return;
       }
-
-      params.onRequestAuthenticated?.();
 
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);

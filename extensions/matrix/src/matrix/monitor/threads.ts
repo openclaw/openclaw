@@ -43,6 +43,7 @@ export function resolveMatrixThreadRouting(params: {
   dmThreadReplies?: MatrixThreadReplies;
   messageId: string;
   threadRootId?: string;
+  isThreadRoot?: boolean;
 }): MatrixThreadRouting {
   const effectiveThreadReplies =
     params.isDirectMessage && params.dmThreadReplies !== undefined
@@ -50,7 +51,9 @@ export function resolveMatrixThreadRouting(params: {
       : params.threadReplies;
   const messageId = params.messageId.trim();
   const threadRootId = params.threadRootId?.trim();
-  const inboundThreadId = threadRootId && threadRootId !== messageId ? threadRootId : undefined;
+  const isThreadRoot = params.isThreadRoot === true;
+  const inboundThreadId =
+    threadRootId && threadRootId !== messageId && !isThreadRoot ? threadRootId : undefined;
   const threadId =
     effectiveThreadReplies === "off"
       ? undefined

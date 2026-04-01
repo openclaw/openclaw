@@ -82,12 +82,7 @@ async function sendSlackOutboundMessage(params: {
   to: string;
   text: string;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
   accountId?: string | null;
   deps?: { [channelId: string]: unknown } | null;
@@ -120,12 +115,7 @@ async function sendSlackOutboundMessage(params: {
     threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl
-      ? {
-          mediaUrl: params.mediaUrl,
-          mediaAccess: params.mediaAccess,
-          mediaLocalRoots: params.mediaLocalRoots,
-          mediaReadFile: params.mediaReadFile,
-        }
+      ? { mediaUrl: params.mediaUrl, mediaLocalRoots: params.mediaLocalRoots }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
@@ -193,9 +183,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             text,
             mediaUrl,
-            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
             accountId: ctx.accountId,
             deps: ctx.deps,
             replyToId: ctx.replyToId,
@@ -207,9 +195,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
             cfg: ctx.cfg,
             to: ctx.to,
             text: payload.text ?? "",
-            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
             blocks,
             accountId: ctx.accountId,
             deps: ctx.deps,
@@ -238,9 +224,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
-      mediaAccess,
       mediaLocalRoots,
-      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -252,9 +236,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         to,
         text,
         mediaUrl,
-        mediaAccess,
         mediaLocalRoots,
-        mediaReadFile,
         accountId,
         deps,
         replyToId,

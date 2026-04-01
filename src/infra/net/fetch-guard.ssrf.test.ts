@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchWithSsrFGuard,
-  GUARDED_FETCH_MODE,
-  retainSafeHeadersForCrossOriginRedirectHeaders,
-} from "./fetch-guard.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "./fetch-guard.js";
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -244,20 +240,6 @@ describe("fetchWithSsrFGuard hardening", () => {
       expect(headers.get(header)).toBe(value);
     }
     await result.release();
-  });
-
-  it("keeps the exported redirect-header helper functional", () => {
-    const headers = retainSafeHeadersForCrossOriginRedirectHeaders({
-      Authorization: "Bearer secret",
-      Cookie: "session=abc",
-      Accept: "application/json",
-      "User-Agent": "OpenClaw-Test/1.0",
-    });
-
-    expect(headers).toEqual({
-      accept: "application/json",
-      "user-agent": "OpenClaw-Test/1.0",
-    });
   });
 
   it("keeps headers when redirect stays on same origin", async () => {

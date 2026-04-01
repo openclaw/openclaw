@@ -89,7 +89,6 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
   private ws: WebSocket | null = null;
   private connected = false;
   private closed = false;
-  private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private pendingTranscript = "";
   private onTranscriptCallback: ((transcript: string) => void) | null = null;
@@ -124,10 +123,6 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
         console.log("[RealtimeSTT] WebSocket connected");
         this.connected = true;
         this.reconnectAttempts = 0;
-        if (this.connectTimeout) {
-          clearTimeout(this.connectTimeout);
-          this.connectTimeout = null;
-        }
 
         // Configure the transcription session
         this.sendEvent({
@@ -177,8 +172,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
         }
       });
 
-      this.connectTimeout = setTimeout(() => {
-        this.connectTimeout = null;
+      setTimeout(() => {
         if (!this.connected) {
           reject(new Error("Realtime STT connection timeout"));
         }
@@ -304,10 +298,6 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
   close(): void {
     this.closed = true;
-    if (this.connectTimeout) {
-      clearTimeout(this.connectTimeout);
-      this.connectTimeout = null;
-    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;

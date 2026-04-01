@@ -178,11 +178,6 @@ describe("sanitizeUserFacingText", () => {
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
-
-  it("tolerates non-string input without throwing", () => {
-    expect(sanitizeUserFacingText(undefined as unknown as string)).toBe("");
-    expect(sanitizeUserFacingText(42 as unknown as string)).toBe("42");
-  });
 });
 
 describe("stripThoughtSignatures", () => {

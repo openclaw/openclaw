@@ -178,20 +178,6 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("passes dangerous force unsafe install through to archive installs", async () => {
-    await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      dangerouslyForceUnsafeInstall: true,
-    });
-
-    expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        archivePath: "/tmp/clawhub-demo/archive.zip",
-        dangerouslyForceUnsafeInstall: true,
-      }),
-    );
-  });
-
   it("cleans up the downloaded archive even when archive install fails", async () => {
     installPluginFromArchiveMock.mockResolvedValueOnce({
       ok: false,

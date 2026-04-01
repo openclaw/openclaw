@@ -10,14 +10,13 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createExecApprovalChannelRuntime,
-  deliverApprovalRequestViaChannelNativePlan,
-  doesApprovalRequestMatchChannelAccount,
   type ExecApprovalChannelRuntime,
+  resolveChannelNativeApprovalDeliveryPlan,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { buildExecApprovalActionDescriptors } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
@@ -30,7 +29,13 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  normalizeAccountId,
+  normalizeMessageChannel,
+  resolveAgentIdFromSessionKey,
+} from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordNativeApprovalAdapter } from "../approval-native.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
@@ -59,10 +64,6 @@ type PendingApproval = {
   discordMessageId: string;
   discordChannelId: string;
   timeoutId?: NodeJS.Timeout;
-};
-type PreparedDeliveryTarget = {
-  discordChannelId: string;
-  recipientUserId?: string;
 };
 
 function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
@@ -192,6 +193,69 @@ class ExecApprovalActionRow extends Row<Button> {
       ),
     ]);
   }
+}
+
+function resolveExecApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest;
+}): string | null {
+  const sessionKey = params.request.request.sessionKey?.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  try {
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey];
+    const channel = normalizeMessageChannel(entry?.origin?.provider ?? entry?.lastChannel);
+    if (channel && channel !== "discord") {
+      return null;
+    }
+    const accountId = entry?.origin?.accountId ?? entry?.lastAccountId;
+    return accountId?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePluginApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  request: PluginApprovalRequest;
+}): string | null {
+  const fromSession = resolveExecApprovalAccountId({
+    cfg: params.cfg,
+    request: {
+      id: params.request.id,
+      request: {
+        command: params.request.request.title,
+        sessionKey: params.request.request.sessionKey ?? undefined,
+      },
+      createdAtMs: params.request.createdAtMs,
+      expiresAtMs: params.request.expiresAtMs,
+    },
+  });
+  if (fromSession) {
+    return fromSession;
+  }
+  return params.request.request.turnSourceAccountId?.trim() || null;
+}
+
+function resolveApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequest;
+}): string | null {
+  return isPluginApprovalRequest(params.request)
+    ? resolvePluginApprovalAccountId({ cfg: params.cfg, request: params.request })
+    : resolveExecApprovalAccountId({ cfg: params.cfg, request: params.request });
+}
+
+function resolveApprovalAgentId(request: ApprovalRequest): string | null {
+  return request.request.agentId?.trim() || null;
+}
+
+function resolveApprovalSessionKey(request: ApprovalRequest): string | null {
+  return request.request.sessionKey?.trim() || null;
 }
 
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
@@ -476,22 +540,47 @@ export class DiscordExecApprovalHandler {
       return false;
     }
 
-    if (
-      !doesApprovalRequestMatchChannelAccount({
-        cfg: this.opts.cfg,
-        request,
-        channel: "discord",
-        accountId: this.opts.accountId,
-      })
-    ) {
-      return false;
+    const requestAccountId = resolveApprovalAccountId({
+      cfg: this.opts.cfg,
+      request,
+    });
+    if (requestAccountId) {
+      const handlerAccountId = normalizeAccountId(this.opts.accountId);
+      if (normalizeAccountId(requestAccountId) !== handlerAccountId) {
+        return false;
+      }
     }
 
-    return matchesApprovalRequestFilters({
-      request: request.request,
-      agentFilter: config.agentFilter,
-      sessionFilter: config.sessionFilter,
-    });
+    // Check agent filter
+    if (config.agentFilter?.length) {
+      const agentId = resolveApprovalAgentId(request);
+      if (!agentId) {
+        return false;
+      }
+      if (!config.agentFilter.includes(agentId)) {
+        return false;
+      }
+    }
+
+    // Check session filter (substring match)
+    if (config.sessionFilter?.length) {
+      const session = resolveApprovalSessionKey(request);
+      if (!session) {
+        return false;
+      }
+      const matches = config.sessionFilter.some((p) => {
+        if (session.includes(p)) {
+          return true;
+        }
+        const regex = compileSafeRegex(p);
+        return regex ? testRegexWithBoundedInput(regex, session) : false;
+      });
+      if (!matches) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   async start(): Promise<void> {
@@ -526,17 +615,20 @@ export class DiscordExecApprovalHandler {
     const body = stripUndefinedFields(serializePayload(payload));
     const approvalKind: ApprovalKind = isPluginApprovalRequest(request) ? "plugin" : "exec";
     const nativeApprovalAdapter = createDiscordNativeApprovalAdapter(this.opts.config);
-    return await deliverApprovalRequestViaChannelNativePlan<
-      PreparedDeliveryTarget,
-      PendingApproval,
-      ApprovalRequest
-    >({
+    const deliveryPlan = await resolveChannelNativeApprovalDeliveryPlan({
       cfg: this.opts.cfg,
       accountId: this.opts.accountId,
       approvalKind,
       request,
       adapter: nativeApprovalAdapter.native,
-      sendOriginNotice: async ({ originTarget }) => {
+    });
+    const pendingEntries: PendingApproval[] = [];
+    // "target=both" can collapse onto one Discord DM surface when the origin route
+    // and approver DM resolve to the same concrete channel id.
+    const deliveredChannelIds = new Set<string>();
+    const originTarget = deliveryPlan.originTarget;
+    if (deliveryPlan.notifyOriginWhenDmOnly && originTarget) {
+      try {
         await discordRequest(
           () =>
             rest.post(Routes.channelMessages(originTarget.to), {
@@ -544,18 +636,47 @@ export class DiscordExecApprovalHandler {
             }) as Promise<{ id: string; channel_id: string }>,
           "send-approval-dm-redirect-notice",
         );
-      },
-      prepareTarget: async ({ plannedTarget }) => {
-        if (plannedTarget.surface === "origin") {
-          return {
-            dedupeKey: plannedTarget.target.to,
-            target: {
-              discordChannelId: plannedTarget.target.to,
-            },
-          };
-        }
+      } catch (err) {
+        logError(`discord exec approvals: failed to send DM redirect notice: ${String(err)}`);
+      }
+    }
 
-        const userId = plannedTarget.target.to;
+    for (const deliveryTarget of deliveryPlan.targets) {
+      if (deliveryTarget.surface === "origin") {
+        if (deliveredChannelIds.has(deliveryTarget.target.to)) {
+          logDebug(
+            `discord exec approvals: skipping duplicate approval ${request.id} for channel ${deliveryTarget.target.to}`,
+          );
+          continue;
+        }
+        try {
+          const message = (await discordRequest(
+            () =>
+              rest.post(Routes.channelMessages(deliveryTarget.target.to), {
+                body,
+              }) as Promise<{ id: string; channel_id: string }>,
+            "send-approval-channel",
+          )) as { id: string; channel_id: string };
+
+          if (message?.id) {
+            pendingEntries.push({
+              discordMessageId: message.id,
+              discordChannelId: deliveryTarget.target.to,
+            });
+            deliveredChannelIds.add(deliveryTarget.target.to);
+
+            logDebug(
+              `discord exec approvals: sent approval ${request.id} to channel ${deliveryTarget.target.to}`,
+            );
+          }
+        } catch (err) {
+          logError(`discord exec approvals: failed to send to channel: ${String(err)}`);
+        }
+        continue;
+      }
+
+      const userId = deliveryTarget.target.to;
+      try {
         const dmChannel = (await discordRequest(
           () =>
             rest.post(Routes.userChannels(), {
@@ -566,71 +687,40 @@ export class DiscordExecApprovalHandler {
 
         if (!dmChannel?.id) {
           logError(`discord exec approvals: failed to create DM for user ${userId}`);
-          return null;
+          continue;
+        }
+        if (deliveredChannelIds.has(dmChannel.id)) {
+          logDebug(
+            `discord exec approvals: skipping duplicate approval ${request.id} for DM channel ${dmChannel.id}`,
+          );
+          continue;
         }
 
-        return {
-          dedupeKey: dmChannel.id,
-          target: {
-            discordChannelId: dmChannel.id,
-            recipientUserId: userId,
-          },
-        };
-      },
-      deliverTarget: async ({ plannedTarget, preparedTarget }) => {
         const message = (await discordRequest(
           () =>
-            rest.post(Routes.channelMessages(preparedTarget.discordChannelId), {
+            rest.post(Routes.channelMessages(dmChannel.id), {
               body,
             }) as Promise<{ id: string; channel_id: string }>,
-          plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
+          "send-approval",
         )) as { id: string; channel_id: string };
 
         if (!message?.id) {
-          if (plannedTarget.surface === "origin") {
-            logError("discord exec approvals: failed to send to channel");
-          } else if (preparedTarget.recipientUserId) {
-            logError(
-              `discord exec approvals: failed to send message to user ${preparedTarget.recipientUserId}`,
-            );
-          }
-          return null;
+          logError(`discord exec approvals: failed to send message to user ${userId}`);
+          continue;
         }
 
-        return {
+        pendingEntries.push({
           discordMessageId: message.id,
-          discordChannelId: preparedTarget.discordChannelId,
-        };
-      },
-      onOriginNoticeError: ({ error }) => {
-        logError(`discord exec approvals: failed to send DM redirect notice: ${String(error)}`);
-      },
-      onDuplicateSkipped: ({ preparedTarget }) => {
-        logDebug(
-          `discord exec approvals: skipping duplicate approval ${request.id} for channel ${preparedTarget.dedupeKey}`,
-        );
-      },
-      onDelivered: ({ plannedTarget, preparedTarget }) => {
-        if (plannedTarget.surface === "origin") {
-          logDebug(
-            `discord exec approvals: sent approval ${request.id} to channel ${preparedTarget.target.discordChannelId}`,
-          );
-          return;
-        }
-        logDebug(
-          `discord exec approvals: sent approval ${request.id} to user ${plannedTarget.target.to}`,
-        );
-      },
-      onDeliveryError: ({ error, plannedTarget }) => {
-        if (plannedTarget.surface === "origin") {
-          logError(`discord exec approvals: failed to send to channel: ${String(error)}`);
-          return;
-        }
-        logError(
-          `discord exec approvals: failed to notify user ${plannedTarget.target.to}: ${String(error)}`,
-        );
-      },
-    });
+          discordChannelId: dmChannel.id,
+        });
+        deliveredChannelIds.add(dmChannel.id);
+
+        logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
+      } catch (err) {
+        logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
+      }
+    }
+    return pendingEntries;
   }
 
   async handleApprovalRequested(request: ApprovalRequest): Promise<void> {

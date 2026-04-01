@@ -297,22 +297,22 @@ describe("gateway hooks helpers", () => {
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
   });
 
-  test("normalizeHookDispatchSessionKey preserves target agent scope", () => {
+  test("normalizeHookDispatchSessionKey strips duplicate target agent prefix", () => {
     expect(
       normalizeHookDispatchSessionKey({
         sessionKey: "agent:hooks:slack:channel:c123",
         targetAgentId: "hooks",
       }),
-    ).toBe("agent:hooks:slack:channel:c123");
+    ).toBe("slack:channel:c123");
   });
 
-  test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {
+  test("normalizeHookDispatchSessionKey preserves non-target agent scoped keys", () => {
     expect(
       normalizeHookDispatchSessionKey({
         sessionKey: "agent:main:slack:channel:c123",
         targetAgentId: "hooks",
       }),
-    ).toBe("agent:hooks:slack:channel:c123");
+    ).toBe("agent:main:slack:channel:c123");
   });
 
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {

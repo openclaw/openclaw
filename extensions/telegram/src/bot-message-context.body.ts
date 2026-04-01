@@ -1,4 +1,10 @@
 import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
   buildMentionRegexes,
   formatLocationText,
   logInboundDrop,
@@ -56,8 +62,16 @@ async function resolveStickerVisionSupport(params: {
   agentId?: string;
 }): Promise<boolean> {
   try {
-    const { resolveStickerVisionSupportRuntime } = await import("./sticker-vision.runtime.js");
-    return await resolveStickerVisionSupportRuntime(params);
+    const catalog = await loadModelCatalog({ config: params.cfg });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
+    if (!entry) {
+      return false;
+    }
+    return modelSupportsVision(entry);
   } catch {
     return false;
   }

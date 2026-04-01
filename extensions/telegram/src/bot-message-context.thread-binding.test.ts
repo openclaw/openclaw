@@ -1,5 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
@@ -20,6 +19,8 @@ vi.mock("./conversation-route.js", async (importOriginal) => {
   };
 });
 
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+
 function createBoundRoute(params: { accountId: string; sessionKey: string; agentId: string }) {
   return {
     configuredBinding: null,
@@ -37,6 +38,12 @@ function createBoundRoute(params: { accountId: string; sessionKey: string; agent
 }
 
 describe("buildTelegramMessageContext thread binding override", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
     resolveTelegramConversationRouteMock.mockReset();

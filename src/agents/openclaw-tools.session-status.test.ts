@@ -8,21 +8,8 @@ const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
 const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
-const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
-  vi.fn(
-    (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
-      [] as Array<Record<string, unknown>>,
-  ),
-);
-const resolveEnvApiKeyMock = vi.hoisted(
-  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
-);
-const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
-  () =>
-    vi.fn(
-      (_params?: { provider?: string }) =>
-        null as { apiKey: string; source: string } | null,
-    ),
+const listTasksForSessionKeyMock = vi.hoisted(() =>
+  vi.fn((_: string) => [] as Array<Record<string, unknown>>),
 );
 
 const createMockConfig = () => ({
@@ -157,8 +144,8 @@ function createAuthProfilesModuleMock() {
 
 function createModelAuthModuleMock() {
   return {
-    resolveEnvApiKey: resolveEnvApiKeyMock,
-    resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
+    resolveEnvApiKey: () => null,
+    resolveUsableCustomProviderApiKey: () => null,
     resolveModelAuthMode: () => "api-key",
   };
 }
@@ -205,11 +192,8 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   vi.doMock("../auto-reply/status.js", () => ({
     buildStatusMessage: buildStatusMessageMock,
   }));
-  vi.doMock("../tasks/task-owner-access.js", () => ({
-    listTasksForRelatedSessionKeyForOwner: (params: {
-      relatedSessionKey: string;
-      callerOwnerKey: string;
-    }) => listTasksForRelatedSessionKeyForOwnerMock(params),
+  vi.doMock("../tasks/task-registry.js", () => ({
+    listTasksForSessionKey: (sessionKey: string) => listTasksForSessionKeyMock(sessionKey),
   }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
@@ -218,16 +202,12 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
-  resolveEnvApiKeyMock.mockReset();
-  resolveEnvApiKeyMock.mockReturnValue(null);
-  resolveUsableCustomProviderApiKeyMock.mockReset();
-  resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
   loadCombinedSessionStoreForGatewayMock.mockClear();
-  listTasksForRelatedSessionKeyForOwnerMock.mockClear();
-  listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
+  listTasksForSessionKeyMock.mockClear();
+  listTasksForSessionKeyMock.mockReturnValue([]);
   loadSessionStoreMock.mockReturnValue(store);
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({
     storePath: "(multiple)",
@@ -410,7 +390,7 @@ describe("session_status tool", () => {
         updatedAt: Date.now(),
       },
     });
-    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+    listTasksForSessionKeyMock.mockReturnValue([
       {
         taskId: "task-1",
         runtime: "acp",
@@ -522,54 +502,6 @@ describe("session_status tool", () => {
             primary: "anthropic/claude-opus-4-6",
           }),
         }),
-      }),
-    );
-  });
-
-  it("infers configured custom providers for runtime-only models in session_status", async () => {
-    resetSessionStore({
-      main: {
-        sessionId: "runtime-custom-provider",
-        updatedAt: 10,
-        model: "qwen-max",
-      },
-    });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: {},
-        },
-      },
-      models: {
-        providers: {
-          "qwen-dashscope": {
-            apiKey: "DASHSCOPE_API_KEY",
-            models: [{ id: "qwen-max" }],
-          },
-        },
-      },
-      tools: {
-        agentToAgent: { enabled: false },
-      },
-    };
-    resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
-      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
-    );
-
-    const tool = getSessionStatusTool();
-
-    await tool.execute("call-runtime-custom-provider", {});
-
-    expect(buildStatusMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: expect.objectContaining({
-          model: expect.objectContaining({
-            primary: "qwen-dashscope/qwen-max",
-          }),
-        }),
-        modelAuth: "api-key (models.json)",
       }),
     );
   });

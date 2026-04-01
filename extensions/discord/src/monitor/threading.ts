@@ -501,7 +501,6 @@ function resolveDiscordThreadTitleModelRef(params: {
     cfg: params.cfg,
     channel,
     groupId: params.threadId,
-    groupChatType: "channel",
     groupChannel,
     groupSubject: groupChannel,
     parentSessionKey,

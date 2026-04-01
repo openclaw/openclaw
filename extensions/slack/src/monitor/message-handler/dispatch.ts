@@ -17,7 +17,7 @@ import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runti
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
@@ -37,7 +37,6 @@ import {
   readSlackReplyBlocks,
   resolveSlackThreadTs,
 } from "../replies.js";
-import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 function sleep(ms: number): Promise<void> {
@@ -448,16 +447,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (canFinalizeViaPreviewEdit) {
         draftStream?.stop();
         try {
-          await finalizeSlackPreviewEdit({
-            client: ctx.app.client,
-            token: ctx.botToken,
-            accountId: account.accountId,
-            channelId: draftChannelId,
-            messageId: draftMessageId,
-            text: normalizeSlackOutboundText(trimmedFinalText),
-            ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-            threadTs: usedReplyThreadTs ?? statusThreadTs,
-          });
+          await editSlackMessage(
+            draftChannelId,
+            draftMessageId,
+            normalizeSlackOutboundText(trimmedFinalText),
+            {
+              token: ctx.botToken,
+              accountId: account.accountId,
+              client: ctx.app.client,
+              ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+            },
+          );
           observedReplyDelivery = true;
           return;
         } catch (err) {

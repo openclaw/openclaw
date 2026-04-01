@@ -115,19 +115,11 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(binding.labelNoun.trim()).not.toBe("");
 }
 
-type OutboundSendMock = Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
-
-type SlackOutboundPayloadHarness = {
-  run: () => Promise<Record<string, unknown>>;
-  sendMock: OutboundSendMock;
-  to: string;
-};
-
 export function createSlackOutboundPayloadHarness(params: {
   payload: ReplyPayload;
   sendResults?: Array<{ messageId: string }>;
-}): SlackOutboundPayloadHarness {
-  const sendSlack: OutboundSendMock = vi.fn();
+}) {
+  const sendSlack = vi.fn();
   primeChannelOutboundSendMock(
     sendSlack,
     { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
@@ -801,18 +793,18 @@ export function installChannelOutboundPayloadContractSuite(params: {
   });
 }
 
-export function primeChannelOutboundSendMock<TArgs extends unknown[]>(
-  sendMock: Mock<(...args: TArgs) => Promise<unknown>>,
+export function primeChannelOutboundSendMock(
+  sendMock: Mock,
   fallbackResult: Record<string, unknown>,
-  sendResults: Record<string, unknown>[] = [],
+  sendResults: SendResultLike[] = [],
 ) {
   sendMock.mockReset();
   if (sendResults.length === 0) {
-    sendMock.mockResolvedValue(fallbackResult as never);
+    sendMock.mockResolvedValue(fallbackResult);
     return;
   }
   for (const result of sendResults) {
-    sendMock.mockResolvedValueOnce(result as never);
+    sendMock.mockResolvedValueOnce(result);
   }
 }
 

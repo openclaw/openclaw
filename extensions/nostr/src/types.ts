@@ -7,7 +7,6 @@ import {
   listCombinedAccountIds,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { OpenClawConfig } from "../api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
@@ -17,7 +16,7 @@ export interface NostrAccountConfig {
   enabled?: boolean;
   name?: string;
   defaultAccount?: string;
-  privateKey?: SecretInput;
+  privateKey?: string;
   relays?: string[];
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
@@ -50,10 +49,9 @@ export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
   const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey);
   return listCombinedAccountIds({
     configuredAccountIds: [],
-    implicitAccountId: privateKey
+    implicitAccountId: nostrCfg?.privateKey
       ? (resolveConfiguredDefaultNostrAccountId(cfg) ?? DEFAULT_ACCOUNT_ID)
       : undefined,
   });
@@ -82,11 +80,11 @@ export function resolveNostrAccount(opts: {
     | undefined;
 
   const baseEnabled = nostrCfg?.enabled !== false;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey) ?? "";
-  const configured = Boolean(privateKey);
+  const privateKey = nostrCfg?.privateKey ?? "";
+  const configured = Boolean(privateKey.trim());
 
   let publicKey = "";
-  if (privateKey) {
+  if (configured) {
     try {
       publicKey = getPublicKeyFromPrivate(privateKey);
     } catch {

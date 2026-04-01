@@ -4,17 +4,6 @@ export type ParsedAgentSessionKey = {
 };
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
-export type ParsedThreadSessionSuffix = {
-  baseSessionKey: string | undefined;
-  threadId: string | undefined;
-};
-
-export type RawSessionConversationRef = {
-  channel: string;
-  kind: "group" | "channel";
-  rawId: string;
-  prefix: string;
-};
 
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
@@ -118,76 +107,26 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
-function normalizeSessionConversationChannel(value: string | undefined | null): string | undefined {
-  const trimmed = (value ?? "").trim().toLowerCase();
-  return trimmed || undefined;
-}
-
-export function parseThreadSessionSuffix(
-  sessionKey: string | undefined | null,
-): ParsedThreadSessionSuffix {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-
-  const lowerRaw = raw.toLowerCase();
-  const threadMarker = ":thread:";
-  const threadIndex = lowerRaw.lastIndexOf(threadMarker);
-  const markerIndex = threadIndex;
-  const marker = threadMarker;
-
-  const baseSessionKey = markerIndex === -1 ? raw : raw.slice(0, markerIndex);
-  const threadIdRaw = markerIndex === -1 ? undefined : raw.slice(markerIndex + marker.length);
-  const threadId = threadIdRaw?.trim() || undefined;
-
-  return { baseSessionKey, threadId };
-}
-
-export function parseRawSessionConversationRef(
-  sessionKey: string | undefined | null,
-): RawSessionConversationRef | null {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) {
-    return null;
-  }
-
-  const rawParts = raw.split(":").filter(Boolean);
-  const bodyStartIndex =
-    rawParts.length >= 3 && rawParts[0]?.trim().toLowerCase() === "agent" ? 2 : 0;
-  const parts = rawParts.slice(bodyStartIndex);
-  if (parts.length < 3) {
-    return null;
-  }
-
-  const channel = normalizeSessionConversationChannel(parts[0]);
-  const kind = parts[1]?.trim().toLowerCase();
-  if (!channel || (kind !== "group" && kind !== "channel")) {
-    return null;
-  }
-
-  const rawId = parts.slice(2).join(":").trim();
-  const prefix = rawParts
-    .slice(0, bodyStartIndex + 2)
-    .join(":")
-    .trim();
-  if (!rawId || !prefix) {
-    return null;
-  }
-
-  return { channel, kind, rawId, prefix };
-}
+const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 
 export function resolveThreadParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
-  if (!threadId) {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
     return null;
   }
-  const parent = baseSessionKey?.trim();
-  if (!parent) {
+  const normalized = raw.toLowerCase();
+  let idx = -1;
+  for (const marker of THREAD_SESSION_MARKERS) {
+    const candidate = normalized.lastIndexOf(marker);
+    if (candidate > idx) {
+      idx = candidate;
+    }
+  }
+  if (idx <= 0) {
     return null;
   }
-  return parent;
+  const parent = raw.slice(0, idx).trim();
+  return parent ? parent : null;
 }

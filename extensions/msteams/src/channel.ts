@@ -625,7 +625,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     readOptionalTrimmedString(ctx.params, "filename") ??
                     readOptionalTrimmedString(ctx.params, "title"),
                   mediaLocalRoots: ctx.mediaLocalRoots,
-                  mediaReadFile: ctx.mediaReadFile,
                 });
                 return jsonActionResultWithDetails(
                   {

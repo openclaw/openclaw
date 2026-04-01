@@ -67,4 +67,16 @@ describe("collectDiscordStatusIssues", () => {
     expect(issues[0]?.message).toContain("alerts");
     expect(issues[0]?.message).toContain("guilds.ops.channels");
   });
+
+  it("ignores accounts that are not enabled and configured", () => {
+    expect(
+      collectDiscordStatusIssues([
+        {
+          accountId: "ops",
+          enabled: false,
+          configured: true,
+        } as ChannelAccountSnapshot,
+      ]),
+    ).toEqual([]);
+  });
 });

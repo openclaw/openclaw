@@ -1,4 +1,4 @@
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
 import { createAsyncLock } from "../async-lock.js";
 import { resolveMatrixStateFilePath } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";

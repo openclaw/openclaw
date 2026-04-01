@@ -1,6 +1,8 @@
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import type { TaskAuditSummary } from "./task-registry.audit.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -10,9 +12,7 @@ import {
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
-} from "./runtime-internal.js";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
-import type { TaskAuditSummary } from "./task-registry.audit.js";
+} from "./task-registry.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 

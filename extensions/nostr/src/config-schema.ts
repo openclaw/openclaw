@@ -4,7 +4,6 @@ import {
   DmPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-primitives";
-import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "openclaw/plugin-sdk/zod";
 
 /**
@@ -74,7 +73,7 @@ export const NostrConfigSchema = z.object({
   markdown: MarkdownConfigSchema,
 
   /** Private key in hex or nsec bech32 format */
-  privateKey: buildSecretInputSchema().optional(),
+  privateKey: z.string().optional(),
 
   /** WebSocket relay URLs to connect to */
   relays: z.array(z.string()).optional(),

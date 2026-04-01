@@ -100,7 +100,7 @@ export function parseFeishuConversationId(params: {
     return null;
   }
 
-  const topicSenderMatch = conversationId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  const topicSenderMatch = conversationId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/);
   if (topicSenderMatch) {
     const [, chatId, topicId, senderOpenId] = topicSenderMatch;
     return {
@@ -117,7 +117,7 @@ export function parseFeishuConversationId(params: {
     };
   }
 
-  const topicMatch = conversationId.match(/^(.+):topic:([^:]+)$/i);
+  const topicMatch = conversationId.match(/^(.+):topic:([^:]+)$/);
   if (topicMatch) {
     const [, chatId, topicId] = topicMatch;
     return {
@@ -132,7 +132,7 @@ export function parseFeishuConversationId(params: {
     };
   }
 
-  const senderMatch = conversationId.match(/^(.+):sender:([^:]+)$/i);
+  const senderMatch = conversationId.match(/^(.+):sender:([^:]+)$/);
   if (senderMatch) {
     const [, chatId, senderOpenId] = senderMatch;
     return {

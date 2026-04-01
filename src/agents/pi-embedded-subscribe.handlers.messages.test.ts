@@ -34,21 +34,6 @@ describe("resolveSilentReplyFallbackText", () => {
       }),
     ).toBe("NO_REPLY");
   });
-
-  it("tolerates malformed text payloads without throwing", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: undefined,
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("");
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [42 as unknown as string],
-      }),
-    ).toBe("42");
-  });
 });
 
 describe("hasAssistantVisibleReply", () => {

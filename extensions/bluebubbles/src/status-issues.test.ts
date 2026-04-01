@@ -52,4 +52,15 @@ describe("collectBlueBubblesStatusIssues", () => {
       }),
     );
   });
+
+  it("skips disabled accounts", () => {
+    const issues = collectBlueBubblesStatusIssues([
+      {
+        accountId: "disabled",
+        enabled: false,
+        configured: false,
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
 });

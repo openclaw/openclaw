@@ -142,7 +142,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
-      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -162,7 +161,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         ...baseOpts,
         mediaUrl,
         mediaLocalRoots,
-        mediaReadFile,
         forceDocument: forceDocument ?? false,
       });
     },
@@ -172,7 +170,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     to,
     payload,
     mediaLocalRoots,
-    mediaReadFile,
     accountId,
     deps,
     replyToId,
@@ -195,7 +192,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       baseOpts: {
         ...baseOpts,
         mediaLocalRoots,
-        mediaReadFile,
         forceDocument: forceDocument ?? false,
       },
     });

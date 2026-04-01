@@ -17,7 +17,7 @@ type MatchPluginCommandFn = typeof import("openclaw/plugin-sdk/plugin-runtime").
 type ExecutePluginCommandFn =
   typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
 type DispatchReplyWithBufferedBlockDispatcherFn =
-  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
@@ -65,9 +65,8 @@ const replyPipelineMocks = vi.hoisted(() => {
 export const dispatchReplyWithBufferedBlockDispatcher =
   replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
 
-vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
@@ -130,7 +129,6 @@ export function createNativeCommandsHarness(params?: {
       modelNames: new Map<string, string>(),
     })),
     listSkillCommandsForAgents: vi.fn(() => []),
-    syncTelegramMenuCommands: vi.fn(),
     wasSentByBot: vi.fn(() => false),
   };
   const bot = {

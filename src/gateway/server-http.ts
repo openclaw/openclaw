@@ -40,11 +40,9 @@ import {
   extractHookToken,
   getHookAgentPolicyError,
   getHookChannelError,
-  getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
   isHookAgentAllowed,
-  isSessionKeyAllowedByPrefix,
   normalizeAgentPayload,
   normalizeHookHeaders,
   resolveHookIdempotencyKey,
@@ -57,7 +55,7 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { getBearerToken, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
+import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
@@ -219,7 +217,6 @@ async function canRevealReadinessDetails(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
-    browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
   });
   return authResult.ok;
 }
@@ -617,14 +614,6 @@ export function createHooksRequestHandler(
         sessionKey: sessionKey.value,
         targetAgentId,
       });
-      const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-      if (
-        allowedPrefixes &&
-        !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
-      ) {
-        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
-        return true;
-      }
       const runId = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
@@ -686,14 +675,6 @@ export function createHooksRequestHandler(
             sessionKey: sessionKey.value,
             targetAgentId,
           });
-          const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-          if (
-            allowedPrefixes &&
-            !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
-          ) {
-            sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
-            return true;
-          }
           const replayKey = buildHookReplayCacheKey({
             pathKey: subPath || "mapping",
             token,

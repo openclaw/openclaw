@@ -115,12 +115,6 @@ export function createNativeCommandTestParams(
       modelNames: new Map<string, string>(),
     })) as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents,
-    syncTelegramMenuCommands: vi.fn(({ bot, commandsToRegister }) => {
-      if (commandsToRegister.length === 0) {
-        return undefined;
-      }
-      return bot.api.setMyCommands(commandsToRegister);
-    }) as TelegramBotDeps["syncTelegramMenuCommands"],
     wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };
   return createBaseNativeCommandTestParams({

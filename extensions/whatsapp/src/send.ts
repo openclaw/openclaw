@@ -10,7 +10,7 @@ import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
-import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -21,12 +21,7 @@ export async function sendMessageWhatsApp(
     verbose: boolean;
     cfg?: OpenClawConfig;
     mediaUrl?: string;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
     mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
     accountId?: string;
   },
@@ -65,11 +60,9 @@ export async function sendMessageWhatsApp(
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
     if (options.mediaUrl) {
-      const media = await loadOutboundMediaFromUrl(options.mediaUrl, {
+      const media = await loadWebMedia(options.mediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
-        mediaAccess: options.mediaAccess,
-        mediaLocalRoots: options.mediaLocalRoots,
-        mediaReadFile: options.mediaReadFile,
+        localRoots: options.mediaLocalRoots,
       });
       const caption = text || undefined;
       mediaBuffer = media.buffer;

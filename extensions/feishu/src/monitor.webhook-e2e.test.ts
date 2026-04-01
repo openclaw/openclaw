@@ -116,6 +116,47 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("still runs timingSafeEqual for malformed short signatures", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    const timingSafeEqualSpy = vi.spyOn(crypto, "timingSafeEqual");
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "short-signature-compare-path",
+        path: "/hook-e2e-short-signature-compare-path",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+        });
+        headers["x-lark-signature"] = headers["x-lark-signature"].slice(0, 12);
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
+
+    expect(timingSafeEqualSpy).toHaveBeenCalledOnce();
+    const [leftBuffer, rightBuffer] = timingSafeEqualSpy.mock.calls[0] ?? [];
+    expect(Buffer.isBuffer(leftBuffer)).toBe(true);
+    expect(Buffer.isBuffer(rightBuffer)).toBe(true);
+    if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
+      throw new TypeError("Expected crypto.timingSafeEqual to receive Buffer arguments");
+    }
+    expect(leftBuffer).toHaveLength(rightBuffer.length);
+  });
+
   it("rejects malformed short signatures with 401", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 

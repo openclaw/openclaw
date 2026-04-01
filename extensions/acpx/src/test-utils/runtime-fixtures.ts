@@ -84,16 +84,13 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
-  if (process.env.MOCK_ACPX_ENSURE_STDERR) {
-    process.stderr.write(String(process.env.MOCK_ACPX_ENSURE_STDERR) + "\n");
-  }
   if (process.env.MOCK_ACPX_ENSURE_EXIT_1 === "1") {
     return emitJsonAndExit({
       jsonrpc: "2.0",
       id: null,
       error: {
         code: -32603,
-        message: process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE || "mock ensure failure",
+        message: "mock ensure failure",
       },
     }, 1);
   }
@@ -422,9 +419,7 @@ export async function readMockRuntimeLogEntries(
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
   delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
-  delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-  delete process.env.MOCK_ACPX_ENSURE_STDERR;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
   sharedMockCliScriptPath = null;

@@ -127,7 +127,7 @@ function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] |
   return set.size > 0 ? Array.from(set) : undefined;
 }
 
-export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
+function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
   const normalized = sessionKey.trim().toLowerCase();
   if (!normalized) {
     return false;
@@ -349,7 +349,10 @@ export function normalizeHookDispatchSessionKey(params: {
     return trimmed;
   }
   const targetAgentId = normalizeAgentId(params.targetAgentId);
-  return `agent:${targetAgentId}:${parsed.rest}`;
+  if (parsed.agentId !== targetAgentId) {
+    return `agent:${parsed.agentId}:${parsed.rest}`;
+  }
+  return parsed.rest;
 }
 
 export function normalizeAgentPayload(payload: Record<string, unknown>):

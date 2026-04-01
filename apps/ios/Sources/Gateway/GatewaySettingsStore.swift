@@ -69,13 +69,6 @@ enum GatewaySettingsStore {
             account: self.preferredGatewayStableIDAccount)
     }
 
-    static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
-            service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount)
-        defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
-    }
-
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
@@ -94,13 +87,6 @@ enum GatewaySettingsStore {
             stableID,
             service: self.gatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount)
-    }
-
-    static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
-            service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount)
-        defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
     }
 
     static func loadGatewayToken(instanceId: String) -> String? {
@@ -129,12 +115,6 @@ enum GatewaySettingsStore {
     static func saveGatewayBootstrapToken(_ token: String, instanceId: String) {
         _ = KeychainStore.saveString(
             token,
-            service: self.gatewayService,
-            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
-    }
-
-    static func clearGatewayBootstrapToken(instanceId: String) {
-        _ = KeychainStore.delete(
             service: self.gatewayService,
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }

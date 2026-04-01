@@ -13,7 +13,6 @@ import {
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
 export const CLAWHUB_INSTALL_ERROR_CODE = {
@@ -224,17 +223,15 @@ function logClawHubPackageSummary(params: {
   }
 }
 
-export async function installPluginFromClawHub(
-  params: InstallSafetyOverrides & {
-    spec: string;
-    baseUrl?: string;
-    token?: string;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
-  },
-): Promise<
+export async function installPluginFromClawHub(params: {
+  spec: string;
+  baseUrl?: string;
+  token?: string;
+  logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
+}): Promise<
   | ({
       ok: true;
     } & Extract<InstallPluginResult, { ok: true }> & {
@@ -308,7 +305,6 @@ export async function installPluginFromClawHub(
     );
     const installResult = await installPluginFromArchive({
       archivePath: archive.archivePath,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       mode: params.mode,
       dryRun: params.dryRun,

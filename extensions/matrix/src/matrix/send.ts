@@ -1,8 +1,4 @@
-import {
-  loadOutboundMediaFromUrl,
-  type MarkdownTableMode,
-  type PollInput,
-} from "../runtime-api.js";
+import type { MarkdownTableMode, PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
@@ -167,11 +163,9 @@ export async function sendMessageMatrix(
       let lastMessageId = "";
       if (opts.mediaUrl) {
         const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
-        const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
+        const media = await getCore().media.loadWebMedia(opts.mediaUrl, {
           maxBytes,
-          mediaAccess: opts.mediaAccess,
-          mediaLocalRoots: opts.mediaLocalRoots,
-          mediaReadFile: opts.mediaReadFile,
+          localRoots: opts.mediaLocalRoots,
         });
         const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
           contentType: media.contentType,

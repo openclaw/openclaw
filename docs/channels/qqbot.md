@@ -1,5 +1,5 @@
 ---
-summary: "QQ Bot setup, config, and usage"
+summary: "QQ Bot channel plugin setup, config, and usage"
 read_when:
   - You want to connect OpenClaw to QQ
   - You need QQ Bot credential setup
@@ -7,19 +7,28 @@ read_when:
 title: QQ Bot
 ---
 
-# QQ Bot
+# QQ Bot (plugin)
 
 QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with
 rich media (images, voice, video, files).
 
-Status: bundled channel plugin. Direct messages, group chats, guild channels, and
+Status: supported via plugin. Direct messages, group chats, guild channels, and
 media are supported. Reactions and threads are not supported.
 
-## Bundled with OpenClaw
+## Plugin required
 
-Current OpenClaw installs bundle QQ Bot. You do not need a separate
-`openclaw plugins install` step for normal setup.
+Install the QQ Bot plugin:
+
+```bash
+openclaw plugins install @openclaw/qqbot
+```
+
+Local checkout (when running from a git repo):
+
+```bash
+openclaw plugins install ./extensions/qqbot
+```
 
 ## Setup
 
@@ -39,13 +48,6 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 
 5. Restart the Gateway.
 
-Interactive setup paths:
-
-```bash
-openclaw channels add
-openclaw configure --section channels
-```
-
 ## Configure
 
 Minimal config:
@@ -61,32 +63,6 @@ Minimal config:
   },
 }
 ```
-
-Default-account env vars:
-
-- `QQBOT_APP_ID`
-- `QQBOT_CLIENT_SECRET`
-
-File-backed AppSecret:
-
-```json5
-{
-  channels: {
-    qqbot: {
-      enabled: true,
-      appId: "YOUR_APP_ID",
-      clientSecretFile: "/path/to/qqbot-secret.txt",
-    },
-  },
-}
-```
-
-Notes:
-
-- Env fallback applies to the default QQ Bot account only.
-- `openclaw channels add --channel qqbot --token-file ...` provides the
-  AppSecret only; the AppID must already be set in config or `QQBOT_APP_ID`.
-- `clientSecret` also accepts SecretRef input, not just a plaintext string.
 
 ### Multi-account setup
 
@@ -149,13 +125,6 @@ STT and TTS support two-level configuration with priority fallback:
 
 Set `enabled: false` on either to disable.
 
-Outbound audio upload/transcode behavior can also be tuned with
-`channels.qqbot.audioFormatPolicy`:
-
-- `sttDirectFormats`
-- `uploadDirectFormats`
-- `transcodeEnabled`
-
 ## Target formats
 
 | Format                     | Description        |
@@ -186,8 +155,6 @@ Append `?` to any command for usage help (for example `/bot-upgrade ?`).
 - **Bot replies "gone to Mars":** credentials not configured or Gateway not started.
 - **No inbound messages:** verify `appId` and `clientSecret` are correct, and the
   bot is enabled on the QQ Open Platform.
-- **Setup with `--token-file` still shows unconfigured:** `--token-file` only sets
-  the AppSecret. You still need `appId` in config or `QQBOT_APP_ID`.
 - **Proactive messages not arriving:** QQ may intercept bot-initiated messages if
   the user hasn't interacted recently.
 - **Voice not transcribed:** ensure STT is configured and the provider is reachable.

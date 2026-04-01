@@ -28,4 +28,16 @@ describe("collectZalouserStatusIssues", () => {
       },
     });
   });
+
+  it("skips disabled accounts", () => {
+    const issues = collectZalouserStatusIssues([
+      {
+        accountId: "default",
+        enabled: false,
+        configured: false,
+        lastError: "not authenticated",
+      },
+    ]);
+    expect(issues).toHaveLength(0);
+  });
 });

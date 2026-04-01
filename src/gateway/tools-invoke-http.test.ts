@@ -433,8 +433,7 @@ describe("POST /tools/invoke", () => {
     });
   });
 
-  it("accepts shared-secret bearer auth on the HTTP tools surface", async () => {
-    allowAgentsListForMain();
+  it("blocks trusted-proxy local-direct token fallback from invoking tools over HTTP", async () => {
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
       ok: true,
       method: "token",
@@ -454,8 +453,14 @@ describe("POST /tools/invoke", () => {
       },
     });
 
-    const body = await expectOkInvokeResponse(res);
-    expect(body.result).toEqual({ ok: true, result: [] });
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "gateway bearer auth cannot invoke tools over HTTP",
+      },
+    });
   });
 
   it("uses before_tool_call adjusted params for HTTP tool execution", async () => {
@@ -627,10 +632,7 @@ describe("POST /tools/invoke", () => {
       sessionKey: "main",
     });
 
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error?.type).toBe("tool_error");
+    expect(res.status).toBe(404);
   });
 
   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
@@ -754,8 +756,7 @@ describe("POST /tools/invoke", () => {
     });
   });
 
-  it("treats shared-secret bearer auth as full operator access on /tools/invoke", async () => {
-    allowAgentsListForMain();
+  it("blocks trusted-proxy local-direct token fallback from invoking tools over HTTP", async () => {
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
       ok: true,
       method: "token",
@@ -775,8 +776,14 @@ describe("POST /tools/invoke", () => {
       },
     });
 
-    const body = await expectOkInvokeResponse(res);
-    expect(body.result).toEqual({ ok: true, result: [] });
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "gateway bearer auth cannot invoke tools over HTTP",
+      },
+    });
   });
 
   it("applies owner-only tool policy on the HTTP path", async () => {
@@ -794,29 +801,7 @@ describe("POST /tools/invoke", () => {
       tool: "owner_only_test",
       sessionKey: "main",
     });
-    const allowedBody = await expectOkInvokeResponse(allowedRes);
-    expect(allowedBody.result).toEqual({ ok: true, result: "owner-only" });
-  });
-
-  it("treats shared-secret bearer auth as owner on /tools/invoke", async () => {
-    setMainAllowedTools({ allow: ["owner_only_test"] });
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
-      ok: true,
-      method: "token",
-    });
-
-    const res = await invokeTool({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "x-openclaw-scopes": "operator.approvals",
-      },
-      tool: "owner_only_test",
-      sessionKey: "main",
-    });
-
-    const body = await expectOkInvokeResponse(res);
-    expect(body.result).toEqual({ ok: true, result: "owner-only" });
+    expect(allowedRes.status).toBe(404);
   });
 
   it("extends the HTTP deny list to high-risk execution and file tools", async () => {

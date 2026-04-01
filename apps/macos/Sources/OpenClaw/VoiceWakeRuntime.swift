@@ -82,7 +82,6 @@ actor VoiceWakeRuntime {
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
-        let triggersTalkMode: Bool
     }
 
     private struct RecognitionUpdate {
@@ -101,8 +100,7 @@ actor VoiceWakeRuntime {
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                 localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID,
                 triggerChime: state.voiceWakeTriggerChime,
-                sendChime: state.voiceWakeSendChime,
-                triggersTalkMode: state.voiceWakeTriggersTalkMode)
+                sendChime: state.voiceWakeSendChime)
             return (enabled, config)
         }
 
@@ -531,21 +529,6 @@ actor VoiceWakeRuntime {
     }
 
     private func beginCapture(command: String, triggerEndTime: TimeInterval?, config: RuntimeConfig) async {
-        // When "Trigger Talk Mode" is enabled, skip the capture/overlay flow entirely
-        // and activate Talk Mode immediately. Talk Mode handles its own STT pipeline.
-        // Pause the wake listener to avoid two audio pipelines competing on the mic
-        // (mirrors the push-to-talk coordination pattern).
-        if config.triggersTalkMode {
-            self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
-            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
-            if config.triggerChime != .none {
-                await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
-            }
-            self.pauseForPushToTalk()
-            await AppStateStore.shared.setTalkEnabled(true)
-            return
-        }
-
         self.listeningState = .voiceWake
         self.isCapturing = true
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")

@@ -7,7 +7,6 @@ const MAX_THREAD_STARTER_BODY_LENGTH = 500;
 
 type MatrixThreadContext = {
   threadStarterBody?: string;
-  senderId?: string;
   senderLabel?: string;
   summary?: string;
 };
@@ -100,7 +99,6 @@ export function createMatrixThreadContextResolver(params: {
         senderName,
         summary,
       }),
-      senderId,
       senderLabel,
       summary,
     });

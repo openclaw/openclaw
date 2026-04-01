@@ -126,7 +126,7 @@ describe("slack exec approvals", () => {
         cfg: buildConfig({ enabled: true, approvers: ["U123"] }),
         payload,
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       shouldSuppressLocalSlackExecApprovalPrompt({
@@ -196,65 +196,5 @@ describe("slack exec approvals", () => {
         },
       }),
     ).toBe(false);
-  });
-
-  it("rejects requests bound to another channel or Slack account", () => {
-    const cfg = buildConfig({
-      enabled: true,
-      approvers: ["U123"],
-    });
-
-    expect(
-      shouldHandleSlackExecApprovalRequest({
-        cfg,
-        accountId: "work",
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "discord",
-            turnSourceAccountId: "work",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldHandleSlackExecApprovalRequest({
-        cfg,
-        accountId: "work",
-        request: {
-          id: "req-2",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "slack",
-            turnSourceAccountId: "other",
-            sessionKey: "agent:ops-agent:missing",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldHandleSlackExecApprovalRequest({
-        cfg,
-        accountId: "work",
-        request: {
-          id: "req-3",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "slack",
-            turnSourceAccountId: "work",
-            sessionKey: "agent:ops-agent:missing",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(true);
   });
 });

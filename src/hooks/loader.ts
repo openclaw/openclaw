@@ -136,7 +136,7 @@ export async function loadInternalHooks(
           registerInternalHook(event, handler);
         }
 
-        log.debug(
+        log.info(
           `Registered hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
         );
         loadedCount++;
@@ -225,7 +225,7 @@ export async function loadInternalHooks(
       }
 
       registerInternalHook(handlerConfig.event, handler);
-      log.debug(
+      log.info(
         `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
       );
       loadedCount++;

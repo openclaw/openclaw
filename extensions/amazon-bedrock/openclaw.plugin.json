@@ -5,18 +5,6 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {
-      "guardrail": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "guardrailIdentifier": { "type": "string" },
-          "guardrailVersion": { "type": "string" },
-          "streamProcessingMode": { "type": "string", "enum": ["sync", "async"] },
-          "trace": { "type": "string", "enum": ["enabled", "disabled", "enabled_full"] }
-        },
-        "required": ["guardrailIdentifier", "guardrailVersion"]
-      }
-    }
+    "properties": {}
   }
 }

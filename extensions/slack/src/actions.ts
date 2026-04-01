@@ -4,7 +4,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient, createSlackWriteClient } from "./client.js";
+import { createSlackWebClient } from "./client.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
@@ -64,11 +64,9 @@ function normalizeEmoji(raw: string) {
   return trimmed.replace(/^:+|:+$/g, "");
 }
 
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+async function getClient(opts: SlackActionClientOpts = {}) {
   const token = resolveToken(opts.token, opts.accountId);
-  return (
-    opts.client ?? (mode === "write" ? createSlackWriteClient(token) : createSlackWebClient(token))
-  );
+  return opts.client ?? createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -85,7 +83,7 @@ export async function reactSlackMessage(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   await client.reactions.add({
     channel: channelId,
     timestamp: messageId,
@@ -99,7 +97,7 @@ export async function removeSlackReaction(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   await client.reactions.remove({
     channel: channelId,
     timestamp: messageId,
@@ -112,7 +110,7 @@ export async function removeOwnSlackReactions(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ): Promise<string[]> {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   const userId = await resolveBotUserId(client);
   const reactions = await listSlackReactions(channelId, messageId, { client });
   const toRemove = new Set<string>();
@@ -161,12 +159,7 @@ export async function sendSlackMessage(
   content: string,
   opts: SlackActionClientOpts & {
     mediaUrl?: string;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
     mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     threadTs?: string;
     uploadFileName?: string;
     uploadTitle?: string;
@@ -177,9 +170,7 @@ export async function sendSlackMessage(
     accountId: opts.accountId,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
-    mediaAccess: opts.mediaAccess,
     mediaLocalRoots: opts.mediaLocalRoots,
-    mediaReadFile: opts.mediaReadFile,
     client: opts.client,
     threadTs: opts.threadTs,
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
@@ -194,7 +185,7 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
   await client.chat.update({
@@ -210,7 +201,7 @@ export async function deleteSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   await client.chat.delete({
     channel: channelId,
     ts: messageId,
@@ -273,7 +264,7 @@ export async function pinSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   await client.pins.add({ channel: channelId, timestamp: messageId });
 }
 
@@ -282,7 +273,7 @@ export async function unpinSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts, "write");
+  const client = await getClient(opts);
   await client.pins.remove({ channel: channelId, timestamp: messageId });
 }
 

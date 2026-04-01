@@ -192,7 +192,7 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
     }
   });
 
-  test("shared-secret bearer auth can use /tools/invoke", async () => {
+  test("bearer auth cannot use /tools/invoke", async () => {
     const started = await startServerWithClient("secret");
 
     try {
@@ -208,13 +208,12 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
         }),
       });
 
-      expect(httpRes.status).toBe(200);
+      expect(httpRes.status).toBe(403);
       const body = (await httpRes.json()) as {
-        ok?: boolean;
-        result?: unknown;
+        error?: { type?: string; message?: string };
       };
-      expect(body.ok).toBe(true);
-      expect(body.result).toBeTruthy();
+      expect(body.error?.type).toBe("forbidden");
+      expect(body.error?.message).toBe("gateway bearer auth cannot invoke tools over HTTP");
     } finally {
       started.ws.close();
       await started.server.close();

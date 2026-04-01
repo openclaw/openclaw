@@ -249,9 +249,6 @@ function setResolvedWebSearchApiKey(params: {
   const search = ensureObject(web, "search");
   if (params.provider.setConfiguredCredentialValue) {
     params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    if (params.provider.id !== "brave") {
-      return;
-    }
   }
   params.provider.setCredentialValue(search, params.value);
 }
@@ -276,18 +273,6 @@ function setResolvedXSearchApiKey(params: { resolvedConfig: OpenClawConfig; valu
 
 function keyPathForProvider(provider: PluginWebSearchProviderEntry): string {
   return provider.credentialPath;
-}
-
-function readConfiguredProviderCredential(params: {
-  provider: PluginWebSearchProviderEntry;
-  config: OpenClawConfig;
-  search: Record<string, unknown> | undefined;
-}): unknown {
-  const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
-  return (
-    configuredValue ??
-    (params.provider.id === "brave" ? params.provider.getCredentialValue(params.search) : undefined)
-  );
 }
 
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
@@ -400,11 +385,9 @@ export async function resolveRuntimeWebTools(params: {
         continue;
       }
       const path = keyPathForProvider(provider);
-      const value = readConfiguredProviderCredential({
-        provider,
-        config: params.sourceConfig,
-        search,
-      });
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       const resolution = await resolveSecretInputWithEnvFallback({
         sourceConfig: params.sourceConfig,
         context: params.context,
@@ -547,11 +530,9 @@ export async function resolveRuntimeWebTools(params: {
       if (provider.id === searchMetadata.selectedProvider) {
         continue;
       }
-      const value = readConfiguredProviderCredential({
-        provider,
-        config: params.sourceConfig,
-        search,
-      });
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -565,11 +546,9 @@ export async function resolveRuntimeWebTools(params: {
     }
   } else if (search && !searchEnabled) {
     for (const provider of providers) {
-      const value = readConfiguredProviderCredential({
-        provider,
-        config: params.sourceConfig,
-        search,
-      });
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -588,11 +567,9 @@ export async function resolveRuntimeWebTools(params: {
       if (provider.id === configuredProvider) {
         continue;
       }
-      const value = readConfiguredProviderCredential({
-        provider,
-        config: params.sourceConfig,
-        search,
-      });
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }

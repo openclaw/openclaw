@@ -53,10 +53,7 @@ import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
-import {
-  resolveConfiguredDeferredChannelPluginIds,
-  resolveGatewayStartupPluginIds,
-} from "../plugins/channel-plugin-ids.js";
+import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -588,13 +585,6 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
-  const startupPluginIds = minimalTestGateway
-    ? []
-    : resolveGatewayStartupPluginIds({
-        config: gatewayPluginConfigAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        env: process.env,
-      });
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
@@ -606,7 +596,6 @@ export async function startGatewayServer(
       log,
       coreGatewayHandlers,
       baseMethods,
-      pluginIds: startupPluginIds,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
   } else {
@@ -1363,7 +1352,6 @@ export async function startGatewayServer(
           log,
           coreGatewayHandlers,
           baseMethods,
-          pluginIds: startupPluginIds,
           logDiagnostics: false,
         }));
       }

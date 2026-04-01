@@ -45,7 +45,7 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
-import type { FeishuMessageContext, FeishuMessageInfo } from "./types.js";
+import type { FeishuMessageContext } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
 export { toMessageResourceType } from "./bot-content.js";
@@ -218,49 +218,6 @@ export function buildFeishuAgentBody(params: {
   return messageBody;
 }
 
-function shouldIncludeFetchedGroupContextMessage(params: {
-  isGroup: boolean;
-  allowFrom: Array<string | number>;
-  senderId?: string;
-  senderType?: string;
-}): boolean {
-  if (!params.isGroup || params.allowFrom.length === 0) {
-    return true;
-  }
-  if (params.senderType === "app") {
-    return true;
-  }
-  const senderId = params.senderId?.trim();
-  if (!senderId) {
-    return false;
-  }
-  return isFeishuGroupAllowed({
-    groupPolicy: "allowlist",
-    allowFrom: params.allowFrom,
-    senderId,
-    senderName: undefined,
-  });
-}
-
-function filterFetchedGroupContextMessages<
-  T extends Pick<FeishuMessageInfo, "senderId" | "senderType">,
->(
-  messages: readonly T[],
-  params: {
-    isGroup: boolean;
-    allowFrom: Array<string | number>;
-  },
-): T[] {
-  return messages.filter((message) =>
-    shouldIncludeFetchedGroupContextMessage({
-      isGroup: params.isGroup,
-      allowFrom: params.allowFrom,
-      senderId: message.senderId,
-      senderType: message.senderType,
-    }),
-  );
-}
-
 export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
@@ -380,11 +337,6 @@ export async function handleFeishuMessage(params: {
   const groupConfig = isGroup
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
     : undefined;
-  const effectiveGroupSenderAllowFrom = isGroup
-    ? (groupConfig?.allowFrom?.length ?? 0) > 0
-      ? (groupConfig?.allowFrom ?? [])
-      : (feishuCfg?.groupSenderAllowFrom ?? [])
-    : [];
   const groupSession = isGroup
     ? resolveFeishuGroupSession({
         chatId: ctx.chatId,
@@ -450,10 +402,14 @@ export async function handleFeishuMessage(params: {
     }
 
     // Sender-level allowlist: per-group allowFrom takes precedence, then global groupSenderAllowFrom
-    if (effectiveGroupSenderAllowFrom.length > 0) {
+    const perGroupSenderAllowFrom = groupConfig?.allowFrom ?? [];
+    const globalSenderAllowFrom = feishuCfg?.groupSenderAllowFrom ?? [];
+    const effectiveSenderAllowFrom =
+      perGroupSenderAllowFrom.length > 0 ? perGroupSenderAllowFrom : globalSenderAllowFrom;
+    if (effectiveSenderAllowFrom.length > 0) {
       const senderAllowed = isFeishuGroupAllowed({
         groupPolicy: "allowlist",
-        allowFrom: effectiveGroupSenderAllowFrom,
+        allowFrom: effectiveSenderAllowFrom,
         senderId: ctx.senderOpenId,
         senderIds: [senderUserId],
         senderName: ctx.senderName,
@@ -735,22 +691,10 @@ export async function handleFeishuMessage(params: {
           messageId: ctx.parentId,
           accountId: account.accountId,
         });
-        if (
-          quotedMessageInfo &&
-          shouldIncludeFetchedGroupContextMessage({
-            isGroup,
-            allowFrom: effectiveGroupSenderAllowFrom,
-            senderId: quotedMessageInfo.senderId,
-            senderType: quotedMessageInfo.senderType,
-          })
-        ) {
+        if (quotedMessageInfo) {
           quotedContent = quotedMessageInfo.content;
           log(
             `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
-          );
-        } else if (quotedMessageInfo) {
-          log(
-            `feishu[${account.accountId}]: skipped quoted message from sender ${quotedMessageInfo.senderId ?? "unknown"} due to group sender allowlist`,
           );
         }
       } catch (err) {
@@ -823,7 +767,6 @@ export async function handleFeishuMessage(params: {
       }
     >();
     let rootMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> | undefined;
-    let rootMessageThreadId: string | undefined;
     let rootMessageFetched = false;
     const getRootMessageInfo = async () => {
       if (!ctx.rootId) {
@@ -844,21 +787,6 @@ export async function handleFeishuMessage(params: {
             log(`feishu[${account.accountId}]: failed to fetch root message: ${String(err)}`);
             rootMessageInfo = null;
           }
-        }
-        rootMessageThreadId = rootMessageInfo?.threadId;
-        if (
-          rootMessageInfo &&
-          !shouldIncludeFetchedGroupContextMessage({
-            isGroup,
-            allowFrom: effectiveGroupSenderAllowFrom,
-            senderId: rootMessageInfo.senderId,
-            senderType: rootMessageInfo.senderType,
-          })
-        ) {
-          log(
-            `feishu[${account.accountId}]: skipped thread starter from sender ${rootMessageInfo.senderId ?? "unknown"} due to group sender allowlist`,
-          );
-          rootMessageInfo = null;
         }
       }
       return rootMessageInfo ?? null;
@@ -899,7 +827,7 @@ export async function handleFeishuMessage(params: {
       }
 
       const rootMsg = await getRootMessageInfo();
-      let feishuThreadId = ctx.threadId ?? rootMessageThreadId ?? rootMsg?.threadId;
+      let feishuThreadId = ctx.threadId ?? rootMsg?.threadId;
       if (feishuThreadId) {
         log(`feishu[${account.accountId}]: resolved thread ID: ${feishuThreadId}`);
       }
@@ -926,18 +854,14 @@ export async function handleFeishuMessage(params: {
             .map((id) => id?.trim())
             .filter((id): id is string => id !== undefined && id.length > 0),
         );
-        const allowlistedMessages = filterFetchedGroupContextMessages(threadMessages, {
-          isGroup,
-          allowFrom: effectiveGroupSenderAllowFrom,
-        });
         const relevantMessages =
           (senderScoped
-            ? allowlistedMessages.filter(
+            ? threadMessages.filter(
                 (msg) =>
                   msg.senderType === "app" ||
                   (msg.senderId !== undefined && senderIds.has(msg.senderId.trim())),
               )
-            : allowlistedMessages) ?? [];
+            : threadMessages) ?? [];
 
         const threadStarterBody = rootMsg?.content ?? relevantMessages[0]?.content;
         const includeStarterInHistory = Boolean(rootMsg?.content || ctx.rootId);

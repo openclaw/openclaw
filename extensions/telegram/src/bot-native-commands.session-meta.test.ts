@@ -111,9 +111,8 @@ vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
     listSkillCommandsForAgents: vi.fn(() => []),
   };
 });
-vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
@@ -207,7 +206,6 @@ function registerAndResolveCommandHandlerBase(params: {
       modelNames: new Map<string, string>(),
     })),
     listSkillCommandsForAgents: vi.fn(() => []),
-    syncTelegramMenuCommands: vi.fn(),
     wasSentByBot: vi.fn(() => false),
   };
   registerTelegramNativeCommands({
