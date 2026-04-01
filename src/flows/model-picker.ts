@@ -449,7 +449,7 @@ export async function promptDefaultModel(
     allowKeep &&
     hasPreferredProvider &&
     preferredProvider &&
-    resolved.provider !== preferredProvider
+    !matchesPreferredProvider(resolved.provider, preferredProvider)
   ) {
     const firstModel = filteredModels[0];
     if (firstModel) {
