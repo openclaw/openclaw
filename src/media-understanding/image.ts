@@ -83,7 +83,15 @@ async function resolveImageBuffer(params: {
     return { buffer: params.buffer, mime: params.mime ?? "image/jpeg" };
   }
   if (params.url) {
-    const response = await fetch(params.url);
+    // Use AbortController for timeout on URL fetch (SSRF protection)
+    const controller = new AbortController();
+    const fetchTimeout = setTimeout(() => controller.abort(), 10_000);
+    let response: Response;
+    try {
+      response = await fetch(params.url, { signal: controller.signal });
+    } finally {
+      clearTimeout(fetchTimeout);
+    }
     if (!response.ok) {
       throw new Error(
         `Failed to fetch image from URL: ${response.status} ${response.statusText}`,
@@ -91,7 +99,9 @@ async function resolveImageBuffer(params: {
     }
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    const mime = params.mime ?? (response.headers.get("content-type") ?? "image/jpeg");
+    // Strip Content-Type parameters (e.g., "; charset=utf-8") before using as MIME
+    const rawContentType = response.headers.get("content-type") ?? "image/jpeg";
+    const mime = params.mime ?? rawContentType.split(";")[0].trim();
     return { buffer, mime };
   }
   throw new Error("Image must have either buffer or url");

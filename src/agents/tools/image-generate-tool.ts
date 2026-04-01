@@ -598,7 +598,14 @@ export function createImageGenerateTool(options?: {
           let buffer = image.buffer;
           // If buffer is missing but URL is available, fetch the image
           if (!buffer && image.url) {
-            const response = await fetch(image.url);
+            const controller = new AbortController();
+            const fetchTimeout = setTimeout(() => controller.abort(), 10_000);
+            let response: Response;
+            try {
+              response = await fetch(image.url, { signal: controller.signal });
+            } finally {
+              clearTimeout(fetchTimeout);
+            }
             if (!response.ok) {
               throw new Error(
                 `Failed to fetch image from URL (${response.status} ${response.statusText}): ${image.url}`,

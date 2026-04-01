@@ -2,23 +2,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 export type GeneratedImageAsset = {
-  /**
-   * Image data as a Buffer. Either `buffer` or `url` must be provided.
-   * When `buffer` is provided, the image data is included directly.
-   */
-  buffer?: Buffer;
-  /**
-   * Publicly accessible URL to the image. Either `buffer` or `url` must be provided.
-   * When `url` is provided, OpenClaw will use the URL directly for channels
-   * that support URL-based images (e.g., Feishu), avoiding CDN upload.
-   * For image understanding, the URL will be fetched and converted as needed.
-   */
-  url?: string;
   mimeType: string;
   fileName?: string;
   revisedPrompt?: string;
   metadata?: Record<string, unknown>;
-};
+} & (
+  | { buffer: Buffer; url?: never }
+  | { url: string; buffer?: never }
+);
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
