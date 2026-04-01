@@ -84,7 +84,6 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
-### wecom
 ### OSOP (Open Standard Operating Procedures)
 
 Structured workflow logging, risk analysis, and self-optimization for AI agents.
@@ -105,6 +104,7 @@ clawhub install osop-review
 clawhub install osop-optimize
 ```
 
+### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
 A bot plugin powered by WeCom AI Bot WebSocket persistent connections,
