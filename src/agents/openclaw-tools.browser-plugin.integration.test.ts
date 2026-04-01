@@ -6,6 +6,7 @@ import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -57,5 +58,24 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     expect(tools.map((tool) => tool.name)).not.toContain("browser");
+  });
+
+  it("keeps browser available in the coding profile when browser is configured", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        browser: {
+          enabled: true,
+          defaultProfile: "openclaw",
+        },
+        plugins: {
+          enabled: true,
+        },
+        tools: {
+          profile: "coding",
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain("browser");
   });
 });
