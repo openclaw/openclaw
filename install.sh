@@ -55,17 +55,20 @@ case "$choice" in
         echo -e "  ${CYAN}Pulling SafeClaw proxy image...${NC}"
         docker pull ghcr.io/aceteam-ai/aep-proxy:latest 2>&1 | tail -3
 
+        mkdir -p "$HOME/safeclaw"
+
         echo ""
         echo -e "  ${GREEN}${BOLD}Ready.${NC}"
         echo ""
         echo -e "  ${CYAN}Start SafeClaw:${NC}"
         echo ""
-        echo "    docker run -p 8899:8899 -e OPENAI_API_KEY=\$OPENAI_API_KEY ghcr.io/aceteam-ai/aep-proxy"
+        echo "    docker run -p 8899:8899 -e OPENAI_API_KEY=\$OPENAI_API_KEY -v ~/safeclaw:/workspace ghcr.io/aceteam-ai/aep-proxy"
         echo ""
-        echo -e "  ${CYAN}Dashboard:${NC} http://localhost:8899/aep/"
+        echo -e "  ${CYAN}Dashboard:${NC}  http://localhost:8899/aep/"
+        echo -e "  ${CYAN}Workspace:${NC} ~/safeclaw (the only folder your agent can see)"
         echo ""
-        echo -e "${DIM}  Your agent runs in a container. It cannot access your files,${NC}"
-        echo -e "${DIM}  email, credentials, or browser cookies. Only port 8899 is exposed.${NC}"
+        echo -e "${DIM}  Your agent runs in a container. It can only access ~/safeclaw.${NC}"
+        echo -e "${DIM}  No email, no credentials, no browser cookies. Just your workspace.${NC}"
         ;;
     2)
         # pip path
