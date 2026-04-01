@@ -3,7 +3,7 @@ name: terraform-iac
 description: Create, modify, plan, apply, and destroy AWS and Azure infrastructure using Terraform Cloud. Use when asked to provision cloud resources, manage IaC, write Terraform configs, run terraform plan/apply/destroy, manage workspaces, or maintain infrastructure state. Triggers on phrases like "create an S3 bucket", "provision a VNet", "deploy infrastructure", "terraform plan", "apply infra", "destroy resources", "show current state", "what's deployed".
 ---
 
-# Terraform IaC Agent
+# Terraform IaC Agent skill
 
 Manages AWS and Azure infrastructure via Terraform Cloud (TFC). All state lives in TFC — no local state files.
 
