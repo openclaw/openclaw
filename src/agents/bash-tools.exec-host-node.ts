@@ -182,6 +182,8 @@ export async function executeNodeHostCommand(
         durableApprovalSatisfied = hasDurableExecApproval({
           analysisOk: allowlistEval.analysisOk,
           segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+          allowlist: resolved.allowlist,
+          commandText: params.command,
         });
         allowlistSatisfied = allowlistEval.allowlistSatisfied;
         analysisOk = allowlistEval.analysisOk;

@@ -116,6 +116,7 @@ export type ExecAllowlistEntry = {
   id?: string;
   pattern: string;
   source?: "allow-always";
+  commandText?: string;
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
@@ -512,12 +513,28 @@ export function requiresExecApproval(params: {
 export function hasDurableExecApproval(params: {
   analysisOk: boolean;
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
 }): boolean {
-  return (
+  const normalizedCommand = params.commandText?.trim();
+  const exactCommandMatch = normalizedCommand
+    ? (params.allowlist ?? []).some(
+        (entry) =>
+          entry.source === "allow-always" &&
+          typeof entry.commandText === "string" &&
+          entry.commandText.trim() === normalizedCommand,
+      )
+    : false;
+  const allowlistMatch =
     params.analysisOk &&
     params.segmentAllowlistEntries.length > 0 &&
-    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always")
-  );
+    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always");
+  return exactCommandMatch || allowlistMatch;
+}
+
+function buildDurableCommandApprovalPattern(commandText: string): string {
+  const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
+  return `=command:${digest}`;
 }
 
 export function recordAllowlistUse(
@@ -553,6 +570,7 @@ export function addAllowlistEntry(
   pattern: string,
   options?: {
     source?: ExecAllowlistEntry["source"];
+    commandText?: string;
   },
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
@@ -574,6 +592,7 @@ export function addAllowlistEntry(
           ? {
               ...entry,
               source: options?.source ?? entry.source,
+              commandText: options?.commandText ?? entry.commandText,
               lastUsedAt: now,
             }
           : entry,
@@ -584,12 +603,28 @@ export function addAllowlistEntry(
           id: crypto.randomUUID(),
           pattern: trimmed,
           source: options?.source,
+          commandText: options?.commandText,
           lastUsedAt: now,
         },
       ];
   agents[target] = { ...existing, allowlist: nextAllowlist };
   approvals.agents = agents;
   saveExecApprovals(approvals);
+}
+
+export function addDurableCommandApproval(
+  approvals: ExecApprovalsFile,
+  agentId: string | undefined,
+  commandText: string,
+) {
+  const normalized = commandText.trim();
+  if (!normalized) {
+    return;
+  }
+  addAllowlistEntry(approvals, agentId, buildDurableCommandApprovalPattern(normalized), {
+    source: "allow-always",
+    commandText: normalized,
+  });
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {

@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
+  addDurableCommandApproval,
   addAllowlistEntry,
   type ExecAsk,
   type ExecSecurity,
@@ -105,6 +106,8 @@ export async function processGatewayAllowlist(
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+    allowlist: approvals.allowlist,
+    commandText: params.command,
   });
   const inlineEvalHit =
     params.strictInlineEval === true
@@ -331,10 +334,18 @@ export async function processGatewayAllowlist(
               });
             }
           }
+          if (patterns.length === 0) {
+            addDurableCommandApproval(approvals.file, params.agentId, params.command);
+          }
         }
       }
 
-      if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
+      if (
+        hostSecurity === "allowlist" &&
+        (!analysisOk || !allowlistSatisfied) &&
+        !approvedByAsk &&
+        !durableApprovalSatisfied
+      ) {
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 

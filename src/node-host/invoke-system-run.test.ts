@@ -1480,4 +1480,57 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it("reuses exact-command durable trust for shell-wrapper reruns", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-wrapper-allow-"));
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", "cd ."],
+        cwd: tempDir,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+
+      await withTempApprovalsHome({
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "on-miss", askFallback: "full" },
+          agents: {
+            main: {
+              allowlist: [
+                {
+                  pattern: "=command:test",
+                  source: "allow-always",
+                  commandText: prepared.plan.commandText,
+                },
+              ],
+            },
+          },
+        },
+        run: async () => {
+          const rerun = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-reused")),
+          });
+
+          expect(rerun.runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(rerun.sendInvokeResult, { payloadContains: "shell-wrapper-reused" });
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

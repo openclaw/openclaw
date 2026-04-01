@@ -106,6 +106,18 @@ export function evaluateSystemRunPolicy(params: {
   }
 
   if (params.security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
+    if (params.durableApprovalSatisfied) {
+      return {
+        allowed: true,
+        analysisOk,
+        allowlistSatisfied,
+        shellWrapperBlocked,
+        windowsShellWrapperBlocked,
+        requiresAsk,
+        approvalDecision: params.approvalDecision,
+        approvedByAsk,
+      };
+    }
     return {
       allowed: false,
       eventReason: "allowlist-miss",

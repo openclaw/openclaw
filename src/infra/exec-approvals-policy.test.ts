@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasDurableExecApproval,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
@@ -115,5 +116,22 @@ describe("exec approvals policy helpers", () => {
     },
   ])("requiresExecApproval respects ask mode and allowlist satisfaction for %j", (testCase) => {
     expect(requiresExecApproval(testCase)).toBe(testCase.expected);
+  });
+
+  it("treats exact-command allow-always approvals as durable trust", () => {
+    expect(
+      hasDurableExecApproval({
+        analysisOk: false,
+        segmentAllowlistEntries: [],
+        allowlist: [
+          {
+            pattern: "=command:test",
+            source: "allow-always",
+            commandText: 'powershell -NoProfile -Command "Write-Output hi"',
+          },
+        ],
+        commandText: 'powershell -NoProfile -Command "Write-Output hi"',
+      }),
+    ).toBe(true);
   });
 });
