@@ -2024,6 +2024,25 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     expect(payload?.text).toContain("API rate limit reached");
   });
 
+  it("surfaces node-unavailable copy instead of rate-limit copy for node.invoke timeouts", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "reasoning", isReasoning: true }],
+      meta: {
+        error: {
+          kind: "retry_limit",
+          message:
+            "All models failed (2): anthropic/claude: 429 (rate_limit) | anthropic/claude: errorCode=UNAVAILABLE errorMessage=TIMEOUT: node invoke timed out",
+        },
+      },
+    });
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.text).toContain("paired node appears unavailable");
+    expect(payload?.text).not.toContain("API rate limit reached");
+  });
+
   it("preserves successful media-only replies that use legacy mediaUrl", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ mediaUrl: "https://example.test/image.png" }],

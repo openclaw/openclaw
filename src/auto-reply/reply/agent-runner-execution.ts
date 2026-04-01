@@ -119,6 +119,25 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
   );
 }
 
+const NODE_UNAVAILABLE_USER_MESSAGE =
+  "⚠️ A paired node appears unavailable. Open the OpenClaw app on that device (or reconnect/unpair it), then try again.";
+
+function isNodeInvokeUnavailableErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  if (/\bnode (?:not connected|disconnected)\b/i.test(raw)) {
+    return true;
+  }
+  if (/failed to send invoke to node/i.test(raw)) {
+    return true;
+  }
+  return (
+    /\bnode(?:\.|\s+)invoke\b.*\b(?:timed out|timeout|not connected|unavailable)\b/i.test(raw) ||
+    /\b(?:timed out|timeout)\b.*\bnode(?:\.|\s+)invoke\b/i.test(raw)
+  );
+}
+
 function isToolResultTurnMismatchError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
@@ -135,7 +154,6 @@ function buildExternalRunFailureText(message: string): string {
   }
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 }
-
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -776,6 +794,7 @@ export async function runAgentTurnWithFallback(params: {
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
       // would misclassify mixed-cause exhaustion as a pure transient cooldown.
+      const isNodeInvokeUnavailable = isNodeInvokeUnavailableErrorMessage(message);
       const isRateLimit = isFallbackSummaryError(err)
         ? isPureTransientRateLimitSummary(err)
         : isRateLimitErrorMessage(message);
@@ -785,6 +804,8 @@ export async function runAgentTurnWithFallback(params: {
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
+        : isNodeInvokeUnavailable
+          ? NODE_UNAVAILABLE_USER_MESSAGE
         : isRateLimit
           ? buildRateLimitCooldownMessage(err)
           : isContextOverflow
@@ -847,7 +868,14 @@ export async function runAgentTurnWithFallback(params: {
         runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
           ?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-      if (
+      if (errorCandidate && isNodeInvokeUnavailableErrorMessage(errorCandidate)) {
+        runResult.payloads = [
+          {
+            text: NODE_UNAVAILABLE_USER_MESSAGE,
+            isError: true,
+          },
+        ];
+      } else if (
         errorCandidate &&
         (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
       ) {
