@@ -127,9 +127,13 @@ export async function executeRestore(
       continue;
     }
 
+    const snapshotPath =
+      asset.conflict && opts.force
+        ? buildPreRestoreSnapshotPath(asset.restorePath, nowMs)
+        : undefined;
+
     // If conflict exists and force is set, rename the existing path as a safety backup
-    if (asset.conflict && opts.force) {
-      const snapshotPath = buildPreRestoreSnapshotPath(asset.restorePath, nowMs);
+    if (snapshotPath) {
       await fs.rename(asset.restorePath, snapshotPath);
     }
 
@@ -160,10 +164,12 @@ export async function executeRestore(
       // Ensure restore target parent directory exists
       await fs.mkdir(path.dirname(asset.restorePath), { recursive: true });
 
-      // Check if staging dir has content
+      // Warn if archive contained no entries for this asset
       const stagingEntries = await fs.readdir(stagingDir);
       if (stagingEntries.length === 0) {
-        continue;
+        throw new Error(
+          `No archive entries found for asset ${asset.kind} at ${asset.archivePath}. The archive may be corrupted or the manifest may not match the archive contents.`,
+        );
       }
 
       // Ensure restore target directory exists
@@ -177,6 +183,15 @@ export async function executeRestore(
       });
 
       restoredCount++;
+    } catch (err) {
+      // Roll back the rename if we moved the original aside
+      if (snapshotPath) {
+        await fs.rename(snapshotPath, asset.restorePath).catch(() => undefined);
+      }
+      throw new Error(
+        `Failed to restore ${asset.displayPath}.${snapshotPath ? ` Original data preserved at: ${snapshotPath}` : ""}\n${String(err)}`,
+        { cause: err },
+      );
     } finally {
       await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
     }
