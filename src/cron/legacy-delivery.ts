@@ -1,107 +1,71 @@
+import { parseLegacyDeliveryHintsInput } from "./delivery-field-schemas.js";
+
 export function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
-  if (typeof payload.deliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.channel === "string" && payload.channel.trim()) {
-    return true;
-  }
-  if (typeof payload.provider === "string" && payload.provider.trim()) {
-    return true;
-  }
-  if (typeof payload.to === "string" && payload.to.trim()) {
-    return true;
-  }
-  if (typeof payload.threadId === "string" && payload.threadId.trim()) {
-    return true;
-  }
-  if (typeof payload.threadId === "number" && Number.isFinite(payload.threadId)) {
-    return true;
-  }
-  return false;
+  const hints = parseLegacyDeliveryHintsInput(payload);
+  return (
+    hints.deliver !== undefined ||
+    hints.bestEffortDeliver !== undefined ||
+    hints.channel !== undefined ||
+    hints.provider !== undefined ||
+    hints.to !== undefined ||
+    hints.threadId !== undefined
+  );
 }
 
 export function buildDeliveryFromLegacyPayload(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  const deliver = payload.deliver;
-  const mode = deliver === false ? "none" : "announce";
-  const channelRaw =
-    typeof payload.channel === "string" && payload.channel.trim()
-      ? payload.channel.trim().toLowerCase()
-      : typeof payload.provider === "string"
-        ? payload.provider.trim().toLowerCase()
-        : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const threadIdRaw =
-    typeof payload.threadId === "string"
-      ? payload.threadId.trim()
-      : typeof payload.threadId === "number" && Number.isFinite(payload.threadId)
-        ? String(payload.threadId)
-        : "";
+  const hints = parseLegacyDeliveryHintsInput(payload);
+  const mode = hints.deliver === false ? "none" : "announce";
   const next: Record<string, unknown> = { mode };
-  if (channelRaw) {
-    next.channel = channelRaw;
+  if (hints.channel ?? hints.provider) {
+    next.channel = hints.channel ?? hints.provider;
   }
-  if (toRaw) {
-    next.to = toRaw;
+  if (hints.to) {
+    next.to = hints.to;
   }
-  if (threadIdRaw) {
-    next.threadId = threadIdRaw;
+  if (hints.threadId) {
+    next.threadId = hints.threadId;
   }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
+  if (hints.bestEffortDeliver !== undefined) {
+    next.bestEffort = hints.bestEffortDeliver;
   }
   return next;
 }
 
 export function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
-  const deliver = payload.deliver;
-  const channelRaw =
-    typeof payload.channel === "string" && payload.channel.trim()
-      ? payload.channel.trim().toLowerCase()
-      : typeof payload.provider === "string" && payload.provider.trim()
-        ? payload.provider.trim().toLowerCase()
-        : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const threadIdRaw =
-    typeof payload.threadId === "string"
-      ? payload.threadId.trim()
-      : typeof payload.threadId === "number" && Number.isFinite(payload.threadId)
-        ? String(payload.threadId)
-        : "";
+  const hints = parseLegacyDeliveryHintsInput(payload);
   const next: Record<string, unknown> = {};
   let hasPatch = false;
 
-  if (deliver === false) {
+  if (hints.deliver === false) {
     next.mode = "none";
     hasPatch = true;
   } else if (
-    deliver === true ||
-    channelRaw ||
-    toRaw ||
-    threadIdRaw ||
-    typeof payload.bestEffortDeliver === "boolean"
+    hints.deliver === true ||
+    hints.channel ||
+    hints.provider ||
+    hints.to ||
+    hints.threadId ||
+    hints.bestEffortDeliver !== undefined
   ) {
     next.mode = "announce";
     hasPatch = true;
   }
-  if (channelRaw) {
-    next.channel = channelRaw;
+  if (hints.channel ?? hints.provider) {
+    next.channel = hints.channel ?? hints.provider;
     hasPatch = true;
   }
-  if (toRaw) {
-    next.to = toRaw;
+  if (hints.to) {
+    next.to = hints.to;
     hasPatch = true;
   }
-  if (threadIdRaw) {
-    next.threadId = threadIdRaw;
+  if (hints.threadId) {
+    next.threadId = hints.threadId;
     hasPatch = true;
   }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
+  if (hints.bestEffortDeliver !== undefined) {
+    next.bestEffort = hints.bestEffortDeliver;
     hasPatch = true;
   }
 
