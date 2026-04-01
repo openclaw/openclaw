@@ -8,7 +8,7 @@ import {
   MODELSTUDIO_GLOBAL_BASE_URL,
   MODELSTUDIO_STANDARD_CN_BASE_URL,
   MODELSTUDIO_STANDARD_GLOBAL_BASE_URL,
-} from "./model-definitions.js";
+} from "./models.js";
 import { buildModelStudioProvider } from "./provider-catalog.js";
 
 export {

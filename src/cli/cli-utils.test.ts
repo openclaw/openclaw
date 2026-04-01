@@ -1,12 +1,11 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { registerDnsCli } from "./dns-cli.js";
 import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
 import { shouldSkipRespawnForArgv } from "./respawn-policy.js";
 import { waitForever } from "./wait.js";
-
-const { registerDnsCli } = await import("./dns-cli.js");
 
 describe("waitForever", () => {
   it("creates an unref'ed interval and returns a pending promise", () => {
@@ -19,14 +18,11 @@ describe("waitForever", () => {
 });
 
 describe("shouldSkipRespawnForArgv", () => {
-  it("skips respawn for help/version calls", () => {
-    const cases = [
-      ["node", "openclaw", "--help"],
-      ["node", "openclaw", "-V"],
-    ] as const;
-    for (const argv of cases) {
-      expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
-    }
+  it.each([
+    { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "-V"] },
+  ] as const)("skips respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
 
   it("keeps respawn path for normal commands", () => {
@@ -66,46 +62,37 @@ describe("dns cli", () => {
 });
 
 describe("parseByteSize", () => {
-  it("parses byte-size units and shorthand values", () => {
-    const cases = [
-      ["parses 10kb", "10kb", 10 * 1024],
-      ["parses 1mb", "1mb", 1024 * 1024],
-      ["parses 2gb", "2gb", 2 * 1024 * 1024 * 1024],
-      ["parses shorthand 5k", "5k", 5 * 1024],
-      ["parses shorthand 1m", "1m", 1024 * 1024],
-    ] as const;
-    for (const [name, input, expected] of cases) {
-      expect(parseByteSize(input), name).toBe(expected);
-    }
+  it.each([
+    ["parses 10kb", "10kb", 10 * 1024],
+    ["parses 1mb", "1mb", 1024 * 1024],
+    ["parses 2gb", "2gb", 2 * 1024 * 1024 * 1024],
+    ["parses shorthand 5k", "5k", 5 * 1024],
+    ["parses shorthand 1m", "1m", 1024 * 1024],
+  ] as const)("%s", (_name, input, expected) => {
+    expect(parseByteSize(input)).toBe(expected);
   });
 
   it("uses default unit when omitted", () => {
     expect(parseByteSize("123")).toBe(123);
   });
 
-  it("rejects invalid values", () => {
-    const cases = ["", "nope", "-5kb"] as const;
-    for (const input of cases) {
-      expect(() => parseByteSize(input), input || "<empty>").toThrow();
-    }
+  it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
+    expect(() => parseByteSize(input)).toThrow();
   });
 });
 
 describe("parseDurationMs", () => {
-  it("parses duration strings", () => {
-    const cases = [
-      ["parses bare ms", "10000", 10_000],
-      ["parses seconds suffix", "10s", 10_000],
-      ["parses minutes suffix", "1m", 60_000],
-      ["parses hours suffix", "2h", 7_200_000],
-      ["parses days suffix", "2d", 172_800_000],
-      ["supports decimals", "0.5s", 500],
-      ["parses composite hours+minutes", "1h30m", 5_400_000],
-      ["parses composite with milliseconds", "2m500ms", 120_500],
-    ] as const;
-    for (const [name, input, expected] of cases) {
-      expect(parseDurationMs(input), name).toBe(expected);
-    }
+  it.each([
+    ["parses bare ms", "10000", 10_000],
+    ["parses seconds suffix", "10s", 10_000],
+    ["parses minutes suffix", "1m", 60_000],
+    ["parses hours suffix", "2h", 7_200_000],
+    ["parses days suffix", "2d", 172_800_000],
+    ["supports decimals", "0.5s", 500],
+    ["parses composite hours+minutes", "1h30m", 5_400_000],
+    ["parses composite with milliseconds", "2m500ms", 120_500],
+  ] as const)("%s", (_name, input, expected) => {
+    expect(parseDurationMs(input)).toBe(expected);
   });
 
   it("rejects invalid composite strings", () => {

@@ -9,6 +9,15 @@ import {
   collectTelegramEmptyAllowlistExtraWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "../providers/telegram.js";
+import {
+  collectBundledPluginLoadPathWarnings,
+  scanBundledPluginLoadPathMigrations,
+} from "./bundled-plugin-load-paths.js";
+import {
+  collectConfiguredChannelPluginBlockerWarnings,
+  isWarningBlockedByChannelPlugin,
+  scanConfiguredChannelPluginBlockers,
+} from "./channel-plugin-blockers.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 import {
   collectExecSafeBinCoverageWarnings,
@@ -35,6 +44,13 @@ export function collectDoctorPreviewWarnings(params: {
   doctorFixCommand: string;
 }): string[] {
   const warnings: string[] = [];
+
+  const channelPluginBlockerHits = scanConfiguredChannelPluginBlockers(params.cfg, process.env);
+  if (channelPluginBlockerHits.length > 0) {
+    warnings.push(
+      collectConfiguredChannelPluginBlockerWarnings(channelPluginBlockerHits).join("\n"),
+    );
+  }
 
   const telegramHits = scanTelegramAllowFromUsernameEntries(params.cfg);
   if (telegramHits.length > 0) {
@@ -77,10 +93,20 @@ export function collectDoctorPreviewWarnings(params: {
     );
   }
 
+  const bundledPluginLoadPathHits = scanBundledPluginLoadPathMigrations(params.cfg, process.env);
+  if (bundledPluginLoadPathHits.length > 0) {
+    warnings.push(
+      collectBundledPluginLoadPathWarnings({
+        hits: bundledPluginLoadPathHits,
+        doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
+  }
+
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(params.cfg, {
     doctorFixCommand: params.doctorFixCommand,
     extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
-  });
+  }).filter((warning) => !isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits));
   if (emptyAllowlistWarnings.length > 0) {
     warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
   }

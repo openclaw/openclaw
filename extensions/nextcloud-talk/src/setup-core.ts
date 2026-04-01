@@ -2,20 +2,18 @@ import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
-  applyAccountNameToChannelSection,
-  patchScopedAccountConfig,
-} from "openclaw/plugin-sdk/setup";
-import {
+  createSetupInputPresenceValidator,
   mergeAllowFromEntries,
   createTopLevelChannelDmPolicy,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
   setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { applyAccountNameToChannelSection, patchScopedAccountConfig } from "../runtime-api.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -181,19 +179,20 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ accountId, input }) => {
-    const setupInput = input as NextcloudSetupInput;
-    if (setupInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.";
-    }
-    if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
-      return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
-    }
-    if (!setupInput.baseUrl) {
-      return "Nextcloud Talk requires --base-url.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    defaultAccountOnlyEnvError:
+      "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.",
+    validate: ({ accountId, input }) => {
+      const setupInput = input as NextcloudSetupInput;
+      if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
+        return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
+      }
+      if (!setupInput.baseUrl) {
+        return "Nextcloud Talk requires --base-url.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const setupInput = input as NextcloudSetupInput;
     const namedConfig = applyAccountNameToChannelSection({

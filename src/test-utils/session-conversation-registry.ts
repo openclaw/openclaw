@@ -1,0 +1,138 @@
+import { loadBundledPluginPublicSurfaceSync } from "./bundled-plugin-public-surface.js";
+import { createTestRegistry } from "./channel-plugins.js";
+
+type SessionConversationSurface = {
+  resolveSessionConversation?: (params: { kind: "group" | "channel"; rawId: string }) => {
+    id: string;
+    threadId?: string | null;
+    baseConversationId?: string | null;
+    parentConversationCandidates?: string[];
+  } | null;
+};
+
+function loadSessionConversationSurface(pluginId: string) {
+  return loadBundledPluginPublicSurfaceSync<SessionConversationSurface>({
+    pluginId,
+    artifactBasename: "session-key-api.js",
+  }).resolveSessionConversation;
+}
+
+const resolveTelegramSessionConversation = loadSessionConversationSurface("telegram");
+const resolveFeishuSessionConversation = loadSessionConversationSurface("feishu");
+
+export function createSessionConversationTestRegistry() {
+  return createTestRegistry([
+    {
+      pluginId: "discord",
+      source: "test",
+      plugin: {
+        id: "discord",
+        meta: {
+          id: "discord",
+          label: "Discord",
+          selectionLabel: "Discord",
+          docsPath: "/channels/discord",
+          blurb: "Discord test stub.",
+        },
+        capabilities: { chatTypes: ["direct", "channel", "thread"] },
+        messaging: {
+          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+      },
+    },
+    {
+      pluginId: "slack",
+      source: "test",
+      plugin: {
+        id: "slack",
+        meta: {
+          id: "slack",
+          label: "Slack",
+          selectionLabel: "Slack",
+          docsPath: "/channels/slack",
+          blurb: "Slack test stub.",
+        },
+        capabilities: { chatTypes: ["direct", "channel", "thread"] },
+        messaging: {
+          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+      },
+    },
+    {
+      pluginId: "matrix",
+      source: "test",
+      plugin: {
+        id: "matrix",
+        meta: {
+          id: "matrix",
+          label: "Matrix",
+          selectionLabel: "Matrix",
+          docsPath: "/channels/matrix",
+          blurb: "Matrix test stub.",
+        },
+        capabilities: { chatTypes: ["direct", "channel", "thread"] },
+        messaging: {
+          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+      },
+    },
+    {
+      pluginId: "telegram",
+      source: "test",
+      plugin: {
+        id: "telegram",
+        meta: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "Telegram test stub.",
+        },
+        capabilities: { chatTypes: ["direct", "group", "thread"] },
+        messaging: {
+          normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
+          resolveSessionConversation: resolveTelegramSessionConversation,
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+      },
+    },
+    {
+      pluginId: "feishu",
+      source: "test",
+      plugin: {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu test stub.",
+        },
+        capabilities: { chatTypes: ["direct", "group", "thread"] },
+        messaging: {
+          normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
+          resolveSessionConversation: resolveFeishuSessionConversation,
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+      },
+    },
+  ]);
+}

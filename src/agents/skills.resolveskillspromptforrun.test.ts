@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveSkillsPromptForRun } from "./skills.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import type { SkillEntry } from "./skills/types.js";
 
 describe("resolveSkillsPromptForRun", () => {
@@ -12,14 +13,13 @@ describe("resolveSkillsPromptForRun", () => {
   });
   it("builds prompt from entries when snapshot is missing", () => {
     const entry: SkillEntry = {
-      skill: {
+      skill: createFixtureSkill({
         name: "demo-skill",
         description: "Demo",
         filePath: "/app/skills/demo-skill/SKILL.md",
         baseDir: "/app/skills/demo-skill",
         source: "openclaw-bundled",
-        disableModelInvocation: false,
-      },
+      }),
       frontmatter: {},
     };
     const prompt = resolveSkillsPromptForRun({
@@ -30,3 +30,13 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
 });
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return createCanonicalFixtureSkill(params);
+}

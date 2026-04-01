@@ -2,6 +2,8 @@
 
 Describe the problem and fix in 2–5 bullets:
 
+If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
+
 - Problem:
 - Why it matters:
 - What changed:
@@ -62,6 +64,18 @@ For bug fixes or regressions, name the smallest reliable test coverage that shou
 
 List user-visible changes (including defaults/config).  
 If none, write `None`.
+
+## Diagram (if applicable)
+
+For UI changes or non-trivial logic flows, include a small ASCII diagram reviewers can scan quickly. Otherwise write `N/A`.
+
+```text
+Before:
+[user action] -> [old state]
+
+After:
+[user action] -> [new state] -> [result]
+```
 
 ## Security Impact (required)
 
@@ -126,12 +140,6 @@ If a bot review conversation is addressed by this PR, resolve that conversation 
 - Config/env changes? (`Yes/No`)
 - Migration needed? (`Yes/No`)
 - If yes, exact upgrade steps:
-
-## Failure Recovery (if this breaks)
-
-- How to disable/revert this change quickly:
-- Files/config to restore:
-- Known bad symptoms reviewers should watch for:
 
 ## Risks and Mitigations
 

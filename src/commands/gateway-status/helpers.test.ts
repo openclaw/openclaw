@@ -5,8 +5,8 @@ import {
   isProbeReachable,
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
-  resolveAuthForTarget,
   resolveProbeBudgetMs,
+  resolveAuthForTarget,
 } from "./helpers.js";
 
 describe("extractConfigSummary", () => {
@@ -274,21 +274,79 @@ describe("probe reachability classification", () => {
     expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
   });
 });
-
 describe("resolveProbeBudgetMs", () => {
   it("lets active local loopback probes use the full caller budget", () => {
-    expect(resolveProbeBudgetMs(15_000, { kind: "localLoopback", active: true })).toBe(15_000);
-    expect(resolveProbeBudgetMs(3_000, { kind: "localLoopback", active: true })).toBe(3_000);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "localLoopback",
+        active: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveProbeBudgetMs(3_000, {
+        kind: "localLoopback",
+        active: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(3_000);
   });
 
   it("keeps inactive local loopback probes on the short cap", () => {
-    expect(resolveProbeBudgetMs(15_000, { kind: "localLoopback", active: false })).toBe(800);
-    expect(resolveProbeBudgetMs(500, { kind: "localLoopback", active: false })).toBe(500);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "localLoopback",
+        active: false,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(800);
+    expect(
+      resolveProbeBudgetMs(500, {
+        kind: "localLoopback",
+        active: false,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(500);
+  });
+
+  it("lets explicit loopback URLs use the full caller budget", () => {
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "explicit",
+        active: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveProbeBudgetMs(2_500, {
+        kind: "explicit",
+        active: true,
+        url: "wss://localhost:18789/ws",
+      }),
+    ).toBe(2_500);
   });
 
   it("keeps non-local probe caps unchanged", () => {
-    expect(resolveProbeBudgetMs(15_000, { kind: "configRemote", active: true })).toBe(1_500);
-    expect(resolveProbeBudgetMs(15_000, { kind: "explicit", active: true })).toBe(1_500);
-    expect(resolveProbeBudgetMs(15_000, { kind: "sshTunnel", active: true })).toBe(2_000);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "configRemote",
+        active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(1500);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "explicit",
+        active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(1500);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "sshTunnel",
+        active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(2000);
   });
 });

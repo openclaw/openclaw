@@ -1,12 +1,10 @@
 import {
   readCodexCliCredentialsCached,
-  readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
   EXTERNAL_CLI_SYNC_TTL_MS,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
-  QWEN_CLI_PROFILE_ID,
   MINIMAX_CLI_PROFILE_ID,
   log,
 } from "./constants.js";
@@ -71,11 +69,6 @@ export function shouldReplaceStoredOAuthCredential(
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
-    profileId: QWEN_CLI_PROFILE_ID,
-    provider: "qwen-portal",
-    readCredentials: () => readQwenCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
-  },
-  {
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
     readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
@@ -127,7 +120,7 @@ function syncExternalCliCredentialsForProvider(
 }
 
 /**
- * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI, Codex CLI)
+ * Sync OAuth credentials from external CLI tools (MiniMax CLI, Codex CLI)
  * into the store.
  *
  * Returns true if any credentials were updated.

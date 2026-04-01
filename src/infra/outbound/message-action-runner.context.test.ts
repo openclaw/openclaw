@@ -32,7 +32,7 @@ const whatsappConfig = {
 
 const runDryAction = (params: {
   cfg: OpenClawConfig;
-  action: "send" | "thread-reply" | "broadcast";
+  action: "send" | "thread-reply" | "broadcast" | "upload-file";
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
@@ -534,6 +534,7 @@ describe("runMessageAction context isolation", () => {
   it.each([
     {
       name: "blocks cross-provider sends by default",
+      action: "send" as const,
       cfg: slackConfig,
       actionParams: {
         channel: "telegram",
@@ -545,6 +546,7 @@ describe("runMessageAction context isolation", () => {
     },
     {
       name: "blocks same-provider cross-context when disabled",
+      action: "send" as const,
       cfg: {
         ...slackConfig,
         tools: {
@@ -563,10 +565,32 @@ describe("runMessageAction context isolation", () => {
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       message: /Cross-context messaging denied/,
     },
-  ])("$name", async ({ cfg, actionParams, toolContext, message }) => {
+    {
+      name: "blocks same-provider cross-context uploads when disabled",
+      action: "upload-file" as const,
+      cfg: {
+        ...slackConfig,
+        tools: {
+          message: {
+            crossContext: {
+              allowWithinProvider: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "slack",
+        target: "channel:C99999999",
+        filePath: "/tmp/report.png",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      message: /Cross-context messaging denied/,
+    },
+  ])("$name", async ({ action, cfg, actionParams, toolContext, message }) => {
     await expect(
-      runDrySend({
+      runDryAction({
         cfg,
+        action,
         actionParams,
         toolContext,
       }),

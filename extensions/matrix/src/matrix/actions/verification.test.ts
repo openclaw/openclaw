@@ -19,10 +19,12 @@ vi.mock("./client.js", () => ({
   withStartedActionClient: (...args: unknown[]) => withStartedActionClientMock(...args),
 }));
 
-const { listMatrixVerifications } = await import("./verification.js");
+let listMatrixVerifications: typeof import("./verification.js").listMatrixVerifications;
 
 describe("matrix verification actions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ listMatrixVerifications } = await import("./verification.js"));
     vi.clearAllMocks();
     loadConfigMock.mockReturnValue({
       channels: {

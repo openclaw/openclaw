@@ -8,13 +8,15 @@ import {
   createClient as createMatrixJsClient,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
-} from "matrix-js-sdk";
+} from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
+import { isMatrixNotFoundError } from "./errors.js";
 import { MatrixCryptoBootstrapper } from "./sdk/crypto-bootstrap.js";
 import type { MatrixCryptoBootstrapResult } from "./sdk/crypto-bootstrap.js";
 import { createMatrixCryptoFacade, type MatrixCryptoFacade } from "./sdk/crypto-facade.js";
@@ -144,17 +146,6 @@ function normalizeOptionalString(value: string | null | undefined): string | nul
   return normalized ? normalized : null;
 }
 
-function isMatrixNotFoundError(err: unknown): boolean {
-  const errObj = err as { statusCode?: number; body?: { errcode?: string } };
-  if (errObj?.statusCode === 404 || errObj?.body?.errcode === "M_NOT_FOUND") {
-    return true;
-  }
-  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  return (
-    message.includes("m_not_found") || message.includes("[404]") || message.includes("not found")
-  );
-}
-
 function isUnsupportedAuthenticatedMediaEndpointError(err: unknown): boolean {
   const statusCode = (err as { statusCode?: number })?.statusCode;
   if (statusCode === 404 || statusCode === 405 || statusCode === 501) {
@@ -195,8 +186,8 @@ export class MatrixClient {
   private stopPersistPromise: Promise<void> | null = null;
 
   readonly dms = {
-    update: async (): Promise<void> => {
-      await this.refreshDmCache();
+    update: async (): Promise<boolean> => {
+      return await this.refreshDmCache();
     },
     isDm: (roomId: string): boolean => this.dmRoomIds.has(roomId),
   };
@@ -206,8 +197,6 @@ export class MatrixClient {
   constructor(
     homeserver: string,
     accessToken: string,
-    _storage?: unknown,
-    _cryptoStorage?: unknown,
     opts: {
       userId?: string;
       password?: string;
@@ -221,9 +210,15 @@ export class MatrixClient {
       cryptoDatabasePrefix?: string;
       autoBootstrapCrypto?: boolean;
       ssrfPolicy?: SsrFPolicy;
+      dispatcherPolicy?: PinnedDispatcherPolicy;
     } = {},
   ) {
-    this.httpClient = new MatrixAuthedHttpClient(homeserver, accessToken, opts.ssrfPolicy);
+    this.httpClient = new MatrixAuthedHttpClient({
+      homeserver,
+      accessToken,
+      ssrfPolicy: opts.ssrfPolicy,
+      dispatcherPolicy: opts.dispatcherPolicy,
+    });
     this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
     this.initialSyncLimit = opts.initialSyncLimit;
     this.encryptionEnabled = opts.encryption === true;
@@ -244,7 +239,10 @@ export class MatrixClient {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: createMatrixGuardedFetch({ ssrfPolicy: opts.ssrfPolicy }),
+      fetchFn: createMatrixGuardedFetch({
+        ssrfPolicy: opts.ssrfPolicy,
+        dispatcherPolicy: opts.dispatcherPolicy,
+      }),
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
@@ -1510,11 +1508,11 @@ export class MatrixClient {
     }
   }
 
-  private async refreshDmCache(): Promise<void> {
+  private async refreshDmCache(): Promise<boolean> {
     const direct = await this.getAccountData("m.direct");
     this.dmRoomIds.clear();
     if (!direct || typeof direct !== "object") {
-      return;
+      return false;
     }
     for (const value of Object.values(direct)) {
       if (!Array.isArray(value)) {
@@ -1526,5 +1524,6 @@ export class MatrixClient {
         }
       }
     }
+    return true;
   }
 }

@@ -14,6 +14,12 @@ import {
   type MattermostClient,
 } from "./client.js";
 import {
+  listSkillCommandsForAgents,
+  parseStrictPositiveInteger,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
+import {
   DEFAULT_COMMAND_SPECS,
   isSlashCommandsEnabled,
   registerSlashCommands,

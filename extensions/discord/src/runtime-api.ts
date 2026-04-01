@@ -40,6 +40,7 @@ export {
   createAccountListHelpers,
 } from "openclaw/plugin-sdk/account-helpers";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/discord";
 export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 export type {
   ChannelMessageActionAdapter,
@@ -50,3 +51,4 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+export { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
