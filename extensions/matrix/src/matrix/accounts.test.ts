@@ -685,4 +685,50 @@ describe("resolveMatrixAccount", () => {
       },
     });
   });
+
+  it("lets an account clear inherited groups with an explicit empty map", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+              groups: {},
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toBeUndefined();
+  });
+
+  it("lets an account clear inherited legacy rooms with an explicit empty map", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          rooms: {
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+              rooms: {},
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toBeUndefined();
+  });
 });

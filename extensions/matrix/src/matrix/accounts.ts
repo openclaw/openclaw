@@ -37,8 +37,12 @@ function selectInheritedMatrixRoomEntries(params: {
 function mergeMatrixRoomEntries(
   inherited: MatrixRoomEntries | undefined,
   accountEntries: MatrixRoomEntries | undefined,
+  hasAccountOverride: boolean,
 ): MatrixRoomEntries | undefined {
   if (!inherited && !accountEntries) {
+    return undefined;
+  }
+  if (hasAccountOverride && Object.keys(accountEntries ?? {}).length === 0) {
     return undefined;
   }
   const merged: MatrixRoomEntries = {
@@ -203,6 +207,7 @@ export function resolveMatrixAccountConfig(params: {
       isMultiAccount,
     }),
     accountConfig?.groups,
+    Boolean(accountConfig && Object.hasOwn(accountConfig, "groups")),
   );
   const rooms = mergeMatrixRoomEntries(
     selectInheritedMatrixRoomEntries({
@@ -211,6 +216,7 @@ export function resolveMatrixAccountConfig(params: {
       isMultiAccount,
     }),
     accountConfig?.rooms,
+    Boolean(accountConfig && Object.hasOwn(accountConfig, "rooms")),
   );
   // Room maps need custom scoping, so keep the generic merge for all other fields.
   const { groups: _ignoredGroups, rooms: _ignoredRooms, ...rest } = merged;
