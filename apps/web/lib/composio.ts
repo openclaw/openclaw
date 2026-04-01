@@ -446,3 +446,122 @@ export async function disconnectComposioApp(
   }
   return res.json() as Promise<{ deleted: boolean }>;
 }
+
+// ---------------------------------------------------------------------------
+// Composio MCP (Streamable HTTP) — tools/list for tool index builder
+// ---------------------------------------------------------------------------
+
+export type ComposioMcpTool = {
+  name: string;
+  description?: string;
+  title?: string;
+  inputSchema?: {
+    type?: string;
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
+};
+
+function extractToolsFromJsonRpcMessage(payload: unknown): ComposioMcpTool[] {
+  const rec = asRecord(payload);
+  const result = asRecord(rec?.result);
+  const tools = result?.tools;
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+
+  const out: ComposioMcpTool[] = [];
+  for (const item of tools) {
+    const t = asRecord(item);
+    const name = readString(t?.name);
+    if (!name) {
+      continue;
+    }
+    out.push({
+      name,
+      description: readString(t?.description),
+      title: readString(t?.title ?? asRecord(t?.annotations)?.title),
+      inputSchema: t?.inputSchema as ComposioMcpTool["inputSchema"],
+      annotations: t?.annotations as ComposioMcpTool["annotations"],
+    });
+  }
+  return out;
+}
+
+function parseSseJsonRpcTools(body: string): ComposioMcpTool[] {
+  const lines = body.split(/\r?\n/);
+  let lastPayload: unknown = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) {
+      continue;
+    }
+    const raw = trimmed.slice(5).trim();
+    if (raw === "[DONE]" || raw === "") {
+      continue;
+    }
+    try {
+      lastPayload = JSON.parse(raw);
+    } catch {
+      // ignore non-JSON SSE frames
+    }
+  }
+  if (lastPayload === null) {
+    return [];
+  }
+  return extractToolsFromJsonRpcMessage(lastPayload);
+}
+
+async function parseMcpToolsListResponse(res: Response): Promise<ComposioMcpTool[]> {
+  const contentType = res.headers.get("content-type") ?? "";
+  const text = await res.text();
+  if (contentType.includes("text/event-stream")) {
+    const fromSse = parseSseJsonRpcTools(text);
+    if (fromSse.length > 0) {
+      return fromSse;
+    }
+  }
+  try {
+    return extractToolsFromJsonRpcMessage(JSON.parse(text) as unknown);
+  } catch {
+    return parseSseJsonRpcTools(text);
+  }
+}
+
+/**
+ * Lists all tools exposed by the Composio MCP bridge on the gateway (JSON-RPC `tools/list`).
+ */
+export async function fetchComposioMcpToolsList(
+  gatewayUrl: string,
+  apiKey: string,
+): Promise<ComposioMcpTool[]> {
+  const url = `${gatewayUrl.replace(/\/$/, "")}/v1/composio/mcp`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `MCP tools/list failed (HTTP ${res.status})${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+    );
+  }
+  return parseMcpToolsListResponse(res);
+}
