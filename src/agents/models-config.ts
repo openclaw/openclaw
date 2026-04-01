@@ -59,17 +59,37 @@ async function buildModelsJsonFingerprint(params: {
 async function readExistingModelsFile(pathname: string): Promise<{
   raw: string;
   parsed: unknown;
+  readError: unknown;
 }> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(pathname, "utf8");
-    return {
-      raw,
-      parsed: JSON.parse(raw) as unknown,
-    };
-  } catch {
+    raw = await fs.readFile(pathname, "utf8");
+  } catch (error) {
+    if (!isMissingBootstrapSourceError(error)) {
+      return {
+        raw: "",
+        parsed: null,
+        readError: error,
+      };
+    }
     return {
       raw: "",
       parsed: null,
+      readError: null,
+    };
+  }
+
+  try {
+    return {
+      raw,
+      parsed: JSON.parse(raw) as unknown,
+      readError: null,
+    };
+  } catch {
+    return {
+      raw,
+      parsed: null,
+      readError: null,
     };
   }
 }
@@ -87,6 +107,15 @@ export async function writeModelsFileAtomicForModelsJson(
   const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tempPath, contents, { mode: 0o600 });
   await fs.rename(tempPath, targetPath);
+}
+
+function isMissingBootstrapSourceError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 function resolveModelsConfigInput(config?: OpenClawConfig): {
@@ -162,6 +191,9 @@ export async function ensureOpenClawModelsJson(
     // are available to provider discovery without mutating process.env.
     const env = createConfigRuntimeEnv(cfg);
     const existingModelsFile = await readExistingModelsFile(targetPath);
+    if (existingModelsFile.readError) {
+      throw existingModelsFile.readError;
+    }
     const plan = await planOpenClawModelsJson({
       cfg,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
@@ -172,22 +204,59 @@ export async function ensureOpenClawModelsJson(
     });
 
     if (plan.action === "skip") {
-      return { fingerprint, result: { agentDir, wrote: false } };
+      // When provider resolution is empty for a non-main agent, bootstrap
+      // from the main agent's models.json so the model registry is not empty.
+      const mainAgentDir = resolveOpenClawAgentDir();
+      if (agentDir !== mainAgentDir) {
+        if (existingModelsFile.raw.trim()) {
+          await ensureModelsFileModeForModelsJson(targetPath);
+          return { cacheable: true, fingerprint, result: { agentDir, wrote: false } };
+        }
+
+        const mainModelsPath = path.join(mainAgentDir, "models.json");
+        let mainContents: string;
+        try {
+          mainContents = await fs.readFile(mainModelsPath, "utf-8");
+        } catch (error) {
+          if (isMissingBootstrapSourceError(error)) {
+            // Retry after the main agent writes its bootstrap source file.
+            return { cacheable: false, fingerprint, result: { agentDir, wrote: false } };
+          }
+          throw error;
+        }
+
+        if (mainContents.trim()) {
+          if (existingModelsFile.raw === mainContents) {
+            await ensureModelsFileModeForModelsJson(targetPath);
+            return { cacheable: true, fingerprint, result: { agentDir, wrote: false } };
+          }
+          await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+          await writeModelsFileAtomicForModelsJson(targetPath, mainContents);
+          await ensureModelsFileModeForModelsJson(targetPath);
+          return { cacheable: true, fingerprint, result: { agentDir, wrote: true } };
+        }
+        // Main exists but is empty — retry after it gets populated.
+        return { cacheable: false, fingerprint, result: { agentDir, wrote: false } };
+      }
+      return { cacheable: true, fingerprint, result: { agentDir, wrote: false } };
     }
 
     if (plan.action === "noop") {
       await ensureModelsFileModeForModelsJson(targetPath);
-      return { fingerprint, result: { agentDir, wrote: false } };
+      return { cacheable: true, fingerprint, result: { agentDir, wrote: false } };
     }
 
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
     await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
     await ensureModelsFileModeForModelsJson(targetPath);
-    return { fingerprint, result: { agentDir, wrote: true } };
+    return { cacheable: true, fingerprint, result: { agentDir, wrote: true } };
   });
   MODELS_JSON_STATE.readyCache.set(targetPath, pending);
   try {
     const settled = await pending;
+    if (!settled.cacheable && MODELS_JSON_STATE.readyCache.get(targetPath) === pending) {
+      MODELS_JSON_STATE.readyCache.delete(targetPath);
+    }
     return settled.result;
   } catch (error) {
     if (MODELS_JSON_STATE.readyCache.get(targetPath) === pending) {
