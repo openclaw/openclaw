@@ -231,6 +231,16 @@ export type DiscordComponentBuildResult = {
   entries: DiscordComponentEntry[];
   modals: DiscordModalEntry[];
 };
+export {
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
+  buildDiscordComponentCustomId,
+  buildDiscordModalCustomId,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForCarbon,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForCarbon,
+} from "./component-custom-id.js";
 export { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
