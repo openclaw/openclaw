@@ -5,7 +5,7 @@ export function createContractsVitestConfig(env?: Record<string, string | undefi
     [
       "src/channels/plugins/contracts/**/*.test.ts",
       "src/plugins/contracts/**/*.test.ts",
-      "test/scripts/**/*.test.ts",
+      "test/**/*.test.ts",
     ],
     {
       env,
