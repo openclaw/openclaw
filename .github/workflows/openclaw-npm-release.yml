@@ -86,6 +86,7 @@ jobs:
         run: pnpm ui:build
 
       - name: Validate release tag and package metadata
+        if: ${{ inputs.preflight_run_id == '' }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_MAIN_REF: origin/main
