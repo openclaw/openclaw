@@ -109,6 +109,7 @@ function isPathScopedExecutableToken(token: string): boolean {
 export type ExecAllowlistEvaluation = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
@@ -368,11 +369,13 @@ function evaluateSegments(
 ): {
   satisfied: boolean;
   matches: ExecAllowlistEntry[];
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 } {
   const matches: ExecAllowlistEntry[] = [];
   const skillBinTrust = buildSkillBinTrustIndex(params.skillBins);
   const allowSkills = params.autoAllowSkills === true && skillBinTrust.size > 0;
+  const segmentAllowlistEntries: Array<ExecAllowlistEntry | null> = [];
   const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   const satisfied = segments.every((segment) => {
@@ -412,6 +415,7 @@ function evaluateSegments(
     if (match) {
       matches.push(match);
     }
+    segmentAllowlistEntries.push(match ?? null);
     const safe = isSafeBinUsage({
       argv: effectiveArgv,
       resolution: resolveExecutionTargetResolution(segment.resolution),
@@ -436,7 +440,7 @@ function evaluateSegments(
     return Boolean(by);
   });
 
-  return { satisfied, matches, segmentSatisfiedBy };
+  return { satisfied, matches, segmentAllowlistEntries, segmentSatisfiedBy };
 }
 
 function resolveAnalysisSegmentGroups(analysis: ExecCommandAnalysis): ExecCommandSegment[][] {
@@ -452,9 +456,15 @@ export function evaluateExecAllowlist(
   } & ExecAllowlistContext,
 ): ExecAllowlistEvaluation {
   const allowlistMatches: ExecAllowlistEntry[] = [];
+  const segmentAllowlistEntries: Array<ExecAllowlistEntry | null> = [];
   const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
   if (!params.analysis.ok || params.analysis.segments.length === 0) {
-    return { allowlistSatisfied: false, allowlistMatches, segmentSatisfiedBy };
+    return {
+      allowlistSatisfied: false,
+      allowlistMatches,
+      segmentAllowlistEntries,
+      segmentSatisfiedBy,
+    };
   }
 
   const allowlistContext = pickExecAllowlistContext(params);
@@ -466,15 +476,27 @@ export function evaluateExecAllowlist(
         return {
           allowlistSatisfied: false,
           allowlistMatches: result.matches,
+          segmentAllowlistEntries: result.segmentAllowlistEntries,
           segmentSatisfiedBy: result.segmentSatisfiedBy,
         };
       }
-      return { allowlistSatisfied: false, allowlistMatches: [], segmentSatisfiedBy: [] };
+      return {
+        allowlistSatisfied: false,
+        allowlistMatches: [],
+        segmentAllowlistEntries: [],
+        segmentSatisfiedBy: [],
+      };
     }
     allowlistMatches.push(...result.matches);
+    segmentAllowlistEntries.push(...result.segmentAllowlistEntries);
     segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
   }
-  return { allowlistSatisfied: true, allowlistMatches, segmentSatisfiedBy };
+  return {
+    allowlistSatisfied: true,
+    allowlistMatches,
+    segmentAllowlistEntries,
+    segmentSatisfiedBy,
+  };
 }
 
 export type ExecAllowlistAnalysis = {
@@ -482,6 +504,7 @@ export type ExecAllowlistAnalysis = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
@@ -700,6 +723,7 @@ export function evaluateShellAllowlist(
     allowlistSatisfied: false,
     allowlistMatches: [],
     segments: [],
+    segmentAllowlistEntries: [],
     segmentSatisfiedBy: [],
   });
 
@@ -728,6 +752,7 @@ export function evaluateShellAllowlist(
       allowlistSatisfied: evaluation.allowlistSatisfied,
       allowlistMatches: evaluation.allowlistMatches,
       segments: analysis.segments,
+      segmentAllowlistEntries: evaluation.segmentAllowlistEntries,
       segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
     };
   }
@@ -793,15 +818,20 @@ export function evaluateShellAllowlist(
   }
   const allowlistMatches: ExecAllowlistEntry[] = [];
   const segments: ExecCommandSegment[] = [];
+  const segmentAllowlistEntries: Array<ExecAllowlistEntry | null> = [];
   const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   for (const [index, { analysis, evaluation }] of finalizedEvaluations.entries()) {
     const effectiveSegmentSatisfiedBy = allowSkillPreludeAtIndex.has(index)
       ? analysis.segments.map(() => "skillPrelude" as const)
       : evaluation.segmentSatisfiedBy;
+    const effectiveSegmentAllowlistEntries = allowSkillPreludeAtIndex.has(index)
+      ? analysis.segments.map(() => null)
+      : evaluation.segmentAllowlistEntries;
 
     segments.push(...analysis.segments);
     allowlistMatches.push(...evaluation.allowlistMatches);
+    segmentAllowlistEntries.push(...effectiveSegmentAllowlistEntries);
     segmentSatisfiedBy.push(...effectiveSegmentSatisfiedBy);
     if (!evaluation.allowlistSatisfied && !allowSkillPreludeAtIndex.has(index)) {
       return {
@@ -809,6 +839,7 @@ export function evaluateShellAllowlist(
         allowlistSatisfied: false,
         allowlistMatches,
         segments,
+        segmentAllowlistEntries,
         segmentSatisfiedBy,
       };
     }
@@ -819,6 +850,7 @@ export function evaluateShellAllowlist(
     allowlistSatisfied: true,
     allowlistMatches,
     segments,
+    segmentAllowlistEntries,
     segmentSatisfiedBy,
   };
 }

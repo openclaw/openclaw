@@ -115,6 +115,7 @@ export type ExecApprovalsDefaults = {
 export type ExecAllowlistEntry = {
   id?: string;
   pattern: string;
+  source?: "allow-always";
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
@@ -495,12 +496,27 @@ export function requiresExecApproval(params: {
   security: ExecSecurity;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  durableApprovalSatisfied?: boolean;
 }): boolean {
+  if (params.durableApprovalSatisfied === true) {
+    return false;
+  }
   return (
     params.ask === "always" ||
     (params.ask === "on-miss" &&
       params.security === "allowlist" &&
       (!params.analysisOk || !params.allowlistSatisfied))
+  );
+}
+
+export function hasDurableExecApproval(params: {
+  analysisOk: boolean;
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+}): boolean {
+  return (
+    params.analysisOk &&
+    params.segmentAllowlistEntries.length > 0 &&
+    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always")
   );
 }
 
@@ -535,6 +551,9 @@ export function addAllowlistEntry(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
   pattern: string,
+  options?: {
+    source?: ExecAllowlistEntry["source"];
+  },
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
   const agents = approvals.agents ?? {};
@@ -544,11 +563,31 @@ export function addAllowlistEntry(
   if (!trimmed) {
     return;
   }
-  if (allowlist.some((entry) => entry.pattern === trimmed)) {
+  const existingEntry = allowlist.find((entry) => entry.pattern === trimmed);
+  if (existingEntry && (!options?.source || existingEntry.source === options.source)) {
     return;
   }
-  allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
-  agents[target] = { ...existing, allowlist };
+  const now = Date.now();
+  const nextAllowlist = existingEntry
+    ? allowlist.map((entry) =>
+        entry.pattern === trimmed
+          ? {
+              ...entry,
+              source: options?.source ?? entry.source,
+              lastUsedAt: now,
+            }
+          : entry,
+      )
+    : [
+        ...allowlist,
+        {
+          id: crypto.randomUUID(),
+          pattern: trimmed,
+          source: options?.source,
+          lastUsedAt: now,
+        },
+      ];
+  agents[target] = { ...existing, allowlist: nextAllowlist };
   approvals.agents = agents;
   saveExecApprovals(approvals);
 }

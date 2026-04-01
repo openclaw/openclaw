@@ -5,6 +5,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   evaluateShellAllowlist,
+  hasDurableExecApproval,
   requiresExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
@@ -135,6 +136,7 @@ export async function executeNodeHostCommand(
   });
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
+  let durableApprovalSatisfied = false;
   const inlineEvalHit =
     params.strictInlineEval === true
       ? (baseAllowlistEval.segments
@@ -150,7 +152,7 @@ export async function executeNodeHostCommand(
       )}.`,
     );
   }
-  if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
+  if ((hostAsk === "always" || hostSecurity === "allowlist") && analysisOk) {
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
         "exec.approvals.node.get",
@@ -177,6 +179,10 @@ export async function executeNodeHostCommand(
           platform: nodeInfo?.platform,
           trustedSafeBinDirs: params.trustedSafeBinDirs,
         });
+        durableApprovalSatisfied = hasDurableExecApproval({
+          analysisOk: allowlistEval.analysisOk,
+          segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+        });
         allowlistSatisfied = allowlistEval.allowlistSatisfied;
         analysisOk = allowlistEval.analysisOk;
       }
@@ -197,6 +203,7 @@ export async function executeNodeHostCommand(
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,
+      durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
     obfuscation.detected;

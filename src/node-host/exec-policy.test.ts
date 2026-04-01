@@ -91,6 +91,20 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.requiresAsk).toBe(true);
   });
 
+  it("allows durable allow-always trust to suppress ask=always prompts", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "always",
+          durableApprovalSatisfied: true,
+        }),
+      ),
+    );
+    expect(allowed.requiresAsk).toBe(false);
+    expect(allowed.approvedByAsk).toBe(false);
+  });
+
   it("allows allowlist miss when explicit approval is provided", () => {
     const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(

@@ -429,6 +429,94 @@ describe("exec approvals", () => {
     });
   });
 
+  it("suppresses future gateway prompts when allow-always trust matches the command", async () => {
+    await expectGatewayExecWithoutApproval({
+      config: {
+        version: 1,
+        defaults: { security: "full", ask: "always", askFallback: "full" },
+        agents: {
+          main: {
+            allowlist: [{ pattern: process.execPath, source: "allow-always" }],
+          },
+        },
+      },
+      command: `${JSON.stringify(process.execPath)} --version`,
+      ask: "always",
+      security: "full",
+    });
+  });
+
+  it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "full" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: process.execPath }],
+        },
+      },
+    });
+    mockPendingApprovalRegistration();
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-static-allowlist-still-prompts", {
+      command: `${JSON.stringify(process.execPath)} --version`,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+  });
+
+  it("suppresses future node-host prompts when allow-always trust matches the command", async () => {
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            agents: {
+              main: {
+                allowlist: [{ pattern: process.execPath, source: "allow-always" }],
+              },
+            },
+          },
+        };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-durable-allow-always", {
+      command: `${JSON.stringify(process.execPath)} --version`,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("node-ok");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
   it("requires approval for elevated ask when allowlist misses", async () => {
     const calls: string[] = [];
     let resolveApproval: (() => void) | undefined;

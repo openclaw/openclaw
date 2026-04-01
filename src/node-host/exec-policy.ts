@@ -54,6 +54,7 @@ export function evaluateSystemRunPolicy(params: {
   ask: ExecAsk;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  durableApprovalSatisfied?: boolean;
   approvalDecision: ExecApprovalDecision;
   approved?: boolean;
   isWindows: boolean;
@@ -87,6 +88,7 @@ export function evaluateSystemRunPolicy(params: {
     security: params.security,
     analysisOk,
     allowlistSatisfied,
+    durableApprovalSatisfied: params.durableApprovalSatisfied,
   });
   if (requiresAsk && !approvedByAsk) {
     return {

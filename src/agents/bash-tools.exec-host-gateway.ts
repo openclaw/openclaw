@@ -5,6 +5,7 @@ import {
   type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
+  hasDurableExecApproval,
   recordAllowlistUse,
   resolveApprovalAuditCandidatePath,
   requiresExecApproval,
@@ -101,6 +102,10 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  const durableApprovalSatisfied = hasDurableExecApproval({
+    analysisOk,
+    segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+  });
   const inlineEvalHit =
     params.strictInlineEval === true
       ? (allowlistEval.segments
@@ -117,6 +122,7 @@ export async function processGatewayAllowlist(
     );
   }
   let enforcedCommand: string | undefined;
+  let allowlistPlanUnavailableReason: string | null = null;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
     const enforced = buildEnforcedShellCommand({
       command: params.command,
@@ -124,9 +130,10 @@ export async function processGatewayAllowlist(
       platform: process.platform,
     });
     if (!enforced.ok || !enforced.command) {
-      throw new Error(`exec denied: allowlist execution plan unavailable (${enforced.reason})`);
+      allowlistPlanUnavailableReason = enforced.reason ?? "unsupported platform";
+    } else {
+      enforcedCommand = enforced.command;
     }
-    enforcedCommand = enforced.command;
   }
   const obfuscation = detectCommandObfuscation(params.command);
   if (obfuscation.detected) {
@@ -152,19 +159,33 @@ export async function processGatewayAllowlist(
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
   const requiresInlineEvalApproval = inlineEvalHit !== null;
+  const requiresAllowlistPlanApproval =
+    hostSecurity === "allowlist" &&
+    analysisOk &&
+    allowlistSatisfied &&
+    !durableApprovalSatisfied &&
+    !enforcedCommand &&
+    allowlistPlanUnavailableReason !== null;
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,
+      durableApprovalSatisfied,
     }) ||
+    requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
     obfuscation.detected;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
+    );
+  }
+  if (requiresAllowlistPlanApproval) {
+    params.warnings.push(
+      `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
     );
   }
 
@@ -295,7 +316,7 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        if (hostSecurity === "allowlist" && !requiresInlineEvalApproval) {
+        if (!requiresInlineEvalApproval) {
           const patterns = resolveAllowAlwaysPatterns({
             segments: allowlistEval.segments,
             cwd: params.workdir,
@@ -305,7 +326,9 @@ export async function processGatewayAllowlist(
           });
           for (const pattern of patterns) {
             if (pattern) {
-              addAllowlistEntry(approvals.file, params.agentId, pattern);
+              addAllowlistEntry(approvals.file, params.agentId, pattern, {
+                source: "allow-always",
+              });
             }
           }
         }

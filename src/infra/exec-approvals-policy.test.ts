@@ -78,6 +78,14 @@ describe("exec approvals policy helpers", () => {
       expected: true,
     },
     {
+      ask: "always" as const,
+      security: "full" as const,
+      analysisOk: true,
+      allowlistSatisfied: false,
+      durableApprovalSatisfied: true,
+      expected: false,
+    },
+    {
       ask: "off" as const,
       security: "allowlist" as const,
       analysisOk: true,

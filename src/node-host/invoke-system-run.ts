@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
+  hasDurableExecApproval,
   recordAllowlistUse,
   resolveApprovalAuditCandidatePath,
   resolveAllowAlwaysPatterns,
@@ -332,19 +333,20 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
-    shellCommand: parsed.shellPayload,
-    argv: parsed.argv,
-    approvals,
-    security,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    cwd: parsed.cwd,
-    env: parsed.env,
-    skillBins: bins,
-    autoAllowSkills,
-  });
+  let { analysisOk, allowlistMatches, allowlistSatisfied, segments, segmentAllowlistEntries } =
+    evaluateSystemRunAllowlist({
+      shellCommand: parsed.shellPayload,
+      argv: parsed.argv,
+      approvals,
+      security,
+      safeBins,
+      safeBinProfiles,
+      trustedSafeBinDirs,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      skillBins: bins,
+      autoAllowSkills,
+    });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval
@@ -363,6 +365,10 @@ async function evaluateSystemRunPolicyPhase(
     ask,
     analysisOk,
     allowlistSatisfied,
+    durableApprovalSatisfied: hasDurableExecApproval({
+      analysisOk,
+      segmentAllowlistEntries,
+    }),
     approvalDecision: parsed.approvalDecision,
     approved: parsed.approved,
     isWindows,
@@ -546,11 +552,7 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (
-    phase.policy.approvalDecision === "allow-always" &&
-    phase.security === "allowlist" &&
-    phase.inlineEvalHit === null
-  ) {
+  if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
     if (phase.policy.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments: phase.segments,
@@ -561,7 +563,9 @@ async function executeSystemRunPhase(
       });
       for (const pattern of patterns) {
         if (pattern) {
-          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
+          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern, {
+            source: "allow-always",
+          });
         }
       }
     }
