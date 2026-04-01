@@ -34,6 +34,7 @@ function setMockFetch(
 
 async function createWebFetchToolForTest(params?: {
   firecrawl?: { enabled?: boolean; apiKey?: string };
+  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
@@ -42,6 +43,7 @@ async function createWebFetchToolForTest(params?: {
         web: {
           fetch: {
             cacheTtlMinutes: 0,
+            ssrfPolicy: params?.ssrfPolicy,
             firecrawl: params?.firecrawl ?? { enabled: false },
           },
         },
@@ -136,5 +138,29 @@ describe("web_fetch SSRF protection", () => {
       status: 200,
       extractor: "raw",
     });
+  });
+
+  it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
+    const url = "http://198.18.0.153/file";
+
+    const deniedTool = await createWebFetchToolForTest();
+    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("benchmark ok"));
+    const allowedTool = await createWebFetchToolForTest({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const allowed = await allowedTool?.execute?.("call", { url });
+    expect(allowed?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // A stricter tool instance must still block the same URL instead of reusing
+    // the permissive-policy cache entry.
+    const stricterTool = await createWebFetchToolForTest();
+    await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });
 });

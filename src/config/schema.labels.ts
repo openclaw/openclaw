@@ -250,6 +250,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
+  "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl Fallback",
   "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key", // pragma: allowlist secret
   "tools.web.fetch.firecrawl.baseUrl": "Firecrawl Base URL",
