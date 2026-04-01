@@ -13,10 +13,12 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
 function buildPluginSentinelPaths(pluginIds, depName) {
-  return pluginIds.toSorted((a, b) => a.localeCompare(b)).map((pluginId) => ({
-    pluginId,
-    sentinelPath: pluginDependencySentinelPath(pluginId, depName),
-  }));
+  return pluginIds
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((pluginId) => ({
+      pluginId,
+      sentinelPath: pluginDependencySentinelPath(pluginId, depName),
+    }));
 }
 
 function runtimeDepKey(name, version) {
@@ -179,13 +181,7 @@ export function runBundledPluginPostinstall(params = {}) {
           existsSync: pathExists,
           platform: params.platform,
           comSpec: params.comSpec,
-          npmArgs: [
-            "install",
-            "--omit=dev",
-            "--no-save",
-            "--package-lock=false",
-            ...install.specs,
-          ],
+          npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...install.specs],
         });
       const result = spawn(npmRunner.command, npmRunner.args, {
         cwd: installDir,
