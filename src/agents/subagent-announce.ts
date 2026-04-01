@@ -270,7 +270,7 @@ async function wakeSubagentRunAfterDescendants(params: {
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.childSessionKey,
-              sourceChannel: params.requesterOrigin?.channel ?? INTERNAL_MESSAGE_CHANNEL,
+              sourceChannel: INTERNAL_MESSAGE_CHANNEL,
               sourceTool: "subagent_announce",
             },
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
