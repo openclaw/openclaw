@@ -45,17 +45,18 @@ export function resolveAgentScopedOutboundMediaAccess(params: {
       agentId: params.agentId,
       mediaSources: params.mediaSources,
     });
+  const resolvedWorkspaceDir =
+    params.workspaceDir ??
+    params.mediaAccess?.workspaceDir ??
+    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const readFile =
     params.mediaAccess?.readFile ??
     params.mediaReadFile ??
     createAgentScopedHostMediaReadFile({
       cfg: params.cfg,
       agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: resolvedWorkspaceDir,
     });
-  const resolvedWorkspaceDir =
-    params.workspaceDir ??
-    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   return {
     ...(localRoots?.length ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
