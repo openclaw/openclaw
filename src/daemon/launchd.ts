@@ -586,6 +586,23 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
+    // Verify the service is actually loaded after restart
+    const verify = await execLaunchctl(["print", serviceTarget]);
+    if (verify.code !== 0) {
+      // Service not loaded - try one more bootstrap
+      await bootstrapLaunchAgentOrThrow({
+        domain,
+        serviceTarget,
+        plistPath,
+        actionHint: "openclaw gateway restart verify-retry",
+      });
+      const retryStart = await execLaunchctl(["kickstart", "-k", serviceTarget]);
+      if (retryStart.code !== 0) {
+        throw new Error(
+          `launchctl kickstart failed after verify-retry bootstrap: ${retryStart.stderr || retryStart.stdout}`.trim(),
+        );
+      }
+    }
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
