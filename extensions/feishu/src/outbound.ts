@@ -4,7 +4,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { ChannelOutboundAdapter } from "../runtime-api.js";
+import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -125,7 +125,7 @@ async function sendOutboundText(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   ...createAttachedChannelResultAdapter({

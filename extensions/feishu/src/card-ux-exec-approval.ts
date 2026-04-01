@@ -148,7 +148,7 @@ export function createExecApprovalResolvedCard(params: {
   }
   bodyLines.push(`**结果：** ${decisionLabel}`);
   if (params.resolvedBy) {
-    bodyLines.push(`**操作人：** <at id=${params.resolvedBy}></at>`);
+    bodyLines.push(`**操作人：** <at id="${params.resolvedBy}"></at>`);
   }
 
   return {
