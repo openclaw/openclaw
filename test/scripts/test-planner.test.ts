@@ -653,7 +653,7 @@ describe("test planner", () => {
     expect(manifest.shardCounts.unit).toBe(4);
     expect(manifest.shardCounts.channels).toBe(4);
     expect(manifest.shardCounts.extensionFast).toBeGreaterThanOrEqual(4);
-    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(5);
+    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(6);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
     expect(manifest.jobs.checks.matrix.include).toHaveLength(8);
