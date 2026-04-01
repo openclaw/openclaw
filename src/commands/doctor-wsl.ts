@@ -22,8 +22,7 @@ import os from "node:os";
 import { promisify } from "node:util";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contributions.js";
-import { isWSL } from "../infra/wsl.js";
-import { isWSL2Sync } from "../infra/wsl.js";
+import { isWSL, isWSL2Sync } from "../infra/wsl.js";
 import { note } from "../terminal/note.js";
 
 const execFileAsync = promisify(execFile);
@@ -44,8 +43,12 @@ export type WSLDiagnostics = {
   wslconfig: WSLConfigResources | null;
   /** WSL kernel version string. */
   kernelVersion: string | null;
-  /** Host total memory in bytes (from os.totalmem()). */
-  hostTotalMemoryBytes: number;
+  /**
+   * Total memory visible to the WSL instance in bytes (from os.totalmem()).
+   * Note: inside WSL this reflects the VM allocation (~50% of host RAM
+   * by default), not the Windows host total.
+   */
+  wslVisibleMemoryBytes: number;
 };
 
 /** Parsed resource settings from .wslconfig [wsl2] section. */
@@ -229,7 +232,7 @@ export async function collectWSLDiagnostics(): Promise<WSLDiagnostics> {
       wslConfSystemdEnabled: null,
       wslconfig: null,
       kernelVersion: null,
-      hostTotalMemoryBytes: os.totalmem(),
+      wslVisibleMemoryBytes: os.totalmem(),
     };
   }
 
@@ -247,7 +250,7 @@ export async function collectWSLDiagnostics(): Promise<WSLDiagnostics> {
     wslConfSystemdEnabled,
     wslconfig,
     kernelVersion,
-    hostTotalMemoryBytes: os.totalmem(),
+    wslVisibleMemoryBytes: os.totalmem(),
   };
 }
 
@@ -295,6 +298,11 @@ export function parseMemoryToMB(value: string | null): number | null {
  * messaging with WSL-specific hints. This check focuses on
  * resource limits and environment information that no other
  * Doctor contribution covers.
+ *
+ * Memory note: inside WSL, os.totalmem() returns the memory visible
+ * to the WSL VM (roughly 50% of Windows host RAM by default when
+ * no .wslconfig is present), not the Windows host total. We compare
+ * this value directly against the 4GB threshold without halving.
  */
 export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
   if (!diag.isWSL) {
@@ -319,15 +327,12 @@ export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
       notes.push("Edit %USERPROFILE%\\.wslconfig [wsl2] processors=4");
     }
   } else {
-    const hostMemGB = Math.round(diag.hostTotalMemoryBytes / (1024 * 1024 * 1024));
-    if (hostMemGB > 0) {
-      const wslDefaultMemGB = Math.floor(hostMemGB / 2);
-      if (wslDefaultMemGB < 4) {
-        notes.push(
-          `No .wslconfig found. WSL defaults to ~${wslDefaultMemGB}GB memory (half of ${hostMemGB}GB host).`,
-        );
-        notes.push("Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.");
-      }
+    // No .wslconfig found. os.totalmem() inside WSL reflects the VM
+    // allocation (not the Windows host total), so compare directly.
+    const wslMemGB = Math.round(diag.wslVisibleMemoryBytes / (1024 * 1024 * 1024));
+    if (wslMemGB > 0 && wslMemGB < 4) {
+      notes.push(`No .wslconfig found. WSL is currently limited to ~${wslMemGB}GB memory.`);
+      notes.push("Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.");
     }
   }
 
