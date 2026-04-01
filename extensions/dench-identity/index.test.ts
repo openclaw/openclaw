@@ -29,6 +29,14 @@ describe("buildIdentityPrompt", () => {
     );
   });
 
+  it("does not advertise the removed browser skill contract", () => {
+    const prompt = buildIdentityPrompt(workspaceDir);
+    expect(prompt).not.toContain(
+      path.join(workspaceDir, "skills", "browser", "SKILL.md"),
+    );
+    expect(prompt).not.toContain("Browser Agent");
+  });
+
   it("includes exec approval policy (prevents agent stalling on exec confirmation)", () => {
     const prompt = buildIdentityPrompt(workspaceDir);
     expect(prompt).toContain("elevated: true");

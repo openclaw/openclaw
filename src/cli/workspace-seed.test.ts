@@ -115,6 +115,7 @@ describe("seedWorkspaceFromAssets", () => {
     const result = seedWorkspaceFromAssets({ workspaceDir, packageRoot });
 
     expect(result.projectionFiles).toContain("skills/crm/SKILL.md");
+    expect(result.projectionFiles).not.toContain("skills/browser/SKILL.md");
     expect(result.projectionFiles).not.toContain("IDENTITY.md");
   });
 });
@@ -137,6 +138,7 @@ describe("syncManagedSkills", () => {
     const result = syncManagedSkills({ workspaceDirs: [workspaceDir], packageRoot });
 
     expect(result.syncedSkills).toEqual(MANAGED_SKILLS.map((s) => s.name));
+    expect(result.syncedSkills).not.toContain("browser");
     expect(result.identityUpdated).toBe(false);
     const skillPath = path.join(workspaceDir, "skills", "crm", "SKILL.md");
     expect(existsSync(skillPath)).toBe(true);

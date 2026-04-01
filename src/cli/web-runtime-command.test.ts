@@ -15,9 +15,9 @@ const promptMocks = vi.hoisted(() => ({
 const workspaceSeedMocks = vi.hoisted(() => ({
   discoverWorkspaceDirs: vi.fn((stateDir: string) => [`${stateDir}/workspace`]),
   syncManagedSkills: vi.fn(() => ({
-    syncedSkills: ["crm", "browser"],
+    syncedSkills: ["crm", "app-builder", "gstack"],
     workspaceDirs: ["/tmp/.openclaw-dench/workspace"],
-    identityUpdated: true,
+    identityUpdated: false,
   })),
 }));
 
@@ -160,9 +160,9 @@ describe("updateWebRuntimeCommand", () => {
     workspaceSeedMocks.discoverWorkspaceDirs.mockReturnValue(["/tmp/.openclaw-dench/workspace"]);
     workspaceSeedMocks.syncManagedSkills.mockReset();
     workspaceSeedMocks.syncManagedSkills.mockReturnValue({
-      syncedSkills: ["crm", "browser"],
+      syncedSkills: ["crm", "app-builder", "gstack"],
       workspaceDirs: ["/tmp/.openclaw-dench/workspace"],
-      identityUpdated: true,
+      identityUpdated: false,
     });
 
     webRuntimeMocks.ensureManagedWebRuntime.mockReset();
@@ -270,9 +270,9 @@ describe("updateWebRuntimeCommand", () => {
       packageRoot: "/tmp/pkg",
     });
     expect(summary.skillSync).toEqual({
-      syncedSkills: ["crm", "browser"],
+      syncedSkills: ["crm", "app-builder", "gstack"],
       workspaceDirs: ["/tmp/.openclaw-dench/workspace"],
-      identityUpdated: true,
+      identityUpdated: false,
     });
   });
 

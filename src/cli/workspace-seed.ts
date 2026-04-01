@@ -139,7 +139,6 @@ export function generateWorkspaceMd(objects: SeedObject[]): string {
 
 export const MANAGED_SKILLS: ReadonlyArray<{ name: string; templatePaths?: boolean }> = [
   { name: "crm", templatePaths: true },
-  { name: "browser" },
   { name: "app-builder", templatePaths: true },
   { name: "gstack" },
 ];
