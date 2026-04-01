@@ -281,6 +281,26 @@ describe("retryAsync", () => {
     });
     expect(delays[0]).toBe(1500);
   });
+
+  it("accepts string-valued retryAfter fields", async () => {
+    const err = Object.assign(new Error("429 Too Many Requests"), {
+      status: 429,
+      retryAfter: "3",
+    });
+    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 5000, error: err });
+    expect(delays[0]).toBe(3000);
+  });
+
+  it("parses HTTP-date retry-after hints embedded in error messages", async () => {
+    const future = new Date(Date.now() + 4000).toUTCString();
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 5000,
+      error: new Error(`rate limited, retry-after ${future}`),
+    });
+    expect(delays[0]).toBeGreaterThanOrEqual(0);
+    expect(delays[0]).toBeLessThanOrEqual(5000);
+  });
 });
 
 describe("resolveRetryConfig", () => {

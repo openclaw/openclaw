@@ -102,6 +102,12 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
   if (directRetryAfterSeconds !== undefined) {
     return Math.max(0, Math.round(directRetryAfterSeconds * 1000));
   }
+  if (typeof retryAfterCandidate === "string") {
+    const parsed = parseRetryAfterHeaderValue(retryAfterCandidate);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
 
   const candidates = [
     (err as { response?: { headers?: Headers | Record<string, unknown> } } | null | undefined)
@@ -148,6 +154,13 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
       if (unit === "ms" || unit.startsWith("msec") || unit.startsWith("millisecond")) {
         return Math.max(0, Math.round(amount));
       }
+    }
+  }
+  const retryAfterDateMatch = message.match(/retry[- ]after[^A-Za-z0-9]*([A-Z][a-z]{2},\s*\d{2}\s+[A-Z][a-z]{2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/i);
+  if (retryAfterDateMatch) {
+    const parsed = parseRetryAfterHeaderValue(retryAfterDateMatch[1]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;
