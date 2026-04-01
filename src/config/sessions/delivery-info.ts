@@ -15,7 +15,9 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
 }
 
 export function extractDeliveryInfo(sessionKey: string | undefined): {
-  deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  deliveryContext:
+    | { channel?: string; to?: string; accountId?: string; threadId?: string }
+    | undefined;
   threadId: string | undefined;
 } {
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
@@ -23,7 +25,9 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     return { deliveryContext: undefined, threadId };
   }
 
-  let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  let deliveryContext:
+    | { channel?: string; to?: string; accountId?: string; threadId?: string }
+    | undefined;
   try {
     const cfg = loadConfig();
     const storePath = resolveStorePath(cfg.session?.store);
@@ -33,10 +37,13 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
       entry = store[baseSessionKey];
     }
     if (entry?.deliveryContext) {
+      const resolvedThreadId =
+        entry.deliveryContext.threadId ?? entry.lastThreadId ?? entry.origin?.threadId;
       deliveryContext = {
         channel: entry.deliveryContext.channel,
         to: entry.deliveryContext.to,
         accountId: entry.deliveryContext.accountId,
+        threadId: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
       };
     }
   } catch {

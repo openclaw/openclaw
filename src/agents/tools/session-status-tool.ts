@@ -22,7 +22,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { listTasksForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
+import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -119,32 +119,26 @@ function formatSessionTaskLine(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
 }): string | undefined {
-  const tasks = listTasksForRelatedSessionKeyForOwner({
+  const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner({
     relatedSessionKey: params.relatedSessionKey,
     callerOwnerKey: params.callerOwnerKey,
   });
-  if (tasks.length === 0) {
+  const task = snapshot.focus;
+  if (!task) {
     return undefined;
   }
-  const latest = tasks[0];
-  const active = tasks.filter(
-    (task) => task.status === "queued" || task.status === "running",
-  ).length;
-  const failed = tasks.filter(
-    (task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost",
-  ).length;
   const headline =
-    active > 0
-      ? `${active} active`
-      : failed > 0
-        ? `${failed} recent failure${failed === 1 ? "" : "s"}`
-        : `latest ${latest.status.replaceAll("_", " ")}`;
-  const title = latest.label?.trim() || latest.task.trim();
+    snapshot.activeCount > 0
+      ? `${snapshot.activeCount} active`
+      : snapshot.recentFailureCount > 0
+        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
+        : `latest ${task.status.replaceAll("_", " ")}`;
+  const title = task.label?.trim() || task.task.trim();
   const detail =
-    latest.status === "running" || latest.status === "queued"
-      ? latest.progressSummary?.trim()
-      : latest.error?.trim() || latest.terminalSummary?.trim();
-  const parts = [headline, latest.runtime, title, detail].filter(Boolean);
+    task.status === "running" || task.status === "queued"
+      ? task.progressSummary?.trim()
+      : task.error?.trim() || task.terminalSummary?.trim();
+  const parts = [headline, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
