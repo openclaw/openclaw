@@ -3,6 +3,7 @@ import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import {
+  getFollowupAgentPrompt,
   getFollowupSummaryLine,
   type FollowupRun,
   type QueueDedupeMode,
@@ -91,7 +92,7 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => getFollowupSummaryLine(item) || "[Hidden message]",
+    summarize: (item) => getFollowupSummaryLine(item) ?? "[Hidden message]",
   });
   if (!shouldEnqueue) {
     return false;

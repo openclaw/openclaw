@@ -166,6 +166,24 @@ export function scheduleFollowupDrain(
             defaultRuntime.error?.(
               `collect-mode deferred batch render failed for ${key}; falling back to individual drain: ${String(err)}`,
             );
+            if (summary) {
+              const summaryTarget = items[0];
+              if (!summaryTarget) {
+                break;
+              }
+              await effectiveRunFollowup({
+                execution: { visibility: "internal", agentPrompt: summary },
+                display: { visibility: "user-visible", text: summary },
+                run,
+                enqueuedAt: Date.now(),
+                originatingChannel: summaryTarget.originatingChannel,
+                originatingTo: summaryTarget.originatingTo,
+                originatingAccountId: summaryTarget.originatingAccountId,
+                originatingThreadId: summaryTarget.originatingThreadId,
+                originatingChatType: summaryTarget.originatingChatType,
+              });
+              clearQueueSummaryState(queue);
+            }
             collectState.forceIndividualCollect = true;
             continue;
           }

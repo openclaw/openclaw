@@ -1613,6 +1613,49 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain("Queued #2\ntwo");
   });
 
+  it("emits collect overflow summary before falling back from an invalid display batch", async () => {
+    const key = `test-collect-render-fallback-summary-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "first hidden item", displayText: "visible first" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "second hidden item", displayText: "visible second" }),
+        display: { visibility: "summary-only", text: "hidden without summary" },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
+    expect(calls[0]?.execution.agentPrompt).toContain("- visible first");
+    expect(calls[1]?.execution.agentPrompt).toBe("first hidden item");
+    expect(calls[1]?.display?.text).toBe("visible first");
+  });
+
   it("retries overflow summary delivery without losing dropped previews", async () => {
     const key = `test-overflow-summary-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1644,7 +1687,8 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain(
       "[Queue overflow] Dropped 1 message due to cap.",
     );
-    expect(calls[0]?.execution.agentPrompt).toContain("- first");
+    expect(calls[0]?.execution.agentPrompt).toContain("- [Hidden message]");
+    expect(calls[0]?.execution.agentPrompt).not.toContain("first");
   });
 
   it("preserves routing metadata on overflow summary followups", async () => {
@@ -1695,6 +1739,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain(
       "[Queue overflow] Dropped 1 message due to cap.",
     );
+    expect(calls[0]?.execution.agentPrompt).toContain("- [Hidden message]");
   });
 });
 
