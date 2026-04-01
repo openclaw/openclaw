@@ -11,4 +11,14 @@ describe("agent defaults schema", () => {
       }),
     ).not.toThrow();
   });
+
+  it("accepts tokenLimits.toolResultMax", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        tokenLimits: {
+          toolResultMax: 2_000,
+        },
+      }),
+    ).not.toThrow();
+  });
 });

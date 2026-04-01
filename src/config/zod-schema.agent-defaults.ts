@@ -88,6 +88,12 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    tokenLimits: z
+      .object({
+        toolResultMax: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     llm: z
       .object({
         idleTimeoutSeconds: z

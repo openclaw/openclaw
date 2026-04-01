@@ -175,6 +175,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Lightweight token-budget controls for context shaping. */
+  tokenLimits?: AgentTokenLimitsConfig;
   /** LLM timeout configuration. */
   llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
@@ -379,6 +381,14 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type AgentTokenLimitsConfig = {
+  /**
+   * Approximate maximum tokens to inline from a single tool result before it
+   * is truncated with a head/tail wrapper. Default: 2000.
+   */
+  toolResultMax?: number;
 };
 
 /**
