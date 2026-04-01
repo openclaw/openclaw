@@ -644,7 +644,7 @@ export class TelegramPollingSession {
       if (response.ok) {
         return "ok";
       }
-      if (status >= 400 && status < 500) {
+      if (status === 401 || status === 403 || status === 404) {
         return "fatal-api-failure";
       }
       return "network-failure";
