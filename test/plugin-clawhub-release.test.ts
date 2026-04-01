@@ -7,7 +7,6 @@ import {
   collectClawHubPublishablePluginPackages,
   collectClawHubVersionGateErrors,
   collectPluginClawHubReleasePlan,
-  hasSharedPluginReleaseInputChanges,
   resolveChangedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
@@ -21,14 +20,6 @@ afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-});
-
-describe("hasSharedPluginReleaseInputChanges", () => {
-  it("treats shared ClawHub release inputs as publish-affecting changes", () => {
-    expect(hasSharedPluginReleaseInputChanges(["pnpm-lock.yaml"])).toBe(true);
-    expect(hasSharedPluginReleaseInputChanges(["scripts/plugin-clawhub-publish.sh"])).toBe(true);
-    expect(hasSharedPluginReleaseInputChanges(["extensions/zalo/index.ts"])).toBe(false);
-  });
 });
 
 describe("resolveChangedClawHubPublishablePluginPackages", () => {
@@ -51,13 +42,25 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
     },
   ];
 
-  it("returns all publishable plugins when a shared release input changes", () => {
+  it("ignores shared release-tooling changes", () => {
     expect(
       resolveChangedClawHubPublishablePluginPackages({
         plugins: publishablePlugins,
         changedPaths: ["pnpm-lock.yaml"],
       }),
-    ).toEqual(publishablePlugins);
+    ).toEqual([]);
+  });
+});
+
+describe("collectClawHubPublishablePluginPackages", () => {
+  it("requires the ClawHub external plugin contract", () => {
+    const repoDir = createTempPluginRepo({
+      includeClawHubContract: false,
+    });
+
+    expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
+      "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+    );
   });
 });
 
@@ -107,6 +110,12 @@ describe("collectClawHubVersionGateErrors", () => {
           version: "2026.4.1",
           openclaw: {
             extensions: ["./index.ts"],
+            compat: {
+              pluginApi: ">=2026.4.1",
+            },
+            build: {
+              openclawVersion: "2026.4.1",
+            },
             release: {
               publishToClawHub: true,
             },
@@ -125,6 +134,33 @@ describe("collectClawHubVersionGateErrors", () => {
       "commit",
       "-m",
       "opt in",
+    ]);
+    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    const errors = collectClawHubVersionGateErrors({
+      rootDir: repoDir,
+      plugins: collectClawHubPublishablePluginPackages(repoDir),
+      gitRange: { baseRef, headRef },
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  it("does not require a version bump for shared release-tooling changes", () => {
+    const repoDir = createTempPluginRepo();
+    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    mkdirSync(join(repoDir, "scripts"), { recursive: true });
+    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "shared tooling",
     ]);
     const headRef = git(repoDir, ["rev-parse", "HEAD"]);
 
@@ -158,7 +194,12 @@ describe("collectPluginClawHubReleasePlan", () => {
   });
 });
 
-function createTempPluginRepo(options: { publishToClawHub?: boolean } = {}) {
+function createTempPluginRepo(
+  options: {
+    publishToClawHub?: boolean;
+    includeClawHubContract?: boolean;
+  } = {},
+) {
   const repoDir = mkdtempSync(join(tmpdir(), "openclaw-clawhub-release-"));
   tempDirs.push(repoDir);
 
@@ -176,6 +217,16 @@ function createTempPluginRepo(options: { publishToClawHub?: boolean } = {}) {
         version: "2026.4.1",
         openclaw: {
           extensions: ["./index.ts"],
+          ...(options.includeClawHubContract === false
+            ? {}
+            : {
+                compat: {
+                  pluginApi: ">=2026.4.1",
+                },
+                build: {
+                  openclawVersion: "2026.4.1",
+                },
+              }),
           release: {
             publishToClawHub: options.publishToClawHub ?? true,
           },

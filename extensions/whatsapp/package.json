@@ -38,6 +38,12 @@
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.1"
     },
+    "compat": {
+      "pluginApi": ">=2026.4.1"
+    },
+    "build": {
+      "openclawVersion": "2026.4.1"
+    },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true

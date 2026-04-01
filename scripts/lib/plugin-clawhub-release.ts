@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import {
   collectChangedExtensionIdsFromPaths,
@@ -36,6 +37,14 @@ export type PluginPackageJson = {
     install?: {
       npmSpec?: string;
     };
+    compat?: {
+      pluginApi?: string;
+      minGatewayVersion?: string;
+    };
+    build?: {
+      openclawVersion?: string;
+      pluginSdkVersion?: string;
+    };
     release?: {
       publishToClawHub?: boolean;
       publishToNpm?: boolean;
@@ -63,16 +72,6 @@ export type PluginReleasePlan = {
 };
 
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
-const SHARED_PLUGIN_RELEASE_INPUTS = [
-  ".github/workflows/plugin-clawhub-release.yml",
-  "package.json",
-  "pnpm-lock.yaml",
-  "scripts/lib/plugin-clawhub-release.ts",
-  "scripts/plugin-clawhub-publish.sh",
-  "scripts/plugin-clawhub-release-check.ts",
-  "scripts/plugin-clawhub-release-plan.ts",
-] as const;
-
 function readPluginPackageJson(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
 }
@@ -129,6 +128,13 @@ export function collectClawHubPublishablePluginPackages(
       validationErrors.push(...errors.map((error) => `${dir.name}: ${error}`));
       continue;
     }
+    const contractValidation = validateExternalCodePluginPackageJson(packageJson);
+    if (contractValidation.issues.length > 0) {
+      validationErrors.push(
+        ...contractValidation.issues.map((issue) => `${dir.name}: ${issue.message}`),
+      );
+      continue;
+    }
 
     const version = packageJson.version!.trim();
     const parsedVersion = parseReleaseVersion(version);
@@ -158,11 +164,6 @@ export function collectClawHubPublishablePluginPackages(
   return publishable.toSorted((left, right) => left.packageName.localeCompare(right.packageName));
 }
 
-export function hasSharedPluginReleaseInputChanges(paths: readonly string[]): boolean {
-  const changed = new Set(paths.map((path) => normalizePath(path)));
-  return SHARED_PLUGIN_RELEASE_INPUTS.some((path) => changed.has(path));
-}
-
 export function collectPluginClawHubReleasePathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
@@ -176,17 +177,7 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
 
   return execFileSync(
     "git",
-    [
-      "diff",
-      "--name-only",
-      "--diff-filter=ACMR",
-      baseRef,
-      headRef,
-      "--",
-      "extensions",
-      ...SHARED_PLUGIN_RELEASE_INPUTS.filter((path) => path !== "package.json"),
-      "package.json",
-    ],
+    ["diff", "--name-only", "--diff-filter=ACMR", baseRef, headRef, "--", "extensions"],
     {
       cwd: rootDir,
       encoding: "utf8",
@@ -203,14 +194,6 @@ export function resolveChangedClawHubPublishablePluginPackages(params: {
   plugins: PublishablePluginPackage[];
   changedPaths: readonly string[];
 }): PublishablePluginPackage[] {
-  if (params.changedPaths.length === 0) {
-    return [];
-  }
-
-  if (hasSharedPluginReleaseInputChanges(params.changedPaths)) {
-    return params.plugins;
-  }
-
   return resolveChangedPublishablePluginPackages({
     plugins: params.plugins,
     changedExtensionIds: collectChangedExtensionIdsFromPaths(params.changedPaths),

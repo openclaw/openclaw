@@ -16,24 +16,20 @@ on:
   workflow_dispatch:
     inputs:
       publish_scope:
-        description: Publish the selected plugins or all ClawHub-publishable plugins from the ref
+        description: Publish the selected plugins or all ClawHub-publishable plugins from the workflow ref
         required: true
         default: selected
         type: choice
         options:
           - selected
           - all-publishable
-      ref:
-        description: Commit SHA on main to publish from
-        required: true
-        type: string
       plugins:
         description: Comma-separated plugin package names to publish when publish_scope=selected
         required: false
         type: string
 
 concurrency:
-  group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  group: plugin-clawhub-release-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -58,7 +54,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -78,17 +74,6 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor HEAD origin/main
-
-      - name: Validate workflow SHA matches requested ref
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          REQUESTED_REF: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-          if [[ "${REQUESTED_REF}" != "${GITHUB_SHA}" ]]; then
-            echo "::error::Trusted ClawHub publishes are pinned to the workflow OIDC SHA (${GITHUB_SHA}). Requested ref ${REQUESTED_REF} does not match. Re-run workflow_dispatch from the target commit on main."
-            exit 1
-          fi
 
       - name: Validate publishable plugin metadata
         env:
@@ -229,16 +214,6 @@ jobs:
 
       - name: Install ClawHub CLI
         run: npm install --global "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
-
-      - name: Ensure workflow SHA matches publish ref
-        env:
-          REQUESTED_REF: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
-        run: |
-          set -euo pipefail
-          if [[ "${REQUESTED_REF}" != "${GITHUB_SHA}" ]]; then
-            echo "::error::Trusted ClawHub publishes must run from the same commit as the workflow OIDC token. Requested ref ${REQUESTED_REF} does not match workflow SHA ${GITHUB_SHA}."
-            exit 1
-          fi
 
       - name: Ensure version is not already published
         env:
