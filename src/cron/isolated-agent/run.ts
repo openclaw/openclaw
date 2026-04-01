@@ -43,7 +43,7 @@ import {
   isExternalHookSession,
   resolveHookExternalContentSource,
 } from "../../security/external-content.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
