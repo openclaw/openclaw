@@ -94,6 +94,9 @@ export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
       !params.preserveInsecureLocalControlUiScopes &&
       // trusted-proxy auth can bypass pairing for some clients, but those
       // self-declared scopes are still unbound without device identity.
+      // Clear them as soon as the client declares trusted-proxy auth, even if
+      // that auth later fails, so missing-device sessions never keep scopes
+      // that were not bound to a verified device identity.
       (params.authMethod === "token" ||
         params.authMethod === "password" ||
         params.authMethod === "trusted-proxy" ||

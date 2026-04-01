@@ -788,6 +788,7 @@ export function attachGatewayWsMessageHandler(params: {
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,
+              hasRequestedOperatorScopes: scopes.some((scope) => scope.startsWith("operator.")),
               reason,
             });
             // QR bootstrap onboarding is node-only and single-use. When a fresh device presents
@@ -828,7 +829,7 @@ export function attachGatewayWsMessageHandler(params: {
             };
             if (pairing.request.silent === true) {
               approved = await approveDevicePairing(pairing.request.requestId, {
-                callerScopes: scopes,
+                callerScopes: [],
               });
               if (approved?.status === "approved") {
                 if (allowSilentBootstrapPairing && bootstrapTokenCandidate) {

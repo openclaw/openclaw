@@ -298,6 +298,35 @@ describe("device pairing tokens", () => {
     );
   });
 
+  test("rejects silent operator-scope approvals even when caller scopes match the request", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        {
+          callerScopes: ["operator.admin"],
+        },
+        baseDir,
+      ),
+    ).resolves.toEqual({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);

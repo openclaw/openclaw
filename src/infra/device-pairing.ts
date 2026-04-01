@@ -503,6 +503,12 @@ export async function approveDevicePairing(
       const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
         scope.startsWith(OPERATOR_SCOPE_PREFIX),
       );
+      if (pending.silent === true && requestedOperatorScopes.length > 0) {
+        return {
+          status: "forbidden",
+          missingScope: requestedOperatorScopes[0],
+        };
+      }
       if (!options?.callerScopes) {
         return {
           status: "forbidden",

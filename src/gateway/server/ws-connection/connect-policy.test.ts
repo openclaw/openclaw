@@ -369,4 +369,22 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
   });
+
+  test("clears trusted-proxy scopes before trusted-proxy auth succeeds when device identity is missing", () => {
+    const nonControlUi = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: nonControlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: "trusted-proxy",
+        trustedProxyAuthOk: false,
+      }),
+    ).toBe(true);
+  });
 });

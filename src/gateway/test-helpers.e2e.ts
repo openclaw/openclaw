@@ -48,6 +48,7 @@ export async function connectGatewayClient(params: {
   timeoutMessage?: string;
 }) {
   const role = params.role ?? "operator";
+  const scopes = params.scopes ?? (role === "operator" ? ["operator.admin"] : []);
   const platform = params.platform ?? process.platform;
   const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   const deviceIdentity =
@@ -86,7 +87,7 @@ export async function connectGatewayClient(params: {
       deviceFamily: params.deviceFamily,
       mode: params.mode ?? GATEWAY_CLIENT_MODES.TEST,
       role,
-      scopes: params.scopes,
+      scopes,
       caps: params.caps,
       commands: params.commands,
       instanceId: params.instanceId,

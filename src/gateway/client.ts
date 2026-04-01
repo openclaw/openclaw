@@ -152,6 +152,10 @@ type PendingStop = {
   resolve: () => void;
 };
 
+function resolveDefaultScopesForRole(role: string): string[] {
+  return role === "operator" ? ["operator.admin"] : [];
+}
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -431,7 +435,7 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
-    const scopes = this.opts.scopes ?? ["operator.admin"];
+    const scopes = this.opts.scopes ?? resolveDefaultScopesForRole(role);
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {

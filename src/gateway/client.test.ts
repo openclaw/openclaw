@@ -434,6 +434,8 @@ describe("GatewayClient connect auth payload", () => {
     return JSON.parse(raw ?? "{}") as {
       id?: string;
       params?: {
+        role?: string;
+        scopes?: string[];
         auth?: {
           token?: string;
           deviceToken?: string;
@@ -583,6 +585,36 @@ describe("GatewayClient connect auth payload", () => {
     });
     expect(connectFrameFrom(ws).token).toBeUndefined();
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("defaults operator connect scopes to operator.admin", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectRequestFrom(ws).params?.scopes).toEqual(["operator.admin"]);
+    client.stop();
+  });
+
+  it("defaults non-operator connect scopes to an empty scope list", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "node",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectRequestFrom(ws).params?.scopes).toEqual([]);
     client.stop();
   });
 
