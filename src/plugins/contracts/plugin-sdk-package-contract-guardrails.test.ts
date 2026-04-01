@@ -6,9 +6,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
-import { pluginSdkEntrypoints } from "./entrypoints.js";
+import { pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
