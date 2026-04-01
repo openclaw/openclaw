@@ -306,7 +306,7 @@ afterEach(async () => {
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
-  createMockFollowupRun({ run: { messageProvider } });
+  createMockFollowupRun({ run: { messageProvider } as Partial<FollowupRun["run"]> });
 
 function createQueuedRun(
   overrides: Partial<FollowupRun> & { run?: Partial<FollowupRun["run"]> } = {},

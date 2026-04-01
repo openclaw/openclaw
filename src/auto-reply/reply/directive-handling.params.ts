@@ -32,6 +32,7 @@ export type HandleDirectiveOnlyCoreParams = {
 
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   messageProvider?: string;
+  senderIsOwner?: boolean;
   currentThinkLevel?: ThinkLevel;
   currentFastMode?: boolean;
   currentVerboseLevel?: VerboseLevel;
