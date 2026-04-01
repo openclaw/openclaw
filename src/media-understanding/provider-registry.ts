@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
-import { describeImageWithModel, describeImagesWithModel } from "./image.js";
+import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
