@@ -93,6 +93,24 @@ describe("write tool append mode", () => {
       expect(props.append).toBeDefined();
       expect((props.append as Record<string, unknown>).type).toBe("boolean");
     });
+
+    it("normalizes the file alias before appending", async () => {
+      const tool = createHostWorkspaceWriteTool(tmpDir);
+
+      await tool.execute(
+        "call-1",
+        { file: "alias.txt", content: "first", append: true },
+        undefined as never,
+      );
+      await tool.execute(
+        "call-2",
+        { file: "alias.txt", content: "second", append: true },
+        undefined as never,
+      );
+
+      const content = await fs.readFile(path.join(tmpDir, "alias.txt"), "utf-8");
+      expect(content).toBe("first\nsecond");
+    });
   });
 
   describe("sandboxed write tool", () => {
@@ -120,6 +138,56 @@ describe("write tool append mode", () => {
         | { type: "text"; text: string }
         | undefined;
       expect(textContent?.text).toContain("not supported in sandboxed sessions");
+      expect((result.details as { status?: string } | undefined)?.status).toBe("error");
+    });
+
+    it("includes append in the sandbox schema before rejecting it", () => {
+      const mockBridge = {
+        readFile: async () => Buffer.from(""),
+        writeFile: async () => {},
+        mkdirp: async () => {},
+        stat: async () => ({ size: 0, isFile: true, isDirectory: false }),
+      } as unknown as Parameters<typeof createSandboxedWriteTool>[0]["bridge"];
+
+      const tool = createSandboxedWriteTool({
+        root: tmpDir,
+        bridge: mockBridge,
+      });
+
+      const schema = tool.parameters as Record<string, unknown>;
+      const props = schema.properties as Record<string, unknown>;
+      expect(props.append).toBeDefined();
+      expect((props.append as Record<string, unknown>).type).toBe("boolean");
+    });
+
+    it("rejects malformed append flags instead of overwriting", async () => {
+      let writes = 0;
+      const mockBridge = {
+        readFile: async () => Buffer.from(""),
+        writeFile: async () => {
+          writes += 1;
+        },
+        mkdirp: async () => {},
+        stat: async () => ({ size: 0, isFile: true, isDirectory: false }),
+      } as unknown as Parameters<typeof createSandboxedWriteTool>[0]["bridge"];
+
+      const tool = createSandboxedWriteTool({
+        root: tmpDir,
+        bridge: mockBridge,
+      });
+
+      const result = await tool.execute(
+        "call-1",
+        { path: "test.txt", content: "hello", append: "true" },
+        undefined as never,
+      );
+
+      const textContent = result.content.find((c: { type: string }) => c.type === "text") as
+        | { type: "text"; text: string }
+        | undefined;
+      expect(textContent?.text).toContain("must be a boolean");
+      expect((result.details as { status?: string } | undefined)?.status).toBe("error");
+      expect(writes).toBe(0);
     });
 
     it("works normally without append", async () => {
