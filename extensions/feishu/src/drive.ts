@@ -1,7 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { type CommentFileType } from "./comment-target.js";
+import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
@@ -26,6 +26,7 @@ type FeishuDriveInternalClient = Lark.Client & {
   request(params: {
     method: "GET" | "POST";
     url: string;
+    params?: Record<string, string | undefined>;
     data: unknown;
     timeout?: number;
   }): Promise<unknown>;
@@ -33,9 +34,32 @@ type FeishuDriveInternalClient = Lark.Client & {
 
 type FeishuDriveApiResponse<T> = {
   code: number;
+  log_id?: string;
   msg?: string;
   data?: T;
 };
+
+class FeishuReplyCommentError extends Error {
+  httpStatus?: number;
+  feishuCode?: number | string;
+  feishuMsg?: string;
+  feishuLogId?: string;
+
+  constructor(params: {
+    message: string;
+    httpStatus?: number;
+    feishuCode?: number | string;
+    feishuMsg?: string;
+    feishuLogId?: string;
+  }) {
+    super(params.message);
+    this.name = "FeishuReplyCommentError";
+    this.httpStatus = params.httpStatus;
+    this.feishuCode = params.feishuCode;
+    this.feishuMsg = params.feishuMsg;
+    this.feishuLogId = params.feishuLogId;
+  }
+}
 
 type FeishuDriveCommentReply = {
   reply_id?: string;
@@ -73,6 +97,13 @@ type FeishuDriveListRepliesResponse = FeishuDriveApiResponse<{
   items?: FeishuDriveCommentReply[];
   page_token?: string;
 }>;
+
+type FeishuDriveToolContext = {
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+  };
+};
 
 const FEISHU_DRIVE_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -159,12 +190,14 @@ async function requestDriveApi<T>(params: {
   client: Lark.Client;
   method: "GET" | "POST";
   url: string;
+  query?: Record<string, string | undefined>;
   data?: unknown;
 }): Promise<T> {
   const internalClient = getDriveInternalClient(params.client);
   return (await internalClient.request({
     method: params.method,
     url: params.url,
+    params: params.query ?? {},
     data: params.data ?? {},
     timeout: FEISHU_DRIVE_REQUEST_TIMEOUT_MS,
   })) as T;
@@ -203,6 +236,95 @@ function normalizeCommentCard(comment: FeishuDriveCommentCard) {
     replies_page_token: comment.page_token,
     replies: replies.slice(1).map(normalizeCommentReply),
   };
+}
+
+function normalizeCommentPageSize(pageSize: number | undefined): string | undefined {
+  if (typeof pageSize !== "number" || !Number.isFinite(pageSize)) {
+    return undefined;
+  }
+  return String(Math.min(Math.max(Math.floor(pageSize), 1), 100));
+}
+
+function resolveAmbientCommentTarget(context: FeishuDriveToolContext | undefined) {
+  const deliveryContext = context?.deliveryContext;
+  if (deliveryContext?.channel && deliveryContext.channel !== "feishu") {
+    return null;
+  }
+  return parseFeishuCommentTarget(deliveryContext?.to);
+}
+
+function applyAmbientCommentDefaults<
+  T extends {
+    file_token?: string;
+    file_type?: CommentFileType;
+    comment_id?: string;
+  },
+>(params: T, context: FeishuDriveToolContext | undefined): T {
+  const ambient = resolveAmbientCommentTarget(context);
+  if (!ambient) {
+    return params;
+  }
+  return {
+    ...params,
+    file_token: params.file_token?.trim() || ambient.fileToken,
+    file_type: params.file_type ?? ambient.fileType,
+    comment_id: params.comment_id?.trim() || ambient.commentId,
+  };
+}
+
+function formatDriveApiError(error: unknown): string {
+  if (!isRecord(error)) {
+    return String(error);
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response?.data : undefined;
+  return JSON.stringify({
+    message: typeof error.message === "string" ? error.message : String(error),
+    code: readString(error.code),
+    method: readString(isRecord(error.config) ? error.config.method : undefined),
+    url: readString(isRecord(error.config) ? error.config.url : undefined),
+    params: isRecord(error.config) ? error.config.params : undefined,
+    http_status: typeof response?.status === "number" ? response.status : undefined,
+    feishu_code:
+      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
+    feishu_msg: readString(responseData?.msg),
+    feishu_log_id: readString(responseData?.log_id),
+  });
+}
+
+function extractDriveApiErrorMeta(error: unknown): {
+  message: string;
+  httpStatus?: number;
+  feishuCode?: number | string;
+  feishuMsg?: string;
+  feishuLogId?: string;
+} {
+  if (!isRecord(error)) {
+    return { message: String(error) };
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response?.data : undefined;
+  return {
+    message: typeof error.message === "string" ? error.message : String(error),
+    httpStatus: typeof response?.status === "number" ? response.status : undefined,
+    feishuCode:
+      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
+    feishuMsg: readString(responseData?.msg),
+    feishuLogId: readString(responseData?.log_id),
+  };
+}
+
+function isReplyNotAllowedError(error: unknown): boolean {
+  if (!(error instanceof FeishuReplyCommentError)) {
+    return false;
+  }
+  const message = error.feishuMsg?.toLowerCase() ?? error.message.toLowerCase();
+  return (
+    error.feishuCode === 1069302 &&
+    (message.includes("does not allow replies") ||
+      message.includes("reply permissions are disabled") ||
+      message.includes("不允许回复"))
+  );
 }
 
 async function getRootFolderToken(client: Lark.Client): Promise<string> {
@@ -371,10 +493,7 @@ async function listComments(
         `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments` +
         encodeQuery({
           file_type: params.file_type,
-          page_size:
-            typeof params.page_size === "number" && Number.isFinite(params.page_size)
-              ? String(params.page_size)
-              : undefined,
+          page_size: normalizeCommentPageSize(params.page_size),
           page_token: params.page_token,
           user_id_type: "open_id",
         }),
@@ -407,10 +526,7 @@ async function listCommentReplies(
         )}/replies` +
         encodeQuery({
           file_type: params.file_type,
-          page_size:
-            typeof params.page_size === "number" && Number.isFinite(params.page_size)
-              ? String(params.page_size)
-              : undefined,
+          page_size: normalizeCommentPageSize(params.page_size),
           page_token: params.page_token,
           user_id_type: "open_id",
         }),
@@ -431,7 +547,7 @@ async function addComment(
     content: string;
     block_id?: string;
   },
-) {
+): Promise<{ success: true } & Record<string, unknown>> {
   if (params.block_id?.trim() && params.file_type !== "docx") {
     throw new Error("block_id is only supported for docx comments");
   }
@@ -453,6 +569,37 @@ async function addComment(
   };
 }
 
+// Fetch comment metadata via batch_query because the single-comment endpoint
+// does not support partial comments.
+async function queryCommentById(
+  client: Lark.Client,
+  params: {
+    file_token: string;
+    file_type: CommentFileType;
+    comment_id: string;
+  },
+) {
+  const response = assertDriveApiSuccess(
+    await requestDriveApi<FeishuDriveListCommentsResponse>({
+      client,
+      method: "POST",
+      url:
+        `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/batch_query` +
+        encodeQuery({
+          file_type: params.file_type,
+          user_id_type: "open_id",
+        }),
+      data: {
+        comment_ids: [params.comment_id],
+      },
+    }),
+  );
+  return (
+    response.data?.items?.find((comment) => comment.comment_id?.trim() === params.comment_id) ??
+    response.data?.items?.[0]
+  );
+}
+
 export async function replyComment(
   client: Lark.Client,
   params: {
@@ -462,44 +609,197 @@ export async function replyComment(
     content: string;
   },
 ): Promise<{ success: true; reply_id?: string } & Record<string, unknown>> {
-  const url =
-    `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
-      params.comment_id,
-    )}/replies` + encodeQuery({ file_type: params.file_type });
-  const attempts: unknown[] = [
+  const url = `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
+    params.comment_id,
+  )}/replies`;
+  const query = { file_type: params.file_type };
+  const attempts: Array<{ name: "legacy_content" | "reply_elements"; data: unknown }> = [
     {
-      content: {
-        elements: [
-          {
-            type: "text_run",
-            text_run: {
-              text: params.content,
+      name: "legacy_content",
+      data: {
+        content: {
+          elements: [
+            {
+              type: "text_run",
+              text_run: {
+                text: params.content,
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     },
     {
-      reply_elements: buildReplyElements(params.content),
+      name: "reply_elements",
+      data: {
+        reply_elements: buildReplyElements(params.content),
+      },
     },
   ];
   let lastMessage = "Feishu Drive reply comment failed";
-  for (const data of attempts) {
-    const response = (await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
-      client,
-      method: "POST",
-      url,
-      data,
-    })) as FeishuDriveApiResponse<Record<string, unknown>>;
-    if (response.code === 0) {
+  let lastErrorMeta:
+    | {
+        httpStatus?: number;
+        feishuCode?: number | string;
+        feishuMsg?: string;
+        feishuLogId?: string;
+      }
+    | undefined;
+  let replyNotAllowedMeta:
+    | {
+        httpStatus?: number;
+        feishuCode?: number | string;
+        feishuMsg?: string;
+        feishuLogId?: string;
+      }
+    | undefined;
+  for (const attempt of attempts) {
+    try {
+      const response = (await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
+        client,
+        method: "POST",
+        url,
+        query,
+        data: attempt.data,
+      })) as FeishuDriveApiResponse<Record<string, unknown>>;
+      if (response.code === 0) {
+        return {
+          success: true,
+          ...response.data,
+        };
+      }
+      lastMessage = response.msg ?? lastMessage;
+      lastErrorMeta = {
+        feishuCode: response.code,
+        feishuMsg: response.msg,
+        feishuLogId: response.log_id,
+      };
+      if (
+        isReplyNotAllowedError(
+          new FeishuReplyCommentError({
+            message: response.msg ?? lastMessage,
+            feishuCode: response.code,
+            feishuMsg: response.msg,
+            feishuLogId: response.log_id,
+          }),
+        )
+      ) {
+        replyNotAllowedMeta = { ...lastErrorMeta };
+      }
+      console.warn(
+        `[feishu_drive] replyComment attempt failed ` +
+          `comment=${params.comment_id} file_type=${params.file_type} ` +
+          `body_kind=${attempt.name} code=${response.code ?? "unknown"} ` +
+          `msg=${response.msg ?? "unknown"} log_id=${response.log_id ?? "unknown"}`,
+      );
+    } catch (error) {
+      const meta = extractDriveApiErrorMeta(error);
+      lastMessage = meta.message;
+      lastErrorMeta = {
+        httpStatus: meta.httpStatus,
+        feishuCode: meta.feishuCode,
+        feishuMsg: meta.feishuMsg,
+        feishuLogId: meta.feishuLogId,
+      };
+      if (
+        isReplyNotAllowedError(
+          new FeishuReplyCommentError({
+            message: meta.message,
+            httpStatus: meta.httpStatus,
+            feishuCode: meta.feishuCode,
+            feishuMsg: meta.feishuMsg,
+            feishuLogId: meta.feishuLogId,
+          }),
+        )
+      ) {
+        replyNotAllowedMeta = { ...lastErrorMeta };
+      }
+      console.warn(
+        `[feishu_drive] replyComment attempt threw ` +
+          `comment=${params.comment_id} file_type=${params.file_type} ` +
+          `body_kind=${attempt.name} error=${formatDriveApiError(error)}`,
+      );
+    }
+  }
+  const errorMeta = replyNotAllowedMeta ?? lastErrorMeta;
+  throw new FeishuReplyCommentError({
+    message: lastMessage,
+    httpStatus: errorMeta?.httpStatus,
+    feishuCode: errorMeta?.feishuCode,
+    feishuMsg: errorMeta?.feishuMsg,
+    feishuLogId: errorMeta?.feishuLogId,
+  });
+}
+
+export async function deliverCommentThreadText(
+  client: Lark.Client,
+  params: {
+    file_token: string;
+    file_type: CommentFileType;
+    comment_id: string;
+    content: string;
+    is_whole_comment?: boolean;
+  },
+): Promise<
+  | ({ success: true; reply_id?: string } & Record<string, unknown> & {
+        delivery_mode: "reply_comment";
+      })
+  | ({ success: true; comment_id?: string } & Record<string, unknown> & {
+        delivery_mode: "add_comment";
+      })
+> {
+  let isWholeComment = params.is_whole_comment;
+  if (isWholeComment === undefined) {
+    const comment = await queryCommentById(client, params);
+    isWholeComment = comment?.is_whole === true;
+  }
+  if (isWholeComment) {
+    if (params.file_type !== "doc" && params.file_type !== "docx") {
+      throw new Error(
+        `Whole-document comment follow-ups are only supported for doc/docx (got ${params.file_type})`,
+      );
+    }
+    const wholeCommentFileType: "doc" | "docx" = params.file_type;
+    console.info(
+      `[feishu_drive] whole-comment compatibility path ` +
+        `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment`,
+    );
+    return {
+      delivery_mode: "add_comment",
+      ...(await addComment(client, {
+        file_token: params.file_token,
+        file_type: wholeCommentFileType,
+        content: params.content,
+      })),
+    };
+  }
+  try {
+    return {
+      delivery_mode: "reply_comment",
+      ...(await replyComment(client, params)),
+    };
+  } catch (error) {
+    if (error instanceof FeishuReplyCommentError && isReplyNotAllowedError(error)) {
+      if (params.file_type !== "doc" && params.file_type !== "docx") {
+        throw error;
+      }
+      const fallbackFileType: "doc" | "docx" = params.file_type;
+      console.info(
+        `[feishu_drive] reply-not-allowed compatibility path ` +
+          `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment ` +
+          `log_id=${error.feishuLogId ?? "unknown"}`,
+      );
       return {
-        success: true,
-        ...response.data,
+        delivery_mode: "add_comment",
+        ...(await addComment(client, {
+          file_token: params.file_token,
+          file_type: fallbackFileType,
+          content: params.content,
+        })),
       };
     }
-    lastMessage = response.msg ?? lastMessage;
+    throw error;
   }
-  throw new Error(lastMessage);
 }
 
 // ============ Tool Registration ============
@@ -552,14 +852,22 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return jsonToolResult(await moveFile(client, p.file_token, p.type, p.folder_token));
               case "delete":
                 return jsonToolResult(await deleteFile(client, p.file_token, p.type));
-              case "list_comments":
-                return jsonToolResult(await listComments(client, p));
-              case "list_comment_replies":
-                return jsonToolResult(await listCommentReplies(client, p));
-              case "add_comment":
-                return jsonToolResult(await addComment(client, p));
-              case "reply_comment":
-                return jsonToolResult(await replyComment(client, p));
+              case "list_comments": {
+                const resolved = applyAmbientCommentDefaults(p, ctx);
+                return jsonToolResult(await listComments(client, resolved));
+              }
+              case "list_comment_replies": {
+                const resolved = applyAmbientCommentDefaults(p, ctx);
+                return jsonToolResult(await listCommentReplies(client, resolved));
+              }
+              case "add_comment": {
+                const resolved = applyAmbientCommentDefaults(p, ctx);
+                return jsonToolResult(await addComment(client, resolved));
+              }
+              case "reply_comment": {
+                const resolved = applyAmbientCommentDefaults(p, ctx);
+                return jsonToolResult(await deliverCommentThreadText(client, resolved));
+              }
               default:
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }

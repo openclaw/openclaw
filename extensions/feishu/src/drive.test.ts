@@ -206,6 +206,12 @@ describe("registerFeishuDriveTools", () => {
 
     requestMock
       .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockResolvedValueOnce({
         code: 99991663,
         msg: "invalid request body",
       })
@@ -224,7 +230,18 @@ describe("registerFeishuDriveTools", () => {
       4,
       expect.objectContaining({
         method: "POST",
-        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx",
+        url: "/open-apis/drive/v1/files/doc_1/comments/batch_query?file_type=docx&user_id_type=open_id",
+        data: {
+          comment_ids: ["c1"],
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
         data: {
           content: {
             elements: [
@@ -240,10 +257,11 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
     expect(requestMock).toHaveBeenNthCalledWith(
-      5,
+      6,
       expect.objectContaining({
         method: "POST",
-        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
         data: {
           reply_elements: [{ type: "text", text: "handled" }],
         },
@@ -251,6 +269,434 @@ describe("registerFeishuDriveTools", () => {
     );
     expect(replyCommentResult.details).toEqual(
       expect.objectContaining({ success: true, reply_id: "r4" }),
+    );
+  });
+
+  it("retries reply_comment with reply_elements when the legacy content body throws an HTTP 400", async () => {
+    const registerTool = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockRejectedValueOnce({
+        message: "Request failed with status code 400",
+        code: "ERR_BAD_REQUEST",
+        config: {
+          method: "post",
+          url: "https://open.feishu.cn/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+          params: { file_type: "docx" },
+        },
+        response: {
+          status: 400,
+          data: {
+            code: 1069302,
+            msg: "param error",
+            log_id: "log_legacy_400",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { reply_id: "r5" },
+      });
+
+    const replyCommentResult = await tool.execute("call-throw", {
+      action: "reply_comment",
+      file_token: "doc_1",
+      file_type: "docx",
+      comment_id: "c1",
+      content: "inserted successfully",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/batch_query?file_type=docx&user_id_type=open_id",
+        data: {
+          comment_ids: ["c1"],
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
+        data: {
+          content: {
+            elements: [
+              {
+                type: "text_run",
+                text_run: {
+                  text: "inserted successfully",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
+        data: {
+          reply_elements: [{ type: "text", text: "inserted successfully" }],
+        },
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("replyComment attempt threw"));
+    expect(replyCommentResult.details).toEqual(
+      expect.objectContaining({ success: true, reply_id: "r5" }),
+    );
+  });
+
+  it("defaults reply_comment target fields from the ambient Feishu comment delivery context", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({
+      agentAccountId: undefined,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+      },
+    });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockRejectedValueOnce({
+        message: "Request failed with status code 400",
+        code: "ERR_BAD_REQUEST",
+        config: {
+          method: "post",
+          url: "https://open.feishu.cn/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+          params: { file_type: "docx" },
+        },
+        response: {
+          status: 400,
+          data: {
+            code: 1069302,
+            msg: "param error",
+            log_id: "log_ambient_400",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { reply_id: "r6" },
+      });
+
+    const replyCommentResult = await tool.execute("call-ambient", {
+      action: "reply_comment",
+      content: "ambient success",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/batch_query?file_type=docx&user_id_type=open_id",
+        data: {
+          comment_ids: ["c1"],
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+        params: { file_type: "docx" },
+        data: {
+          reply_elements: [{ type: "text", text: "ambient success" }],
+        },
+      }),
+    );
+    expect(replyCommentResult.details).toEqual(
+      expect.objectContaining({ success: true, reply_id: "r6" }),
+    );
+  });
+
+  it("routes whole-document reply_comment requests through add_comment compatibility", async () => {
+    const registerTool = vi.fn();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: true }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { comment_id: "c2" },
+      });
+
+    const result = await tool.execute("call-whole", {
+      action: "reply_comment",
+      file_token: "doc_1",
+      file_type: "docx",
+      comment_id: "c1",
+      content: "whole comment follow-up",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/comments/batch_query?file_type=docx&user_id_type=open_id",
+        data: {
+          comment_ids: ["c1"],
+        },
+      }),
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "whole comment follow-up" }],
+        },
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("whole-comment compatibility path"),
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        success: true,
+        comment_id: "c2",
+        delivery_mode: "add_comment",
+      }),
+    );
+  });
+
+  it("falls back to add_comment when reply_comment is disallowed by Feishu even without is_whole metadata", async () => {
+    const registerTool = vi.fn();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: false }],
+        },
+      })
+      .mockRejectedValueOnce({
+        message: "Request failed with status code 400",
+        code: "ERR_BAD_REQUEST",
+        config: {
+          method: "post",
+          url: "https://open.feishu.cn/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+          params: { file_type: "docx" },
+        },
+        response: {
+          status: 400,
+          data: {
+            code: 1069302,
+            msg: "The comment section does not allow replies. Solution: Check the comment settings to confirm reply permissions are disabled.",
+            log_id: "log_reply_forbidden",
+          },
+        },
+      })
+      .mockRejectedValueOnce({
+        message: "Request failed with status code 400",
+        code: "ERR_BAD_REQUEST",
+        config: {
+          method: "post",
+          url: "https://open.feishu.cn/open-apis/drive/v1/files/doc_1/comments/c1/replies",
+          params: { file_type: "docx" },
+        },
+        response: {
+          status: 400,
+          data: {
+            code: 99992402,
+            msg: "field validation failed",
+            log_id: "log_reply_invalid",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { comment_id: "c3" },
+      });
+
+    const result = await tool.execute("call-reply-forbidden", {
+      action: "reply_comment",
+      file_token: "doc_1",
+      file_type: "docx",
+      comment_id: "c1",
+      content: "compat follow-up",
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "compat follow-up" }],
+        },
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("reply-not-allowed compatibility path"),
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        success: true,
+        comment_id: "c3",
+        delivery_mode: "add_comment",
+      }),
+    );
+  });
+
+  it("clamps comment list page sizes to the Feishu API maximum", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: undefined });
+
+    requestMock.mockResolvedValueOnce({ code: 0, data: { has_more: false, items: [] } });
+    await tool.execute("call-list", {
+      action: "list_comments",
+      file_token: "doc_1",
+      file_type: "docx",
+      page_size: 200,
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "GET",
+        url: "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&page_size=100&user_id_type=open_id",
+      }),
+    );
+
+    requestMock.mockResolvedValueOnce({ code: 0, data: { has_more: false, items: [] } });
+    await tool.execute("call-replies", {
+      action: "list_comment_replies",
+      file_token: "doc_1",
+      file_type: "docx",
+      comment_id: "c1",
+      page_size: 200,
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "GET",
+        url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&page_size=100&user_id_type=open_id",
+      }),
     );
   });
 

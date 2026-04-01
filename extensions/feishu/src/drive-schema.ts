@@ -53,7 +53,7 @@ export const FeishuDriveSchema = Type.Union([
     action: Type.Literal("list_comments"),
     file_token: Type.String({ description: "Document token" }),
     file_type: CommentFileType,
-    page_size: Type.Optional(Type.Integer({ minimum: 1, description: "Page size" })),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
     page_token: Type.Optional(Type.String({ description: "Comment page token" })),
   }),
   Type.Object({
@@ -61,7 +61,7 @@ export const FeishuDriveSchema = Type.Union([
     file_token: Type.String({ description: "Document token" }),
     file_type: CommentFileType,
     comment_id: Type.String({ description: "Comment id" }),
-    page_size: Type.Optional(Type.Integer({ minimum: 1, description: "Page size" })),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
     page_token: Type.Optional(Type.String({ description: "Reply page token" })),
   }),
   Type.Object({
