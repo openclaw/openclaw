@@ -11,22 +11,32 @@ import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 const flows = new Map<string, FlowRecord>();
 let restoreAttempted = false;
 
-type FlowRecordPatch = Partial<
-  Pick<
-    FlowRecord,
-    | "status"
-    | "notifyPolicy"
-    | "goal"
-    | "currentStep"
-    | "blockedTaskId"
-    | "blockedSummary"
-    | "controllerId"
-    | "stateJson"
-    | "waitJson"
-    | "cancelRequestedAt"
-    | "updatedAt"
-    | "endedAt"
-  >
+type FlowRecordPatch = Omit<
+  Partial<
+    Pick<
+      FlowRecord,
+      | "status"
+      | "notifyPolicy"
+      | "goal"
+      | "currentStep"
+      | "blockedTaskId"
+      | "blockedSummary"
+      | "controllerId"
+      | "stateJson"
+      | "waitJson"
+      | "cancelRequestedAt"
+      | "updatedAt"
+      | "endedAt"
+    >
+  >,
+  | "currentStep"
+  | "blockedTaskId"
+  | "blockedSummary"
+  | "controllerId"
+  | "stateJson"
+  | "waitJson"
+  | "cancelRequestedAt"
+  | "endedAt"
 > & {
   currentStep?: string | null;
   blockedTaskId?: string | null;
