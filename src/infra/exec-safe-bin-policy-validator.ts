@@ -130,7 +130,106 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
 }
 
-export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
+
+function collectPositionalTokens(
+  args: string[],
+  profile: SafeBinProfile,
+): string[] | null {
+  const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
+  const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
+  const knownLongFlags =
+    profile.knownLongFlags ?? collectKnownLongFlags(allowedValueFlags, deniedFlags);
+  const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
+  const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
+
+  const positional: string[] = [];
+  let i = 0;
+  while (i < args.length) {
+    const rawToken = args[i] ?? "";
+    const token = parseExecArgvToken(rawToken);
+
+    if (token.kind === "empty" || token.kind === "stdin") {
+      i += 1;
+      continue;
+    }
+
+    if (token.kind === "terminator") {
+      for (let j = i + 1; j < args.length; j += 1) {
+        const rest = args[j];
+        if (!rest || rest === "-") {
+          continue;
+        }
+        if (!consumePositionalToken(rest, positional)) {
+          return null;
+        }
+      }
+      break;
+    }
+
+    if (token.kind === "positional") {
+      if (!consumePositionalToken(token.raw, positional)) {
+        return null;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (token.style === "long") {
+      const nextIndex = consumeLongOptionToken({
+        args,
+        index: i,
+        flag: token.flag,
+        inlineValue: token.inlineValue,
+        allowedValueFlags,
+        deniedFlags,
+        knownLongFlagsSet,
+        longFlagPrefixMap,
+      });
+      if (nextIndex < 0) {
+        return null;
+      }
+      i = nextIndex;
+      continue;
+    }
+
+    const nextIndex = consumeShortOptionClusterToken({
+      args,
+      index: i,
+      cluster: token.cluster,
+      flags: token.flags,
+      allowedValueFlags,
+      deniedFlags,
+    });
+    if (nextIndex < 0) {
+      return null;
+    }
+    i = nextIndex;
+  }
+
+  return positional;
+}
+
+export function validateSafeBinArgv(
+  args: string[],
+  profile: SafeBinProfile,
+  options?: { binName?: string },
+): boolean {
+  const positional = collectPositionalTokens(args, profile);
+  if (!positional) {
+    return false;
+  }
+  if (!validatePositionalCount(positional, profile)) {
+    return false;
+  }
+  return validateSafeBinSemantics({
+    binName: options?.binName,
+    positional,
+  });
+}
+
+/** @deprecated Use validateSafeBinArgv with options parameter */
+export function validateSafeBinArgvLegacy(args: string[], profile: SafeBinProfile): boolean {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =

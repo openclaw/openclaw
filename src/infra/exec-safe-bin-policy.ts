@@ -1,9 +1,11 @@
 export {
+  DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILE_FIXTURES,
   SAFE_BIN_PROFILES,
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
   normalizeSafeBinProfileFixtures,
+  renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,
   resolveSafeBinDeniedFlags,
   resolveSafeBinProfiles,
@@ -13,3 +15,9 @@ export {
 } from "./exec-safe-bin-policy-profiles.js";
 
 export { validateSafeBinArgv } from "./exec-safe-bin-policy-validator.js";
+export {
+  getSafeBinSemanticRule,
+  listRiskyConfiguredSafeBins,
+  normalizeSafeBinName,
+  validateSafeBinSemantics,
+} from "./exec-safe-bin-semantics.js";
