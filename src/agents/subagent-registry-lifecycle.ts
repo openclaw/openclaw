@@ -62,6 +62,68 @@ export function createSubagentRegistryLifecycleController(params: {
   runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
+  const safeSetSubagentTaskDeliveryStatus = (args: {
+    runId: string;
+    childSessionKey: string;
+    deliveryStatus: "failed";
+  }) => {
+    try {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId: args.runId,
+        runtime: "subagent",
+        sessionKey: args.childSessionKey,
+        deliveryStatus: args.deliveryStatus,
+      });
+    } catch (err) {
+      params.warn("failed to update subagent background task delivery state", {
+        err,
+        runId: args.runId,
+        childSessionKey: args.childSessionKey,
+        deliveryStatus: args.deliveryStatus,
+      });
+    }
+  };
+
+  const safeFinalizeSubagentTaskRun = (args: {
+    entry: SubagentRunRecord;
+    outcome: SubagentRunOutcome;
+  }) => {
+    const endedAt = args.entry.endedAt ?? Date.now();
+    const lastEventAt = args.entry.endedAt ?? Date.now();
+    try {
+      if (args.outcome.status === "ok") {
+        completeTaskRunByRunId({
+          runId: args.entry.runId,
+          runtime: "subagent",
+          sessionKey: args.entry.childSessionKey,
+          endedAt,
+          lastEventAt,
+          progressSummary: args.entry.frozenResultText ?? undefined,
+          terminalSummary: null,
+        });
+        return;
+      }
+      failTaskRunByRunId({
+        runId: args.entry.runId,
+        runtime: "subagent",
+        sessionKey: args.entry.childSessionKey,
+        status: args.outcome.status === "timeout" ? "timed_out" : "failed",
+        endedAt,
+        lastEventAt,
+        error: args.outcome.status === "error" ? args.outcome.error : undefined,
+        progressSummary: args.entry.frozenResultText ?? undefined,
+        terminalSummary: null,
+      });
+    } catch (err) {
+      params.warn("failed to finalize subagent background task state", {
+        err,
+        runId: args.entry.runId,
+        childSessionKey: args.entry.childSessionKey,
+        outcomeStatus: args.outcome.status,
+      });
+    }
+  };
+
   const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
     if (entry.frozenResultText !== undefined) {
       return false;
@@ -158,10 +220,9 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
-    setDetachedTaskDeliveryStatusByRunId({
+    safeSetSubagentTaskDeliveryStatus({
       runId: giveUpParams.runId,
-      runtime: "subagent",
-      sessionKey: giveUpParams.entry.childSessionKey,
+      childSessionKey: giveUpParams.entry.childSessionKey,
       deliveryStatus: "failed",
     });
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
@@ -469,29 +530,10 @@ export function createSubagentRegistryLifecycleController(params: {
     if (mutated) {
       params.persist();
     }
-    if (completeParams.outcome.status === "ok") {
-      completeTaskRunByRunId({
-        runId: entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        endedAt: entry.endedAt,
-        lastEventAt: entry.endedAt ?? Date.now(),
-        progressSummary: entry.frozenResultText ?? undefined,
-        terminalSummary: null,
-      });
-    } else {
-      failTaskRunByRunId({
-        runId: entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        status: completeParams.outcome.status === "timeout" ? "timed_out" : "failed",
-        endedAt: entry.endedAt,
-        lastEventAt: entry.endedAt ?? Date.now(),
-        error: completeParams.outcome.status === "error" ? completeParams.outcome.error : undefined,
-        progressSummary: entry.frozenResultText ?? undefined,
-        terminalSummary: null,
-      });
-    }
+    safeFinalizeSubagentTaskRun({
+      entry,
+      outcome: completeParams.outcome,
+    });
 
     try {
       await persistSubagentSessionTiming(entry);
