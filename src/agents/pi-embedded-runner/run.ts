@@ -302,6 +302,8 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let cumulativeToolTokens = 0;
+      let cumulativeCompactionOverheadTokens = 0;
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
@@ -466,6 +468,8 @@ export async function runEmbeddedPiAgent(
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
+                toolTokens: cumulativeToolTokens,
+                compactionOverheadTokens: cumulativeCompactionOverheadTokens,
               }),
             });
           }
@@ -591,6 +595,7 @@ export async function runEmbeddedPiAgent(
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+          cumulativeToolTokens += Math.max(0, Math.floor(attempt.toolTokens ?? 0));
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
@@ -855,6 +860,10 @@ export async function runEmbeddedPiAgent(
                   runtimeContext: overflowCompactionRuntimeContext,
                 });
                 if (compactResult.ok && compactResult.compacted) {
+                  cumulativeCompactionOverheadTokens += Math.max(
+                    0,
+                    Math.floor(compactResult.result?.overheadTokens ?? 0),
+                  );
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: params.sessionId,
@@ -877,6 +886,10 @@ export async function runEmbeddedPiAgent(
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
+                cumulativeCompactionOverheadTokens += Math.max(
+                  0,
+                  Math.floor(compactResult.result?.overheadTokens ?? 0),
+                );
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
@@ -973,6 +986,8 @@ export async function runEmbeddedPiAgent(
                   lastRunPromptUsage,
                   lastAssistant,
                   lastTurnTotal,
+                  toolTokens: cumulativeToolTokens,
+                  compactionOverheadTokens: cumulativeCompactionOverheadTokens,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
                 error: { kind, message: errorText },
@@ -1017,6 +1032,8 @@ export async function runEmbeddedPiAgent(
                     lastRunPromptUsage,
                     lastAssistant,
                     lastTurnTotal,
+                    toolTokens: cumulativeToolTokens,
+                    compactionOverheadTokens: cumulativeCompactionOverheadTokens,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
@@ -1049,6 +1066,8 @@ export async function runEmbeddedPiAgent(
                     lastRunPromptUsage,
                     lastAssistant,
                     lastTurnTotal,
+                    toolTokens: cumulativeToolTokens,
+                    compactionOverheadTokens: cumulativeCompactionOverheadTokens,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "image_size", message: errorText },
@@ -1282,6 +1301,11 @@ export async function runEmbeddedPiAgent(
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
+            toolTokens: cumulativeToolTokens > 0 ? cumulativeToolTokens : undefined,
+            compactionOverheadTokens:
+              cumulativeCompactionOverheadTokens > 0
+                ? cumulativeCompactionOverheadTokens
+                : undefined,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 

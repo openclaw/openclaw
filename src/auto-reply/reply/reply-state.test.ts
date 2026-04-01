@@ -556,4 +556,45 @@ describe("incrementCompactionCount", () => {
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);
   });
+
+  it("accumulates compaction overhead against the latest persisted cumulative usage", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        ...entry,
+        cumulativeUsage: {
+          inputTokens: 400,
+          outputTokens: 120,
+          toolTokens: 80,
+          compactionOverheadTokens: 10,
+          updatedAt: 1_000,
+        },
+      },
+    });
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      compactionOverheadTokens: 30,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].cumulativeUsage).toEqual({
+      inputTokens: 400,
+      outputTokens: 120,
+      toolTokens: 80,
+      compactionOverheadTokens: 40,
+      updatedAt: expect.any(Number),
+    });
+    expect(sessionStore[sessionKey]?.cumulativeUsage?.compactionOverheadTokens).toBe(40);
+  });
 });

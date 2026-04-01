@@ -2276,6 +2276,79 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].estimatedCostUsd).toBe(0);
   });
+
+  it("accumulates cumulative token usage across persisted session updates", async () => {
+    const storePath = await createStorePath("openclaw-usage-cumulative-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_200, output: 300, total: 1_500 },
+      lastCallUsage: { input: 1_200, output: 300, total: 1_500 },
+      toolTokens: 240,
+      compactionOverheadTokens: 48,
+      contextTokensUsed: 200_000,
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 800, output: 120, total: 920 },
+      lastCallUsage: { input: 800, output: 120, total: 920 },
+      toolTokens: 60,
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].cumulativeUsage).toEqual({
+      inputTokens: 2_000,
+      outputTokens: 420,
+      toolTokens: 300,
+      compactionOverheadTokens: 48,
+      updatedAt: expect.any(Number),
+    });
+  });
+
+  it("persists compaction-only cumulative usage without clearing the last context snapshot", async () => {
+    const storePath = await createStorePath("openclaw-usage-compaction-only-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 39_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      compactionOverheadTokens: 96,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(39_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].cumulativeUsage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      toolTokens: 0,
+      compactionOverheadTokens: 96,
+      updatedAt: expect.any(Number),
+    });
+  });
 });
 
 describe("initSessionState stale threadId fallback", () => {

@@ -380,6 +380,7 @@ export function handleToolExecutionStart(
 
     const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
     ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+    ctx.recordToolTokens({ toolName, arguments: args });
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -490,6 +491,7 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  ctx.recordToolTokens({ toolName, result: sanitizedResult, isError: isToolError });
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);

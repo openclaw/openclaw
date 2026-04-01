@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { accumulateSessionCumulativeUsage } from "../../config/sessions/cumulative-usage.js";
 import {
   mergeSessionEntry,
   setSessionRuntimeModel,
@@ -47,6 +48,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
+  const toolTokens = resolveNonNegativeNumber(result.meta.agentMeta?.toolTokens);
+  const compactionOverheadTokens = resolveNonNegativeNumber(
+    result.meta.agentMeta?.compactionOverheadTokens,
+  );
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const contextTokens =
@@ -127,6 +132,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], next);
+    const cumulativeUsage = accumulateSessionCumulativeUsage(
+      store[sessionKey] ?? entry,
+      {
+        inputTokens: usage?.input,
+        outputTokens: usage?.output,
+        toolTokens,
+        compactionOverheadTokens,
+      },
+      merged.updatedAt,
+    );
+    if (cumulativeUsage) {
+      merged.cumulativeUsage = cumulativeUsage;
+    }
     store[sessionKey] = merged;
     return merged;
   });

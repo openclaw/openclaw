@@ -131,6 +131,7 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
+import { estimateTextTokensApprox } from "../token-approximation.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -1011,6 +1012,7 @@ export async function compactEmbeddedPiSessionDirect(
             firstKeptEntryId: result.firstKeptEntryId,
             tokensBefore: observedTokenCount ?? result.tokensBefore,
             tokensAfter,
+            overheadTokens: estimateTextTokensApprox(result.summary),
             details: result.details,
           },
         };

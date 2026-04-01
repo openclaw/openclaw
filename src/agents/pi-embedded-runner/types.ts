@@ -8,6 +8,8 @@ export type EmbeddedPiAgentMeta = {
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   promptTokens?: number;
+  toolTokens?: number;
+  compactionOverheadTokens?: number;
   usage?: {
     input?: number;
     output?: number;
@@ -87,6 +89,7 @@ export type EmbeddedPiCompactResult = {
     firstKeptEntryId: string;
     tokensBefore: number;
     tokensAfter?: number;
+    overheadTokens?: number;
     details?: unknown;
   };
 };

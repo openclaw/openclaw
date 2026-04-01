@@ -188,4 +188,68 @@ describe("updateSessionStoreAfterAgentRun", () => {
       sessionId: "claude-cli-session-1",
     });
   });
+
+  it("accumulates cumulative usage against the latest persisted store entry", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:codex:usage:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const existing: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      cumulativeUsage: {
+        inputTokens: 600,
+        outputTokens: 90,
+        toolTokens: 45,
+        compactionOverheadTokens: 12,
+        updatedAt: Date.now() - 10_000,
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: existing }, null, 2), "utf8");
+
+    const staleInMemory: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore: staleInMemory,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          aborted: false,
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: {
+              input: 300,
+              output: 60,
+              total: 360,
+            },
+            toolTokens: 24,
+            compactionOverheadTokens: 6,
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.cumulativeUsage).toEqual({
+      inputTokens: 900,
+      outputTokens: 150,
+      toolTokens: 69,
+      compactionOverheadTokens: 18,
+      updatedAt: expect.any(Number),
+    });
+    expect(staleInMemory[sessionKey]?.cumulativeUsage?.toolTokens).toBe(69);
+  });
 });

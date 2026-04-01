@@ -289,6 +289,8 @@ export function createFollowupRunner(params: {
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
+          toolTokens: runResult.meta?.agentMeta?.toolTokens,
+          compactionOverheadTokens: runResult.meta?.agentMeta?.compactionOverheadTokens,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
@@ -374,6 +376,7 @@ export function createFollowupRunner(params: {
           amount: autoCompactionCount,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
+          compactionOverheadTokens: runResult.meta?.agentMeta?.compactionOverheadTokens,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
         });
         const refreshedSessionEntry =

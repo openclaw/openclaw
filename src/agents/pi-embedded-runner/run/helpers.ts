@@ -119,6 +119,8 @@ export function buildErrorAgentMeta(params: {
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
   lastTurnTotal?: number;
+  toolTokens?: number;
+  compactionOverheadTokens?: number;
 }): EmbeddedPiAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
@@ -130,6 +132,10 @@ export function buildErrorAgentMeta(params: {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
+    ...(params.toolTokens && params.toolTokens > 0 ? { toolTokens: params.toolTokens } : {}),
+    ...(params.compactionOverheadTokens && params.compactionOverheadTokens > 0
+      ? { compactionOverheadTokens: params.compactionOverheadTokens }
+      : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

@@ -11,6 +11,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { accumulateSessionCumulativeUsage } from "../../config/sessions/cumulative-usage.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
@@ -51,6 +52,10 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function hasPositiveCount(value: number | undefined): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
 function estimateSessionRunCostUsd(params: {
   cfg: OpenClawConfig;
   usage?: NormalizedUsage;
@@ -84,6 +89,8 @@ export async function persistSessionUsageUpdate(params: {
   providerUsed?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
+  toolTokens?: number;
+  compactionOverheadTokens?: number;
   usageIsContextSnapshot?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
@@ -102,10 +109,15 @@ export async function persistSessionUsageUpdate(params: {
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
+  const hasCumulativeUsageDelta =
+    hasPositiveCount(params.usage?.input) ||
+    hasPositiveCount(params.usage?.output) ||
+    hasPositiveCount(params.toolTokens) ||
+    hasPositiveCount(params.compactionOverheadTokens);
   const hasFreshContextSnapshot =
     Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
 
-  if (hasUsage || hasFreshContextSnapshot) {
+  if (hasUsage || hasFreshContextSnapshot || hasCumulativeUsageDelta) {
     try {
       await updateSessionStoreEntry({
         storePath,
@@ -140,6 +152,16 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
+          const cumulativeUsage = accumulateSessionCumulativeUsage(
+            entry,
+            {
+              inputTokens: params.usage?.input,
+              outputTokens: params.usage?.output,
+              toolTokens: params.toolTokens,
+              compactionOverheadTokens: params.compactionOverheadTokens,
+            },
+            patch.updatedAt,
+          );
           if (hasUsage) {
             patch.inputTokens = params.usage?.input ?? 0;
             patch.outputTokens = params.usage?.output ?? 0;
@@ -154,10 +176,15 @@ export async function persistSessionUsageUpdate(params: {
           } else if (entry.estimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = entry.estimatedCostUsd;
           }
-          // Missing a last-call snapshot (and promptTokens fallback) means
-          // context utilization is stale/unknown.
-          patch.totalTokens = totalTokens;
-          patch.totalTokensFresh = typeof totalTokens === "number";
+          if (cumulativeUsage) {
+            patch.cumulativeUsage = cumulativeUsage;
+          }
+          if (hasUsage || hasFreshContextSnapshot) {
+            // Missing a last-call snapshot (and promptTokens fallback) means
+            // context utilization is stale/unknown.
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = typeof totalTokens === "number";
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });

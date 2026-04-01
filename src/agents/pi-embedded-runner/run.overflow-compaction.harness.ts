@@ -332,12 +332,16 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
   }));
 
-  vi.doMock("../../plugins/provider-runtime.js", () => ({
-    prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
-    resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
-    prepareProviderExtraParams: vi.fn(async () => ({})),
-    wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
-  }));
+  vi.doMock("../../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
+      prepareProviderExtraParams: vi.fn(async () => ({})),
+      wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
+    };
+  });
 
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: vi.fn(() => false),

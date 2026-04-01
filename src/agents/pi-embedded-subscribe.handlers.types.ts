@@ -117,6 +117,7 @@ export type EmbeddedPiSubscribeContext = {
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
+  recordToolTokens: (payload: unknown) => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
@@ -168,6 +169,7 @@ export type ToolHandlerContext = {
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
+  recordToolTokens: (payload: unknown) => void;
   trimMessagingToolSent: () => void;
 };
 

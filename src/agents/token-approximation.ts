@@ -99,6 +99,10 @@ export function estimateUnknownTokenChars(value: unknown): number {
   }
 }
 
+export function estimateUnknownTokensApprox(value: unknown): number {
+  return estimateTokensFromChars(estimateUnknownTokenChars(value));
+}
+
 function estimateContentTokenChars(content: unknown): number {
   if (typeof content === "string") {
     return estimateTextTokenChars(content);

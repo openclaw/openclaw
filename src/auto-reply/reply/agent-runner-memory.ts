@@ -436,6 +436,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     tokensAfter: result.result?.tokensAfter,
+    compactionOverheadTokens: result.result?.overheadTokens,
   });
   await appendPostCompactionRefreshPrompt({
     cfg: params.cfg,
@@ -731,6 +732,7 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        compactionOverheadTokens: result.meta?.agentMeta?.compactionOverheadTokens,
         newSessionId: postCompactionSessionId,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;

@@ -161,6 +161,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       storePath: params.storePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
+      compactionOverheadTokens: result.result?.overheadTokens,
     });
   }
   // Use the post-compaction token count for context summary if available

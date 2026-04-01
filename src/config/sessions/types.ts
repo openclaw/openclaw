@@ -72,6 +72,14 @@ export type CliSessionBinding = {
   mcpConfigHash?: string;
 };
 
+export type SessionCumulativeUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  toolTokens: number;
+  compactionOverheadTokens: number;
+  updatedAt: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -158,6 +166,7 @@ export type SessionEntry = {
   queueDrop?: "old" | "new" | "summarize";
   inputTokens?: number;
   outputTokens?: number;
+  cumulativeUsage?: SessionCumulativeUsage;
   totalTokens?: number;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
