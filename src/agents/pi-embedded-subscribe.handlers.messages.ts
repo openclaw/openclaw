@@ -38,8 +38,30 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
-const coerceText = (value: unknown): string =>
-  typeof value === "string" ? value : value == null ? "" : String(value);
+const coerceText = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+};
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
