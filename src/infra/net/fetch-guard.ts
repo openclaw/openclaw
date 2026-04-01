@@ -165,7 +165,7 @@ function rewriteRedirectInitForMethod(params: {
   const currentMethod = init.method?.toUpperCase() ?? "GET";
   const shouldForceGet =
     status === 303
-      ? currentMethod !== "HEAD"
+      ? currentMethod !== "GET" && currentMethod !== "HEAD"
       : (status === 301 || status === 302) && currentMethod === "POST";
 
   if (!shouldForceGet) {
