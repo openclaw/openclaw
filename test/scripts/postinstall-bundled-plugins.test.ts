@@ -54,6 +54,7 @@ describe("bundled plugin postinstall", () => {
     expect(
       createNestedNpmInstallEnv({
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       }),
@@ -93,6 +94,7 @@ describe("bundled plugin postinstall", () => {
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
@@ -226,6 +228,7 @@ describe("bundled plugin postinstall", () => {
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
@@ -292,6 +295,41 @@ describe("bundled plugin postinstall", () => {
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
+        npm_config_prefix: "/opt/homebrew",
+        HOME: "/tmp/home",
+      },
+      extensionsDir,
+      packageRoot,
+      execSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(execSync).toHaveBeenCalledWith(
+      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
+      {
+        cwd: packageRoot,
+        env: {
+          HOME: "/tmp/home",
+        },
+        stdio: "pipe",
+      },
+    );
+  });
+
+  it("installs bundled plugin deps when npm location is global", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.38.4",
+      },
+    });
+    const execSync = vi.fn();
+
+    runBundledPluginPostinstall({
+      env: {
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
