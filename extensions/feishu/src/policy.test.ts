@@ -30,7 +30,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: false });
+    ).toEqual({ requireMention: false, respondToAtAll: false });
   });
 
   it("keeps explicit top-level mention gating in open groups", () => {
@@ -41,7 +41,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, respondToAtAll: false });
   });
 
   it("keeps explicit account mention gating in open groups", () => {
@@ -62,7 +62,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, respondToAtAll: false });
   });
 
   it("keeps explicit per-group mention gating in open groups", () => {
@@ -76,7 +76,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "open",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, respondToAtAll: false });
   });
 
   it("defaults allowlist groups to require mentions", () => {
@@ -87,7 +87,7 @@ describe("resolveFeishuReplyPolicy", () => {
         groupPolicy: "allowlist",
         groupId: "oc_1",
       }),
-    ).toEqual({ requireMention: true });
+    ).toEqual({ requireMention: true, respondToAtAll: false });
   });
 });
 
