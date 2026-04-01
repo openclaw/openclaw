@@ -249,11 +249,16 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
   };
 }
 
+// Minimum backoff (1 s) to prevent zero-delay tight loops when a user configures backoffMs: [0].
+const MIN_RECURRING_BACKOFF_MS = 1_000;
+
 function resolveRecurringErrorBackoffSchedule(cronConfig?: CronConfig): number[] {
   const retryConfig = resolveRetryConfig(cronConfig);
-  return Array.isArray(cronConfig?.retry?.backoffMs) && cronConfig.retry.backoffMs.length > 0
-    ? retryConfig.backoffMs
-    : DEFAULT_BACKOFF_SCHEDULE_MS;
+  const schedule =
+    Array.isArray(cronConfig?.retry?.backoffMs) && cronConfig.retry.backoffMs.length > 0
+      ? retryConfig.backoffMs
+      : DEFAULT_BACKOFF_SCHEDULE_MS;
+  return schedule.map((ms) => Math.max(ms, MIN_RECURRING_BACKOFF_MS));
 }
 
 function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {

@@ -214,7 +214,7 @@ describe("test planner", () => {
     expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
-    expect(plan.topLevelParallelLimit).toBe(3);
+    expect(plan.topLevelParallelLimit).toBe(4);
     expect(plan.deferredRunConcurrency).toBe(1);
     artifacts.cleanupTempArtifacts();
   });
