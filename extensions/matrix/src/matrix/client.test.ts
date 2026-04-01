@@ -451,6 +451,43 @@ describe("resolveMatrixConfig", () => {
     expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
   });
 
+  it("does not materialize a default account from top-level homeserver plus userId alone", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@default:example.org",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveImplicitMatrixAccountId(cfg, {} as NodeJS.ProcessEnv)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
+  });
+
+  it("does not materialize a default env account from global homeserver plus userId alone", () => {
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_USER_ID: "@default:example.org",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
+  });
+
   it("keeps implicit selection for env-backed accounts that can use cached credentials", () => {
     const cfg = {
       channels: {
