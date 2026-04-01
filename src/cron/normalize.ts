@@ -160,6 +160,21 @@ function coercePayload(payload: UnknownRecord) {
   ) {
     delete next.allowUnsafeExternalContent;
   }
+  if ("toolsAllow" in next) {
+    if (Array.isArray(next.toolsAllow)) {
+      next.toolsAllow = (next.toolsAllow as unknown[])
+        .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+        .map((t) => t.trim());
+      if ((next.toolsAllow as string[]).length === 0) {
+        delete next.toolsAllow;
+      }
+    } else if (next.toolsAllow === null) {
+      // Explicit null means "clear the allow-list" (edit --clear-tools)
+      next.toolsAllow = null;
+    } else {
+      delete next.toolsAllow;
+    }
+  }
   return next;
 }
 
