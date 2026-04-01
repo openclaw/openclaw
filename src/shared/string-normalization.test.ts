@@ -43,6 +43,8 @@ describe("shared/string-normalization", () => {
     expect(normalizeHyphenSlug("مجموعة-اختبار")).toBe("مجموعة-اختبار");
     // Mixed ASCII + CJK
     expect(normalizeHyphenSlug("team-中文")).toBe("team-中文");
+    // Devanagari (combining marks)
+    expect(normalizeHyphenSlug("नमस्ते")).toBe("नमस्ते");
   });
 
   it("normalizes @/# prefixed slugs used by channel allowlists", () => {
