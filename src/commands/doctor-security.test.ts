@@ -309,6 +309,40 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
+  it("warns when an agent inherits broader global tools.exec policy than the matching host agent policy", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          runner: {
+            security: "allowlist",
+            ask: "always",
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              security: "full",
+              ask: "off",
+            },
+          },
+          agents: {
+            list: [{ id: "runner" }],
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
+    expect(message).toContain('tools.exec.security="full"');
+    expect(message).toContain('tools.exec.ask="off"');
+    expect(message).toContain('agents.runner.security="allowlist"');
+    expect(message).toContain('agents.runner.ask="always"');
+  });
+
   it('does not warn about durable allow-always trust when ask="always" is enforced', async () => {
     await withExecApprovalsFile(
       {

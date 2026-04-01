@@ -201,7 +201,7 @@ describe("exec approvals policy helpers", () => {
           askFallback: "deny",
         },
       },
-      execConfig: {
+      scopeExecConfig: {
         security: "full",
         ask: "off",
       },
@@ -237,7 +237,7 @@ describe("exec approvals policy helpers", () => {
           ask: "off",
         },
       },
-      execConfig: {
+      scopeExecConfig: {
         ask: "always",
       },
       configPath: "tools.exec",
@@ -269,7 +269,7 @@ describe("exec approvals policy helpers", () => {
           },
         },
       },
-      execConfig: {
+      scopeExecConfig: {
         security: "full",
         ask: "off",
       },
@@ -289,6 +289,56 @@ describe("exec approvals policy helpers", () => {
     expect(summary.askFallback).toEqual({
       effective: "deny",
       source: "~/.openclaw/exec-approvals.json agents.*.askFallback",
+    });
+  });
+
+  it("inherits requested agent policy from global tools.exec config", () => {
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        agents: {
+          runner: {
+            security: "allowlist",
+            ask: "always",
+          },
+        },
+      },
+      globalExecConfig: {
+        security: "full",
+        ask: "off",
+      },
+      configPath: "agents.list.runner.tools.exec",
+      scopeLabel: "agent:runner",
+      agentId: "runner",
+    });
+
+    expect(summary.security).toMatchObject({
+      requested: "full",
+      requestedSource: "tools.exec.security",
+      host: "allowlist",
+      effective: "allowlist",
+    });
+    expect(summary.ask).toMatchObject({
+      requested: "off",
+      requestedSource: "tools.exec.ask",
+      host: "always",
+      effective: "always",
+    });
+  });
+
+  it("reports askFallback from the OpenClaw default when approvals omit it", () => {
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        agents: {},
+      },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    });
+
+    expect(summary.askFallback).toEqual({
+      effective: "deny",
+      source: "OpenClaw default (deny)",
     });
   });
 });

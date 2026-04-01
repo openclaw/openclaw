@@ -251,6 +251,57 @@ describe("exec approvals CLI", () => {
     );
   });
 
+  it("reports agent scopes with inherited global requested policy", async () => {
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        runner: {
+          security: "allowlist",
+          ask: "always",
+        },
+      },
+    };
+    readBestEffortConfig.mockResolvedValue({
+      tools: {
+        exec: {
+          security: "full",
+          ask: "off",
+        },
+      },
+      agents: {
+        list: [{ id: "runner" }],
+      },
+    });
+
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectivePolicy: expect.objectContaining({
+          scopes: expect.arrayContaining([
+            expect.objectContaining({
+              scopeLabel: "agent:runner",
+              security: expect.objectContaining({
+                requested: "full",
+                requestedSource: "tools.exec.security",
+                effective: "allowlist",
+              }),
+              ask: expect.objectContaining({
+                requested: "off",
+                requestedSource: "tools.exec.ask",
+                effective: "always",
+              }),
+              askFallback: expect.objectContaining({
+                source: "OpenClaw default (deny)",
+              }),
+            }),
+          ]),
+        }),
+      }),
+      0,
+    );
+  });
+
   it("defaults allowlist add to wildcard agent", async () => {
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
     saveExecApprovals.mockClear();
