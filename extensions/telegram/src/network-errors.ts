@@ -188,6 +188,10 @@ export function isTelegramServerError(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 500);
 }
 
+export function isTelegramRateLimitError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code === 429);
+}
+
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
 export function isTelegramClientRejection(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);

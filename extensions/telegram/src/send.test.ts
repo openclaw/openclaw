@@ -1914,6 +1914,39 @@ describe("sendStickerTelegram", () => {
     ).rejects.toThrow(/Network request for 'sendSticker' failed!/i);
     expect(sendSticker).toHaveBeenCalledTimes(1);
   });
+
+  it("retries rate-limited sticker sends and honors retry_after", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce({
+        error_code: 429,
+        description: "Too Many Requests",
+        response: { parameters: { retry_after: 1 } },
+      })
+      .mockResolvedValueOnce({
+        message_id: 109,
+        chat: { id: chatId },
+      });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendStickerTelegram(chatId, "fileId123", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "109", chatId });
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1000);
+    expect(sendSticker).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
 
 describe("shared send behaviors", () => {

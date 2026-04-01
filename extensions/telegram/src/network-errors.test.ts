@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
+  isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
@@ -214,6 +215,18 @@ describe("isTelegramServerError", () => {
 
   it("returns false for plain Error", () => {
     expect(isTelegramServerError(new Error("500: Internal Server Error"))).toBe(false);
+  });
+});
+
+describe("isTelegramRateLimitError", () => {
+  it("returns true for Telegram 429 errors", () => {
+    expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
+  });
+
+  it("detects error_code in nested cause", () => {
+    const inner = Object.assign(new Error("Too Many Requests"), { error_code: 429 });
+    const outer = Object.assign(new Error("wrapped"), { cause: inner });
+    expect(isTelegramRateLimitError(outer)).toBe(true);
   });
 });
 
