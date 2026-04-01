@@ -60,6 +60,11 @@ export function shouldHandleDiscordApprovalRequest(params: {
   const config =
     params.configOverride ??
     resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId }).config.execApprovals;
+  const approvers = getDiscordExecApprovalApprovers({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    configOverride: params.configOverride,
+  });
   if (
     !doesApprovalRequestMatchChannelAccount({
       cfg: params.cfg,
@@ -73,7 +78,7 @@ export function shouldHandleDiscordApprovalRequest(params: {
   if (!config) {
     return true;
   }
-  if (!config.enabled || (config.approvers?.length ?? 0) === 0) {
+  if (!config.enabled || approvers.length === 0) {
     return false;
   }
   return matchesApprovalRequestFilters({
