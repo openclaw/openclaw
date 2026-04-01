@@ -43,7 +43,8 @@ env:
   PNPM_VERSION: "10.23.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
-  CLAWHUB_REF: "main"
+  # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
+  CLAWHUB_REF: "0cb0db9786be074aa820e5dd330cd1142158b62d"
 
 jobs:
   preview_plugins_clawhub:
