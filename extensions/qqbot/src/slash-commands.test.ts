@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { matchSlashCommand, type SlashCommandContext } from "./slash-commands.js";
+import {
+  getFrameworkCommands,
+  matchSlashCommand,
+  type SlashCommandContext,
+} from "./slash-commands.js";
 
 /** Build a minimal SlashCommandContext for testing. */
 function buildCtx(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
@@ -109,4 +113,59 @@ describe("slash command authorization", () => {
   });
 
   // ---- usage query (?) for remaining pre-dispatch commands ----
+});
+
+describe("/bot-logs framework command hardening", () => {
+  function getBotLogsHandler() {
+    const command = getFrameworkCommands().find((item) => item.name === "bot-logs");
+    expect(command).toBeDefined();
+    return command!.handler;
+  }
+
+  it("rejects /bot-logs when allowFrom is wildcard", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["*"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
+  it("rejects /bot-logs when allowFrom mixes wildcard and explicit entries", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["*", "qqbot:user-1"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
+  it("rejects /bot-logs when allowFrom uses qqbot:* wildcard form", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot:*"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
+  it("rejects /bot-logs when allowFrom uses qqbot: * wildcard form", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot: *"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
+  it("allows /bot-logs when allowFrom contains numeric sender ids", async () => {
+    const handler = getBotLogsHandler();
+    const accountConfig = { allowFrom: [12345] } as unknown as SlashCommandContext["accountConfig"];
+    const result = await handler(buildCtx({ accountConfig }));
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(
+      "⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。",
+    );
+  });
+
+  it("allows /bot-logs execution when allowFrom is explicit", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot:user-1"] } }));
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(
+      "⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。",
+    );
+  });
 });

@@ -108,6 +108,20 @@ export interface QQBotFrameworkCommand {
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
+function hasExplicitCommandAllowlist(accountConfig?: QQBotAccountConfig): boolean {
+  const allowFrom = accountConfig?.allowFrom;
+  if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
+    return false;
+  }
+  return allowFrom.every((entry) => {
+    const normalized = String(entry)
+      .trim()
+      .replace(/^qqbot:\s*/i, "")
+      .trim();
+    return normalized.length > 0 && normalized !== "*";
+  });
+}
+
 // ============ Command registry ============
 
 // Pre-dispatch commands (requireAuth: false) — handled immediately before queuing.
@@ -529,7 +543,14 @@ registerCommand({
     `导出最近的 OpenClaw 日志文件（最多 4 个文件）。`,
     `每个文件只保留最后 1000 行，并作为附件返回。`,
   ].join("\n"),
-  handler: () => buildBotLogsResult(),
+  handler: (ctx) => {
+    // Defense in depth: require an explicit QQ allowlist entry for log export.
+    // This keeps `/bot-logs` closed when setup leaves allowFrom in permissive mode.
+    if (!hasExplicitCommandAllowlist(ctx.accountConfig)) {
+      return `⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。`;
+    }
+    return buildBotLogsResult();
+  },
 });
 
 // Slash command entry point.
