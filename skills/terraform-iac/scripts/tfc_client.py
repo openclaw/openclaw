@@ -13,7 +13,7 @@ Usage:
   tfc_client.py list-workspaces
 
 Required env vars:
-  TFC_TOKEN   Terraform Cloud Org API token
+  TFC_TOKEN   Terraform Cloud user or team API token (not org token)
   TFC_ORG     Terraform Cloud organization name
 """
 

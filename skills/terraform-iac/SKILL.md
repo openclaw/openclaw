@@ -3,14 +3,14 @@ name: terraform-iac
 description: Create, modify, plan, apply, and destroy AWS and Azure infrastructure using Terraform Cloud. Use when asked to provision cloud resources, manage IaC, write Terraform configs, run terraform plan/apply/destroy, manage workspaces, or maintain infrastructure state. Triggers on phrases like "create an S3 bucket", "provision a VNet", "deploy infrastructure", "terraform plan", "apply infra", "destroy resources", "show current state", "what's deployed".
 ---
 
-# Terraform IaC Agent skill
+# Terraform IaC Agent
 
 Manages AWS and Azure infrastructure via Terraform Cloud (TFC). All state lives in TFC — no local state files.
 
 ## Configuration
 
 Required env vars (set once in OpenClaw config):
-- `TFC_TOKEN` — Terraform Cloud Org API token
+- `TFC_TOKEN` — Terraform Cloud **user API token** or **team API token** (not an organization token — org tokens lack permissions for plan/apply operations). Generate at: User Settings → Tokens, or Organization → Teams → Team API Token.
 - `TFC_ORG` — Terraform Cloud organization name
 - `TFC_WORKSPACE_AWS` — workspace name for AWS resources (e.g. `prod-aws`)
 - `TFC_WORKSPACE_AZURE` — workspace name for Azure resources (e.g. `prod-azure`)
@@ -38,22 +38,24 @@ Identify:
 
 ### Step 2: Generate Terraform config
 
-Write `.tf` files to a local working directory (default: `~/.openclaw/terraform-iac/<workspace>/`).
-
-- One file per logical group: `main.tf`, `variables.tf`, `outputs.tf`
-- Use `terraform.required_providers` block with pinned versions
-- For multi-cloud: separate directories per cloud, separate TFC workspaces
-
-See `references/aws.md` and `references/azure.md` for provider patterns and common resource examples.
-
-### Step 3: Run plan via TFC API
-
-Use `scripts/tfc_client.py`:
+Use `{baseDir}/scripts/tfc_client.py generate` with the appropriate resource type:
 
 ```bash
-python3 skills/terraform-iac/scripts/tfc_client.py plan \
-  --workspace $TFC_WORKSPACE_AWS \
-  --dir ~/.openclaw/terraform-iac/aws
+python3 {baseDir}/scripts/tfc_client.py generate \
+  --resource s3 --name my-bucket \
+  --workspace prod-aws --dir /tmp/tf-aws
+```
+
+Supported resources: `s3`, `vpc`, `ec2`, `sg`, `lambda`, `iam-user`, `iam-role`, `budget`, `cloudtrail`, `cloudwatch`, `efs`, `landing-zone`, `rg`
+
+Interactive wizards (vpc, ec2, sg, lambda, iam-user, budget, cloudtrail, cloudwatch, efs, landing-zone) will prompt for configuration with design guidance.
+
+See `{baseDir}/references/aws.md` and `{baseDir}/references/azure.md` for provider patterns.
+
+### Step 3: Run plan
+
+```bash
+python3 {baseDir}/scripts/tfc_client.py plan --dir /tmp/tf-aws
 ```
 
 Show the plan output to the user. Summarize what will be created/changed/destroyed.
@@ -68,12 +70,10 @@ Do NOT apply without explicit confirmation.
 
 ```bash
 # Apply
-python3 skills/terraform-iac/scripts/tfc_client.py apply --run-id <run_id>
+python3 {baseDir}/scripts/tfc_client.py apply --dir /tmp/tf-aws
 
 # Destroy (requires separate confirmation)
-python3 skills/terraform-iac/scripts/tfc_client.py destroy \
-  --workspace $TFC_WORKSPACE_AWS \
-  --dir ~/.openclaw/terraform-iac/aws
+python3 {baseDir}/scripts/tfc_client.py destroy --dir /tmp/tf-aws
 ```
 
 ### Step 6: Show outputs
@@ -81,7 +81,7 @@ python3 skills/terraform-iac/scripts/tfc_client.py destroy \
 After apply, fetch and display outputs:
 
 ```bash
-python3 skills/terraform-iac/scripts/tfc_client.py outputs --workspace $TFC_WORKSPACE_AWS
+python3 {baseDir}/scripts/tfc_client.py outputs --workspace prod-aws
 ```
 
 ## State Queries
@@ -89,17 +89,13 @@ python3 skills/terraform-iac/scripts/tfc_client.py outputs --workspace $TFC_WORK
 To answer "what's currently deployed":
 
 ```bash
-python3 skills/terraform-iac/scripts/tfc_client.py state --workspace $TFC_WORKSPACE_AWS
+python3 {baseDir}/scripts/tfc_client.py state --workspace prod-aws
 ```
 
 ## Workspace Management
 
 ```bash
-# Create a new workspace
-python3 skills/terraform-iac/scripts/tfc_client.py create-workspace --name <name> --cloud aws
-
-# List workspaces
-python3 skills/terraform-iac/scripts/tfc_client.py list-workspaces
+python3 {baseDir}/scripts/tfc_client.py list-workspaces
 ```
 
 ## Rules
