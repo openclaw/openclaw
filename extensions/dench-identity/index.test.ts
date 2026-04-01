@@ -29,6 +29,15 @@ describe("buildIdentityPrompt", () => {
     );
   });
 
+  it("includes composio-apps skill path and MCP tool preference", () => {
+    const prompt = buildIdentityPrompt(workspaceDir);
+    expect(prompt).toContain(
+      path.join(workspaceDir, "skills", "composio-apps", "SKILL.md"),
+    );
+    expect(prompt).toContain("Composio MCP");
+    expect(prompt).toContain("Never** use curl");
+  });
+
   it("includes exec approval policy (prevents agent stalling on exec confirmation)", () => {
     const prompt = buildIdentityPrompt(workspaceDir);
     expect(prompt).toContain("elevated: true");

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { loadComposioToolCheatSheetMarkdown } from "./composio-cheat-sheet.js";
 
 export const id = "dench-identity";
 
@@ -7,8 +8,11 @@ export function buildIdentityPrompt(workspaceDir: string): string {
   const crmSkillPath = path.join(skillsDir, "crm", "SKILL.md");
   const browserSkillPath = path.join(skillsDir, "browser", "SKILL.md");
   const appBuilderSkillPath = path.join(skillsDir, "app-builder", "SKILL.md");
+  const composioAppsSkillPath = path.join(skillsDir, "composio-apps", "SKILL.md");
   const appsDir = path.join(workspaceDir, "apps");
   const dbPath = path.join(workspaceDir, "workspace.duckdb");
+
+  const composioCheatSheet = loadComposioToolCheatSheetMarkdown(workspaceDir);
 
   return `# DenchClaw System Prompt
 
@@ -47,6 +51,7 @@ When in doubt, delegate. A well-delegated task finishes faster and produces bett
 | **CRM Analyst** | \`${crmSkillPath}\` | DuckDB queries, object/field/entry CRUD, pipeline ops, data enrichment, PIVOT views, report generation, workspace docs | Default model; fast model for simple queries |
 | **Browser Agent** | \`${browserSkillPath}\` | Web scraping, form filling, authenticated browsing, screenshots, multi-page workflows | Default model |
 | **App Builder** | \`${appBuilderSkillPath}\` | Build \`.dench.app\` web apps with DuckDB, Chart.js/D3, games, AI chat UIs, platform API | Capable model with thinking enabled |
+| **App Integration** | \`${composioAppsSkillPath}\` | Connected app tools (Gmail, Slack, etc.) via Composio MCP — recipes and argument defaults | Default model |
 
 ### Ad-hoc specialists (check for custom skills first)
 
@@ -101,7 +106,10 @@ For multi-session projects, write a session handoff summary to \`${workspaceDir}
 - Prefer \`exa_search\` over the built-in \`web_search\` whenever \`exa_search\` is available.
 - Use \`exa_get_contents\` to fetch page contents and \`exa_answer\` for citation-backed answers when they fit the task.
 - Use \`apollo_enrich\` for people and company enrichment lookups.
+- For connected apps (Gmail, Slack, GitHub, etc.), use the **Composio MCP** tools directly. Check the **Connected App Tools** section below for exact tool names and argument formats.
+- **Never** use curl or raw HTTP to call Composio or gateway integration endpoints — always use the MCP tools.
 
+${composioCheatSheet ? `\n${composioCheatSheet}\n` : ""}
 ## Links
 
 - Website: https://denchclaw.com

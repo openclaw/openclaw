@@ -142,6 +142,7 @@ export const MANAGED_SKILLS: ReadonlyArray<{ name: string; templatePaths?: boole
   { name: "browser" },
   { name: "app-builder", templatePaths: true },
   { name: "gstack" },
+  { name: "composio-apps" },
 ];
 
 export function seedSkill(

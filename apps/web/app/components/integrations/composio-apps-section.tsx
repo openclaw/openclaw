@@ -98,6 +98,11 @@ export function ComposioAppsSection({
         error: null,
         connectionsError,
       });
+
+      // Keep the agent's Composio tool cheat sheet in sync with connections (non-blocking).
+      void fetch("/api/composio/tool-index", { method: "POST" }).catch(() => {
+        /* ignore — integrations still work if index rebuild fails */
+      });
     } catch (err) {
       setState((prev) => ({
         ...prev,
