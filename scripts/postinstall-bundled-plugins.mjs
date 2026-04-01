@@ -97,13 +97,24 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
 export function createNestedNpmInstallEnv(env = process.env) {
   const nextEnv = { ...env };
   delete nextEnv.npm_config_global;
+  delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
 }
 
+function isGlobalNpmInstall(env) {
+  if (env.npm_config_global === "true") {
+    return true;
+  }
+  if (typeof env.npm_config_location === "string") {
+    return env.npm_config_location.toLowerCase() === "global";
+  }
+  return false;
+}
+
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
-  if (env.npm_config_global !== "true") {
+  if (!isGlobalNpmInstall(env)) {
     return;
   }
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
