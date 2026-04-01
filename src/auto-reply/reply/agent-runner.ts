@@ -741,7 +741,9 @@ export async function runReplyAgent(params: {
         amount: autoCompactionCount,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
-        compactionOverheadTokens: runResult.meta?.agentMeta?.compactionOverheadTokens,
+        // compactionOverheadTokens is intentionally omitted: persistRunSessionUsage
+        // above already accumulated it into cumulativeUsage. Passing it here again
+        // would double-count the overhead in the cumulative totals.
         newSessionId: runResult.meta?.agentMeta?.sessionId,
       });
       const refreshedSessionEntry =

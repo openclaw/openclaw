@@ -130,13 +130,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
+  // CLI providers report usage as a context snapshot (current total size), not a
+  // per-run delta.  Adding a snapshot to cumulative totals on every turn inflates
+  // lifetime counts; skip input/output accumulation for those providers.
+  const usageIsContextSnapshot = isCliProvider(providerUsed, cfg);
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], next);
     const cumulativeUsage = accumulateSessionCumulativeUsage(
       store[sessionKey] ?? entry,
       {
-        inputTokens: usage?.input,
-        outputTokens: usage?.output,
+        inputTokens: usageIsContextSnapshot ? undefined : usage?.input,
+        outputTokens: usageIsContextSnapshot ? undefined : usage?.output,
         toolTokens,
         compactionOverheadTokens,
       },
