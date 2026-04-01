@@ -74,6 +74,11 @@ type AcpxHealthCheckResult =
           };
     };
 
+type EnsureFailureRecoveryResult = {
+  events: AcpxJsonObject[];
+  skipPostEnsureReplacement: boolean;
+};
+
 function formatPermissionModeGuidance(): string {
   return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
 }
@@ -379,7 +384,7 @@ export class AcpxRuntime implements AcpRuntime {
     sessionName: string;
     agent: string;
     cwd: string;
-  }): Promise<boolean> {
+  }): Promise<{ replace: boolean; replacementEvents?: AcpxJsonObject[] }> {
     const args = await this.buildVerbArgs({
       agent: params.agent,
       cwd: params.cwd,
@@ -397,7 +402,7 @@ export class AcpxRuntime implements AcpRuntime {
       this.logger?.warn?.(
         `acpx ensureSession status probe failed: session=${params.sessionName} cwd=${params.cwd} error=${summarizeLogText(error instanceof Error ? error.message : String(error)) || "<empty>"}`,
       );
-      return false;
+      return { replace: false };
     }
 
     const noSession = events.some((event) => toAcpxErrorEvent(event)?.code === "NO_SESSION");
@@ -405,7 +410,7 @@ export class AcpxRuntime implements AcpRuntime {
       this.logger?.warn?.(
         `acpx ensureSession replacing missing named session: session=${params.sessionName} cwd=${params.cwd}`,
       );
-      return true;
+      return { replace: true };
     }
 
     const detail = events.find((event) => !toAcpxErrorEvent(event));
@@ -413,22 +418,24 @@ export class AcpxRuntime implements AcpRuntime {
     if (status === "dead") {
       const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
       if (shouldRetainNamedSessionForDeadStatus(detail)) {
-        await this.replaceDeadNamedSession({
-          detail,
-          sessionName: params.sessionName,
-          agent: params.agent,
-          cwd: params.cwd,
-          logContext: `status=${status} summary=${summary || "<empty>"}`,
-        });
-        return true;
+        return {
+          replace: true,
+          replacementEvents: await this.replaceDeadNamedSession({
+            detail,
+            sessionName: params.sessionName,
+            agent: params.agent,
+            cwd: params.cwd,
+            logContext: `status=${status} summary=${summary || "<empty>"}`,
+          }),
+        };
       }
       this.logger?.warn?.(
         `acpx ensureSession replacing dead named session: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
       );
-      return true;
+      return { replace: true };
     }
 
-    return false;
+    return { replace: false };
   }
 
   private async recoverEnsureFailure(params: {
@@ -436,7 +443,7 @@ export class AcpxRuntime implements AcpRuntime {
     agent: string;
     cwd: string;
     error: unknown;
-  }): Promise<AcpxJsonObject[] | null> {
+  }): Promise<EnsureFailureRecoveryResult | null> {
     const errorMessage = summarizeLogText(
       params.error instanceof Error ? params.error.message : String(params.error),
     );
@@ -468,11 +475,14 @@ export class AcpxRuntime implements AcpRuntime {
       this.logger?.warn?.(
         `acpx ensureSession creating named session after ensure failure and missing status: session=${params.sessionName} cwd=${params.cwd}`,
       );
-      return await this.createNamedSession({
-        agent: params.agent,
-        cwd: params.cwd,
-        sessionName: params.sessionName,
-      });
+      return {
+        events: await this.createNamedSession({
+          agent: params.agent,
+          cwd: params.cwd,
+          sessionName: params.sessionName,
+        }),
+        skipPostEnsureReplacement: true,
+      };
     }
 
     const detail = events.find((event) => !toAcpxErrorEvent(event));
@@ -480,29 +490,38 @@ export class AcpxRuntime implements AcpRuntime {
     if (status === "dead") {
       const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
       if (shouldRetainNamedSessionForDeadStatus(detail)) {
-        return await this.replaceDeadNamedSession({
-          detail,
-          sessionName: params.sessionName,
-          agent: params.agent,
-          cwd: params.cwd,
-          logContext: `status=${status} summary=${summary || "<empty>"}`,
-        });
+        return {
+          events: await this.replaceDeadNamedSession({
+            detail,
+            sessionName: params.sessionName,
+            agent: params.agent,
+            cwd: params.cwd,
+            logContext: `status=${status} summary=${summary || "<empty>"}`,
+          }),
+          skipPostEnsureReplacement: true,
+        };
       }
       this.logger?.warn?.(
         `acpx ensureSession replacing dead named session after ensure failure: session=${params.sessionName} cwd=${params.cwd}`,
       );
-      return await this.createNamedSession({
-        agent: params.agent,
-        cwd: params.cwd,
-        sessionName: params.sessionName,
-      });
+      return {
+        events: await this.createNamedSession({
+          agent: params.agent,
+          cwd: params.cwd,
+          sessionName: params.sessionName,
+        }),
+        skipPostEnsureReplacement: true,
+      };
     }
 
     if (status === "alive" || findSessionIdentifierEvent(events)) {
       this.logger?.warn?.(
         `acpx ensureSession reusing live named session after ensure failure: session=${params.sessionName} cwd=${params.cwd} status=${status || "unknown"}`,
       );
-      return events;
+      return {
+        events,
+        skipPostEnsureReplacement: false,
+      };
     }
 
     return null;
@@ -521,6 +540,7 @@ export class AcpxRuntime implements AcpRuntime {
     const mode = input.mode;
     const resumeSessionId = asTrimmedString(input.resumeSessionId);
     let events: AcpxJsonObject[];
+    let skipPostEnsureReplacement = false;
     if (resumeSessionId) {
       events = await this.createNamedSession({
         agent,
@@ -549,7 +569,8 @@ export class AcpxRuntime implements AcpRuntime {
         if (!recovered) {
           throw error;
         }
-        events = recovered;
+        events = recovered.events;
+        skipPostEnsureReplacement = recovered.skipPostEnsureReplacement;
       }
     }
     if (events.length === 0) {
@@ -559,26 +580,27 @@ export class AcpxRuntime implements AcpRuntime {
     }
     let ensuredEvent = findSessionIdentifierEvent(events);
 
-    if (
-      ensuredEvent &&
-      !resumeSessionId &&
-      (await this.shouldReplaceEnsuredSession({
+    if (ensuredEvent && !resumeSessionId && !skipPostEnsureReplacement) {
+      const replacement = await this.shouldReplaceEnsuredSession({
         sessionName,
         agent,
         cwd,
-      }))
-    ) {
-      events = await this.createNamedSession({
-        agent,
-        cwd,
-        sessionName,
       });
-      if (events.length === 0) {
-        this.logger?.warn?.(
-          `acpx ensureSession returned no events after replacing dead session: session=${sessionName} agent=${agent} cwd=${cwd}`,
-        );
+      if (replacement.replace) {
+        events =
+          replacement.replacementEvents ??
+          (await this.createNamedSession({
+            agent,
+            cwd,
+            sessionName,
+          }));
+        if (events.length === 0) {
+          this.logger?.warn?.(
+            `acpx ensureSession returned no events after replacing dead session: session=${sessionName} agent=${agent} cwd=${cwd}`,
+          );
+        }
+        ensuredEvent = findSessionIdentifierEvent(events);
       }
-      ensuredEvent = findSessionIdentifierEvent(events);
     }
 
     if (!ensuredEvent && !resumeSessionId) {

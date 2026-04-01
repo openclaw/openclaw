@@ -71,15 +71,17 @@ async function expectSessionEnsureFallback(params: {
     const logs = await readMockRuntimeLogEntries(logPath);
     const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
     const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-    const newIndex = logs.findIndex((entry) => entry.kind === "new");
+    const newEntries = logs.filter((entry) => entry.kind === "new");
+    const newEntry = newEntries[0] ?? null;
+    const newIndex = newEntry ? logs.indexOf(newEntry) : -1;
     expect(ensureIndex).toBeGreaterThanOrEqual(0);
     expect(statusIndex).toBeGreaterThan(ensureIndex);
     if (params.expectNewAfterStatus) {
+      expect(newEntries).toHaveLength(1);
       expect(newIndex).toBeGreaterThan(statusIndex);
     } else {
-      expect(newIndex).toBe(-1);
+      expect(newEntries).toHaveLength(0);
     }
-    const newEntry = newIndex >= 0 ? logs[newIndex] : null;
     const newArgs = ((newEntry?.args as string[]) ?? []).slice();
     const resumeFlagIndex = newArgs.indexOf("--resume-session");
     if (params.expectedResumeSessionId === undefined) {
