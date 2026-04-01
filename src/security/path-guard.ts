@@ -98,6 +98,21 @@ export async function checkPathGuardStrict(
 
   const matchesEntry = async (entry: string): Promise<boolean> => {
     if (path.isAbsolute(entry)) {
+      const normalizedEntryPattern = toPosixPath(entry);
+      const hasGlobMagic = new Minimatch(normalizedEntryPattern, {
+        dot: true,
+        magicalBraces: true,
+      }).hasMagic();
+
+      if (hasGlobMagic) {
+        // Absolute glob entries match the canonicalized real path.
+        // Do NOT canonicalize the entry itself (it may contain glob segments).
+        return minimatch(normalizedRealPath, normalizedEntryPattern, {
+          dot: true,
+          magicalBraces: true,
+        });
+      }
+
       const canonicalEntry = await resolveRealPathStrict(entry);
       const normalizedEntry = toPosixPath(canonicalEntry);
       return (
@@ -119,6 +134,13 @@ export async function checkPathGuardStrict(
     // that resolves outside workspace, because requested targets are matched in realpath-space.
     const canonicalAbsoluteEntry = await resolveRealPathStrict(absoluteEntry);
     const normalizedCanonicalAbsoluteEntry = toPosixPath(canonicalAbsoluteEntry);
+
+    // Relative policy entries are workspace-anchored by intent.
+    // If the canonicalized entry escapes the workspace (e.g. entry points at a symlinked dir outside),
+    // it must NOT match outside-workspace targets.
+    if (!isPathInside(normalizedWorkspaceRoot, normalizedCanonicalAbsoluteEntry)) {
+      return false;
+    }
 
     const normalizedPattern = toPosixPath(entry);
     const hasGlobMagic = new Minimatch(normalizedPattern, {
@@ -161,7 +183,8 @@ export async function checkPathGuardStrict(
   }
 
   // 3) Allow list
-  if (policy.allowedPaths && policy.allowedPaths.length > 0) {
+  // Treat allowedPaths: [] as an explicit deny-all.
+  if (policy.allowedPaths !== undefined) {
     let allowed = false;
     for (const allowEntry of policy.allowedPaths) {
       if (await matchesEntry(allowEntry)) {

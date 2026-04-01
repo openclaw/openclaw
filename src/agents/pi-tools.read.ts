@@ -577,6 +577,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           containerWorkdir: options?.containerWorkdir,
         });
 
+        // Always run sandbox alias/hardlink escape checks, even when PathGuard policy is enabled.
+        // PathGuard focuses on policy evaluation in canonical path space; assertSandboxPath enforces
+        // additional sandbox-specific escape protections.
+        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+
         if (options?.policy) {
           try {
             await checkPathGuardStrict(sandboxPath, options.policy, root);
@@ -584,14 +589,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
             if (error instanceof PathGuardError) {
               return pathGuardDeniedToolResult({
                 attemptedAction: tool.name,
-                whatIWasTryingToDo: `Access a file path for tool "${tool.name}".`, 
+                whatIWasTryingToDo: `Access a file path for tool "${tool.name}".`,
                 err: error,
               });
             }
             throw error;
           }
-        } else {
-          await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
         }
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
