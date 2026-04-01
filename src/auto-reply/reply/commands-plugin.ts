@@ -38,6 +38,8 @@ export const handlePluginCommand: CommandHandler = async (
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionEntry?.sessionId,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,
