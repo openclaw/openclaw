@@ -14,6 +14,7 @@ import {
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  stripRedundantProviderPrefix,
 } from "../agents/model-selection.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -1046,7 +1047,10 @@ export function resolveSessionModelRef(
       // with provider="openrouter") into { provider: "anthropic" }, discarding
       // the stored OpenRouter provider and causing direct API calls to a
       // provider the user has no credentials for.
-      return { provider: runtimeProvider, model: runtimeModel };
+      return {
+        provider: runtimeProvider,
+        model: stripRedundantProviderPrefix(runtimeProvider, runtimeModel),
+      };
     }
     const parsedRuntime = parseModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
     if (parsedRuntime) {

@@ -1,5 +1,5 @@
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveDefaultModelForAgent, stripRedundantProviderPrefix } from "./model-selection.js";
 import {
   consumeEmbeddedRunModelSwitch,
   requestEmbeddedRunModelSwitch,
@@ -51,7 +51,8 @@ export function resolveLiveSessionModelSelection(params: {
   const runtimeProvider = entry?.modelProvider?.trim();
   const runtimeModel = entry?.model?.trim();
   const provider = runtimeProvider || entry?.providerOverride?.trim() || defaultModelRef.provider;
-  const model = runtimeModel || entry?.modelOverride?.trim() || defaultModelRef.model;
+  const rawModel = runtimeModel || entry?.modelOverride?.trim() || defaultModelRef.model;
+  const model = stripRedundantProviderPrefix(provider, rawModel);
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
     provider,
