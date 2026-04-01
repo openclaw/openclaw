@@ -6,6 +6,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { isThreadSessionKey } from "../config/sessions/reset.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
@@ -14,7 +15,6 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { isThreadSessionKey } from "../config/sessions/reset.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
@@ -202,9 +202,15 @@ export function resolveAnnounceOrigin(
   // into announce routing — only thread/topic sessions may contribute
   // threadId from their session store entry. The requesterOrigin threadId
   // (captured at spawn time) is always preserved regardless.
+  //
+  // However, when requesterOrigin has no threadId (legacy/resumed runs where
+  // spawn-time origin wasn't persisted), preserve the entry threadId as the
+  // only available thread hint to avoid breaking fallback routing.
   // See: https://github.com/openclaw/openclaw/issues/17731
   const entryThreadIdAllowed = requesterSessionKey
-    ? isThreadSessionKey(requesterSessionKey)
+    ? isThreadSessionKey(requesterSessionKey) ||
+      // Preserve entry threadId as fallback when requesterOrigin has none
+      normalizedRequester?.threadId == null
     : true; // preserve existing behavior when session key is not available
   const sanitizedEntry: DeliveryContext | undefined =
     normalizedEntry && !entryThreadIdAllowed && normalizedEntry.threadId != null
