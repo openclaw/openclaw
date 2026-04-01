@@ -217,9 +217,10 @@ This is intentionally conservative. It can improve readiness when runtime start 
 
 Missing-requirements routing priority:
 
-- `API key may be required` -> `configure_provider`
-- `provider configuration missing` -> `configure_provider`
-- `model configuration missing` -> `configure_provider`
+- `API key missing` -> `check_api_key_config`
+- `API key may be required` -> `check_api_key_config`
+- `provider configuration missing` -> `check_provider_config`
+- `model configuration missing` -> `check_model_config`
 - `nim is not running` -> `start_nim_runtime`
 - `gpu runtime not enabled` -> `enable_gpu_runtime`
 - `nvidia policy missing` -> `review_runtime_capabilities`
@@ -254,6 +255,8 @@ Provider remediation notes:
   - `model`
   - `api_key_required`
   - `api_key_present`
+  - `checked_sources`
+  - `detected_keys`
   - `provider_config_present`
   - `model_config_present`
   - `provider_source`
@@ -263,6 +266,7 @@ Provider remediation notes:
 
 Current provider priority order is:
 
+- `API key missing` -> `check_api_key_config`
 - `API key may be required` -> `check_api_key_config`
 - `provider configuration missing` -> `check_provider_config`
 - `model configuration missing` -> `check_model_config`
@@ -271,9 +275,14 @@ The current signals are inferred conservatively from:
 
 - structured sandbox status (`provider`, `model`)
 - start result summary and key points
+- `~/.openclaw/openclaw.json`
+- environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`)
 
 Routing loop behavior change:
 
+- if remediation resolves to `check_api_key_config`, the loop runs that check once
+- if remediation resolves to `check_provider_config`, the loop runs that check once
+- if remediation resolves to `check_model_config`, the loop runs that check once
 - if remediation resolves to `check_api_key_config`, loop stops with `final_state = provider_api_key_missing`
 - if remediation resolves to `check_provider_config`, loop stops with `final_state = provider_config_missing`
 - if remediation resolves to `check_model_config`, loop stops with `final_state = provider_model_missing`

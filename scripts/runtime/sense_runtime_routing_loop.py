@@ -111,7 +111,17 @@ def main() -> int:
         next_step = str(resolved_next_step or remediation.get('next_step') or decision.get('next_step') or 'manual_review')
 
         provider_status = remediation.get('provider_status') if isinstance(remediation, dict) else None
-        if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False and str(remediation.get('remediation_action') or '') not in {'configure_provider'}:
+        if (
+            isinstance(provider_status, dict)
+            and provider_status.get('provider_ready') is False
+            and str(remediation.get('remediation_action') or '') not in {
+                'configure_provider',
+                'check_api_key_config',
+                'check_provider_config',
+                'check_model_config',
+                'check_runtime_provider',
+            }
+        ):
             final_state = 'provider_not_ready'
             next_step = resolved_next_step or 'configure_provider'
             break
@@ -125,19 +135,56 @@ def main() -> int:
             executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'configure_provider', 'result': provider_result})
             resolved_next_step = str(provider_result.get('resolved_next_step') or '') if isinstance(provider_result, dict) else ''
             next_step = str(resolved_next_step or provider_result.get('next_step') or next_step)
-            if next_step == 'check_api_key_config':
+            provider_status = provider_result.get('provider_status') if isinstance(provider_result, dict) else None
+            if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False and next_step == 'configure_provider':
+                final_state = 'provider_not_ready'
+                next_step = 'configure_provider'
+                break
+            if next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
+        if next_step == 'check_api_key_config' and remediation_action != 'check_api_key_config':
+            api_key_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'check_api_key_config']
+            api_key_result = run_json(api_key_cmd)
+            last_remediation = api_key_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'check_api_key_config', 'result': api_key_result})
+            next_step = str(api_key_result.get('resolved_next_step') or api_key_result.get('next_step') or next_step)
+            provider_status = api_key_result.get('provider_status') if isinstance(api_key_result, dict) else None
+            if next_step == 'configure_provider':
                 final_state = 'provider_api_key_missing'
                 break
             if next_step == 'check_provider_config':
+                pass
+            elif next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
+        if next_step == 'check_provider_config' and remediation_action != 'check_provider_config':
+            provider_cfg_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'check_provider_config']
+            provider_cfg_result = run_json(provider_cfg_cmd)
+            last_remediation = provider_cfg_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'check_provider_config', 'result': provider_cfg_result})
+            next_step = str(provider_cfg_result.get('resolved_next_step') or provider_cfg_result.get('next_step') or next_step)
+            provider_status = provider_cfg_result.get('provider_status') if isinstance(provider_cfg_result, dict) else None
+            if next_step == 'configure_provider':
                 final_state = 'provider_config_missing'
                 break
             if next_step == 'check_model_config':
-                final_state = 'provider_model_missing'
+                pass
+            elif next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
                 break
-            provider_status = provider_result.get('provider_status') if isinstance(provider_result, dict) else None
-            if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False:
-                final_state = 'provider_not_ready'
-                next_step = 'configure_provider'
+
+        if next_step == 'check_model_config' and remediation_action != 'check_model_config':
+            model_cfg_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'check_model_config']
+            model_cfg_result = run_json(model_cfg_cmd)
+            last_remediation = model_cfg_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'check_model_config', 'result': model_cfg_result})
+            next_step = str(model_cfg_result.get('resolved_next_step') or model_cfg_result.get('next_step') or next_step)
+            provider_status = model_cfg_result.get('provider_status') if isinstance(model_cfg_result, dict) else None
+            if next_step == 'configure_provider':
+                final_state = 'provider_model_missing'
                 break
             if next_step == 'run_runtime_task':
                 final_state = 'ready_for_runtime_task'

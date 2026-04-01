@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 BACKOFF_SCHEDULE = [2, 4, 8]
+OPENCLAW_CONFIG_PATH = Path.home() / '.openclaw' / 'openclaw.json'
+KNOWN_API_KEY_ENV_VARS = [
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'NVIDIA_API_KEY',
+    'OPENROUTER_API_KEY',
+    'OLLAMA_API_KEY',
+]
+PROVIDER_ENV_VAR_MAP = {
+    'openai': 'OPENAI_API_KEY',
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'nvidia': 'NVIDIA_API_KEY',
+    'openrouter': 'OPENROUTER_API_KEY',
+    'ollama': 'OLLAMA_API_KEY',
+}
 
 PRIORITIZED_REQUIREMENT_STEPS = [
+    ('API key missing', 'check_api_key_config'),
     ('API key may be required', 'check_api_key_config'),
     ('provider configuration missing', 'check_provider_config'),
     ('model configuration missing', 'check_model_config'),
@@ -116,6 +133,160 @@ def run_runtime_start(script_dir: Path, args: argparse.Namespace) -> dict:
     return run_json(cmd)
 
 
+def load_openclaw_config() -> tuple[dict, list[str]]:
+    checked_sources: list[str] = []
+    if OPENCLAW_CONFIG_PATH.exists():
+        checked_sources.append('config')
+        try:
+            payload = json.loads(OPENCLAW_CONFIG_PATH.read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}, checked_sources
+        if isinstance(payload, dict):
+            return payload, checked_sources
+    return {}, checked_sources
+
+
+def infer_provider_and_model_from_config(config: dict) -> dict:
+    provider = 'unknown'
+    provider_source = None
+    model = 'unknown'
+    model_source = None
+
+    models_cfg = config.get('models') if isinstance(config.get('models'), dict) else {}
+    providers_cfg = models_cfg.get('providers') if isinstance(models_cfg.get('providers'), dict) else {}
+    defaults_cfg = config.get('agents') if isinstance(config.get('agents'), dict) else {}
+    defaults_cfg = defaults_cfg.get('defaults') if isinstance(defaults_cfg.get('defaults'), dict) else {}
+    default_model_cfg = defaults_cfg.get('model') if isinstance(defaults_cfg.get('model'), dict) else {}
+    primary_model = default_model_cfg.get('primary')
+
+    if isinstance(primary_model, str) and primary_model:
+        if '/' in primary_model:
+            provider_part, model_part = primary_model.split('/', 1)
+            if provider_part:
+                provider = provider_part
+                provider_source = 'config'
+            if model_part:
+                model = model_part
+                model_source = 'config'
+        else:
+            model = primary_model
+            model_source = 'config'
+
+    if provider == 'unknown' and providers_cfg:
+        provider = next(iter(providers_cfg.keys()))
+        provider_source = 'config'
+
+    provider_cfg = providers_cfg.get(provider) if isinstance(providers_cfg.get(provider), dict) else {}
+    if model == 'unknown' and provider_cfg:
+        models = provider_cfg.get('models') if isinstance(provider_cfg.get('models'), list) else []
+        for candidate in models:
+            if not isinstance(candidate, dict):
+                continue
+            model_id = candidate.get('id') or candidate.get('name')
+            if isinstance(model_id, str) and model_id:
+                model = model_id
+                model_source = 'config'
+                break
+
+    return {
+        'provider': provider,
+        'provider_source': provider_source,
+        'model': model,
+        'model_source': model_source,
+    }
+
+
+def merge_provider_model_sources(runtime_signals: dict, config: dict) -> dict:
+    merged = dict(runtime_signals)
+    config_signals = infer_provider_and_model_from_config(config)
+
+    runtime_provider = str(merged.get('provider') or 'unknown')
+    runtime_model = str(merged.get('model') or 'unknown')
+    if runtime_provider not in {'', 'unknown'}:
+        merged['provider_source'] = 'runtime'
+    else:
+        merged['provider'] = config_signals.get('provider', 'unknown')
+        merged['provider_source'] = config_signals.get('provider_source')
+    if runtime_model not in {'', 'unknown'}:
+        merged['model_source'] = 'runtime'
+    else:
+        merged['model'] = config_signals.get('model', 'unknown')
+        merged['model_source'] = config_signals.get('model_source')
+
+    return merged
+
+
+def infer_required_api_key_names(provider_status: dict, start_result: dict | None) -> list[str]:
+    provider = str(provider_status.get('provider') or 'unknown').lower()
+    required: list[str] = []
+    if provider in PROVIDER_ENV_VAR_MAP:
+        required.append(PROVIDER_ENV_VAR_MAP[provider])
+
+    haystacks: list[str] = []
+    if isinstance(start_result, dict):
+        summary = start_result.get('summary')
+        if isinstance(summary, str):
+            haystacks.append(summary.lower())
+        key_points = start_result.get('key_points')
+        if isinstance(key_points, list):
+            for item in key_points:
+                if isinstance(item, str):
+                    haystacks.append(item.lower())
+    text = ' '.join(haystacks)
+    if 'nvidia api key' in text and 'NVIDIA_API_KEY' not in required:
+        required.insert(0, 'NVIDIA_API_KEY')
+    if 'openai api key' in text and 'OPENAI_API_KEY' not in required:
+        required.insert(0, 'OPENAI_API_KEY')
+    if 'anthropic api key' in text and 'ANTHROPIC_API_KEY' not in required:
+        required.insert(0, 'ANTHROPIC_API_KEY')
+    if 'openrouter api key' in text and 'OPENROUTER_API_KEY' not in required:
+        required.insert(0, 'OPENROUTER_API_KEY')
+
+    deduped: list[str] = []
+    for item in required:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def check_api_key_presence(config: dict, provider_status: dict, start_result: dict | None) -> dict:
+    checked_sources = ['env']
+    detected_keys: list[str] = []
+    required_key_names = infer_required_api_key_names(provider_status, start_result)
+    keys_to_check = list(required_key_names) if required_key_names else list(KNOWN_API_KEY_ENV_VARS)
+
+    for env_name in keys_to_check:
+        if bool(os.environ.get(env_name)):
+            detected_keys.append(env_name)
+
+    providers_cfg = {}
+    models_cfg = config.get('models') if isinstance(config.get('models'), dict) else {}
+    if isinstance(models_cfg.get('providers'), dict):
+        providers_cfg = models_cfg.get('providers')
+    if providers_cfg:
+        checked_sources.append('config')
+    for provider_name, provider_cfg in providers_cfg.items():
+        if not isinstance(provider_cfg, dict):
+            continue
+        env_name = PROVIDER_ENV_VAR_MAP.get(str(provider_name).lower())
+        if env_name and env_name in keys_to_check and provider_cfg.get('apiKey'):
+            detected_keys.append(env_name)
+
+    deduped_keys: list[str] = []
+    for item in detected_keys:
+        if item not in deduped_keys:
+            deduped_keys.append(item)
+
+    api_key_required = bool(required_key_names)
+    api_key_present = len(deduped_keys) > 0
+    return {
+        'api_key_required': api_key_required,
+        'api_key_present': api_key_present,
+        'checked_sources': checked_sources,
+        'detected_keys': deduped_keys,
+    }
+
+
 def summarize_capabilities(sandbox_payload: dict) -> dict:
     details = sandbox_payload.get('details') if isinstance(sandbox_payload, dict) else None
     sandbox_status = details.get('sandbox_status') if isinstance(details, dict) else {}
@@ -144,17 +315,11 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
     if model in {'', 'unknown'}:
         missing.append('model configuration missing')
 
-    if isinstance(start_result, dict):
-        haystacks = []
-        summary = start_result.get('summary')
-        if isinstance(summary, str):
-            haystacks.append(summary.lower())
-        for item in start_result.get('key_points') if isinstance(start_result.get('key_points'), list) else []:
-            if isinstance(item, str):
-                haystacks.append(item.lower())
-        text = ' '.join(haystacks)
-        if 'api key required' in text or 'nvidia api key' in text:
-            missing.append('API key may be required')
+    api_key_names = infer_required_api_key_names(provider_status, start_result)
+    if api_key_names:
+        missing.append('API key may be required')
+    if provider_status.get('api_key_required') and provider_status.get('api_key_present') is False:
+        missing.append('API key missing')
 
     deduped: list[str] = []
     for item in missing:
@@ -164,23 +329,44 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
 
 
 def build_provider_status(provider_status: dict, start_result: dict | None) -> dict:
-    status = dict(provider_status)
-    missing = infer_missing_requirements(status, start_result)
+    config, checked_sources = load_openclaw_config()
+    status = merge_provider_model_sources(provider_status, config)
+    api_key_status = check_api_key_presence(config, status, start_result)
+    status.update(api_key_status)
+
     provider = str(status.get('provider') or 'unknown')
     model = str(status.get('model') or 'unknown')
-    api_key_required = 'API key may be required' in missing
-    provider_config_present = provider not in {'', 'unknown'}
-    model_config_present = model not in {'', 'unknown'}
+    status['provider_config_present'] = provider not in {'', 'unknown'}
+    status['model_config_present'] = model not in {'', 'unknown'}
 
-    status['api_key_required'] = api_key_required
-    status['api_key_present'] = False if api_key_required else None
-    status['provider_config_present'] = provider_config_present
-    status['model_config_present'] = model_config_present
-    status['provider_source'] = None
-    status['model_source'] = None
-    status['provider_ready'] = len(missing) == 0
+    missing = infer_missing_requirements(status, start_result)
+    status['checked_sources'] = checked_sources or ['env']
+    status['provider_ready'] = (
+        status.get('provider_config_present') is True
+        and status.get('model_config_present') is True
+        and (status.get('api_key_required') is False or status.get('api_key_present') is True)
+    )
     status['missing_requirements'] = missing
     return status
+
+
+def run_provider_signal_check(script_dir: Path, args: argparse.Namespace, *, start_attempted: bool) -> dict:
+    initial_sandbox_payload = get_sandbox_status(script_dir, args)
+    initial_provider_status = build_provider_status(summarize_capabilities(initial_sandbox_payload), None)
+    start_result = run_runtime_start(script_dir, args)
+    runtime_status = get_runtime_status(script_dir, args)
+    followup_sandbox_payload = get_sandbox_status(script_dir, args)
+    followup_provider_status = build_provider_status(summarize_capabilities(followup_sandbox_payload), start_result)
+    resolved_next_step = resolve_missing_requirements_next_step(followup_provider_status.get('missing_requirements'))
+    return {
+        'initial_provider_status': initial_provider_status,
+        'provider_status': followup_provider_status,
+        'resolved_next_step': resolved_next_step,
+        'start_result': start_result,
+        'runtime_status': runtime_status,
+        'followup_status': followup_provider_status,
+        'start_attempted': start_attempted,
+    }
 
 
 def infer_gpu_missing_requirements(gpu_status: dict) -> list[str]:
@@ -326,23 +512,54 @@ def main() -> int:
             response['next_step'] = resolved_next_step or 'configure_provider'
         else:
             response['next_step'] = followup_status.get('next_step') or response['next_step']
+    elif recommended_action == 'check_api_key_config':
+        provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)
+        provider_status = dict(provider_probe['provider_status'])
+        response['remediation_result'] = 'checked api key configuration against environment and runtime signals'
+        response['provider_status'] = provider_status
+        response['missing_requirements'] = provider_status.get('missing_requirements') or []
+        response['resolved_next_step'] = 'check_provider_config' if provider_status.get('api_key_present') else 'configure_provider'
+        response['initial_provider_status'] = provider_probe['initial_provider_status']
+        response['start_result'] = provider_probe['start_result']
+        response['runtime_status'] = provider_probe['runtime_status']
+        response['followup_status'] = provider_probe['followup_status']
+        response['next_step'] = response['resolved_next_step']
+    elif recommended_action == 'check_provider_config':
+        provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)
+        provider_status = dict(provider_probe['provider_status'])
+        response['remediation_result'] = 'checked provider configuration using runtime and config signals'
+        response['provider_status'] = provider_status
+        response['missing_requirements'] = provider_status.get('missing_requirements') or []
+        response['resolved_next_step'] = 'check_model_config' if provider_status.get('provider_config_present') else 'configure_provider'
+        response['initial_provider_status'] = provider_probe['initial_provider_status']
+        response['start_result'] = provider_probe['start_result']
+        response['runtime_status'] = provider_probe['runtime_status']
+        response['followup_status'] = provider_probe['followup_status']
+        response['next_step'] = response['resolved_next_step']
+    elif recommended_action == 'check_model_config':
+        provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)
+        provider_status = dict(provider_probe['provider_status'])
+        response['remediation_result'] = 'checked model configuration using runtime and config signals'
+        response['provider_status'] = provider_status
+        response['missing_requirements'] = provider_status.get('missing_requirements') or []
+        response['resolved_next_step'] = 'run_runtime_task' if provider_status.get('model_config_present') else 'configure_provider'
+        response['initial_provider_status'] = provider_probe['initial_provider_status']
+        response['start_result'] = provider_probe['start_result']
+        response['runtime_status'] = provider_probe['runtime_status']
+        response['followup_status'] = provider_probe['followup_status']
+        response['next_step'] = response['resolved_next_step']
     elif recommended_action == 'configure_provider':
-        initial_sandbox_payload = get_sandbox_status(script_dir, args)
-        initial_provider_status = build_provider_status(summarize_capabilities(initial_sandbox_payload), None)
-        start_result = run_runtime_start(script_dir, args)
-        runtime_status = get_runtime_status(script_dir, args)
-        followup_sandbox_payload = get_sandbox_status(script_dir, args)
-        followup_provider_status = build_provider_status(summarize_capabilities(followup_sandbox_payload), start_result)
-        resolved_next_step = resolve_missing_requirements_next_step(followup_provider_status.get('missing_requirements'))
-
+        provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)
+        followup_provider_status = provider_probe['provider_status']
+        resolved_next_step = provider_probe['resolved_next_step']
         response['remediation_result'] = 'checked provider signals; triggered sense runtime start; re-checked runtime and sandbox status'
         response['provider_status'] = followup_provider_status
         response['missing_requirements'] = followup_provider_status.get('missing_requirements') or []
         response['resolved_next_step'] = resolved_next_step
-        response['initial_provider_status'] = initial_provider_status
-        response['start_result'] = start_result
-        response['runtime_status'] = runtime_status
-        response['followup_status'] = followup_provider_status
+        response['initial_provider_status'] = provider_probe['initial_provider_status']
+        response['start_result'] = provider_probe['start_result']
+        response['runtime_status'] = provider_probe['runtime_status']
+        response['followup_status'] = provider_probe['followup_status']
         if followup_provider_status.get('provider_ready') is True:
             response['next_step'] = 'run_runtime_task'
         else:
