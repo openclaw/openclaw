@@ -188,6 +188,29 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("stricter side wins");
   });
 
+  it("does not invent a deny host policy when exec-approvals defaults.security is unset", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {},
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              security: "allowlist",
+              ask: "on-miss",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain('security="deny"');
+  });
+
   it("warns when a per-agent exec policy is broader than the matching host agent policy", async () => {
     await withExecApprovalsFile(
       {

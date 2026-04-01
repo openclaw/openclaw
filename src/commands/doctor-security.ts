@@ -88,7 +88,7 @@ function resolveHostExecPolicy(params: { approvals: ExecApprovalsFile; agentId?:
       ? params.approvals.agents[params.agentId]
       : undefined;
   const defaults = params.approvals.defaults;
-  const security = agentEntry?.security ?? defaults?.security ?? "deny";
+  const security = agentEntry?.security ?? defaults?.security ?? "allowlist";
   const ask = agentEntry?.ask ?? defaults?.ask ?? "on-miss";
   return {
     security,
