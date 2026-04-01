@@ -143,6 +143,23 @@ describe("/bot-logs framework command hardening", () => {
     expect(result as string).toContain("权限不足");
   });
 
+  it("rejects /bot-logs when allowFrom uses qqbot: * wildcard form", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot: *"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
+  it("allows /bot-logs when allowFrom contains numeric sender ids", async () => {
+    const handler = getBotLogsHandler();
+    const accountConfig = { allowFrom: [12345] } as unknown as SlashCommandContext["accountConfig"];
+    const result = await handler(buildCtx({ accountConfig }));
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(
+      "⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。",
+    );
+  });
+
   it("allows /bot-logs execution when allowFrom is explicit", async () => {
     const handler = getBotLogsHandler();
     const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot:user-1"] } }));
