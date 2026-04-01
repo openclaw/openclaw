@@ -2,7 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
-import { resolveCacheRetention } from "./anthropic-stream-wrappers.js";
+import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];

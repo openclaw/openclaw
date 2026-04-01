@@ -1176,6 +1176,7 @@ async function executeMainSessionCronJob(
   });
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
+    const isRecurringJob = job.schedule.kind !== "at";
     const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
     const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
     const waitStartedAt = state.deps.nowMs();
@@ -1193,6 +1194,17 @@ async function executeMainSessionCronJob(
       });
       if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
         break;
+      }
+      if (isRecurringJob) {
+        // Recurring main-session cron jobs should not hold the cron lane open
+        // while the main lane is busy, or their measured duration starts to
+        // reflect queue wait instead of cron bookkeeping (#58833).
+        state.deps.requestHeartbeatNow({
+          reason,
+          agentId: job.agentId,
+          sessionKey: targetMainSessionKey,
+        });
+        return { status: "ok", summary: text };
       }
       if (abortSignal?.aborted) {
         return { status: "error", error: timeoutErrorMessage() };
