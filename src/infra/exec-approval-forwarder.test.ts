@@ -591,3 +591,26 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("invalid mode fallback", () => {
+  it("falls back to session routing when mode is an invalid string", async () => {
+    vi.useFakeTimers();
+    setActivePluginRegistry(emptyRegistry);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "foobar" as "session",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+});
