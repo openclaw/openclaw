@@ -78,6 +78,7 @@ import {
   resolveMaxRunRetryIterations,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
+  resolveRateLimitProfileRotationLimit,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -304,9 +305,11 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
+      const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1176,6 +1179,32 @@ export async function runEmbeddedPiAgent(
                   "The AI service is temporarily overloaded. Please try again in a moment.",
                   {
                     reason: "overloaded",
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                    profileId: lastProfileId,
+                    status,
+                  },
+                );
+              }
+            }
+
+            // For rate-limit errors, apply the same rotation cap so that
+            // per-model quota exhaustion (e.g. Anthropic Sonnet-only limits)
+            // escalates to cross-provider model fallback instead of spinning
+            // forever across profiles that share the same model quota.
+            // See: https://github.com/openclaw/openclaw/issues/58572
+            if (assistantFailoverReason === "rate_limit") {
+              rateLimitProfileRotations += 1;
+              if (rateLimitProfileRotations > rateLimitProfileRotationLimit && fallbackConfigured) {
+                const status = resolveFailoverStatus("rate_limit");
+                log.warn(
+                  `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+                );
+                logAssistantFailoverDecision("fallback_model", { status });
+                throw new FailoverError(
+                  "The AI service is temporarily rate-limited. Please try again in a moment.",
+                  {
+                    reason: "rate_limit",
                     provider: activeErrorContext.provider,
                     model: activeErrorContext.model,
                     profileId: lastProfileId,
