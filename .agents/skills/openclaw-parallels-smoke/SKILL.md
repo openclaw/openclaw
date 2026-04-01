@@ -79,8 +79,8 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Fresh snapshots may be missing `curl`, and `apt-get update` can fail on clock skew. Bootstrap with `apt-get -o Acquire::Check-Date=false update` and install `curl ca-certificates`.
 - Fresh `main` tgz smoke still needs the latest-release installer first because the snapshot has no Node or npm before bootstrap.
 - This snapshot does not have a usable `systemd --user` session; managed daemon install is unsupported.
-- `prlctl exec` reaps detached Linux child processes on this snapshot, so detached background gateway runs are not trustworthy smoke signals.
-- Treat `gateway=skipped-no-detached-linux-gateway` plus `daemon=systemd-user-unavailable` as baseline on that Linux lane, not a regression.
+- The Linux smoke now falls back to a manual `setsid openclaw gateway run --bind loopback --port 18789 --force` launch with `HOME=/root` and the provider secret exported, then verifies `gateway status --deep --require-rpc` when available.
+- If Linux gateway bring-up fails, inspect `/tmp/openclaw-parallels-linux-gateway.log` in the guest phase logs first; the common failure mode is a missing provider secret in the launched gateway environment.
 
 ## Discord roundtrip
 
