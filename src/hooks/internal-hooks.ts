@@ -228,7 +228,13 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
   }
-  handlers.get(eventKey)!.push(handler);
+  const existing = handlers.get(eventKey)!;
+  // Deduplicate: skip if the exact same handler function is already registered.
+  // Without this guard, periodic config reloads re-register the same handlers,
+  // causing hooks to fire N times after N reload cycles.
+  if (!existing.includes(handler)) {
+    existing.push(handler);
+  }
 }
 
 /**
