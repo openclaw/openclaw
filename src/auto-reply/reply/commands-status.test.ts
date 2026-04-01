@@ -262,6 +262,41 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
   });
 
+  it("prefers failure context over newer success context when showing recent failures", async () => {
+    createRunningTaskRun({
+      runtime: "acp",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:acp:status-task-failed-priority",
+      runId: "run-status-task-failed-priority",
+      task: "failed background task",
+    });
+    failTaskRunByRunId({
+      runId: "run-status-task-failed-priority",
+      endedAt: Date.now() - 30_000,
+      error: "approval denied",
+    });
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-succeeded-later",
+      runId: "run-status-task-succeeded-later",
+      task: "later successful task",
+    });
+    completeTaskRunByRunId({
+      runId: "run-status-task-succeeded-later",
+      endedAt: Date.now(),
+      terminalSummary: "all done",
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
+    expect(reply?.text).toContain("failed background task");
+    expect(reply?.text).toContain("approval denied");
+    expect(reply?.text).not.toContain("later successful task");
+    expect(reply?.text).not.toContain("all done");
+  });
+
   it("falls back to same-agent task counts without details when the current session has none", async () => {
     createRunningTaskRun({
       runtime: "subagent",

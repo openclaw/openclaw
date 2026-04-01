@@ -33,6 +33,7 @@ function isRecentTerminalTask(task: TaskRecord, now: number): boolean {
 
 export type TaskStatusSnapshot = {
   latest?: TaskRecord;
+  focus?: TaskRecord;
   visible: TaskRecord[];
   active: TaskRecord[];
   recentTerminal: TaskRecord[];
@@ -52,8 +53,11 @@ export function buildTaskStatusSnapshot(
   const active = reconciled.filter(isActiveTask);
   const recentTerminal = reconciled.filter((task) => isRecentTerminalTask(task, now));
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
+  const focus =
+    active[0] ?? recentTerminal.find((task) => isFailureTask(task)) ?? recentTerminal[0];
   return {
     latest: active[0] ?? recentTerminal[0],
+    focus,
     visible,
     active,
     recentTerminal,

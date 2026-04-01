@@ -515,6 +515,52 @@ describe("session_status tool", () => {
     expect(text).toContain("permission denied");
   });
 
+  it("prefers failure context over newer success context in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-failed",
+        runtime: "cron",
+        requesterSessionKey: "agent:main:main",
+        task: "failing task",
+        status: "failed",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 60_000,
+        endedAt: Date.now() - 30_000,
+        error: "permission denied",
+      },
+      {
+        taskId: "task-succeeded",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        task: "successful task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 10_000,
+        endedAt: Date.now(),
+        terminalSummary: "all done",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-failed-priority", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 recent failure");
+    expect(text).toContain("failing task");
+    expect(text).toContain("permission denied");
+    expect(text).not.toContain("successful task");
+    expect(text).not.toContain("all done");
+  });
+
   it("resolves a literal current sessionId in session_status", async () => {
     resetSessionStore({
       main: {

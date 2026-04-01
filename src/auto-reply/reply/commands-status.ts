@@ -58,8 +58,8 @@ function shouldLoadUsageSummary(params: {
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForSessionKey(sessionKey));
-  const latest = snapshot.latest;
-  if (!latest) {
+  const task = snapshot.focus;
+  if (!task) {
     return undefined;
   }
   const headline =
@@ -68,12 +68,12 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
       : snapshot.recentFailureCount > 0
         ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
         : "recently finished";
-  const title = latest.label?.trim() || latest.task.trim();
+  const title = task.label?.trim() || task.task.trim();
   const detail =
-    latest.status === "running" || latest.status === "queued"
-      ? latest.progressSummary?.trim()
-      : latest.error?.trim() || latest.terminalSummary?.trim();
-  const parts = [headline, latest.runtime, title, detail].filter(Boolean);
+    task.status === "running" || task.status === "queued"
+      ? task.progressSummary?.trim()
+      : task.error?.trim() || task.terminalSummary?.trim();
+  const parts = [headline, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
