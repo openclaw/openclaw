@@ -18,6 +18,18 @@ describe("yep web search provider", () => {
     expect(__testing.normalizeYepLanguage(undefined)).toBeUndefined();
   });
 
+  it("normalizes bare domains to full URLs", () => {
+    expect(__testing.normalizeYepDomains("example.com")).toBe("https://example.com");
+    expect(__testing.normalizeYepDomains("example.com,docs.example.com")).toBe(
+      "https://example.com,https://docs.example.com",
+    );
+    expect(__testing.normalizeYepDomains("https://example.com")).toBe("https://example.com");
+    expect(__testing.normalizeYepDomains("http://example.com")).toBe("http://example.com");
+    expect(__testing.normalizeYepDomains(" example.com , docs.example.com ")).toBe(
+      "https://example.com,https://docs.example.com",
+    );
+  });
+
   it("returns missing key payload when no API key is available", async () => {
     vi.stubEnv("YEP_API_KEY", "");
     const provider = createYepWebSearchProvider();
@@ -116,7 +128,7 @@ describe("yep web search provider", () => {
       limit: 3,
       type: "basic",
       language: ["en"],
-      include_domains: "example.com",
+      include_domains: "https://example.com",
     });
   });
 

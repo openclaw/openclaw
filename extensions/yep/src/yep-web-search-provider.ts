@@ -62,6 +62,19 @@ function normalizeYepLanguage(value: string | undefined): string | undefined {
   return /^[a-z]{2}$/.test(trimmed) ? trimmed : undefined;
 }
 
+// Yep expects full URLs (e.g. "https://example.com"), not bare hostnames.
+function normalizeYepDomains(value: string): string {
+  return value
+    .split(",")
+    .map((d) => {
+      const trimmed = d.trim();
+      if (!trimmed) return "";
+      return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    })
+    .filter(Boolean)
+    .join(",");
+}
+
 async function runYepSearch(params: {
   query: string;
   count: number;
@@ -98,10 +111,10 @@ async function runYepSearch(params: {
     body.safe_search = params.safeSearch;
   }
   if (params.includeDomains) {
-    body.include_domains = params.includeDomains;
+    body.include_domains = normalizeYepDomains(params.includeDomains);
   }
   if (params.excludeDomains) {
-    body.exclude_domains = params.excludeDomains;
+    body.exclude_domains = normalizeYepDomains(params.excludeDomains);
   }
   if (params.dateAfter) {
     body.start_published_date = params.dateAfter;
@@ -413,6 +426,7 @@ export function createYepWebSearchProvider(): WebSearchProviderPlugin {
 }
 
 export const __testing = {
+  normalizeYepDomains,
   normalizeYepLanguage,
   resolveYepApiKey,
   YEP_SEARCH_ENDPOINT,
