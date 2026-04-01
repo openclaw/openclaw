@@ -264,7 +264,7 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("treats LiveSessionModelSwitchError as failover on last candidate (#58466)", async () => {
+  it("re-throws LiveSessionModelSwitchError immediately (#58700)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
@@ -272,10 +272,10 @@ describe("runWithModelFallback", () => {
     });
     const run = vi.fn().mockRejectedValue(switchError);
 
-    // With no fallbacks, the single candidate is also the last one.
-    // Previously this would re-throw LiveSessionModelSwitchError, causing
-    // the outer retry loop to restart with the overloaded model indefinitely.
-    // Now it should surface as a FailoverError instead.
+    // LiveSessionModelSwitchError should be re-thrown immediately so the
+    // outer runner can restart with the new model.  Previously (#58466) it
+    // was caught and converted to a FailoverError, silently losing the
+    // model switch request.  Fixes #58700.
     const err = await runWithModelFallback({
       cfg,
       provider: "anthropic",
@@ -283,14 +283,11 @@ describe("runWithModelFallback", () => {
       run,
       fallbacksOverride: [],
     }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
-    // Should NOT be a LiveSessionModelSwitchError — the outer retry loop must
-    // not restart with the conflicting model.
-    expect(err).not.toBeInstanceOf(LiveSessionModelSwitchError);
+    expect(err).toBeInstanceOf(LiveSessionModelSwitchError);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58466)", async () => {
+  it("re-throws LiveSessionModelSwitchError without trying remaining candidates (#58700)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
@@ -298,14 +295,17 @@ describe("runWithModelFallback", () => {
     });
     const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValueOnce("ok");
 
-    const result = await runWithModelFallback({
+    // The model switch should abort the fallback loop immediately — no
+    // point trying other candidates when the user explicitly switched models.
+    const err = await runWithModelFallback({
       cfg,
       provider: "openai",
       model: "gpt-4.1-mini",
       run,
-    });
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LiveSessionModelSwitchError);
+    // Only called once — the second candidate should never be reached.
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("falls back on auth errors", async () => {

@@ -783,46 +783,15 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         }) ?? err;
 
-      // LiveSessionModelSwitchError during fallback means the session's
-      // persisted model conflicts with this fallback candidate.  Treat it
-      // as a known failover so the chain continues to the next candidate
-      // instead of re-throwing and triggering infinite retry loops in the
-      // outer runner.  (#58466)
+      // LiveSessionModelSwitchError indicates the session's model selection has
+      // changed mid-run (e.g. user ran /model).  Re-throw immediately so the
+      // outer runner can restart with the new model instead of wasting calls on
+      // remaining fallback candidates.  The outer runner already has retry-limit
+      // guards (MAX_LIVE_SWITCH_RETRIES) to prevent infinite loops.
+      // Fixes #58700 — previously this was caught and treated as a candidate
+      // failure, causing the model switch request to be silently lost.
       if (err instanceof LiveSessionModelSwitchError) {
-        const switchMsg = err.message;
-        const switchNormalized = new FailoverError(switchMsg, {
-          reason: "overloaded",
-          provider: candidate.provider,
-          model: candidate.model,
-        });
-        lastError = switchNormalized;
-        const described = describeFailoverError(switchNormalized);
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error: described.message,
-          reason: described.reason ?? "unknown",
-          status: described.status,
-          code: described.code,
-        });
-        logModelFallbackDecision({
-          decision: "candidate_failed",
-          runId: params.runId,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
-          reason: described.reason,
-          status: described.status,
-          code: described.code,
-          error: described.message,
-          nextCandidate: candidates[i + 1],
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
-        });
-        continue;
+        throw err;
       }
 
       // Even unrecognized errors should not abort the fallback loop when
