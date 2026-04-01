@@ -724,6 +724,8 @@ export async function runEmbeddedAttempt(
         modelApi: params.model?.api,
         provider: params.provider,
         modelId: params.modelId,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
       });
 
       await prewarmSessionFile(params.sessionFile);

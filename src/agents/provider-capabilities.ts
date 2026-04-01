@@ -53,6 +53,12 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
       "mistralai",
     ],
   },
+  minimax: {
+    dropThinkingBlockModelHints: ["minimax"],
+  },
+  "minimax-portal": {
+    dropThinkingBlockModelHints: ["minimax"],
+  },
   moonshot: {
     openAiPayloadNormalizationMode: "moonshot-thinking",
   },

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import {
@@ -61,6 +62,9 @@ export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = params.modelId ?? "";
@@ -77,6 +81,9 @@ export function resolveTranscriptPolicy(params: {
     shouldSanitizeGeminiThoughtSignaturesForModel({
       provider,
       modelId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
     });
   const requiresOpenAiCompatibleToolIdSanitization =
     params.modelApi === "openai-completions" ||
@@ -88,7 +95,13 @@ export function resolveTranscriptPolicy(params: {
   // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
   // original signatures are preserved byte-for-byte. Drop them at send-time to
   // keep persisted sessions usable across follow-up turns.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
+  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({
+    provider,
+    modelId,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
 
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;

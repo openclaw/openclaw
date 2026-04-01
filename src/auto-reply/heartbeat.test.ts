@@ -68,7 +68,7 @@ describe("stripHeartbeatToken", () => {
     });
   });
 
-  it("does not touch token in the middle", () => {
+  it("does not touch token in the middle in message mode", () => {
     expect(
       stripHeartbeatToken(`hello ${HEARTBEAT_TOKEN} there`, {
         mode: "message",
@@ -77,6 +77,44 @@ describe("stripHeartbeatToken", () => {
       shouldSkip: false,
       text: `hello ${HEARTBEAT_TOKEN} there`,
       didStrip: false,
+    });
+  });
+
+  it("strips token in the middle in heartbeat mode", () => {
+    expect(
+      stripHeartbeatToken(`Some preamble ${HEARTBEAT_TOKEN} actual reply`, {
+        mode: "heartbeat",
+      }),
+    ).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+  });
+
+  it("strips mid-text token and keeps long content after in heartbeat mode", () => {
+    const long = "B".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
+    expect(
+      stripHeartbeatToken(`preamble ${HEARTBEAT_TOKEN} ${long}`, {
+        mode: "heartbeat",
+      }),
+    ).toEqual({
+      shouldSkip: false,
+      text: `preamble   ${long}`,
+      didStrip: true,
+    });
+  });
+
+  it("strips mid-text token with newlines and keeps long content after in heartbeat mode", () => {
+    const long = "B".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
+    expect(
+      stripHeartbeatToken(`thinking prose\n${HEARTBEAT_TOKEN}\n\n${long}`, {
+        mode: "heartbeat",
+      }),
+    ).toEqual({
+      shouldSkip: false,
+      text: `thinking prose\n \n\n${long}`,
+      didStrip: true,
     });
   });
 
