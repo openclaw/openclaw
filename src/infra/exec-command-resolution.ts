@@ -45,6 +45,10 @@ function parseFirstToken(command: string): string | null {
   return match ? match[0] : null;
 }
 
+function isDriveLessWindowsRootedPath(value: string): boolean {
+  return process.platform === "win32" && /^:[\\/]/.test(value);
+}
+
 function tryResolveRealpath(filePath: string | undefined): string | undefined {
   if (!filePath) {
     return undefined;
@@ -176,6 +180,9 @@ function resolveExecutableCandidatePathFromResolution(
     return undefined;
   }
   const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
+  if (isDriveLessWindowsRootedPath(expanded)) {
+    return undefined;
+  }
   if (!expanded.includes("/") && !expanded.includes("\\")) {
     return undefined;
   }
