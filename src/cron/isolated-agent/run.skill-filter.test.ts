@@ -8,8 +8,11 @@ import {
   buildWorkspaceSkillSnapshotMock,
   getCliSessionIdMock,
   isCliProviderMock,
+  lookupCachedContextTokensMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
+  makeCronSession,
+  makeCronSessionEntry,
   resolveAgentConfigMock,
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
@@ -318,6 +321,38 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         "cliSessionId",
         "existing-cli-session-def",
       );
+    });
+  });
+
+  describe("context token fallback", () => {
+    it("preserves existing session contextTokens when no cached model window is loaded", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          contextTokens: 222_000,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupCachedContextTokensMock.mockReturnValue(undefined);
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.contextTokens).toBe(222_000);
+    });
+
+    it("prefers cached model contextTokens over the previous session value", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          contextTokens: 222_000,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupCachedContextTokensMock.mockReturnValue(512_000);
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.contextTokens).toBe(512_000);
     });
   });
 });

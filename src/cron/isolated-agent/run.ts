@@ -1,5 +1,50 @@
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { resolveCronStyleNow } from "../../agents/current-time.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveNestedAgentLane } from "../../agents/lanes.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
+import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import {
+  countActiveDescendantRuns,
+  listDescendantRunsForRequester,
+} from "../../agents/subagent-registry.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import {
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+  supportsXHighThinking,
+} from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
+import { updateSessionStore } from "../../config/sessions/store.runtime.js";
+import { setSessionRuntimeModel } from "../../config/sessions/types.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { logWarn } from "../../logger.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  buildSafeExternalPrompt,
+  detectSuspiciousPatterns,
+  mapHookExternalContentSource,
+  isExternalHookSession,
+  resolveHookExternalContentSource,
+} from "../../security/external-content.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
@@ -15,48 +60,6 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  LiveSessionModelSwitchError,
-  buildSafeExternalPrompt,
-  countActiveDescendantRuns,
-  deriveSessionTotalTokens,
-  detectSuspiciousPatterns,
-  ensureAgentWorkspace,
-  estimateUsageCost,
-  hasNonzeroUsage,
-  isCliProvider,
-  isExternalHookSession,
-  listDescendantRunsForRequester,
-  loadModelCatalog,
-  logWarn,
-  lookupContextTokens,
-  mapHookExternalContentSource,
-  normalizeAgentId,
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  registerAgentRunContext,
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentModelFallbacksOverride,
-  resolveAgentTimeoutMs,
-  resolveAgentWorkspaceDir,
-  resolveBootstrapWarningSignaturesSeen,
-  resolveCronStyleNow,
-  resolveDefaultAgentId,
-  resolveFastModeState,
-  resolveHookExternalContentSource,
-  resolveModelCostConfig,
-  resolveNestedAgentLane,
-  resolveSessionAuthProfileOverride,
-  resolveSessionTranscriptPath,
-  resolveThinkingDefault,
-  runEmbeddedPiAgent,
-  runWithModelFallback,
-  setSessionRuntimeModel,
-  supportsXHighThinking,
-  updateSessionStore,
-} from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -161,6 +164,10 @@ function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
+function resolvePositiveContextTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 async function loadCliRunnerRuntime() {
@@ -702,8 +709,9 @@ export async function runCronIsolatedAgentTurn(params: {
     const providerUsed =
       finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? liveSelection.provider;
     const contextTokens =
-      agentCfg?.contextTokens ??
-      lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
+      resolvePositiveContextTokens(agentCfg?.contextTokens) ??
+      lookupCachedContextTokens(modelUsed) ??
+      resolvePositiveContextTokens(cronSession.sessionEntry.contextTokens) ??
       DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {

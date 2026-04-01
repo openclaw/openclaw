@@ -1,4 +1,7 @@
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { resolveDefaultModelForAgent, resolvePersistedModelRef } from "./model-selection.js";
 import {
   consumeEmbeddedRunModelSwitch,
@@ -6,24 +9,8 @@ import {
   type EmbeddedRunModelSwitchRequest,
 } from "./pi-embedded-runner/runs.js";
 import { abortEmbeddedPiRun } from "./pi-embedded.js";
-
+export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-
-export class LiveSessionModelSwitchError extends Error {
-  provider: string;
-  model: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-
-  constructor(selection: LiveSessionModelSelection) {
-    super(`Live session model switch requested: ${selection.provider}/${selection.model}`);
-    this.name = "LiveSessionModelSwitchError";
-    this.provider = selection.provider;
-    this.model = selection.model;
-    this.authProfileId = selection.authProfileId;
-    this.authProfileIdSource = selection.authProfileIdSource;
-  }
-}
 
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
