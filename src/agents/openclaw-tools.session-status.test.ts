@@ -14,6 +14,16 @@ const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
       [] as Array<Record<string, unknown>>,
   ),
 );
+const resolveEnvApiKeyMock = vi.hoisted(
+  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
+);
+const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
+  () =>
+    vi.fn(
+      (_params?: { provider?: string }) =>
+        null as { apiKey: string; source: string } | null,
+    ),
+);
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -147,8 +157,8 @@ function createAuthProfilesModuleMock() {
 
 function createModelAuthModuleMock() {
   return {
-    resolveEnvApiKey: () => null,
-    resolveUsableCustomProviderApiKey: () => null,
+    resolveEnvApiKey: resolveEnvApiKeyMock,
+    resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
     resolveModelAuthMode: () => "api-key",
   };
 }
@@ -208,6 +218,10 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
+  resolveEnvApiKeyMock.mockReset();
+  resolveEnvApiKeyMock.mockReturnValue(null);
+  resolveUsableCustomProviderApiKeyMock.mockReset();
+  resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
@@ -508,6 +522,54 @@ describe("session_status tool", () => {
             primary: "anthropic/claude-opus-4-6",
           }),
         }),
+      }),
+    );
+  });
+
+  it("infers configured custom providers for runtime-only models in session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "runtime-custom-provider",
+        updatedAt: 10,
+        model: "qwen-max",
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+      models: {
+        providers: {
+          "qwen-dashscope": {
+            apiKey: "DASHSCOPE_API_KEY",
+            models: [{ id: "qwen-max" }],
+          },
+        },
+      },
+      tools: {
+        agentToAgent: { enabled: false },
+      },
+    };
+    resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
+      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
+    );
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-runtime-custom-provider", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "qwen-dashscope/qwen-max",
+          }),
+        }),
+        modelAuth: "api-key (models.json)",
       }),
     );
   });
