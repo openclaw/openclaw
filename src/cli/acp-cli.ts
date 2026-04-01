@@ -125,15 +125,13 @@ export function registerAcpCli(program: Command) {
     .description(
       "Close the current ACP session and hand control back to the main agent. Designed for ACP agents to call when the user goes off-topic.",
     )
-    .option("--session-key <key>", "ACP session key (auto-discovered from cwd if omitted)")
-    .option("--reason <text>", "Why handing back (included in session metadata)")
+    .option("--session-key <key>", "ACP session key (from the [ACP SESSION CONTROL] block)")
     .option("--message <text>", "Final message delivered to the conversation before unbinding")
     .action(async (opts) => {
       try {
         const { handleAcpCloseSelf } = await import("../commands/acp-close-self.js");
         const result = await handleAcpCloseSelf({
           sessionKey: opts.sessionKey as string | undefined,
-          reason: opts.reason as string | undefined,
           message: opts.message as string | undefined,
         });
         if (!result.ok) {
