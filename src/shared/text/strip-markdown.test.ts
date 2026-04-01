@@ -42,3 +42,9 @@ describe("stripMarkdown", () => {
     expect(result).toBe("hello");
   });
 });
+
+it("does not insert extra blank line when fence is adjacent to surrounding text", () => {
+  const input = "prefix\n```sh\ncode\n```\nsuffix";
+  const result = stripMarkdown(input);
+  expect(result).toBe("prefix\ncode\nsuffix");
+});
