@@ -1,0 +1,7 @@
+{
+  "$schema": "https://schema.tauri.app/capabilities/2",
+  "identifier": "default",
+  "description": "Default capability set for the OpenClaw desktop companion window.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

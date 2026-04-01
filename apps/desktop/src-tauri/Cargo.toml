@@ -1,0 +1,16 @@
+[package]
+name = "openclaw-desktop"
+version = "0.1.0"
+description = "OpenClaw desktop companion app"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dirs = "6"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "rustls-native-certs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon"] }
+url = "2"
