@@ -201,10 +201,6 @@ export function installSessionToolResultGuard(
       if (id) {
         pendingState.delete(id);
       }
-      // P1: Only re-parent tool results whose toolCallId is in the pending set.
-      if (isPending && assistantEntryId) {
-        sessionManager.branch(assistantEntryId);
-      }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
@@ -222,6 +218,13 @@ export function installSessionToolResultGuard(
           assistantEntryId = undefined;
         }
         return undefined;
+      }
+      // P1: Only re-parent tool results whose toolCallId is in the pending set,
+      // and only AFTER the write hook confirms the result will be persisted.
+      // Branching before persistence would move the leaf even for blocked results,
+      // dropping earlier persisted results from the active branch.
+      if (isPending && assistantEntryId) {
+        sessionManager.branch(assistantEntryId);
       }
       return originalAppend(persisted as never);
     }
