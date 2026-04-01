@@ -235,6 +235,50 @@ describe("feishuOutbound comment-thread routing", () => {
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
   });
 
+  it("routes comment-thread code-block replies through replyComment instead of IM cards", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "```ts\nconst x = 1\n```",
+      accountId: "main",
+    });
+
+    expect(replyCommentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "```ts\nconst x = 1\n```",
+      }),
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("routes comment-thread replies through replyComment even when renderMode=card", async () => {
+    const result = await sendText({
+      cfg: cardRenderConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "handled in thread",
+      accountId: "main",
+    });
+
+    expect(replyCommentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "handled in thread",
+      }),
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
   it("falls back to a text-only comment reply for media payloads", async () => {
     const result = await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,

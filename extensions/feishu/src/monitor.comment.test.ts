@@ -310,7 +310,7 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("skips comment notices when bot open_id is unavailable", async () => {
-    const synthetic = await resolveDriveCommentSyntheticEvent({
+    const turn = await resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent(),
@@ -318,7 +318,7 @@ describe("resolveDriveCommentEventTurn", () => {
       createClient: () => makeOpenApiClient({}) as never,
     });
 
-    expect(synthetic).toBeNull();
+    expect(turn).toBeNull();
   });
 });
 

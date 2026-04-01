@@ -153,6 +153,16 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         }
       }
 
+      if (parseFeishuCommentTarget(to)) {
+        return await sendOutboundText({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+        });
+      }
+
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
