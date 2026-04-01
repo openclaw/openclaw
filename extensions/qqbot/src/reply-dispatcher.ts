@@ -211,6 +211,10 @@ function isRemoteHttpUrl(p: string): boolean {
   return p.startsWith("http://") || p.startsWith("https://");
 }
 
+function isInlineImageDataUrl(p: string): boolean {
+  return /^data:image\/[^;]+;base64,/i.test(p);
+}
+
 function sanitizeForLog(value: string, maxLen = 200): string {
   return value.replace(/[\r\n\t\0]/g, " ").slice(0, maxLen);
 }
@@ -257,11 +261,11 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
   let imageUrl: string | null;
   if (payload.source === "file") {
     imageUrl = validateStructuredPayloadLocalPath(ctx, normalizedPath, "image");
-  } else if (isRemoteHttpUrl(normalizedPath)) {
+  } else if (isRemoteHttpUrl(normalizedPath) || isInlineImageDataUrl(normalizedPath)) {
     imageUrl = normalizedPath;
   } else {
     log?.error(
-      `[qqbot:${account.accountId}] Image payload URL must use http(s): ${sanitizeForLog(payload.path)}`,
+      `[qqbot:${account.accountId}] Image payload URL must use http(s) or data:image/: ${sanitizeForLog(payload.path)}`,
     );
     return;
   }
