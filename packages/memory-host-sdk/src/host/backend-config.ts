@@ -330,8 +330,9 @@ function isCaseInsensitiveFilesystem(dir: string): boolean {
     const { ino: inoLower } = fs.statSync(lower);
     return inoUpper === inoLower;
   } catch {
-    // Cannot stat the upper/lower paths — conservatively report case-sensitive
-    // so both collections are registered. QMD will deduplicate if needed.
+    // Cannot stat the upper/lower paths — conservatively treat as case-sensitive
+    // so both collections are registered. Note: if QMD rejects the duplicate
+    // on macOS in this rare path, the memory-root collection may silently fail.
     return false;
   }
 }
