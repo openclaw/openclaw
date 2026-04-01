@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(() => noop),
   persistSubagentRunsToDisk: vi.fn(),
   restoreSubagentRunsFromDisk: vi.fn(() => 0),
-  getSubagentRunsSnapshotForRead: vi.fn((runs: Map<string, unknown>) => new Map(runs)),
+  getSubagentRunsSnapshotForRead: vi.fn((runs: Map<string, SubagentRunRecord>) => new Map(runs)),
 }));
 
 vi.mock("../config/config.js", async () => {
