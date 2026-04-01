@@ -1,0 +1,408 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "saas": "https://mabos.io/ontology/saas/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/saas",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/business-core",
+  "rdfs:label": "SaaS Domain Ontology",
+  "rdfs:comment": "Domain concepts for Software-as-a-Service businesses: subscriptions, tenants, releases, and product-led growth",
+  "@graph": [
+    {
+      "@id": "saas:Subscription",
+      "@type": "owl:Class",
+      "rdfs:label": "Subscription",
+      "rdfs:comment": "A recurring billing relationship between a tenant and a pricing plan",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "subscription",
+      "sbvr:definition": "Subscription is a recurring billing relationship that exists between a tenant and a pricing plan",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Plan",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Product",
+      "rdfs:label": "Pricing Plan",
+      "rdfs:comment": "A pricing tier with feature set, limits, and billing frequency (monthly/annual)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "pricing plan",
+      "sbvr:definition": "Pricing Plan is a pricing tier that has a feature set, limits, and billing frequency",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Feature",
+      "@type": "owl:Class",
+      "rdfs:label": "Feature",
+      "rdfs:comment": "A product capability that may be gated by plan tier or feature flag",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "feature",
+      "sbvr:definition": "Feature is a product capability that may be gated by plan tier or feature flag",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:FeatureFlag",
+      "@type": "owl:Class",
+      "rdfs:label": "Feature Flag",
+      "rdfs:comment": "A toggle controlling feature availability for gradual rollout or A/B testing",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "feature flag",
+      "sbvr:definition": "Feature Flag is a toggle that controls feature availability for gradual rollout or A/B testing",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Tenant",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Customer",
+      "rdfs:label": "Tenant",
+      "rdfs:comment": "A customer organization with isolated data, users, and configuration",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "tenant",
+      "sbvr:definition": "Tenant is a customer organization that has isolated data, users, and configuration",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:User",
+      "@type": "owl:Class",
+      "rdfs:label": "User",
+      "rdfs:comment": "An individual user within a tenant with roles and permissions",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "user",
+      "sbvr:definition": "User is an individual that belongs to a tenant and has roles and permissions",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Usage",
+      "@type": "owl:Class",
+      "rdfs:label": "Usage Record",
+      "rdfs:comment": "A metered usage event (API calls, storage, compute, seats) for billing or limits",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "usage record",
+      "sbvr:definition": "Usage Record is a metered event that tracks API calls, storage, compute, or seats for billing or limits",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Deployment",
+      "@type": "owl:Class",
+      "rdfs:label": "Deployment",
+      "rdfs:comment": "A running instance of the software in a specific environment (prod, staging, dev)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "deployment",
+      "sbvr:definition": "Deployment is a running instance that hosts the software in a specific environment",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Release",
+      "@type": "owl:Class",
+      "rdfs:label": "Release",
+      "rdfs:comment": "A versioned software release with changelog, features, and migration notes",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "release",
+      "sbvr:definition": "Release is a versioned software package that has a changelog, features, and migration notes",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Incident",
+      "@type": "owl:Class",
+      "rdfs:label": "Incident",
+      "rdfs:comment": "A service disruption with severity, impact, timeline, and post-mortem",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "incident",
+      "sbvr:definition": "Incident is a service disruption that has severity, impact, timeline, and post-mortem",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Trial",
+      "@type": "owl:Class",
+      "rdfs:label": "Trial",
+      "rdfs:comment": "A time-limited free access period for prospect evaluation",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "trial",
+      "sbvr:definition": "Trial is a time-limited access period that provides free evaluation for prospects",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:API",
+      "@type": "owl:Class",
+      "rdfs:label": "API",
+      "rdfs:comment": "A programmatic interface exposed to tenants with versioning, rate limits, and documentation",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "api",
+      "sbvr:definition": "API is a programmatic interface that is exposed to tenants with versioning, rate limits, and documentation",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:APIEndpoint",
+      "@type": "owl:Class",
+      "rdfs:label": "API Endpoint",
+      "rdfs:comment": "A specific route within the API with method, schema, and rate limit",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "api endpoint",
+      "sbvr:definition": "API Endpoint is a specific route that exists within an API with method, schema, and rate limit",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:WebhookConfig",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Webhook",
+      "rdfs:label": "Webhook Config",
+      "rdfs:comment": "A tenant-configured webhook for event notifications",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "webhook config",
+      "sbvr:definition": "Webhook Config is a tenant-configured webhook that delivers event notifications",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:SaaSIntegration",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Integration",
+      "rdfs:label": "Integration",
+      "rdfs:comment": "A third-party integration available in the marketplace (Slack, Zapier, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "integration",
+      "sbvr:definition": "Integration is a third-party connection that is available in the marketplace",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:SLA",
+      "@type": "owl:Class",
+      "rdfs:label": "SLA",
+      "rdfs:comment": "Service Level Agreement defining uptime, response time, and support guarantees",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "sla",
+      "sbvr:definition": "SLA is a service level agreement that defines uptime, response time, and support guarantees",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Onboarding",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:BusinessProcess",
+      "rdfs:label": "Onboarding",
+      "rdfs:comment": "The customer activation journey from signup to first value (aha moment)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "onboarding",
+      "sbvr:definition": "Onboarding is a customer activation journey that guides a tenant from signup to first value",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:ABTest",
+      "@type": "owl:Class",
+      "rdfs:label": "A/B Test",
+      "rdfs:comment": "A controlled experiment comparing variants of UI, pricing, or messaging",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "a/b test",
+      "sbvr:definition": "A/B Test is a controlled experiment that compares variants of UI, pricing, or messaging",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:Cohort",
+      "@type": "owl:Class",
+      "rdfs:label": "Cohort",
+      "rdfs:comment": "A group of users segmented by signup date, plan, or behavior for analysis",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "cohort",
+      "sbvr:definition": "Cohort is a group of users that is segmented by signup date, plan, or behavior for analysis",
+      "sbvr:vocabulary": "saas"
+    },
+    {
+      "@id": "saas:SupportTicket",
+      "@type": "owl:Class",
+      "rdfs:label": "Support Ticket",
+      "rdfs:comment": "A customer support request with priority, category, and resolution status",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "support ticket",
+      "sbvr:definition": "Support Ticket is a customer support request that has priority, category, and resolution status",
+      "sbvr:vocabulary": "saas"
+    },
+
+    { "@id": "saas:mrr", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Subscription", "rdfs:range": "xsd:decimal", "rdfs:comment": "Monthly Recurring Revenue contributed by this subscription" },
+    { "@id": "saas:arr", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Subscription", "rdfs:range": "xsd:decimal", "rdfs:comment": "Annual Recurring Revenue (MRR x 12)" },
+    { "@id": "saas:churnRate", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Monthly customer churn rate 0.0-1.0" },
+    { "@id": "saas:revenueChurn", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Monthly revenue churn rate (net of expansion) — can be negative for net-negative churn" },
+    { "@id": "saas:activationRate", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of signups reaching activation milestone 0.0-1.0" },
+    { "@id": "saas:trialConversionRate", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of trials converting to paid 0.0-1.0" },
+    { "@id": "saas:nps", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:integer", "rdfs:comment": "Net Promoter Score (-100 to 100)" },
+    { "@id": "saas:uptime", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Deployment", "rdfs:range": "xsd:float", "rdfs:comment": "Uptime percentage (e.g., 0.9999 = 99.99%)" },
+    { "@id": "saas:latencyP99", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:APIEndpoint", "rdfs:range": "xsd:integer", "rdfs:comment": "99th percentile latency in milliseconds" },
+    { "@id": "saas:dailyActiveUsers", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Deployment", "rdfs:range": "xsd:integer", "rdfs:comment": "Daily active users (DAU)" },
+    { "@id": "saas:weeklyActiveUsers", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Deployment", "rdfs:range": "xsd:integer", "rdfs:comment": "Weekly active users (WAU)" },
+    { "@id": "saas:seatCount", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Tenant", "rdfs:range": "xsd:integer", "rdfs:comment": "Number of licensed seats for this tenant" },
+    { "@id": "saas:expansionRevenue", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Tenant", "rdfs:range": "xsd:decimal", "rdfs:comment": "Additional revenue from upsells and seat expansion" },
+    { "@id": "saas:timeToValue", "@type": "owl:DatatypeProperty", "rdfs:domain": "saas:Onboarding", "rdfs:range": "xsd:integer", "rdfs:comment": "Days from signup to first value milestone" },
+    { "@id": "saas:burnRate", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:decimal", "rdfs:comment": "Monthly cash burn rate" },
+    { "@id": "saas:runway", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Months of runway remaining at current burn rate" },
+
+    {
+      "@id": "saas:subscribedTo",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Tenant",
+      "rdfs:range": "saas:Plan",
+      "rdfs:comment": "The plan this tenant subscribes to",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Tenant is subscribed to Plan",
+      "sbvr:roles": [
+        { "sbvr:roleName": "subscribing tenant", "sbvr:rolePlayer": "saas:Tenant" },
+        { "sbvr:roleName": "subscribed plan", "sbvr:rolePlayer": "saas:Plan" }
+      ]
+    },
+    {
+      "@id": "saas:includesFeature",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Plan",
+      "rdfs:range": "saas:Feature",
+      "rdfs:comment": "Features included in this plan",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Plan includes Feature",
+      "sbvr:roles": [
+        { "sbvr:roleName": "including plan", "sbvr:rolePlayer": "saas:Plan" },
+        { "sbvr:roleName": "included feature", "sbvr:rolePlayer": "saas:Feature" }
+      ]
+    },
+    {
+      "@id": "saas:controlledBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Feature",
+      "rdfs:range": "saas:FeatureFlag",
+      "rdfs:comment": "The feature flag controlling this feature's availability",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Feature is controlled by FeatureFlag",
+      "sbvr:roles": [
+        { "sbvr:roleName": "controlled feature", "sbvr:rolePlayer": "saas:Feature" },
+        { "sbvr:roleName": "controlling flag", "sbvr:rolePlayer": "saas:FeatureFlag" }
+      ]
+    },
+    {
+      "@id": "saas:deployedAs",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Release",
+      "rdfs:range": "saas:Deployment",
+      "rdfs:comment": "The deployment created from this release",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Release is deployed as Deployment",
+      "sbvr:roles": [
+        { "sbvr:roleName": "deployed release", "sbvr:rolePlayer": "saas:Release" },
+        { "sbvr:roleName": "resulting deployment", "sbvr:rolePlayer": "saas:Deployment" }
+      ]
+    },
+    {
+      "@id": "saas:exposesAPI",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Deployment",
+      "rdfs:range": "saas:API",
+      "rdfs:comment": "APIs exposed by this deployment",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Deployment exposes API",
+      "sbvr:roles": [
+        { "sbvr:roleName": "exposing deployment", "sbvr:rolePlayer": "saas:Deployment" },
+        { "sbvr:roleName": "exposed api", "sbvr:rolePlayer": "saas:API" }
+      ]
+    },
+    {
+      "@id": "saas:hasEndpoint",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:API",
+      "rdfs:range": "saas:APIEndpoint",
+      "rdfs:comment": "Endpoints within this API",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "API has APIEndpoint",
+      "sbvr:roles": [
+        { "sbvr:roleName": "parent api", "sbvr:rolePlayer": "saas:API" },
+        { "sbvr:roleName": "endpoint", "sbvr:rolePlayer": "saas:APIEndpoint" }
+      ]
+    },
+    {
+      "@id": "saas:coveredBySLA",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Plan",
+      "rdfs:range": "saas:SLA",
+      "rdfs:comment": "The SLA that applies to this plan tier",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Plan is covered by SLA",
+      "sbvr:roles": [
+        { "sbvr:roleName": "covered plan", "sbvr:rolePlayer": "saas:Plan" },
+        { "sbvr:roleName": "covering sla", "sbvr:rolePlayer": "saas:SLA" }
+      ]
+    },
+    {
+      "@id": "saas:belongsToCohort",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Tenant",
+      "rdfs:range": "saas:Cohort",
+      "rdfs:comment": "The analysis cohort this tenant belongs to",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Tenant belongs to Cohort",
+      "sbvr:roles": [
+        { "sbvr:roleName": "cohort member", "sbvr:rolePlayer": "saas:Tenant" },
+        { "sbvr:roleName": "cohort", "sbvr:rolePlayer": "saas:Cohort" }
+      ]
+    },
+    {
+      "@id": "saas:hasUser",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Tenant",
+      "rdfs:range": "saas:User",
+      "rdfs:comment": "Users belonging to this tenant",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Tenant has User",
+      "sbvr:roles": [
+        { "sbvr:roleName": "owning tenant", "sbvr:rolePlayer": "saas:Tenant" },
+        { "sbvr:roleName": "tenant user", "sbvr:rolePlayer": "saas:User" }
+      ]
+    },
+    {
+      "@id": "saas:impactedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Tenant",
+      "rdfs:range": "saas:Incident",
+      "rdfs:comment": "Incidents that affected this tenant",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Tenant is impacted by Incident",
+      "sbvr:roles": [
+        { "sbvr:roleName": "impacted tenant", "sbvr:rolePlayer": "saas:Tenant" },
+        { "sbvr:roleName": "impacting incident", "sbvr:rolePlayer": "saas:Incident" }
+      ]
+    },
+    {
+      "@id": "saas:configuredWebhook",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Tenant",
+      "rdfs:range": "saas:WebhookConfig",
+      "rdfs:comment": "Webhooks configured by this tenant",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Tenant has configured WebhookConfig",
+      "sbvr:roles": [
+        { "sbvr:roleName": "configuring tenant", "sbvr:rolePlayer": "saas:Tenant" },
+        { "sbvr:roleName": "webhook configuration", "sbvr:rolePlayer": "saas:WebhookConfig" }
+      ]
+    },
+    {
+      "@id": "saas:onboardedVia",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "saas:Tenant",
+      "rdfs:range": "saas:Onboarding",
+      "rdfs:comment": "The onboarding process this tenant went through",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Tenant is onboarded via Onboarding",
+      "sbvr:roles": [
+        { "sbvr:roleName": "onboarded tenant", "sbvr:rolePlayer": "saas:Tenant" },
+        { "sbvr:roleName": "onboarding process", "sbvr:rolePlayer": "saas:Onboarding" }
+      ]
+    }
+  ]
+}

@@ -144,3 +144,5 @@ export function registerSkillLoop(
 export { SkillRegistry } from "./registry.js";
 export { SkillCreator } from "./creator.js";
 export { SkillNudge } from "./nudge.js";
+export { SkillMarketplace } from "./marketplace.js";
+export { SkillInjector } from "./injector.js";

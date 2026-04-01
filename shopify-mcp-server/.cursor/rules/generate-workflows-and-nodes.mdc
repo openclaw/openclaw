@@ -1,0 +1,525 @@
+---
+description: n8n workflow automation rules specific to VividMAS project
+globs: **/*.json", "**/*.js", "**/*.ts
+---
+---
+# Specify the following for Cursor rules
+description: n8n workflow automation rules specific to VividMAS project
+globs: ["**/*.json", "**/*.js", "**/*.ts"]
+---
+
+# n8n: Workflow Automation Rules
+
+You're an n8n workflow automation expert. Generate **high-quality n8n workflows** that adhere to the following best practices:
+
+## General Guidelines
+
+1. **Default to Secure Authentication:**
+   - Always use environment variables for sensitive credentials
+   - Never hardcode API keys or passwords in workflows
+   - Use encryption for sensitive data transmission
+   - Store credentials in n8n credentials manager
+
+2. **Set Error Handling:**
+   - Configure error handling for each node
+   - Use "Continue on Fail" strategically
+   - Implement error notification systems
+   - Log errors appropriately
+
+3. **Workflow Organization:**
+   - Use clear, descriptive workflow names
+   - Add detailed workflow descriptions
+   - Tag workflows for easy categorization
+   - Document node configurations
+
+## Best Practices
+
+1. **Node Configuration:**
+   ```json
+   {
+     "node": {
+       "name": "descriptive_name",
+       "type": "n8n-nodes-base.httpRequest",
+       "position": [x, y],
+       "parameters": {
+         "authentication": "genericCredentialType",
+         "requestMethod": "POST",
+         "url": "={{$env.API_URL}}"
+       }
+     }
+   }
+   ```
+
+2. **Error Handling Template:**
+   ```json
+   {
+     "node": {
+       "name": "Error_Handler",
+       "type": "n8n-nodes-base.if",
+       "parameters": {
+         "conditions": {
+           "boolean": [
+             {
+               "value1": "={{$error}}",
+               "value2": true
+             }
+           ]
+         }
+       }
+     }
+   }
+   ```
+
+3. **Workflow Structure:**
+   - Start with trigger nodes
+   - Follow with data transformation
+   - Include error handling
+   - End with action nodes
+
+## Node Type Guidelines
+
+1. **Trigger Nodes:**
+   - Configure proper polling intervals
+   - Set appropriate timeout values
+   - Include webhook security if applicable
+   - Document webhook URLs
+
+2. **Processing Nodes:**
+   - Use Function nodes for complex logic
+   - Implement data validation
+   - Handle rate limiting
+   - Cache results when possible
+
+3. **Output Nodes:**
+   - Verify data format matches target system
+   - Include retry mechanisms
+   - Log successful operations
+   - Implement fallback options
+
+## Example Templates
+
+### Basic HTTP Request Workflow
+
+```json
+{
+  "nodes": [
+    {
+      "name": "HTTP_Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "={{$env.API_URL}}",
+        "authentication": "genericCredentialType",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      }
+    },
+    {
+      "name": "Error_Handler",
+      "type": "n8n-nodes-base.if",
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$error}}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+### Data Transformation Workflow
+
+```json
+{
+  "nodes": [
+    {
+      "name": "Set_Variables",
+      "type": "n8n-nodes-base.set",
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "processedData",
+              "value": "={{$json.data}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Function",
+      "type": "n8n-nodes-base.function",
+      "parameters": {
+        "functionCode": "return items.map(item => { /* transformation logic */ });"
+      }
+    }
+  ]
+}
+```
+
+## Security Guidelines
+
+1. **Authentication:**
+   - Use OAuth 2.0 when available
+   - Implement API key rotation
+   - Set up proper credential encryption
+   - Use least privilege access
+
+2. **Data Handling:**
+   - Sanitize input data
+   - Validate output formats
+   - Implement data masking
+   - Follow data retention policies
+
+3. **Access Control:**
+   - Set up role-based access
+   - Monitor workflow execution
+   - Audit credential usage
+   - Implement IP restrictions
+
+## Testing Requirements
+
+1. **Workflow Testing:**
+   - Test with sample data
+   - Verify error handling
+   - Check performance impact
+   - Validate output format
+
+2. **Production Deployment:**
+   - Use version control
+   - Document dependencies
+   - Set up monitoring
+   - Configure alerts
+
+## Maintenance Procedures
+
+1. **Regular Updates:**
+   - Check for node updates
+   - Review credential validity
+   - Update documentation
+   - Test after updates
+
+2. **Monitoring:**
+   - Set up execution logging
+   - Monitor performance metrics
+   - Track error rates
+   - Set up alerts
+
+## Documentation Requirements
+
+1. **Workflow Documentation:**
+   - Purpose and scope
+   - Node configuration details
+   - Error handling approach
+   - Dependencies and prerequisites
+
+2. **Required Documentation Files:**
+   - README.md
+   - CHANGELOG.md
+   - CONFIGURATION.md
+   - TROUBLESHOOTING.md
+```
+
+This template provides a comprehensive structure for creating n8n workflows, following the same pattern as the Supabase function rules but adapted specifically for n8n's requirements and best practices. It includes:
+
+1. Clear sections for different aspects of workflow creation
+2. JSON templates for common patterns
+3. Security and testing guidelines
+4. Maintenance and documentation requirements
+
+The rule can be used to ensure consistent workflow creation across a team or project, and can be extended with additional specific requirements as needed.
+
+
+# n8n: VividMAS Project Workflow Rules
+
+## Project-Specific Configuration
+
+1. **Environment Configuration:**
+   ```bash
+   # Core n8n Settings
+   N8N_ENCRYPTION_KEY=f08efb96c96e9470c51d200150e6987874f29a0a1b6c1084
+   N8N_USER_MANAGEMENT_JWT_SECRET=freedom2024-secret
+   N8N_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+   # Database Configuration
+   POSTGRES_USER=root
+   POSTGRES_DB=n8n
+   ```
+
+2. **Webhook Endpoints:**
+   ```json
+   {
+     "webhookUrls": {
+       "base": "https://n8n.vividmas.ngrok.app",
+       "telegram": "https://n8n.vividmas.ngrok.app/webhook/telegram",
+       "whatsapp": "https://n8n.vividmas.ngrok.app/webhook/whatsapp",
+       "facebook": "https://35c8-72-68-31-133.ngrok-free.app/webhook/facebook"
+     }
+   }
+   ```
+
+## Webhook Configuration Templates
+
+1. **Telegram Webhook:**
+   ```json
+   {
+     "name": "Telegram_Webhook",
+     "type": "n8n-nodes-base.webhook",
+     "parameters": {
+       "path": "webhook/telegram",
+       "options": {
+         "responseMode": "lastNode"
+       }
+     }
+   }
+   ```
+
+2. **WhatsApp Webhook:**
+   ```json
+   {
+     "name": "WhatsApp_Webhook",
+     "type": "n8n-nodes-base.webhook",
+     "parameters": {
+       "path": "webhook/whatsapp",
+       "options": {
+         "responseMode": "lastNode"
+       }
+     }
+   }
+   ```
+
+## Database Integration
+
+1. **Postgres Connection:**
+   ```json
+   {
+     "name": "DB_Connection",
+     "type": "n8n-nodes-base.postgres",
+     "credentials": {
+       "postgres": {
+         "host": "localhost",
+         "database": "n8n",
+         "user": "root",
+         "password": "your-super-secret-and-long-postgres-password"
+       }
+     }
+   }
+   ```
+
+## Tunnel Configuration
+
+1. **ngrok Settings:**
+   ```json
+   {
+     "tunnelConfig": {
+       "telegram": "2sp0B7VSbfcOxpuSMz3AHUHWNF6_2DNBVfnc8UMhWJVWZqidY",
+       "whatsapp": "2sp0MizgHhaxSJd93ZCWSNAA9gT_5JTzek5nWKTkvPSmEMtZR",
+       "facebook": "2sp10oJR29LWK0I9kkIMfbP9hGW_3V9T5xNcJgaL669RTQNpi"
+     }
+   }
+   ```
+
+## Security Rules
+
+1. **API Authentication:**
+   ```json
+   {
+     "name": "API_Request",
+     "type": "n8n-nodes-base.httpRequest",
+     "parameters": {
+       "headers": {
+         "X-N8N-API-KEY": "={{$env.N8N_API_KEY}}"
+       }
+     }
+   }
+   ```
+
+2. **Database Security:**
+   ```json
+   {
+     "databaseSecurity": {
+       "encryptionKey": "={{$env.N8N_ENCRYPTION_KEY}}",
+       "jwtSecret": "={{$env.N8N_USER_MANAGEMENT_JWT_SECRET}}"
+     }
+   }
+   ```
+
+## Integration Templates
+
+1. **Supabase Integration:**
+   ```json
+   {
+     "name": "Supabase_Connection",
+     "type": "n8n-nodes-base.httpRequest",
+     "parameters": {
+       "url": "={{$env.SUPABASE_REST_URL}}",
+       "headers": {
+         "apikey": "={{$env.ANON_KEY}}",
+         "Authorization": "Bearer {{$env.SERVICE_ROLE_KEY}}"
+       }
+     }
+   }
+   ```
+
+## CLI Commands for Project
+
+```bash
+# Start n8n with tunnel
+n8n start --tunnel
+
+# Export project workflows
+n8n export:workflow --output=./backups/workflows/
+
+# Import project workflows
+n8n import:workflow --input=./backups/workflows/
+
+# Create new credentials
+n8n credential:create
+```
+
+## Workflow Structure Requirements
+
+1. **Messaging Workflows:**
+   ```json
+   {
+     "name": "Message_Handler",
+     "nodes": [
+       {
+         "name": "Webhook_Trigger",
+         "type": "n8n-nodes-base.webhook",
+         "parameters": {
+           "path": "webhook/{{platform}}",
+           "authentication": "headerAuth",
+           "headerName": "X-N8N-API-KEY",
+           "headerValue": "={{$env.N8N_API_KEY}}"
+         }
+       }
+     ]
+   }
+   ```
+
+2. **Database Operations:**
+   ```json
+   {
+     "name": "Database_Operation",
+     "nodes": [
+       {
+         "name": "Postgres_Operation",
+         "type": "n8n-nodes-base.postgres",
+         "parameters": {
+           "operation": "select",
+           "schema": "public",
+           "table": "your_table",
+           "returnAll": true
+         }
+       }
+     ]
+   }
+   ```
+
+## Error Handling
+
+1. **Webhook Error Handler:**
+   ```json
+   {
+     "name": "Error_Handler",
+     "type": "n8n-nodes-base.if",
+     "parameters": {
+       "conditions": {
+         "boolean": [
+           {
+             "value1": "={{$error}}",
+             "value2": true
+           }
+         ]
+       }
+     },
+     "continueOnFail": true
+   }
+   ```
+
+## Documentation Requirements
+
+1. **Workflow Documentation Template:**
+   ```markdown
+   # Workflow: [Name]
+
+   ## Configuration
+   - Base URL: https://n8n.vividmas.ngrok.app
+   - Webhook Path: /webhook/[platform]
+   - Authentication: X-N8N-API-KEY header
+
+   ## Environment Variables
+   - Required variables from .env
+   - Credential requirements
+
+   ## Error Handling
+   - Error scenarios
+   - Recovery procedures
+   ```
+
+## Maintenance Procedures
+
+1. **Regular Checks:**
+   - Verify webhook endpoints
+   - Check ngrok tunnel status
+   - Monitor Postgres connection
+   - Review API key validity
+
+2. **Backup Procedures:**
+   ```bash
+   # Daily backup
+   n8n export:workflow --all --output=./backups/workflows/backup-$(date +%Y%m%d).json
+
+   # Credential backup
+   n8n export:credentials --output=./backups/credentials/
+   ```
+
+## Version Control
+
+1. **Git Structure:**
+   ```
+   /
+   ├── workflows/
+   │   ├── telegram/
+   │   ├── whatsapp/
+   │   └── facebook/
+   ├── credentials/
+   ├── backups/
+   └── .env
+   ```
+
+2. **Workflow Versioning:**
+   ```json
+   {
+     "meta": {
+       "version": "1.0.0",
+       "platform": "telegram|whatsapp|facebook",
+       "webhookUrl": "https://n8n.vividmas.ngrok.app/webhook/[platform]"
+     }
+   }
+   ```
+
+## Testing Guidelines
+
+1. **Webhook Testing:**
+   ```bash
+   # Test webhook endpoints
+   curl -X POST \
+     -H "X-N8N-API-KEY: $N8N_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"test": true}' \
+     https://n8n.vividmas.ngrok.app/webhook/[platform]
+   ```
+
+2. **Database Testing:**
+   ```sql
+   -- Test database connection
+   SELECT NOW();
+   ```

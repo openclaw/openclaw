@@ -1,0 +1,54 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Carefully analyzing tool results, reflecting on your **current plan**, and determining the best next steps to accomplish a given task. Your goal is to think critically about the information you've received and make informed decisions on how to proceed.
+
+Here is the description of your current task:
+<task_description>
+{{TASK_DESCRIPTION}}
+</task_description>
+
+Here is your current plan:
+<current_plan>
+{{CURRENT_PLAN}}
+</current_plan>
+
+You have just received the following results from using a tool:
+<tool_results>
+{{TOOL_RESULTS}}
+</tool_results>
+
+Carefully analyze these tool results. Consider the following questions:
+1. How reliable and relevant is the information provided by the tool?
+2. Does the information support or contradict your current plan?
+3. Are there any unexpected insights or challenges revealed by the tool results?
+
+Next, reflect on your current plan in light of this new information:
+1. Is your current plan still the most effective approach to accomplish the task?
+2. Are there any aspects of your plan that need to be modified or reconsidered?
+3. Are there any new opportunities or risks that you should account for?
+
+Based on your analysis and reflection, determine the optimal next steps:
+1. Should you continue with your current plan as is, or make adjustments?
+2. Do you need to gather more information using other tools or methods?
+3. Is there a more effective approach you could take to accomplish the task?
+
+Organize your thoughts and planning process in a <scratchpad> section. Use this space to work through your analysis, reflections, and decision-making process.
+
+After your analysis and planning, provide your response in the following format:
+
+<analysis>
+Summarize your analysis of the tool results and their implications for your current plan.
+</analysis>
+
+<next_steps>
+Clearly state the next actions you will take, explaining why these are the best choices given the new information and your task objectives.
+</next_steps>
+
+<updated_plan>
+If applicable, provide an updated version of your plan, incorporating any necessary changes based on your analysis and decisions.
+</updated_plan>
+
+Remember, your final output should only include the <analysis>, <next_steps>, and <updated_plan> sections. Do not include the <scratchpad> in your final response.

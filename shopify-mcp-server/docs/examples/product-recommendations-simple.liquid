@@ -1,0 +1,206 @@
+{%- if section.settings.show_product_recommendations -%}
+  <div class="product-recommendations" data-product-id="{{ product.id }}" data-limit="4">
+    {%- if recommendations.products_count > 0 -%}
+      <h2>{{ section.settings.heading | default: 'You may also like' }}</h2>
+      <div class="product-recommendations__grid">
+        {%- for product in recommendations.products -%}
+          <div class="product-recommendation__item">
+            <a href="{{ product.url }}" class="product-recommendation__link">
+              {%- if product.featured_image -%}
+                <img 
+                  src="{{ product.featured_image | img_url: '300x300' }}" 
+                  alt="{{ product.featured_image.alt | escape }}" 
+                  loading="lazy"
+                  class="product-recommendation__image"
+                />
+              {%- endif -%}
+              <div class="product-recommendation__info">
+                <h3 class="product-recommendation__title">{{ product.title | escape }}</h3>
+                <div class="product-recommendation__price">
+                  {%- if product.price_varies -%}
+                    <span class="price-range">
+                      {{ product.price_min | money }} - {{ product.price_max | money }}
+                    </span>
+                  {%- else -%}
+                    <span class="price">{{ product.price | money }}</span>
+                  {%- endif -%}
+                  {%- if product.compare_at_price > product.price -%}
+                    <span class="price-compare">{{ product.compare_at_price | money }}</span>
+                  {%- endif -%}
+                </div>
+                {%- if section.settings.show_vendor -%}
+                  <div class="product-recommendation__vendor">{{ product.vendor }}</div>
+                {%- endif -%}
+              </div>
+            </a>
+          </div>
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+  </div>
+{%- endif -%}
+
+<style>
+  .product-recommendations {
+    margin: 2rem 0;
+    padding: 2rem 0;
+    border-top: 1px solid #e0e0e0;
+  }
+  
+  .product-recommendations h2 {
+    text-align: center;
+    margin-bottom: 2rem;
+    font-size: 1.5rem;
+    font-weight: 600;
+  }
+  
+  .product-recommendations__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  
+  .product-recommendation__item {
+    border: 1px solid #f0f0f0;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  
+  .product-recommendation__item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+  
+  .product-recommendation__link {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+  }
+  
+  .product-recommendation__image {
+    width: 100%;
+    height: 250px;
+    object-fit: cover;
+    display: block;
+  }
+  
+  .product-recommendation__info {
+    padding: 1rem;
+  }
+  
+  .product-recommendation__title {
+    font-size: 1rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    line-height: 1.3;
+  }
+  
+  .product-recommendation__price {
+    margin-bottom: 0.5rem;
+  }
+  
+  .price {
+    font-weight: 600;
+    color: #333;
+  }
+  
+  .price-range {
+    font-weight: 600;
+    color: #333;
+  }
+  
+  .price-compare {
+    text-decoration: line-through;
+    color: #999;
+    margin-left: 0.5rem;
+    font-size: 0.9rem;
+  }
+  
+  .product-recommendation__vendor {
+    font-size: 0.875rem;
+    color: #666;
+  }
+  
+  @media (max-width: 768px) {
+    .product-recommendations__grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1rem;
+    }
+    
+    .product-recommendation__image {
+      height: 200px;
+    }
+  }
+</style>
+
+{% javascript %}
+var loadProductRecommendationsIntoSection = function() {
+  // Look for an element with class 'product-recommendations'
+  var productRecommendationsSection = document.querySelector(".product-recommendations");
+  if (productRecommendationsSection === null) { return; }
+  
+  // Read product id from data attribute
+  var productId = productRecommendationsSection.dataset.productId;
+  // Read limit from data attribute
+  var limit = productRecommendationsSection.dataset.limit;
+  
+  // Build request URL
+  var requestUrl = "/recommendations/products?section_id=product-recommendations-simple&limit="+limit+"&product_id="+productId;
+  
+  // Create request and submit it using Ajax
+  var request = new XMLHttpRequest();
+  request.open("GET", requestUrl);
+  request.onload = function() {
+    if (request.status >= 200 && request.status < 300) {
+      var container = document.createElement("div");
+      container.innerHTML = request.response;
+      var newContent = container.querySelector(".product-recommendations");
+      if (newContent) {
+        productRecommendationsSection.innerHTML = newContent.innerHTML;
+      }
+    }
+  };
+  request.send();
+};
+
+// If your section has theme settings, the theme editor
+// reloads the section as you edit those settings. When that happens, the
+// recommendations need to be fetched again.
+document.addEventListener("shopify:section:load", function(event) {
+  if (event.detail.sectionId === "product-recommendations-simple") {
+    loadProductRecommendationsIntoSection();
+  }
+});
+
+// Fetching the recommendations on page load
+loadProductRecommendationsIntoSection();
+{% endjavascript %}
+
+{% schema %}
+{
+  "name": "Product Recommendations",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "show_product_recommendations",
+      "label": "Show product recommendations",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "You may also like"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_vendor",
+      "label": "Show product vendor",
+      "default": false
+    }
+  ]
+}
+{% endschema %} 

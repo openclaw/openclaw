@@ -113,3 +113,4 @@ export function registerSessionIntel(
 
 export { SessionIndex } from "./session-index.js";
 export { SessionRecall } from "./recall.js";
+export { UserModel } from "./user-model.js";

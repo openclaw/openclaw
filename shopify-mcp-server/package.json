@@ -1,0 +1,74 @@
+{
+  "name": "shopify-admin-mcp-server",
+  "version": "2.0.0",
+  "description": "Focused MCP Server for Shopify Admin API and store management. Provides comprehensive tools for managing products, orders, customers, collections, pages, navigation, themes, and store settings through GraphQL API.",
+  "keywords": [
+    "admin",
+    "api",
+    "graphql",
+    "mcp",
+    "shopify",
+    "store-management"
+  ],
+  "license": "MIT",
+  "author": "Amir Bengherbi",
+  "bin": {
+    "shopify-admin-mcp-server": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\" && node -e \"require('fs').chmodSync('build/index-http.js', '755')\"",
+    "build:http": "tsc && node -e \"require('fs').chmodSync('build/index-http.js', '755')\"",
+    "dev": "npm run build && npm run start",
+    "dev:http": "npm run build:http && npm run start:http",
+    "generate": "node scripts/dev.js generate",
+    "list": "node scripts/dev.js list",
+    "parse-prd": "node scripts/dev.js parse-prd",
+    "start": "node build/index.js",
+    "start:http": "node build/index-http.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:admin": "node --experimental-vm-modules node_modules/jest/bin/jest.js AdminFeatures.test.ts",
+    "test:client": "node --experimental-vm-modules node_modules/jest/bin/jest.js ShopifyClient.test.ts",
+    "test:mcp": "node --experimental-vm-modules node_modules/jest/bin/jest.js McpServerIntegration.test.ts",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.4.1",
+    "@types/uuid": "^10.0.0",
+    "boxen": "^8.0.1",
+    "chalk": "^4.1.2",
+    "cli-table3": "^0.6.5",
+    "commander": "^11.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.21.2",
+    "fastmcp": "^1.20.5",
+    "figlet": "^1.8.0",
+    "fuse.js": "^7.0.0",
+    "gradient-string": "^3.0.0",
+    "graphql-request": "^7.1.2",
+    "helmet": "^8.1.0",
+    "inquirer": "^12.5.0",
+    "jsonwebtoken": "^9.0.2",
+    "lru-cache": "^10.2.0",
+    "openai": "^4.89.0",
+    "ora": "^8.2.0",
+    "uuid": "^11.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.23",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.10",
+    "dotenv": "^16.5.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.3"
+  }
+}

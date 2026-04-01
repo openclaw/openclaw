@@ -1,0 +1,34 @@
+---
+description: Specific standards for implementing MCP server agents and tools
+globs: mpc-server/src/*, mpc-server/tests/*
+alwaysApply: true
+---
+
+# Your rule content
+
+## Agent Implementation
+
+- Each agent must implement the BaseAgent interface
+- All agent inputs must be validated using Zod schemas
+- Comprehensive error handling must be implemented for all operations
+- Each agent must have corresponding test files that verify all functionality
+- Mock implementations must follow the same interface as real implementations
+- Document where real LLM implementations would differ from mocks
+
+## Testing Standards
+
+- Test files must verify all public methods of the agent
+- Tests must cover both successful and error scenarios
+- Mock all external dependencies for consistent test results
+- Test input validation by providing invalid inputs
+- Verify error handling by triggering error conditions
+- Run tests after implementation to verify functionality before committing
+
+## Implementation Guidelines
+
+- Follow consistent naming conventions across all agents
+- Use descriptive variable and function names
+- Add comprehensive JSDoc comments for all public methods
+- Implement proper type definitions for all inputs and outputs
+- Ensure all async operations have proper error handling
+- Avoid any hardcoded values that might change in different environments

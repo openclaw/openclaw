@@ -1,0 +1,168 @@
+---
+description: Design Rubric Scoring Guide
+globs: 
+alwaysApply: false
+---
+<category>
+<title>Information Architecture</title>
+<description>Ensures content is structured and organized in a way that users can easily navigate, find information, and complete tasks efficiently.</description>
+<criteria>
+- Logical navigation hierarchy and labeling  
+- Consistent categorization and grouping  
+- Clear pathways to critical information or features  
+- Minimal cognitive load through clear structure  
+- Scalability for future content expansion  
+</criteria>
+<scoring>
+1: Structure is chaotic, making it hard to find or understand content.  
+2: Some logical grouping exists, but navigation and labeling remain unclear.  
+3: Adequately organized structure with occasional navigational issues.  
+4: Well-organized and intuitive navigation that accommodates varied user needs.  
+5: Exceptionally clear and scalable structure with seamless navigation paths.  
+</scoring>
+</category>
+
+
+<category>
+<title>Visual Design</title>
+<description>Focuses on the aesthetics, overall look, and feel of the product to create a visually appealing and coherent user interface.</description>
+<criteria>
+- Cohesive and consistent use of typography, color, and layout  
+- Visual hierarchy guiding users to key content and actions  
+- Balanced use of whitespace and alignment  
+- Appropriate imagery and iconography supporting functionality  
+- Brand-aligned elements enhancing user trust and recognition  
+</criteria>
+<scoring>
+1: Disjointed and cluttered visuals lacking cohesion.  
+2: Some consistent elements, but overall design feels unrefined.  
+3: Adequate design consistency and hierarchy with minor issues.  
+4: Polished and well-organized visuals with strong brand alignment.  
+5: Outstanding, cohesive aesthetic that elevates usability and brand identity.  
+</scoring>
+</category>
+
+
+<category>
+<title>Interaction Design</title>
+<description>Encompasses the creation and refinement of interactive elements to ensure they are intuitive, efficient, and enjoyable.</description>
+<criteria>
+- Clearly defined and discoverable interactive elements  
+- Smooth transitions and feedback on user actions  
+- Minimal unnecessary complexity or friction  
+- Predictable outcomes from interactive controls  
+- Support for error prevention and easy recovery  
+</criteria>
+<scoring>
+1: Interactive elements are confusing and behave unpredictably.  
+2: Interactions work but lack clear feedback or intuitive placement.  
+3: Usable interactive elements with occasional friction points.  
+4: Well-designed, efficient, and responsive interactions.  
+5: Exceptionally intuitive and seamless interactions that anticipate user needs.  
+</scoring>
+</category>
+
+
+<category>
+<title>Accessibility</title>
+<description>Ensures the design is usable by people of diverse abilities, following best practices and inclusive standards.</description>
+<criteria>
+- Proper use of semantic HTML and ARIA attributes  
+- Sufficient color contrast and scalable typography  
+- Keyboard and screen reader compatibility  
+- Clear labels and instructions for interactive elements  
+- Inclusive consideration of different user needs  
+</criteria>
+<scoring>
+1: Neglects fundamental accessibility requirements.  
+2: Minimal attempts at accessibility; many barriers remain.  
+3: Basic compliance with accessibility guidelines, but gaps persist.  
+4: Strong adherence to accessibility standards with few areas to improve.  
+5: Thorough and thoughtful inclusive design meeting or exceeding standards.  
+</scoring>
+</category>
+
+
+<category>
+<title>Performance and Responsiveness</title>
+<description>Focuses on page load times, responsiveness of the interface, and the overall efficiency of the product across devices.</description>
+<criteria>
+- Fast initial page load and time-to-interactive  
+- Smooth responsiveness when switching screen sizes  
+- Optimized media and assets for various bandwidths  
+- Minimization of unnecessary scripts and libraries  
+- Effective handling of slow network or offline scenarios  
+</criteria>
+<scoring>
+1: Regular timeouts, crashes, or significant delays.  
+2: Noticeable lag and frequent performance issues.  
+3: Acceptable performance with intermittent slowdowns.  
+4: Generally fast and responsive experience across devices.  
+5: Lightning-fast load times and fluid interactions, even under heavy load.  
+</scoring>
+</category>
+
+
+<category>
+<title>User Research and Testing</title>
+<description>Captures how effectively user insights are integrated through ongoing research, testing, and iteration.</description>
+<criteria>
+- Clearly defined research objectives and goals  
+- Comprehensive user testing (e.g., usability tests, surveys)  
+- Regular synthesis of user feedback into actionable insights  
+- Iterative improvements informed by data  
+- Engagement with diverse user segments  
+</criteria>
+<scoring>
+1: Lacks any formal research or user testing.  
+2: Minimal user research with limited application of insights.  
+3: Moderately effective research; feedback is partially integrated.  
+4: Well-defined research process with consistent user testing and iteration.  
+5: Research-driven design that continually evolves based on diverse, robust user feedback.  
+</scoring>
+</category>
+
+
+<category>
+<title>Content Strategy</title>
+<description>Ensures that all written and multimedia content is aligned with user needs, brand voice, and business goals.</description>
+<criteria>
+- Clear, concise, and user-focused messaging  
+- Tone and style consistent with brand identity  
+- Content effectively meeting user tasks and questions  
+- Proper localization and internationalization (if needed)  
+- Systematic approach to content creation and governance  
+</criteria>
+<scoring>
+1: Inconsistent or confusing messaging with little relevance to users.  
+2: Some content strategy in place, but messaging lacks coherence.  
+3: Satisfactory content meeting most user needs with minor inconsistencies.  
+4: Well-planned, cohesive content strategy that aligns brand voice and user goals.  
+5: Masterful, comprehensive content strategy that resonates with diverse audiences.  
+</scoring>
+</category>
+
+
+<category>
+<title>Usability</title>
+<description>Ensures the system is straightforward to learn, efficient to use, and reduces user error through intuitive workflows.</description>
+<criteria>
+- Clear and concise labeling of functions and features  
+- Straightforward task flows and minimal cognitive load  
+- Consistency in navigation and controls across the product  
+- Error handling and prevention measures  
+- Quick learnability and memorability for repeat users  
+</criteria>
+<scoring>
+1: Users struggle to understand and accomplish basic tasks.  
+2: Key tasks are identifiable but still require excessive effort.  
+3: Users can complete tasks without major issues, though improvements are needed.  
+4: Smooth and efficient task completion with few usability hurdles.  
+5: Highly intuitive, task-focused experience with minimal error potential.  
+</scoring>
+</category>
+
+
+<conclusion>
+Each category in this rubric contributes to an expert-level UX design that meets users’ needs, fosters trust, and supports long-term engagement. By evaluating and refining these eight areas—Information Architecture, Visual Design, Interaction Design, Accessibility, Performance and Responsiveness, User Research and Testing, Content Strategy, and Usability—design teams can create experiences that are both highly usable and strategically aligned with business goals.
+</conclusion>

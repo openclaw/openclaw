@@ -1,0 +1,780 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "sbvr": "https://mabos.io/ontology/sbvr/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@id": "https://mabos.io/ontology/upper",
+  "@type": "owl:Ontology",
+  "rdfs:label": "MABOS Upper Ontology",
+  "rdfs:comment": "Core BDI agent, cognitive, and organizational concepts for the Multi-Agent Business Operating System",
+  "@graph": [
+
+    {"@id": "sbvr:VocabularyElement", "@type": "owl:Class", "rdfs:label": "Vocabulary Element", "rdfs:comment": "Base metaclass for all SBVR vocabulary entries — noun concepts, verb concepts, and fact types"},
+    {"@id": "sbvr:NounConcept", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:VocabularyElement", "rdfs:label": "Noun Concept", "rdfs:comment": "An SBVR noun concept corresponding to an OWL class — a category of things in the business vocabulary"},
+    {"@id": "sbvr:IndividualConcept", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:NounConcept", "rdfs:label": "Individual Concept", "rdfs:comment": "An SBVR individual concept — a specific named instance within the vocabulary"},
+    {"@id": "sbvr:VerbConcept", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:VocabularyElement", "rdfs:label": "Verb Concept", "rdfs:comment": "An SBVR verb concept corresponding to an OWL object property — an action or relationship term"},
+    {"@id": "sbvr:FactType", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:VocabularyElement", "rdfs:label": "Fact Type", "rdfs:comment": "An SBVR fact type — a relationship between concepts with named roles, arity, and natural language readings"},
+    {"@id": "sbvr:FactTypeRole", "@type": "owl:Class", "rdfs:label": "Fact Type Role", "rdfs:comment": "A named role within an SBVR fact type, binding a role name to a concept that plays it"},
+    {"@id": "sbvr:BusinessRule", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:VocabularyElement", "rdfs:label": "Business Rule", "rdfs:comment": "An SBVR business rule — a constraint or derivation governing fact types, with definitional or behavioral modality"},
+    {"@id": "sbvr:DefinitionalRule", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:BusinessRule", "rdfs:label": "Definitional Rule", "rdfs:comment": "An alethic/necessity rule expressing what must be true by definition — 'It is necessary that...'"},
+    {"@id": "sbvr:BehavioralRule", "@type": "owl:Class", "rdfs:subClassOf": "sbvr:BusinessRule", "rdfs:label": "Behavioral Rule", "rdfs:comment": "A deontic/obligation rule expressing what should or must not occur — 'It is obligatory/prohibited that...'"},
+    {"@id": "sbvr:ProofTable", "@type": "owl:Class", "rdfs:label": "Proof Table", "rdfs:comment": "A truth table for validating business rule outcomes with entries of input-output combinations"},
+    {"@id": "sbvr:ProofEntry", "@type": "owl:Class", "rdfs:label": "Proof Entry", "rdfs:comment": "A single row in a proof table representing one validation scenario with truth value and confidence"},
+    {"@id": "sbvr:Vocabulary", "@type": "owl:Class", "rdfs:label": "Vocabulary", "rdfs:comment": "A named vocabulary grouping concept types, fact types, and rules within a domain"},
+
+    {"@id": "sbvr:hasDesignation", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:VocabularyElement", "rdfs:range": "xsd:string", "rdfs:comment": "The natural language term designating this vocabulary element"},
+    {"@id": "sbvr:hasDefinition", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:VocabularyElement", "rdfs:range": "xsd:string", "rdfs:comment": "The formal SBVR definition text for this vocabulary element"},
+    {"@id": "sbvr:hasGeneralConcept", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:NounConcept", "rdfs:range": "sbvr:NounConcept", "rdfs:comment": "Links a noun concept to its more general parent concept in the generalization hierarchy"},
+    {"@id": "sbvr:hasRole", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:FactType", "rdfs:range": "sbvr:FactTypeRole", "rdfs:comment": "Links a fact type to one of its constituent roles"},
+    {"@id": "sbvr:roleArity", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:FactType", "rdfs:range": "xsd:integer", "rdfs:comment": "The number of roles in this fact type: 1=unary, 2=binary, 3+=n-ary"},
+    {"@id": "sbvr:hasReading", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:FactType", "rdfs:range": "xsd:string", "rdfs:comment": "A natural language reading of this fact type, e.g. 'customer purchases product'"},
+    {"@id": "sbvr:rolePlayer", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:FactTypeRole", "rdfs:range": "sbvr:NounConcept", "rdfs:comment": "The noun concept that fills this role in the fact type"},
+    {"@id": "sbvr:roleName", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:FactTypeRole", "rdfs:range": "xsd:string", "rdfs:comment": "The name of this role within the fact type"},
+    {"@id": "sbvr:ruleType", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:BusinessRule", "rdfs:range": "xsd:string", "rdfs:comment": "The type of business rule: 'definitional' or 'behavioral'"},
+    {"@id": "sbvr:ruleModality", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:BusinessRule", "rdfs:range": "xsd:string", "rdfs:comment": "The modal logic of the rule: 'alethic' (necessity) or 'deontic' (obligation)"},
+    {"@id": "sbvr:constrainsFact", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:BusinessRule", "rdfs:range": "sbvr:FactType", "rdfs:comment": "The fact type that this business rule constrains"},
+    {"@id": "sbvr:hasProofTable", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:BusinessRule", "rdfs:range": "sbvr:ProofTable", "rdfs:comment": "The proof table used to validate this business rule"},
+    {"@id": "sbvr:hasProofEntry", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:ProofTable", "rdfs:range": "sbvr:ProofEntry", "rdfs:comment": "An entry (row) within this proof table"},
+    {"@id": "sbvr:truthValue", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:ProofEntry", "rdfs:range": "xsd:boolean", "rdfs:comment": "The truth value of this proof table entry"},
+    {"@id": "sbvr:entryConfidence", "@type": "owl:DatatypeProperty", "rdfs:domain": "sbvr:ProofEntry", "rdfs:range": "xsd:float", "rdfs:comment": "Confidence level 0.0-1.0 for this proof entry"},
+    {"@id": "sbvr:belongsToVocabulary", "@type": "owl:ObjectProperty", "rdfs:domain": "sbvr:VocabularyElement", "rdfs:range": "sbvr:Vocabulary", "rdfs:comment": "The vocabulary this element belongs to"},
+
+    {
+      "@id": "mabos:Agent",
+      "@type": "owl:Class",
+      "rdfs:label": "Agent",
+      "rdfs:comment": "An autonomous entity with beliefs, desires, and intentions operating within a BDI cognitive architecture",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "agent",
+      "sbvr:definition": "An agent is an autonomous entity that has beliefs, desires, and intentions operating within a BDI cognitive architecture",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Belief",
+      "@type": "owl:Class",
+      "rdfs:label": "Belief",
+      "rdfs:comment": "An agent's information about the world with certainty level. Categories: environment, self, agent, case",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "belief",
+      "sbvr:definition": "A belief is an agent's information about the world that has a certainty level and belongs to a category",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Desire",
+      "@type": "owl:Class",
+      "rdfs:label": "Desire",
+      "rdfs:comment": "An enduring motivation or aspiration. Priority = base(0.3)+importance(0.25)+urgency(0.25)+alignment(0.15)+deps(0.05)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "desire",
+      "sbvr:definition": "A desire is an enduring motivation or aspiration that has a computed priority score",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Goal",
+      "@type": "owl:Class",
+      "rdfs:label": "Goal",
+      "rdfs:subClassOf": "mabos:Desire",
+      "rdfs:comment": "A concrete, measurable objective derived from a desire with success criteria and deadline",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "goal",
+      "sbvr:definition": "A goal is a desire that is concrete and measurable and has success criteria and a deadline",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Intention",
+      "@type": "owl:Class",
+      "rdfs:label": "Intention",
+      "rdfs:comment": "A committed plan of action with a commitment strategy (single-minded, open-minded, or cautious)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "intention",
+      "sbvr:definition": "An intention is a committed plan of action that has a commitment strategy",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Plan",
+      "@type": "owl:Class",
+      "rdfs:label": "Plan",
+      "rdfs:comment": "A hierarchical task network (HTN) decomposition of steps to achieve a goal",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "plan",
+      "sbvr:definition": "A plan is a hierarchical task network decomposition of steps that serves a goal",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:PlanStep",
+      "@type": "owl:Class",
+      "rdfs:label": "Plan Step",
+      "rdfs:comment": "A single action within a plan — either primitive (executable) or compound (further decomposable)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "plan step",
+      "sbvr:definition": "A plan step is a single action within a plan that is either primitive or compound",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Case",
+      "@type": "owl:Class",
+      "rdfs:label": "Case",
+      "rdfs:comment": "A stored experience tuple (Beliefs, Desires, Intentions, Outcome) for case-based reasoning. Retrieval: S(B,D) = F(Sb ∩ Sd)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "case",
+      "sbvr:definition": "A case is a stored experience that has beliefs, desires, intentions, and an outcome for case-based reasoning",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Playbook",
+      "@type": "owl:Class",
+      "rdfs:label": "Playbook",
+      "rdfs:comment": "A reusable standard operating procedure for known situations, derived from successful cases",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "playbook",
+      "sbvr:definition": "A playbook is a reusable standard operating procedure that is derived from successful cases",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Stakeholder",
+      "@type": "owl:Class",
+      "rdfs:label": "Stakeholder",
+      "rdfs:comment": "A human principal who governs the business with approval thresholds and decision authority",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "stakeholder",
+      "sbvr:definition": "A stakeholder is a human principal that governs the business and has approval thresholds and decision authority",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Contractor",
+      "@type": "owl:Class",
+      "rdfs:label": "Contractor",
+      "rdfs:comment": "A human resource engaged via freelance/contract arrangement with trust scoring",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "contractor",
+      "sbvr:definition": "A contractor is a human resource that is engaged via freelance or contract arrangement and has a trust score",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:WorkPackage",
+      "@type": "owl:Class",
+      "rdfs:label": "Work Package",
+      "rdfs:comment": "A unit of work assigned from an agent to a human contractor with deliverables and deadlines",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "work package",
+      "sbvr:definition": "A work package is a unit of work that is assigned to a contractor and has deliverables and deadlines",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Decision",
+      "@type": "owl:Class",
+      "rdfs:label": "Decision",
+      "rdfs:comment": "A choice point requiring stakeholder or agent judgment, with options, impact analysis, and recommendation",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "decision",
+      "sbvr:definition": "A decision is a choice point that requires stakeholder or agent judgment and has options and impact analysis",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:ReasoningMethod",
+      "@type": "owl:Class",
+      "rdfs:label": "Reasoning Method",
+      "rdfs:comment": "A cognitive method for problem-solving (deductive, Bayesian, CBR, abductive, forward/backward chaining)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "reasoning method",
+      "sbvr:definition": "A reasoning method is a cognitive method that is used for problem-solving",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:CommitmentStrategy",
+      "@type": "owl:Class",
+      "rdfs:label": "Commitment Strategy",
+      "rdfs:comment": "How tenaciously an agent pursues an intention",
+      "owl:oneOf": ["mabos:SingleMinded", "mabos:OpenMinded", "mabos:Cautious"],
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "commitment strategy",
+      "sbvr:definition": "A commitment strategy is a classification of how tenaciously an agent pursues an intention",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Performative",
+      "@type": "owl:Class",
+      "rdfs:label": "ACL Performative",
+      "rdfs:comment": "A speech act type for agent communication: REQUEST, INFORM, QUERY, PROPOSE, ACCEPT, REJECT, CFP, etc.",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "performative",
+      "sbvr:definition": "A performative is a speech act type that is used for agent communication",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Message",
+      "@type": "owl:Class",
+      "rdfs:label": "Message",
+      "rdfs:comment": "An ACL message exchanged between agents with performative, sender, receiver, content, and conversation ID",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "message",
+      "sbvr:definition": "A message is an ACL message that is exchanged between agents and has a performative, sender, receiver, and content",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Organization",
+      "@type": "owl:Class",
+      "rdfs:label": "Organization",
+      "rdfs:comment": "A structured group of agents forming a business unit with roles, hierarchy, and governance rules",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "organization",
+      "sbvr:definition": "An organization is a structured group of agents that forms a business unit and has roles, hierarchy, and governance rules",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Role",
+      "@type": "owl:Class",
+      "rdfs:label": "Role",
+      "rdfs:comment": "A functional position within an organization (CEO, CFO, COO, CMO, CTO, HR, Legal, Strategy, Knowledge)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "role",
+      "sbvr:definition": "A role is a functional position within an organization",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Workflow",
+      "@type": "owl:Class",
+      "rdfs:label": "Workflow",
+      "rdfs:comment": "A defined sequence of tasks, approvals, and handoffs that constitute a business process",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "workflow",
+      "sbvr:definition": "A workflow is a defined sequence of tasks, approvals, and handoffs that constitutes a business process",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Event",
+      "@type": "owl:Class",
+      "rdfs:label": "Event",
+      "rdfs:comment": "A significant occurrence that triggers belief revision, desire evaluation, or workflow execution",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "event",
+      "sbvr:definition": "An event is a significant occurrence that triggers belief revision, desire evaluation, or workflow execution",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Metric",
+      "@type": "owl:Class",
+      "rdfs:label": "Metric",
+      "rdfs:comment": "A quantitative measurement used for monitoring, KPIs, and goal progress tracking",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "metric",
+      "sbvr:definition": "A metric is a quantitative measurement that is used for monitoring and goal progress tracking",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Rule",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "sbvr:BusinessRule",
+      "rdfs:label": "Rule",
+      "rdfs:comment": "A condition-action pair for inference, constraint checking, or policy evaluation",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "rule",
+      "sbvr:definition": "A rule is a business rule that is a condition-action pair for inference, constraint checking, or policy evaluation",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Fact",
+      "@type": "owl:Class",
+      "rdfs:label": "Fact",
+      "rdfs:comment": "A subject-predicate-object triple in the fact store with confidence, source, temporal validity, and derivation",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "fact",
+      "sbvr:definition": "A fact is a subject-predicate-object triple that has confidence, source, and temporal validity",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:WorkingMemory",
+      "@type": "owl:Class",
+      "rdfs:label": "Working Memory",
+      "rdfs:comment": "Short-lived memory store limited to 7 items for active cognitive processing",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "working memory",
+      "sbvr:definition": "Working memory is a short-lived memory store that is limited to 7 items for active cognitive processing",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:ShortTermMemory",
+      "@type": "owl:Class",
+      "rdfs:label": "Short-Term Memory",
+      "rdfs:comment": "Temporary memory store with 200-item capacity and 2-hour TTL for recent experiences",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "short-term memory",
+      "sbvr:definition": "Short-term memory is a temporary memory store that has a 200-item capacity and 2-hour TTL",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:LongTermMemory",
+      "@type": "owl:Class",
+      "rdfs:label": "Long-Term Memory",
+      "rdfs:comment": "Persistent memory store for consolidated knowledge, indexed by importance × recency",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "long-term memory",
+      "sbvr:definition": "Long-term memory is a persistent memory store for consolidated knowledge that is indexed by importance and recency",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:CoordinationProtocol",
+      "@type": "owl:Class",
+      "rdfs:label": "Coordination Protocol",
+      "rdfs:comment": "A pattern for multi-agent coordination: request-reply, publish-subscribe, or contract-net",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "coordination protocol",
+      "sbvr:definition": "A coordination protocol is a pattern for multi-agent coordination",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:ContractNet",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:CoordinationProtocol",
+      "rdfs:label": "Contract Net Protocol",
+      "rdfs:comment": "CFP broadcast → proposal collection → evaluation → award with notification",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "contract net protocol",
+      "sbvr:definition": "A contract net protocol is a coordination protocol that uses CFP broadcast, proposal collection, evaluation, and award",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:InferenceEngine",
+      "@type": "owl:Class",
+      "rdfs:label": "Inference Engine",
+      "rdfs:comment": "Forward chaining (pattern matching, fixed-point), backward chaining (gap analysis), abductive reasoning",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "inference engine",
+      "sbvr:definition": "An inference engine is a reasoning component that performs forward chaining, backward chaining, or abductive reasoning",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:Hypothesis",
+      "@type": "owl:Class",
+      "rdfs:label": "Hypothesis",
+      "rdfs:comment": "An abductive reasoning output — a ranked candidate explanation for observed facts",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "hypothesis",
+      "sbvr:definition": "A hypothesis is an abductive reasoning output that is a ranked candidate explanation for observed facts",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:CausalReasoning",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:ReasoningMethod",
+      "rdfs:label": "Causal Reasoning",
+      "rdfs:comment": "Reasoning about cause-effect relationships using causal graphs and intervention analysis",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "causal reasoning",
+      "sbvr:definition": "Causal reasoning is a reasoning method that reasons about cause-effect relationships using causal graphs",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:CounterfactualReasoning",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:ReasoningMethod",
+      "rdfs:label": "Counterfactual Reasoning",
+      "rdfs:comment": "What-if analysis exploring alternative outcomes under different conditions or decisions",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "counterfactual reasoning",
+      "sbvr:definition": "Counterfactual reasoning is a reasoning method that explores alternative outcomes under different conditions",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+    {
+      "@id": "mabos:BayesianReasoning",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:ReasoningMethod",
+      "rdfs:label": "Bayesian Reasoning",
+      "rdfs:comment": "Probabilistic reasoning updating belief certainty via Bayes' theorem as evidence arrives",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "bayesian reasoning",
+      "sbvr:definition": "Bayesian reasoning is a reasoning method that updates belief certainty via Bayes' theorem as evidence arrives",
+      "sbvr:vocabulary": "mabos-upper"
+    },
+
+    {
+      "@id": "mabos:hasBelief",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Belief",
+      "rdfs:comment": "Links an agent to its beliefs about the world",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent has belief",
+      "sbvr:roles": [
+        {"sbvr:roleName": "beliefHolder", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "heldBelief", "sbvr:rolePlayer": "mabos:Belief"}
+      ]
+    },
+    {
+      "@id": "mabos:hasDesire",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Desire",
+      "rdfs:comment": "Links an agent to its motivations and aspirations",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent has desire",
+      "sbvr:roles": [
+        {"sbvr:roleName": "desireHolder", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "heldDesire", "sbvr:rolePlayer": "mabos:Desire"}
+      ]
+    },
+    {
+      "@id": "mabos:hasIntention",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Intention",
+      "rdfs:comment": "Links an agent to its committed courses of action",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent has intention",
+      "sbvr:roles": [
+        {"sbvr:roleName": "intentionHolder", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "heldIntention", "sbvr:rolePlayer": "mabos:Intention"}
+      ]
+    },
+    {
+      "@id": "mabos:hasGoal",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Goal",
+      "rdfs:comment": "Links an agent to its concrete measurable objectives",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent has goal",
+      "sbvr:roles": [
+        {"sbvr:roleName": "goalHolder", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "heldGoal", "sbvr:rolePlayer": "mabos:Goal"}
+      ]
+    },
+    {
+      "@id": "mabos:executesPlan",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Intention",
+      "rdfs:range": "mabos:Plan",
+      "rdfs:comment": "The plan being executed to fulfill this intention",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "intention executes plan",
+      "sbvr:roles": [
+        {"sbvr:roleName": "executingIntention", "sbvr:rolePlayer": "mabos:Intention"},
+        {"sbvr:roleName": "executedPlan", "sbvr:rolePlayer": "mabos:Plan"}
+      ]
+    },
+    {
+      "@id": "mabos:servesGoal",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Plan",
+      "rdfs:range": "mabos:Goal",
+      "rdfs:comment": "The goal this plan is designed to achieve",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "plan serves goal",
+      "sbvr:roles": [
+        {"sbvr:roleName": "servingPlan", "sbvr:rolePlayer": "mabos:Plan"},
+        {"sbvr:roleName": "servedGoal", "sbvr:rolePlayer": "mabos:Goal"}
+      ]
+    },
+    {
+      "@id": "mabos:hasStep",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Plan",
+      "rdfs:range": "mabos:PlanStep",
+      "rdfs:comment": "Links a plan to its constituent steps",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "plan has step",
+      "sbvr:roles": [
+        {"sbvr:roleName": "parentPlan", "sbvr:rolePlayer": "mabos:Plan"},
+        {"sbvr:roleName": "containedStep", "sbvr:rolePlayer": "mabos:PlanStep"}
+      ]
+    },
+    {
+      "@id": "mabos:hasSubStep",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:PlanStep",
+      "rdfs:range": "mabos:PlanStep",
+      "rdfs:comment": "Links a compound step to its child steps (HTN decomposition)",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "plan step has sub-step",
+      "sbvr:roles": [
+        {"sbvr:roleName": "parentStep", "sbvr:rolePlayer": "mabos:PlanStep"},
+        {"sbvr:roleName": "childStep", "sbvr:rolePlayer": "mabos:PlanStep"}
+      ]
+    },
+    {
+      "@id": "mabos:hasRole",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Role",
+      "rdfs:comment": "The functional role this agent fulfills in the organization",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent has role",
+      "sbvr:roles": [
+        {"sbvr:roleName": "roleHolder", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "assignedRole", "sbvr:rolePlayer": "mabos:Role"}
+      ]
+    },
+    {
+      "@id": "mabos:belongsTo",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Organization",
+      "rdfs:comment": "The organization this agent is a member of",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent belongs to organization",
+      "sbvr:roles": [
+        {"sbvr:roleName": "member", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "memberOrganization", "sbvr:rolePlayer": "mabos:Organization"}
+      ]
+    },
+    {
+      "@id": "mabos:sendsMessage",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Message",
+      "rdfs:comment": "Links an agent to messages it has sent",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent sends message",
+      "sbvr:roles": [
+        {"sbvr:roleName": "sender", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "sentMessage", "sbvr:rolePlayer": "mabos:Message"}
+      ]
+    },
+    {
+      "@id": "mabos:receivesMessage",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:Message",
+      "rdfs:comment": "Links an agent to messages it has received",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent receives message",
+      "sbvr:roles": [
+        {"sbvr:roleName": "receiver", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "receivedMessage", "sbvr:rolePlayer": "mabos:Message"}
+      ]
+    },
+    {
+      "@id": "mabos:hasPerformative",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Message",
+      "rdfs:range": "mabos:Performative",
+      "rdfs:comment": "The speech act type of this message",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "message has performative",
+      "sbvr:roles": [
+        {"sbvr:roleName": "typedMessage", "sbvr:rolePlayer": "mabos:Message"},
+        {"sbvr:roleName": "messagePerformative", "sbvr:rolePlayer": "mabos:Performative"}
+      ]
+    },
+    {
+      "@id": "mabos:triggersEvent",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": "mabos:Event",
+      "rdfs:comment": "A fact change that triggers an event",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "fact triggers event",
+      "sbvr:roles": [
+        {"sbvr:roleName": "triggeringFact", "sbvr:rolePlayer": "mabos:Fact"},
+        {"sbvr:roleName": "triggeredEvent", "sbvr:rolePlayer": "mabos:Event"}
+      ]
+    },
+    {
+      "@id": "mabos:measuredBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Goal",
+      "rdfs:range": "mabos:Metric",
+      "rdfs:comment": "The metric used to track progress toward this goal",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "goal is measured by metric",
+      "sbvr:roles": [
+        {"sbvr:roleName": "measuredGoal", "sbvr:rolePlayer": "mabos:Goal"},
+        {"sbvr:roleName": "measuringMetric", "sbvr:rolePlayer": "mabos:Metric"}
+      ]
+    },
+    {
+      "@id": "mabos:governedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Organization",
+      "rdfs:range": "mabos:Stakeholder",
+      "rdfs:comment": "The human principal who governs this organization",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "organization is governed by stakeholder",
+      "sbvr:roles": [
+        {"sbvr:roleName": "governedOrg", "sbvr:rolePlayer": "mabos:Organization"},
+        {"sbvr:roleName": "governingStakeholder", "sbvr:rolePlayer": "mabos:Stakeholder"}
+      ]
+    },
+    {
+      "@id": "mabos:derivedFrom",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": "mabos:Rule",
+      "rdfs:comment": "The rule that derived this fact through inference",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "fact is derived from rule",
+      "sbvr:roles": [
+        {"sbvr:roleName": "derivedFact", "sbvr:rolePlayer": "mabos:Fact"},
+        {"sbvr:roleName": "derivingRule", "sbvr:rolePlayer": "mabos:Rule"}
+      ]
+    },
+    {
+      "@id": "mabos:usesProtocol",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Agent",
+      "rdfs:range": "mabos:CoordinationProtocol",
+      "rdfs:comment": "The coordination protocol used for multi-agent interaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "agent uses coordination protocol",
+      "sbvr:roles": [
+        {"sbvr:roleName": "protocolUser", "sbvr:rolePlayer": "mabos:Agent"},
+        {"sbvr:roleName": "usedProtocol", "sbvr:rolePlayer": "mabos:CoordinationProtocol"}
+      ]
+    },
+    {
+      "@id": "mabos:assignedTo",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:WorkPackage",
+      "rdfs:range": "mabos:Contractor",
+      "rdfs:comment": "The contractor assigned to execute this work package",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "work package is assigned to contractor",
+      "sbvr:roles": [
+        {"sbvr:roleName": "assignedWork", "sbvr:rolePlayer": "mabos:WorkPackage"},
+        {"sbvr:roleName": "assignedContractor", "sbvr:rolePlayer": "mabos:Contractor"}
+      ]
+    },
+    {
+      "@id": "mabos:raisedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Decision",
+      "rdfs:range": "mabos:Agent",
+      "rdfs:comment": "The agent that raised this decision for stakeholder review",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "decision is raised by agent",
+      "sbvr:roles": [
+        {"sbvr:roleName": "raisedDecision", "sbvr:rolePlayer": "mabos:Decision"},
+        {"sbvr:roleName": "raisingAgent", "sbvr:rolePlayer": "mabos:Agent"}
+      ]
+    },
+    {
+      "@id": "mabos:resolvedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Decision",
+      "rdfs:range": "mabos:Stakeholder",
+      "rdfs:comment": "The stakeholder who resolved this decision",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "decision is resolved by stakeholder",
+      "sbvr:roles": [
+        {"sbvr:roleName": "resolvedDecision", "sbvr:rolePlayer": "mabos:Decision"},
+        {"sbvr:roleName": "resolvingStakeholder", "sbvr:rolePlayer": "mabos:Stakeholder"}
+      ]
+    },
+    {
+      "@id": "mabos:storedIn",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": { "owl:unionOf": ["mabos:WorkingMemory", "mabos:ShortTermMemory", "mabos:LongTermMemory"] },
+      "rdfs:comment": "The memory store where this fact currently resides",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "fact is stored in memory",
+      "sbvr:roles": [
+        {"sbvr:roleName": "storedFact", "sbvr:rolePlayer": "mabos:Fact"},
+        {"sbvr:roleName": "memoryStore", "sbvr:rolePlayer": "mabos:WorkingMemory"}
+      ]
+    },
+
+    {
+      "@id": "mabos:certainty",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Belief",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Certainty level 0.0-1.0"
+    },
+    {
+      "@id": "mabos:priority",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Goal",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Computed priority 0.0-1.0 using weighted formula"
+    },
+    {
+      "@id": "mabos:urgency",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Decision",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Urgency level 0.0-1.0 for decision prioritization"
+    },
+    {
+      "@id": "mabos:trustScore",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Contractor",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Trust score 0.0-1.0, auto-adjusted ±0.1 per completed work package"
+    },
+    {
+      "@id": "mabos:confidence",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Confidence level 0.0-1.0 for facts in the store"
+    },
+    {
+      "@id": "mabos:importance",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Importance score for memory consolidation ranking"
+    },
+    {
+      "@id": "mabos:validFrom",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": "xsd:dateTime",
+      "rdfs:comment": "Temporal validity start for time-bounded facts"
+    },
+    {
+      "@id": "mabos:validUntil",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Fact",
+      "rdfs:range": "xsd:dateTime",
+      "rdfs:comment": "Temporal validity end for time-bounded facts"
+    },
+    {
+      "@id": "mabos:conversationId",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Message",
+      "rdfs:range": "xsd:string",
+      "rdfs:comment": "Groups related messages into a conversation thread"
+    },
+    {
+      "@id": "mabos:similarity",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Case",
+      "rdfs:range": "xsd:float",
+      "rdfs:comment": "Similarity score from CBR retrieval 0.0-1.0"
+    },
+    {
+      "@id": "mabos:outcome",
+      "@type": "owl:DatatypeProperty",
+      "rdfs:domain": "mabos:Case",
+      "rdfs:range": "xsd:string",
+      "rdfs:comment": "The result of the case: success, partial, failure"
+    }
+  ]
+}

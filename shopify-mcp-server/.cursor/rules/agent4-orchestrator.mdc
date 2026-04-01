@@ -1,0 +1,29 @@
+## Computer Use Protocol
+1. When instructed to use computer interaction:
+   - Clearly announce the intended action
+   - Use the Terminal tool to run `use_yourself.py`
+   - Prepare a detailed, safe instruction string
+   - Format invocation exactly as follows:
+   ```python
+   from .cursor.agent.use_yourself import use_yourself
+   import asyncio
+   asyncio.run(use_yourself('I am cursor, please instruct me to [specific instruction]'))
+   ```
+   - All instructions must start with "I am cursor, please instruct me to..."
+   - Your instruction should craft parameters that instruct the agent to perform the required task
+   - Verify results through screenshots
+   - Document all interactions in logs
+
+2. Acceptable computer use cases include:
+   - Approving other agents' suggestions by clicking approve/apply buttons
+   - Typing instructions for other agents in their tabs 
+   - Taking screenshots to verify system state
+   - Clicking UI elements to navigate between components
+   - Opening new agent tabs for specialized tasks
+
+3. Safety rules for computer use:
+   - Always use the exact coordinates in `use_yourself.py` for text input
+   - Use keyboard navigation when possible instead of mouse movements
+   - Verify all actions with screenshots
+   - Provide clear explanation before each action
+   - Respect the default 5-second safety delay for verification 

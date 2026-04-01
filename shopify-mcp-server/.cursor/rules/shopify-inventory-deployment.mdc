@@ -1,0 +1,479 @@
+---
+description: Use this rule when managing shopify inventory
+globs: 
+alwaysApply: false
+---
+# Shopify Inventory Management & Deployment Guidelines
+
+## **Inventory Management Architecture**
+
+### **Limited Edition Model Standards**
+```javascript
+// ✅ DO: Use consistent inventory structure
+const INVENTORY_MODEL = {
+  totalPerProduct: 300,
+  variants: {
+    '24x36-gallery-wrapped': 75,
+    '24x36-canvas-roll': 75,
+    '36x48-gallery-wrapped': 51,
+    '36x48-canvas-roll': 54,
+    '53x72-gallery-wrapped': 21,
+    '53x72-canvas-roll': 24
+  },
+  location: '170 Avenue F',
+  targetProducts: 15
+};
+```
+
+### **Production-Ready Import Scripts**
+```javascript
+// ✅ DO: Use safety-first approach
+const REQUIRED_ENV = ['SHOPIFY_ACCESS_TOKEN', 'MYSHOPIFY_DOMAIN'];
+
+// ✅ DO: Implement explicit execution flags
+if (!process.argv.includes('--execute')) {
+  console.log('📋 DRY RUN MODE - No changes will be made');
+  console.log('Use --execute flag to apply changes to Shopify');
+  return;
+}
+
+// ✅ DO: Include comprehensive validation
+function validateEnvironment() {
+  const missing = REQUIRED_ENV.filter(env => !process.env[env]);
+  if (missing.length > 0) {
+    throw new Error(`Missing environment variables: ${missing.join(', ')}`);
+  }
+}
+```
+
+## **GraphQL Integration Patterns**
+
+### **Inventory Update Mutations**
+```graphql
+# ✅ DO: Use atomic inventory updates
+mutation InventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+  inventorySetOnHandQuantities(input: $input) {
+    inventoryAdjustmentGroup {
+      createdAt
+      reason
+      changes {
+        name
+        delta
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+```
+
+### **Product Variant Queries**
+```graphql
+# ✅ DO: Query all necessary variant data
+query GetProductVariants($handle: String!) {
+  product(handle: $handle) {
+    id
+    title
+    handle
+    variants(first: 10) {
+      edges {
+        node {
+          id
+          sku
+          inventoryQuantity
+          inventoryItem {
+            id
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## **Error Handling & Recovery**
+
+### **Robust Error Management**
+```javascript
+// ✅ DO: Implement comprehensive error handling
+async function updateInventoryWithRetry(variantId, quantity, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await updateInventory(variantId, quantity);
+      console.log(`✅ Success: Updated ${variantId} to ${quantity} pieces`);
+      return result;
+    } catch (error) {
+      console.warn(`⚠️ Attempt ${attempt}/${maxRetries} failed: ${error.message}`);
+      
+      if (attempt === maxRetries) {
+        console.error(`❌ Final attempt failed for ${variantId}`);
+        throw error;
+      }
+      
+      // ✅ DO: Implement exponential backoff
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+}
+```
+
+### **Rate Limiting & Performance**
+```javascript
+// ✅ DO: Respect Shopify API limits
+const RATE_LIMIT_DELAY = 100; // milliseconds between requests
+
+async function processWithRateLimit(items, processor) {
+  const results = [];
+  
+  for (const [index, item] of items.entries()) {
+    try {
+      const result = await processor(item);
+      results.push({ success: true, item, result });
+      
+      // ✅ DO: Add delay between requests
+      if (index < items.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
+      }
+    } catch (error) {
+      console.error(`❌ Error processing ${item}:`, error.message);
+      results.push({ success: false, item, error });
+    }
+  }
+  
+  return results;
+}
+```
+
+## **Data Validation Patterns**
+
+### **CSV Data Validation**
+```javascript
+// ✅ DO: Validate data structure before processing
+function validateInventoryData(csvData) {
+  const validation = {
+    valid: true,
+    errors: [],
+    summary: {
+      totalProducts: 0,
+      totalVariants: 0,
+      totalPieces: 0
+    }
+  };
+  
+  const productGroups = csvData.reduce((groups, row) => {
+    const productHandle = row['Product Handle'];
+    if (!groups[productHandle]) groups[productHandle] = [];
+    groups[productHandle].push(row);
+    return groups;
+  }, {});
+  
+  // ✅ DO: Validate each product structure
+  Object.entries(productGroups).forEach(([handle, variants]) => {
+    if (variants.length !== 6) {
+      validation.errors.push(`${handle}: Expected 6 variants, found ${variants.length}`);
+      validation.valid = false;
+    }
+    
+    const totalQuantity = variants.reduce((sum, v) => sum + parseInt(v.Quantity || 0), 0);
+    if (totalQuantity !== 300) {
+      validation.errors.push(`${handle}: Expected 300 total pieces, found ${totalQuantity}`);
+      validation.valid = false;
+    }
+  });
+  
+  return validation;
+}
+```
+
+### **SKU Mapping Validation**
+```javascript
+// ✅ DO: Ensure SKU consistency
+function validateSKUMapping(csvData, shopifyVariants) {
+  const skuMap = new Map();
+  const unmappedSKUs = [];
+  
+  csvData.forEach(row => {
+    const sku = row['Variant SKU'];
+    const variant = shopifyVariants.find(v => v.sku === sku);
+    
+    if (variant) {
+      skuMap.set(sku, variant.id);
+    } else {
+      unmappedSKUs.push(sku);
+    }
+  });
+  
+  if (unmappedSKUs.length > 0) {
+    throw new Error(`Unmapped SKUs found: ${unmappedSKUs.join(', ')}`);
+  }
+  
+  return skuMap;
+}
+```
+
+## **Deployment Automation**
+
+### **Theme File Deployment**
+```javascript
+// ✅ DO: Use MCP server for theme operations
+async function deployThemeFiles(files) {
+  const mcpClient = new MCPClient({
+    serverPath: './build/index.js',
+    env: {
+      SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN,
+      MYSHOPIFY_DOMAIN: process.env.MYSHOPIFY_DOMAIN
+    }
+  });
+  
+  const results = [];
+  
+  for (const file of files) {
+    try {
+      const result = await mcpClient.call('theme-file-write', {
+        directory: './themes/current',
+        filePath: file.path,
+        content: file.content,
+        backup: true
+      });
+      
+      console.log(`✅ Deployed: ${file.path}`);
+      results.push({ success: true, file: file.path, result });
+    } catch (error) {
+      console.error(`❌ Failed to deploy ${file.path}:`, error.message);
+      results.push({ success: false, file: file.path, error });
+    }
+  }
+  
+  return results;
+}
+```
+
+### **Automated Testing Pipeline**
+```javascript
+// ✅ DO: Include testing in deployment workflow
+async function runDeploymentTests() {
+  const tests = [
+    {
+      name: 'Inventory Widget Functionality',
+      test: async () => await testInventoryWidget()
+    },
+    {
+      name: 'Template Assignment',
+      test: async () => await validateTemplateAssignment()
+    },
+    {
+      name: 'CSS Asset Loading',
+      test: async () => await validateAssetLoading()
+    },
+    {
+      name: 'Mobile Responsiveness',
+      test: async () => await testMobileLayout()
+    }
+  ];
+  
+  const results = [];
+  
+  for (const test of tests) {
+    console.log(`🧪 Running: ${test.name}`);
+    try {
+      const result = await test.test();
+      console.log(`✅ Passed: ${test.name}`);
+      results.push({ name: test.name, status: 'passed', result });
+    } catch (error) {
+      console.error(`❌ Failed: ${test.name} - ${error.message}`);
+      results.push({ name: test.name, status: 'failed', error });
+    }
+  }
+  
+  return results;
+}
+```
+
+## **Environment Management**
+
+### **Configuration Validation**
+```javascript
+// ✅ DO: Validate all required configurations
+function validateDeploymentEnvironment() {
+  const checks = [
+    {
+      name: 'Shopify Access Token',
+      check: () => !!process.env.SHOPIFY_ACCESS_TOKEN,
+      fix: 'Set SHOPIFY_ACCESS_TOKEN environment variable'
+    },
+    {
+      name: 'Store Domain',
+      check: () => !!process.env.MYSHOPIFY_DOMAIN,
+      fix: 'Set MYSHOPIFY_DOMAIN environment variable'
+    },
+    {
+      name: 'Theme Access',
+      check: async () => await canAccessThemes(),
+      fix: 'Ensure access token has read_themes and write_themes permissions'
+    },
+    {
+      name: 'Location Exists',
+      check: async () => await validateLocation('170 Avenue F'),
+      fix: 'Create or verify fulfillment location in Shopify admin'
+    }
+  ];
+  
+  const results = await Promise.all(checks.map(async check => {
+    try {
+      const passed = await check.check();
+      return { name: check.name, passed, fix: check.fix };
+    } catch (error) {
+      return { name: check.name, passed: false, error: error.message, fix: check.fix };
+    }
+  }));
+  
+  const failed = results.filter(r => !r.passed);
+  if (failed.length > 0) {
+    console.error('❌ Environment validation failed:');
+    failed.forEach(f => console.error(`  - ${f.name}: ${f.fix}`));
+    throw new Error('Environment validation failed');
+  }
+  
+  console.log('✅ Environment validation passed');
+  return true;
+}
+```
+
+## **Monitoring & Reporting**
+
+### **Progress Tracking**
+```javascript
+// ✅ DO: Provide detailed progress reporting
+class DeploymentMonitor {
+  constructor(totalItems) {
+    this.total = totalItems;
+    this.completed = 0;
+    this.failed = 0;
+    this.startTime = Date.now();
+  }
+  
+  update(success = true) {
+    this.completed++;
+    if (!success) this.failed++;
+    
+    const progress = Math.round((this.completed / this.total) * 100);
+    const elapsed = Date.now() - this.startTime;
+    const rate = this.completed / (elapsed / 1000);
+    const eta = (this.total - this.completed) / rate;
+    
+    console.log(`📊 Progress: ${progress}% (${this.completed}/${this.total}) | ` +
+               `Rate: ${rate.toFixed(1)}/s | ETA: ${eta.toFixed(0)}s | ` +
+               `Failed: ${this.failed}`);
+  }
+  
+  summary() {
+    const elapsed = Date.now() - this.startTime;
+    return {
+      total: this.total,
+      completed: this.completed,
+      failed: this.failed,
+      successRate: (this.completed - this.failed) / this.total,
+      duration: elapsed / 1000
+    };
+  }
+}
+```
+
+### **Audit Logging**
+```javascript
+// ✅ DO: Maintain detailed audit logs
+function createAuditLog(operation, details) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    operation,
+    details,
+    environment: {
+      nodeVersion: process.version,
+      shopifyDomain: process.env.MYSHOPIFY_DOMAIN?.replace(/^https?:\/\//, ''),
+      userAgent: 'VividWalls-MCP-Server/1.0'
+    }
+  };
+  
+  // ✅ DO: Log to both console and file
+  console.log(JSON.stringify(logEntry, null, 2));
+  
+  // Append to audit file
+  const fs = require('fs');
+  const logPath = `./logs/audit-${new Date().toISOString().split('T')[0]}.log`;
+  fs.appendFileSync(logPath, JSON.stringify(logEntry) + '\n');
+}
+```
+
+## **Rollback & Recovery**
+
+### **Automated Rollback**
+```javascript
+// ✅ DO: Implement rollback capabilities
+async function createRollbackPoint() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const rollbackData = {
+    timestamp,
+    themes: await backupCurrentTheme(),
+    inventory: await captureInventorySnapshot(),
+    settings: await captureThemeSettings()
+  };
+  
+  const backupPath = `./backups/rollback-${timestamp}.json`;
+  fs.writeFileSync(backupPath, JSON.stringify(rollbackData, null, 2));
+  
+  console.log(`📦 Rollback point created: ${backupPath}`);
+  return backupPath;
+}
+
+async function executeRollback(rollbackPath) {
+  console.log(`🔄 Executing rollback from: ${rollbackPath}`);
+  
+  const rollbackData = JSON.parse(fs.readFileSync(rollbackPath, 'utf8'));
+  
+  // Restore theme files
+  await restoreThemeFiles(rollbackData.themes);
+  
+  // Restore inventory levels
+  await restoreInventoryLevels(rollbackData.inventory);
+  
+  // Restore settings
+  await restoreThemeSettings(rollbackData.settings);
+  
+  console.log('✅ Rollback completed successfully');
+}
+```
+
+## **Common Anti-Patterns**
+
+```javascript
+// ❌ DON'T: Skip environment validation
+// ❌ DON'T: Make changes without explicit confirmation
+// ❌ DON'T: Ignore rate limiting
+// ❌ DON'T: Skip backup creation
+// ❌ DON'T: Hardcode inventory quantities
+// ❌ DON'T: Ignore error handling in batch operations
+// ❌ DON'T: Deploy without testing
+
+// ✅ DO: Follow production-ready patterns
+const BEST_PRACTICES = {
+  alwaysValidateEnvironment: true,
+  requireExplicitExecution: true,
+  implementRateLimit: true,
+  createBackups: true,
+  useConfigurableValues: true,
+  handleErrorsGracefully: true,
+  testBeforeDeployment: true
+};
+```
+
+## **Integration Triggers**
+
+Use these patterns when:
+- **Inventory Import**: Working with CSV data and inventory updates
+- **Theme Deployment**: Deploying widgets, templates, or assets
+- **Production Changes**: Any operation that modifies live store data
+- **Batch Operations**: Processing multiple items or variants
+- **API Integration**: GraphQL mutations and queries
+- **Error Recovery**: Handling failed operations or rollbacks

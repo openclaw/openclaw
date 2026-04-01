@@ -1,0 +1,235 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+---
+description: Protects critical Docker services from accidental removal during docker-compose.yml updates
+globs: docker-compose.yml, docker-compose.*.yml, archive/backups/*compose*.yml
+alwaysApply: true
+---
+
+# Docker Compose Service Protection Rules
+
+## Critical Service Protection
+
+**NEVER remove or disable these production services without explicit user confirmation:**
+- **wordpress** (WordPress multisite container)
+- **wordpress-db** (MySQL database with all WordPress data)
+- **wordpress-redis** (Redis cache for WordPress performance)
+- **n8n** (Workflow automation platform)
+- **qdrant** (Vector database)
+- **postgres** (PostgreSQL for various services)
+- **caddy** (Reverse proxy handling all domains)
+- **flowise**, **open-webui**, **langfuse** (AI/ML services)
+- **supabase-*** (All Supabase services if present)
+
+## Before Modifying docker-compose.yml
+
+### 1. **Check Running Services**
+```bash
+# List all running containers
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Check specific critical services
+docker ps | grep -E "(wordpress|mysql|postgres|caddy)"
+```
+
+### 2. **Backup Current Configuration**
+```bash
+# Always backup before changes
+cp docker-compose.yml docker-compose.yml.backup.$(date +%Y%m%d_%H%M%S)
+
+# For WordPress specifically
+cp wordpress-compose.yml wordpress-compose.yml.backup.$(date +%Y%m%d_%H%M%S)
+```
+
+### 3. **Verify Data Volumes Exist**
+```bash
+# Check WordPress volumes (contain all site data)
+docker volume ls | grep wordpress
+
+# Expected volumes:
+# - vivid_mas_wordpress_data
+# - vivid_mas_wordpress_db_data
+# - vivid_mas_wordpress_redis_data
+```
+
+## WordPress Multisite Specific Rules
+
+**WordPress Configuration Requirements:**
+- Container name: `wordpress-multisite`
+- Port mapping: `8080:80`
+- Database host: `wordpress-db:3306`
+- Environment variables must include:
+  ```yaml
+  WORDPRESS_CONFIG_EXTRA: |
+    define("WP_HOME", "https://wordpress.vividwalls.blog");
+    define("WP_SITEURL", "https://wordpress.vividwalls.blog");
+    define("MULTISITE", true);
+    define("SUBDOMAIN_INSTALL", true);
+    define("DOMAIN_CURRENT_SITE", "wordpress.vividwalls.blog");
+  ```
+
+## Safe Update Procedures
+
+### Adding New Services
+```bash
+# 1. Add new service to docker-compose.yml
+# 2. Start only the new service
+docker-compose up -d [new-service-name]
+
+# 3. Verify existing services weren't affected
+docker ps | grep -E "(wordpress|caddy|n8n)"
+```
+
+### Updating Existing Services
+```bash
+# 1. Update specific service without affecting others
+docker-compose up -d --no-deps [service-name]
+
+# 2. Never use 'docker-compose down' without --remove-orphans
+# This preserves services defined in other compose files
+```
+
+### Removing Services
+```bash
+# 1. Stop specific service only
+docker-compose stop [service-name]
+
+# 2. Remove specific container
+docker-compose rm [service-name]
+
+# 3. NEVER remove volumes without backup
+# docker volume rm [volume-name] # DANGEROUS!
+```
+
+## Emergency Recovery
+
+### If WordPress Goes Down
+```bash
+# 1. Check if volumes still exist
+docker volume ls | grep wordpress
+
+# 2. Restore from archived compose file
+cp archive/backups/wordpress-compose.optimized.yml wordpress-compose.yml
+
+# 3. Start WordPress with existing volumes
+docker-compose -f wordpress-compose.yml up -d
+
+# 4. Verify site is accessible
+curl -I https://wordpress.vividwalls.blog
+```
+
+### If Caddy Configuration Lost
+```bash
+# Caddy config includes all domain routing
+# Main domain redirect required:
+echo 'vividwalls.blog {
+    redir https://wordpress.vividwalls.blog{uri} permanent
+}' >> Caddyfile
+
+# Reload Caddy
+docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+```
+
+## Validation Script
+
+**Run this after any docker-compose changes:**
+```bash
+#!/bin/bash
+# validate-docker-services.sh
+
+echo "🔍 Validating Docker Services..."
+
+# Critical services that must be running
+CRITICAL_SERVICES=(
+    "wordpress-multisite"
+    "wordpress-mysql"
+    "wordpress-redis"
+    "caddy"
+    "n8n"
+    "postgres"
+    "qdrant"
+)
+
+# Check each critical service
+for service in "${CRITICAL_SERVICES[@]}"; do
+    if docker ps | grep -q "$service"; then
+        echo "✅ $service is running"
+    else
+        echo "❌ WARNING: $service is NOT running!"
+    fi
+done
+
+# Check WordPress accessibility
+if curl -s -I https://wordpress.vividwalls.blog | grep -q "200 OK"; then
+    echo "✅ WordPress site is accessible"
+else
+    echo "❌ WARNING: WordPress site is NOT accessible!"
+fi
+
+# Check data volumes
+echo -e "\n📦 Data Volumes:"
+docker volume ls | grep -E "(wordpress|n8n|qdrant|postgres)"
+```
+
+## Best Practices
+
+1. **Use Separate Compose Files** for different service groups:
+   - `docker-compose.yml` - Core services
+   - `wordpress-compose.yml` - WordPress specific
+   - `ai-services-compose.yml` - AI/ML services
+
+2. **Always Use Named Volumes** for persistent data
+   - Never use host mounts for database data
+   - Named volumes survive container recreation
+
+3. **Network Isolation**
+   - Keep `vivid_mas` network external
+   - All services must join this network
+
+4. **Memory Limits** (from optimized config):
+   ```yaml
+   deploy:
+     resources:
+       limits:
+         memory: 1G
+       reservations:
+         memory: 256M
+   ```
+
+5. **Environment Variables**
+   - Use `.env` file for sensitive data
+   - Never commit passwords to git
+
+## Common Issues and Fixes
+
+### "Container name already in use"
+```bash
+docker ps -a | grep [container-name]
+docker rm [container-name]
+```
+
+### "Port already allocated"
+```bash
+# Find what's using the port
+lsof -i :8080
+# Or check Docker
+docker ps --format "table {{.Names}}\t{{.Ports}}" | grep 8080
+```
+
+### WordPress Redirect Loop
+- Ensure WP_HOME and WP_SITEURL match actual domain
+- Check Caddy is routing correctly
+- Clear browser cookies
+
+## Integration with Task Master
+
+When Task Master suggests Docker changes:
+1. Review changes against this protection list
+2. Create backup before applying
+3. Run validation script after changes
+4. Update task with actual implementation details
+
+Remember: **Data preservation is paramount!** Always verify volumes exist before removing containers.

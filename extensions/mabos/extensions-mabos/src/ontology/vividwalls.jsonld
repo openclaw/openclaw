@@ -1,0 +1,429 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "ecom": "https://mabos.io/ontology/ecommerce/",
+    "vw": "https://mabos.io/ontology/vividwalls/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/vividwalls",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/ecommerce",
+  "rdfs:label": "VividWalls Art Domain Ontology",
+  "rdfs:comment": "Domain concepts for VividWalls limited-edition art print commerce, including editions, collections, artists, galleries, and collector management",
+  "@graph": [
+    {
+      "@id": "vw:ArtPrint",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "ecom:Product",
+      "rdfs:label": "Art Print",
+      "rdfs:comment": "An original or reproduced artwork prepared for wall display",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "art print",
+      "sbvr:definition": "Art Print is an original or reproduced artwork that is prepared for wall display",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:Edition",
+      "@type": "owl:Class",
+      "rdfs:label": "Edition",
+      "rdfs:comment": "A limited production run of an art print with a fixed maximum quantity",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "edition",
+      "sbvr:definition": "Edition is a limited production run of an art print that has a fixed maximum quantity",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:Collection",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "ecom:Collection",
+      "rdfs:label": "Art Collection",
+      "rdfs:comment": "A curated set of art prints grouped by theme, artist, or season",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "art collection",
+      "sbvr:definition": "Art Collection is a curated set of art prints that is grouped by theme, artist, or season",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:ArtistCollaboration",
+      "@type": "owl:Class",
+      "rdfs:label": "Artist Collaboration",
+      "rdfs:comment": "A partnership between VividWalls and an artist to produce exclusive collections",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "artist collaboration",
+      "sbvr:definition": "Artist Collaboration is a partnership between VividWalls and an artist to produce exclusive collections",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:CertificateOfAuthenticity",
+      "@type": "owl:Class",
+      "rdfs:label": "Certificate of Authenticity",
+      "rdfs:comment": "A document certifying the provenance and edition number of an art print",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "certificate of authenticity",
+      "sbvr:definition": "Certificate of Authenticity is a document that certifies the provenance and edition number of an art print",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:Collector",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "ecom:Customer",
+      "rdfs:label": "Collector",
+      "rdfs:comment": "A buyer who collects limited-edition art prints",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "collector",
+      "sbvr:definition": "Collector is a buyer who collects limited-edition art prints",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:CollectorProfile",
+      "@type": "owl:Class",
+      "rdfs:label": "Collector Profile",
+      "rdfs:comment": "Preference and purchase history data for a collector",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "collector profile",
+      "sbvr:definition": "Collector Profile is preference and purchase history data that belongs to a collector",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:GalleryPartner",
+      "@type": "owl:Class",
+      "rdfs:label": "Gallery Partner",
+      "rdfs:comment": "A physical or online gallery that exhibits or resells VividWalls collections",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "gallery partner",
+      "sbvr:definition": "Gallery Partner is a physical or online gallery that exhibits or resells VividWalls collections",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:GalleryExhibition",
+      "@type": "owl:Class",
+      "rdfs:label": "Gallery Exhibition",
+      "rdfs:comment": "An event where a gallery showcases VividWalls art to potential collectors",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "gallery exhibition",
+      "sbvr:definition": "Gallery Exhibition is an event where a gallery showcases VividWalls art to potential collectors",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:FramingOption",
+      "@type": "owl:Class",
+      "rdfs:label": "Framing Option",
+      "rdfs:comment": "A frame style and material available for an art print",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "framing option",
+      "sbvr:definition": "Framing Option is a frame style and material that is available for an art print",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:PrintMedium",
+      "@type": "owl:Class",
+      "rdfs:label": "Print Medium",
+      "rdfs:comment": "The physical medium on which art is printed (canvas, fine art paper, metal, acrylic)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "print medium",
+      "sbvr:definition": "Print Medium is the physical medium on which art is printed such as canvas, fine art paper, metal, or acrylic",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:PrintSize",
+      "@type": "owl:Class",
+      "rdfs:label": "Print Size",
+      "rdfs:comment": "A standard or custom dimension specification for an art print",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "print size",
+      "sbvr:definition": "Print Size is a standard or custom dimension specification for an art print",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:ArtTaxonomy",
+      "@type": "owl:Class",
+      "rdfs:label": "Art Taxonomy",
+      "rdfs:comment": "A classification of art by style, movement, subject, and color palette",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "art taxonomy",
+      "sbvr:definition": "Art Taxonomy is a classification of art by style, movement, subject, and color palette",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:PricingTier",
+      "@type": "owl:Class",
+      "rdfs:label": "Pricing Tier",
+      "rdfs:comment": "A pricing band (emerging, established, premium, masterwork) determining markup",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "pricing tier",
+      "sbvr:definition": "Pricing Tier is a pricing band that determines markup and is one of emerging, established, premium, or masterwork",
+      "sbvr:vocabulary": "vividwalls"
+    },
+
+    { "@id": "vw:editionSize", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:Edition", "rdfs:range": "xsd:integer", "rdfs:comment": "Maximum number of prints in this edition" },
+    { "@id": "vw:editionNumber", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:Edition", "rdfs:range": "xsd:integer", "rdfs:comment": "Sequence number of a specific print within the edition" },
+    { "@id": "vw:artistName", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:ArtistCollaboration", "rdfs:range": "xsd:string", "rdfs:comment": "Name of the collaborating artist" },
+    { "@id": "vw:royaltyPercentage", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:ArtistCollaboration", "rdfs:range": "xsd:float", "rdfs:comment": "Artist royalty percentage per sale (0.0-1.0)" },
+    { "@id": "vw:certificateId", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:CertificateOfAuthenticity", "rdfs:range": "xsd:string", "rdfs:comment": "Unique certificate identifier" },
+    { "@id": "vw:issuedDate", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:CertificateOfAuthenticity", "rdfs:range": "xsd:dateTime", "rdfs:comment": "Date the certificate was issued" },
+    { "@id": "vw:collectorSince", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:CollectorProfile", "rdfs:range": "xsd:dateTime", "rdfs:comment": "Date the collector first purchased" },
+    { "@id": "vw:preferredStyles", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:CollectorProfile", "rdfs:range": "xsd:string", "rdfs:comment": "Comma-separated preferred art styles" },
+    { "@id": "vw:totalEditionsOwned", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:CollectorProfile", "rdfs:range": "xsd:integer", "rdfs:comment": "Total editions in the collector's collection" },
+    { "@id": "vw:tierMinMarkup", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:PricingTier", "rdfs:range": "xsd:float", "rdfs:comment": "Minimum markup percentage for this tier" },
+    { "@id": "vw:printWidth", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:PrintSize", "rdfs:range": "xsd:integer", "rdfs:comment": "Width in centimeters" },
+    { "@id": "vw:printHeight", "@type": "owl:DatatypeProperty", "rdfs:domain": "vw:PrintSize", "rdfs:range": "xsd:integer", "rdfs:comment": "Height in centimeters" },
+
+    {
+      "@id": "vw:hasEdition",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Collection",
+      "rdfs:range": "vw:Edition",
+      "rdfs:comment": "The editions contained in this collection",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Collection has Edition",
+      "sbvr:roles": [
+        { "sbvr:roleName": "parent collection", "sbvr:rolePlayer": "vw:Collection" },
+        { "sbvr:roleName": "contained edition", "sbvr:rolePlayer": "vw:Edition" }
+      ]
+    },
+    {
+      "@id": "vw:producedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Collection",
+      "rdfs:range": "vw:ArtistCollaboration",
+      "rdfs:comment": "The artist collaboration that produced this collection",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Collection is produced by ArtistCollaboration",
+      "sbvr:roles": [
+        { "sbvr:roleName": "produced collection", "sbvr:rolePlayer": "vw:Collection" },
+        { "sbvr:roleName": "producing collaboration", "sbvr:rolePlayer": "vw:ArtistCollaboration" }
+      ]
+    },
+    {
+      "@id": "vw:hasCertificate",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Edition",
+      "rdfs:range": "vw:CertificateOfAuthenticity",
+      "rdfs:comment": "The certificate of authenticity for this edition",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Edition has CertificateOfAuthenticity",
+      "sbvr:roles": [
+        { "sbvr:roleName": "certified edition", "sbvr:rolePlayer": "vw:Edition" },
+        { "sbvr:roleName": "edition certificate", "sbvr:rolePlayer": "vw:CertificateOfAuthenticity" }
+      ]
+    },
+    {
+      "@id": "vw:purchasedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Edition",
+      "rdfs:range": "vw:Collector",
+      "rdfs:comment": "The collector who purchased this edition",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Edition is purchased by Collector",
+      "sbvr:roles": [
+        { "sbvr:roleName": "purchased edition", "sbvr:rolePlayer": "vw:Edition" },
+        { "sbvr:roleName": "purchasing collector", "sbvr:rolePlayer": "vw:Collector" }
+      ]
+    },
+    {
+      "@id": "vw:hasProfile",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Collector",
+      "rdfs:range": "vw:CollectorProfile",
+      "rdfs:comment": "The profile associated with this collector",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Collector has CollectorProfile",
+      "sbvr:roles": [
+        { "sbvr:roleName": "profiled collector", "sbvr:rolePlayer": "vw:Collector" },
+        { "sbvr:roleName": "collector profile", "sbvr:rolePlayer": "vw:CollectorProfile" }
+      ]
+    },
+    {
+      "@id": "vw:exhibitedAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Collection",
+      "rdfs:range": "vw:GalleryExhibition",
+      "rdfs:comment": "The gallery exhibition where this collection is exhibited",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Collection is exhibited at GalleryExhibition",
+      "sbvr:roles": [
+        { "sbvr:roleName": "exhibited collection", "sbvr:rolePlayer": "vw:Collection" },
+        { "sbvr:roleName": "hosting exhibition", "sbvr:rolePlayer": "vw:GalleryExhibition" }
+      ]
+    },
+    {
+      "@id": "vw:hostedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:GalleryExhibition",
+      "rdfs:range": "vw:GalleryPartner",
+      "rdfs:comment": "The gallery partner hosting this exhibition",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "GalleryExhibition is hosted by GalleryPartner",
+      "sbvr:roles": [
+        { "sbvr:roleName": "hosted exhibition", "sbvr:rolePlayer": "vw:GalleryExhibition" },
+        { "sbvr:roleName": "hosting gallery", "sbvr:rolePlayer": "vw:GalleryPartner" }
+      ]
+    },
+    {
+      "@id": "vw:availableFraming",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:ArtPrint",
+      "rdfs:range": "vw:FramingOption",
+      "rdfs:comment": "A framing option available for this art print",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ArtPrint has available FramingOption",
+      "sbvr:roles": [
+        { "sbvr:roleName": "framed art print", "sbvr:rolePlayer": "vw:ArtPrint" },
+        { "sbvr:roleName": "available framing option", "sbvr:rolePlayer": "vw:FramingOption" }
+      ]
+    },
+    {
+      "@id": "vw:printedOn",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:ArtPrint",
+      "rdfs:range": "vw:PrintMedium",
+      "rdfs:comment": "The print medium this art print is printed on",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ArtPrint is printed on PrintMedium",
+      "sbvr:roles": [
+        { "sbvr:roleName": "printed art print", "sbvr:rolePlayer": "vw:ArtPrint" },
+        { "sbvr:roleName": "printing medium", "sbvr:rolePlayer": "vw:PrintMedium" }
+      ]
+    },
+    {
+      "@id": "vw:availableSize",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:ArtPrint",
+      "rdfs:range": "vw:PrintSize",
+      "rdfs:comment": "A print size available for this art print",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ArtPrint is available in PrintSize",
+      "sbvr:roles": [
+        { "sbvr:roleName": "sized art print", "sbvr:rolePlayer": "vw:ArtPrint" },
+        { "sbvr:roleName": "available print size", "sbvr:rolePlayer": "vw:PrintSize" }
+      ]
+    },
+    {
+      "@id": "vw:classifiedAs",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:ArtPrint",
+      "rdfs:range": "vw:ArtTaxonomy",
+      "rdfs:comment": "The art taxonomy classification for this art print",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "ArtPrint is classified as ArtTaxonomy",
+      "sbvr:roles": [
+        { "sbvr:roleName": "classified art print", "sbvr:rolePlayer": "vw:ArtPrint" },
+        { "sbvr:roleName": "art classification", "sbvr:rolePlayer": "vw:ArtTaxonomy" }
+      ]
+    },
+    {
+      "@id": "vw:pricedAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "vw:Edition",
+      "rdfs:range": "vw:PricingTier",
+      "rdfs:comment": "The pricing tier for this edition",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Edition is priced at PricingTier",
+      "sbvr:roles": [
+        { "sbvr:roleName": "priced edition", "sbvr:rolePlayer": "vw:Edition" },
+        { "sbvr:roleName": "edition pricing tier", "sbvr:rolePlayer": "vw:PricingTier" }
+      ]
+    },
+
+    {
+      "@id": "vw:rule-cert-required",
+      "@type": ["sbvr:DefinitionalRule"],
+      "rdfs:label": "Edition Must Have Certificate of Authenticity",
+      "sbvr:definition": "Each edition must have exactly one certificate of authenticity",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "vw:hasCertificate",
+      "sbvr:hasProofTable": "vw:pt-cert-required",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:pt-cert-required",
+      "@type": ["mabos:ProofTable"],
+      "rdfs:label": "Proof Table: Certificate Required",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:rule-edition-limit",
+      "@type": ["sbvr:BehavioralRule"],
+      "rdfs:label": "Edition Sales Must Not Exceed Edition Size",
+      "sbvr:definition": "The number of prints sold from an edition must not exceed the edition size",
+      "sbvr:ruleType": "behavioral",
+      "sbvr:ruleModality": "deontic",
+      "sbvr:constrainsFact": "vw:purchasedBy",
+      "sbvr:hasProofTable": "vw:pt-edition-limit",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:pt-edition-limit",
+      "@type": ["mabos:ProofTable"],
+      "rdfs:label": "Proof Table: Edition Limit",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:rule-one-per-collector",
+      "@type": ["sbvr:BehavioralRule"],
+      "rdfs:label": "Collector May Purchase At Most One Copy Per Edition",
+      "sbvr:definition": "A collector may purchase at most one copy of a given edition",
+      "sbvr:ruleType": "behavioral",
+      "sbvr:ruleModality": "deontic",
+      "sbvr:constrainsFact": "vw:purchasedBy",
+      "sbvr:hasProofTable": "vw:pt-one-per-collector",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:pt-one-per-collector",
+      "@type": ["mabos:ProofTable"],
+      "rdfs:label": "Proof Table: One Per Collector",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:rule-tier-markup",
+      "@type": ["sbvr:DefinitionalRule"],
+      "rdfs:label": "Edition Price Must Meet Tier Minimum Markup",
+      "sbvr:definition": "The sale price of an edition must be at least the tier minimum markup above cost",
+      "sbvr:ruleType": "definitional",
+      "sbvr:ruleModality": "alethic",
+      "sbvr:constrainsFact": "vw:pricedAt",
+      "sbvr:hasProofTable": "vw:pt-tier-markup",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:pt-tier-markup",
+      "@type": ["mabos:ProofTable"],
+      "rdfs:label": "Proof Table: Tier Markup",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:rule-artist-royalty",
+      "@type": ["sbvr:BehavioralRule"],
+      "rdfs:label": "Collaboration Sales Must Trigger Artist Royalty Payment",
+      "sbvr:definition": "Each sale of an edition from a collaboration must trigger a royalty payment to the artist",
+      "sbvr:ruleType": "behavioral",
+      "sbvr:ruleModality": "deontic",
+      "sbvr:constrainsFact": "vw:producedBy",
+      "sbvr:hasProofTable": "vw:pt-artist-royalty",
+      "sbvr:vocabulary": "vividwalls"
+    },
+    {
+      "@id": "vw:pt-artist-royalty",
+      "@type": ["mabos:ProofTable"],
+      "rdfs:label": "Proof Table: Artist Royalty",
+      "sbvr:vocabulary": "vividwalls"
+    }
+  ]
+}

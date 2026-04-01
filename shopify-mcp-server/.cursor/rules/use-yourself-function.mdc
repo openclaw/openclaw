@@ -1,0 +1,16 @@
+---
+description: use youself tool
+globs: 
+alwaysApply: false
+---
+# User Your Self Function Rule
+
+## when you are asked to use yourself. please use the use_yourself function in use_yourself.py. this exists and you can call this directly with your request.
+
+## When instructed to use yourself, your argument to the function will be the instructions to an AI agent to use you. so craft the function parameter to instruct the agent to instruct you for whatever the user is asking for
+
+## Your parameter should start with "I am cursor, please instruct me to..."
+
+## you must always call this as terminal command function with a string parameter.
+
+## call the function by importing it in command line, it is a asycn function so you can use await to call it.

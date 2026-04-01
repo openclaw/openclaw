@@ -1,0 +1,21 @@
+---
+description: Ensures code quality through continuous verification processes before committing or merging code
+globs:  *.ts, *.tsx, *.js, *.jsx, *.css, *.scss, *.json, *.yaml, *.py, src/, tests/, backend/src/, backend/tests/, frontend/src/, frontend/tests/
+alwaysApply: true
+---
+## Pre-Commit Verification
+
+- Run the full test suite before any merge to main
+- Address all TypeScript/linting errors before committing
+- Verify code compiles without warnings
+- Run static analysis tools to catch potential issues
+- Document any known limitations or TODOs
+
+## Code Review Process
+
+- Verify test coverage for new functionality
+- Ensure error handling is properly implemented for all edge cases
+- Check that input validation is comprehensive
+- Review test cases to confirm they test actual requirements
+- Verify that tests cover both happy path and error scenarios
+

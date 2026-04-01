@@ -1,0 +1,262 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# DigitalOcean DNS Management for VividMAS Platform
+
+This rule covers DNS configuration for the VividMAS AI automation platform using DigitalOcean DNS services.
+
+## **Project Overview**
+
+**VividMAS Platform Services:**
+- **n8n** (Workflow Automation) - Port 5678
+- **Open WebUI** (AI Chat Interface) - Port 3000  
+- **Flowise** (No-code AI Builder) - Port 3001
+- **Supabase** (Database + Auth) - Port 8000
+- **Langfuse** (LLM Observability) - Port 3030
+- **SearXNG** (Privacy Search) - Port 8080
+- **Ollama** (Local LLMs) - Port 11434
+- **WordPress** (CMS) - Port 8080 (separate compose)
+
+## **DNS Configuration Setup**
+
+### **Domain Registration vs DNS Management**
+- **Domain Registration**: GoDaddy (or other registrar)
+- **Nameservers**: Changed to DigitalOcean nameservers
+- **DNS Management**: DigitalOcean controls all DNS records
+
+### **Required Subdomain Structure**
+```
+n8n.yourdomain.com          → n8n (port 5678)
+webui.yourdomain.com        → Open WebUI (port 3000)
+flowise.yourdomain.com      → Flowise (port 3001)
+supabase.yourdomain.com     → Supabase (port 8000)
+langfuse.yourdomain.com     → Langfuse (port 3030)
+search.yourdomain.com       → SearXNG (port 8080)
+ollama.yourdomain.com       → Ollama (port 11434)
+wordpress.yourdomain.com    → WordPress (port 8080)
+```
+
+## **Environment Configuration**
+
+### **Required .env Variables**
+```bash
+# Domain Configuration
+N8N_HOSTNAME=n8n.yourdomain.com
+WEBUI_HOSTNAME=webui.yourdomain.com
+FLOWISE_HOSTNAME=flowise.yourdomain.com
+SUPABASE_HOSTNAME=supabase.yourdomain.com
+LANGFUSE_HOSTNAME=langfuse.yourdomain.com
+SEARXNG_HOSTNAME=search.yourdomain.com
+OLLAMA_HOSTNAME=ollama.yourdomain.com
+WORDPRESS_HOSTNAME=wordpress.yourdomain.com
+WORDPRESS_DOMAIN=wordpress.yourdomain.com
+
+# SSL Configuration
+LETSENCRYPT_EMAIL=your-email@yourdomain.com
+
+# Security
+N8N_SECURE_COOKIE=false  # Set to true when using HTTPS
+```
+
+### **Docker Compose Configuration**
+```yaml
+# In docker-compose.yml, n8n service environment:
+- WEBHOOK_URL=https://n8n.yourdomain.com
+
+# WordPress requires separate compose file update:
+# In wordpress-compose.yml:
+environment:
+  - WORDPRESS_CONFIG_EXTRA=define("DOMAIN_CURRENT_SITE", "wordpress.yourdomain.com");
+```
+
+### **Caddyfile Configuration**
+```caddyfile
+{
+    email {$LETSENCRYPT_EMAIL}
+}
+
+# All services use this pattern:
+{$SERVICE_HOSTNAME} {
+    reverse_proxy localhost:PORT
+}
+
+# WordPress addition:
+{$WORDPRESS_HOSTNAME} {
+    reverse_proxy localhost:8080
+}
+```
+
+## **doctl CLI Setup & Usage**
+
+### **Authentication Setup**
+```bash
+# Install doctl (if not installed)
+brew install doctl
+
+# Initialize authentication
+doctl auth init
+# Enter your DigitalOcean API token when prompted
+
+# Verify authentication
+doctl auth list
+```
+
+### **Domain Management Commands**
+```bash
+# List domains
+doctl compute domain list
+
+# List existing DNS records
+doctl compute domain records list yourdomain.com
+
+# Create A record template
+doctl compute domain records create yourdomain.com \
+  --record-type A \
+  --record-name SUBDOMAIN \
+  --record-data SERVER_IP \
+  --record-ttl 300
+```
+
+### **Automated DNS Record Creation Script**
+```bash
+#!/bin/bash
+DOMAIN="yourdomain.com"
+SERVER_IP="YOUR_SERVER_IP"
+
+# Array of subdomains to create
+SUBDOMAINS=("n8n" "webui" "flowise" "supabase" "langfuse" "search" "ollama" "wordpress")
+
+for subdomain in "${SUBDOMAINS[@]}"; do
+    echo "Creating A record for ${subdomain}.${DOMAIN}"
+    doctl compute domain records create $DOMAIN \
+        --record-type A \
+        --record-name $subdomain \
+        --record-data $SERVER_IP \
+        --record-ttl 300
+done
+
+# Verify all records were created
+echo "Verifying DNS records:"
+doctl compute domain records list $DOMAIN
+```
+
+## **Server Configuration Process**
+
+### **1. Update Environment Variables**
+```bash
+# On server: /home/vivid/vivid_mas/.env
+ssh root@SERVER_IP "cd /home/vivid/vivid_mas && cp .env .env.backup-domain"
+
+# Update hostnames to use new domain
+sed -i 's/N8N_HOSTNAME=.*/N8N_HOSTNAME=n8n.yourdomain.com/' .env
+sed -i 's/# LETSENCRYPT_EMAIL=.*/LETSENCRYPT_EMAIL=your-email@yourdomain.com/' .env
+# ... repeat for all services
+```
+
+### **2. Update Docker Compose Configuration**
+```bash
+# Update n8n webhook URL
+sed -i 's/WEBHOOK_URL=.*/WEBHOOK_URL=https:\/\/n8n.yourdomain.com/' docker-compose.yml
+
+# Update WordPress domain
+sed -i 's/WORDPRESS_DOMAIN:-localhost/WORDPRESS_DOMAIN:-wordpress.yourdomain.com/' wordpress-compose.yml
+```
+
+### **3. Update Caddyfile**
+```bash
+# Add WordPress configuration to Caddyfile
+echo '' >> Caddyfile
+echo '# WordPress' >> Caddyfile
+echo '{$WORDPRESS_HOSTNAME} {' >> Caddyfile
+echo '    reverse_proxy localhost:8080' >> Caddyfile
+echo '}' >> Caddyfile
+```
+
+### **4. Restart Services**
+```bash
+# Restart main services
+docker-compose restart caddy n8n
+
+# Restart WordPress (separate compose)
+docker-compose -f wordpress-compose.yml restart
+```
+
+## **Verification & Testing**
+
+### **DNS Propagation Check**
+```bash
+# Check DNS propagation
+dig n8n.yourdomain.com
+nslookup n8n.yourdomain.com
+
+# Test all subdomains
+for sub in n8n webui flowise supabase langfuse search ollama wordpress; do
+    echo "Testing ${sub}.yourdomain.com:"
+    dig +short ${sub}.yourdomain.com
+done
+```
+
+### **SSL Certificate Verification**
+```bash
+# Check SSL certificate status
+curl -I https://n8n.yourdomain.com
+
+# Monitor Caddy logs for certificate generation
+docker logs caddy --follow
+```
+
+### **Service Access URLs**
+After DNS propagation (5-30 minutes):
+- **n8n**: https://n8n.yourdomain.com
+- **Open WebUI**: https://webui.yourdomain.com
+- **Flowise**: https://flowise.yourdomain.com
+- **Supabase**: https://supabase.yourdomain.com
+- **Langfuse**: https://langfuse.yourdomain.com
+- **SearXNG**: https://search.yourdomain.com
+- **Ollama**: https://ollama.yourdomain.com
+- **WordPress**: https://wordpress.yourdomain.com/wp-admin/
+
+## **Troubleshooting**
+
+### **Common Issues**
+1. **Secure Cookie Error**: Set `N8N_SECURE_COOKIE=false` until HTTPS is working
+2. **DNS Not Propagating**: Check TTL settings (300s = 5 minutes)
+3. **SSL Certificate Issues**: Check Caddy logs and Let's Encrypt rate limits
+4. **WordPress Domain Issues**: Update both `WORDPRESS_DOMAIN` and database URLs
+
+### **Rollback Process**
+```bash
+# Restore environment backup
+cp .env.backup-domain .env
+
+# Restore docker-compose backup
+cp docker-compose.yml.backup docker-compose.yml
+
+# Restart services
+docker-compose restart caddy n8n
+```
+
+## **Security Considerations**
+
+- **HTTPS Only**: All services should use HTTPS in production
+- **Firewall**: Ensure only necessary ports are open (80, 443, 22)
+- **API Tokens**: Store DigitalOcean API tokens securely
+- **Let's Encrypt**: Monitor certificate renewal (automatic via Caddy)
+
+## **Project-Specific Details**
+
+### **Current Configuration (vividwalls.blog)**
+- **Domain**: vividwalls.blog
+- **Server IP**: 157.230.13.13
+- **Email**: kingler@vividwalls.co
+- **WordPress Admin**: kingler-admin / VQC$RkIJxzZDL)xh(Y
+
+### **File Locations**
+- **Main Compose**: `/home/vivid/vivid_mas/docker-compose.yml`
+- **WordPress Compose**: `/home/vivid/vivid_mas/wordpress-compose.yml`
+- **Environment**: `/home/vivid/vivid_mas/.env`
+- **Caddyfile**: `/home/vivid/vivid_mas/Caddyfile`
+
+This rule provides a complete reference for DNS management and domain configuration for the VividMAS platform.

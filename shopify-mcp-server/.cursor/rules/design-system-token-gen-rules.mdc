@@ -1,0 +1,223 @@
+---
+description: Call this rule/guide when generating comprehensive atomic design tokens for design systems. This rule enforces a strict hierarchical token model (atoms → molecules → organisms → templates), cross-level referencing, accessibility safeguards, and platform-agnostic transformation.
+globs: *.tsx, *.jsx, *.css, *.scss, *.json, *.yaml, src/component/ui/
+alwaysApply: true
+---
+These rules define how you should generate and enforce design system tokens using an atomic design methodology integrated with DTCG standards. The system must cover raw values (atoms), composite components (molecules), complex UI sections (organisms), and full application layouts (templates) with robust cross-level referencing and transformation capabilities.
+
+## 1. Atomic Hierarchy and Token Structure
+
+1.1. Token Hierarchy
+	•	Atoms: Fundamental tokens that define raw values (e.g., colors, typography, spacing).
+	•	Examples:
+	•	Colors: --atoms-color-primary-base
+	•	Typography: --atoms-typography-body-fontFamily
+	•	Spacing: --atoms-spacing-unit
+	•	Molecules: Composed of atoms; represent simple UI components (e.g., buttons, inputs).
+	•	Examples:
+	•	Button: --molecules-button-primary-background
+	•	Input Border: --molecules-input-border
+	•	Organisms: Complex sections that combine molecules and atoms (e.g., headers, cards).
+	•	Examples:
+	•	Header: --organisms-header-background
+	•	Card: --organisms-card-composition
+	•	Templates: Layout structures or application views built from organisms.
+	•	Examples:
+	•	Dashboard: --templates-dashboard-grid
+
+1.2. Structured Naming Conventions
+	•	General Naming Schema:
+[namespace]-[atomicLevel]-[component/element]-[property]-[state/modifier]
+	•	Atomic Levels:
+	•	Atoms: atoms-color, atoms-spacing, atoms-typography
+	•	Molecules: molecules-button, molecules-input
+	•	Organisms: organisms-header, organisms-card
+	•	Templates: templates-dashboard, templates-layout
+	•	Cross-Level Referencing:
+Molecules must reference atoms; organisms may reference both atoms and molecules; templates reference organisms and lower levels.
+Example:
+
+"background": { "$value": "{atoms.color.primary.base}" }
+
+## 2. Comprehensive Token Categories
+
+2.1. Colors
+	•	Primitive (Atoms):
+Use numeric scales (e.g., 50, 500, 900) for luminance.
+	•	Example:
+
+"blue": {
+  "50": { "$value": "#e7f5ff", "$type": "color" },
+  "500": { "$value": "#228be6", "$type": "color" },
+  "900": { "$value": "#1c4299", "$type": "color" }
+}
+
+
+	•	Semantic (Aliases):
+Map primitives to UI roles such as background or text.
+	•	Example:
+
+"background": {
+  "base": {
+    "$value": { "light": "{atoms.color.neutral.100}", "dark": "{atoms.color.neutral.900}" },
+    "$type": "color"
+  }
+}
+
+
+
+2.2. Typography
+  • Atoms define base font families, sizes, and line heights.
+  • Composite Scales for body text and headings combine multiple properties.
+  • Example:
+
+"heading1": {
+  "$value": {
+    "fontSize": "{size.font.3xl}",
+    "lineHeight": 1.2,
+    "letterSpacing": "-0.02em",
+    "fontWeight": 700
+  },
+  "$type": "typography"
+}
+
+
+
+2.3. Spacing, Sizing, and Effects
+	•	Define dimensions for spacing, font sizes, radii, etc.
+	•	Effects: Shadows, blur, and borders with theme-aware values.
+
+## 3. State and Theme Variations
+
+3.1. Interactive States
+	•	Tokens must include modifiers for states: default, hover, active, disabled.
+	•	Example for a Button Molecule:
+
+"button": {
+  "primary": {
+    "background": {
+      "$value": {
+        "default": "{atoms.color.primary.base}",
+        "hover": "{atoms.color.primary.hover}"
+      },
+      "$type": "color"
+    }
+  }
+}
+
+
+
+3.2. Theme-Aware Values
+	•	Tokens must support light and dark themes.
+	•	Example:
+
+"background": {
+  "$value": {
+    "light": "{atoms.color.neutral.100}",
+    "dark": "{atoms.color.neutral.900}"
+  },
+  "$type": "color"
+}
+
+## 4. Platform-Agnostic Transformation and Output
+
+4.1. Cross-Platform Output
+	•	Use a transformation pipeline (e.g., Style Dictionary) to generate tokens for Web (CSS), Android (XML), and iOS (Swift).
+	•	Transformation Configuration:
+Include file paths, formats, and transformation groups in a configuration file.
+	•	Example (JSON configuration snippet):
+
+{
+  "source": ["tokens/**/*.json"],
+  "platforms": {
+    "android": {
+      "transformGroup": "android",
+      "buildPath": "build/android/",
+      "files": [{
+        "destination": "colors.xml",
+        "format": "android/colors"
+      }]
+    },
+    "ios": {
+      "transformGroup": "ios",
+      "buildPath": "build/ios/",
+      "files": [{
+        "destination": "Tokens.swift",
+        "format": "ios-swift/class.swift",
+        "className": "Tokens"
+      }]
+    },
+    "web": {
+      "transformGroup": "web",
+      "buildPath": "build/web/",
+      "files": [{
+        "destination": "tokens.css",
+        "format": "css/variables"
+      }]
+    }
+  }
+}
+
+## 5. Atomic Validation and Governance
+
+5.1. Composition Integrity
+	•	Molecules may only reference atoms.
+	•	Organisms may reference molecules and atoms.
+	•	Templates may reference tokens from all levels.
+	•	Validation Example:
+
+{
+  "atomicRules": {
+    "moleculesCanOnlyReference": ["atoms"],
+    "organismsCanReference": ["molecules", "atoms"],
+    "templatesCanReference": ["organisms", "molecules", "atoms"]
+  }
+}
+
+
+
+5.2. Cross-Platform and Semantic Constraints
+	•	Tokens must be type-safe and consistent across platforms.
+	•	Use automated CI/CD pipelines to validate token names, cross-level references, and WCAG compliance.
+
+## 6. Implementation Patterns
+
+6.1. Atomic Transformation Rules
+	•	Define custom transformers (e.g., in Style Dictionary) to create platform-specific naming from atomic tokens.
+	•	Example Transformer:
+
+module.exports = {
+  transform: {
+    'atomic/name': {
+      type: 'name',
+      transformer: (token) => {
+        const levels = ['atoms', 'molecules', 'organisms', 'templates'];
+        return levels.includes(token.path[0])
+          ? token.path.slice(1).join('-')
+          : token.name;
+      }
+    }
+  }
+}
+
+
+
+6.2. Responsive and Grid Integration
+	•	Include viewport-relative sizing tokens and grid system definitions for responsive design.
+	•	Example:
+
+"grid": {
+  "columns": { "$value": 12, "$type": "number" },
+  "gutter": { "$value": "{atoms.spacing.unit}", "$type": "dimension" }
+}
+
+## 7. Conclusion
+
+These strict rules enforce a robust, atomic design token system that:
+	•	Aligns with Atomic Design Principles: From atoms to templates, every token level is defined with clear, type-safe references.
+	•	Ensures Platform Parity: Tokens are transformed to support Web, Android, and iOS consistently.
+	•	Enforces Accessibility: Automatic contrast checks and theme-aware values maintain WCAG compliance.
+	•	Validates Composition Integrity: Cross-level referencing rules ensure design-dev alignment and reduce UI inconsistencies.
+	•	Supports Responsive Design: Viewport-relative sizing and grid tokens enable flexible, adaptive layouts.
+
+This comprehensive ruleset provides a single source of truth for generating, transforming, and validating design tokens in an atomic design system, ensuring consistency and scalability across all UI applications.

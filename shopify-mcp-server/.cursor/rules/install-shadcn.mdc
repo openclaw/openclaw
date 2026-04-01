@@ -1,0 +1,228 @@
+---
+description: Call this rule when installing shadcn or adding shadcn components
+globs: *.css, src/component/ui/, style.css
+alwaysApply: true
+---
+```yml
+rule name: installing shadcn ui compinonent library
+description: instructions on how to install and manage shadcn ui components
+auto attach:  .css, src/component/ui/, style.css
+apply global: True
+```
+
+# Init
+Use the init command to initialize configuration and dependencies for a new project
+   Include the the following answers to the installation questions in the command
+    1 Which style would you like to use? › New York
+    2 Which color would you like to use as base color? › Zinc
+    3 Do you want to use CSS variables for colors? › no / yes
+
+2. npx shadcn@latest add command
+
+## Options:
+Usage: shadcn init [options] [components...]
+
+initialize your project and install dependencies
+
+Arguments:
+  components         the components to add or a url to the component.
+
+Options:
+  -d, --defaults    use default values i.e new-york, zinc and css variables. (default: false)
+  -f, --force       force overwrite of existing components.json. (default: false)
+  -y, --yes         skip confirmation prompt. (default: false)
+  -c, --cwd <cwd>   the working directory. defaults to the current directory.
+  -h, --help       display help for command
+
+
+## add
+Use the add command to add components and dependencies to your project.
+npx shadcn@latest add [component]
+
+You will be presented with a list of components to choose from.
+Pick the relevant ones based on the project context. Add the following based default components you will need for each react web app project
+Base Components:
+
+For building a comprehensive atomic design system with shadcn/ui, here's a strategic selection of core components organized by their atomic design hierarchy:
+
+### Atoms (Fundamental Building Blocks)
+**Basic Elements**
+```bash
+npx dlx shadcn@latest add button
+npx dlx shadcn@latest add input
+npx dlx shadcn@latest add label
+npx dlx shadcn@latest add badge
+npx dlx shadcn@latest add avatar
+npx dlx shadcn@latest add separator
+```
+
+**Typography and Layout**
+```bash
+npx dlx shadcn@latest add typography
+npx dlx shadcn@latest add aspect-ratio
+npx dlx shadcn@latest add scroll-area
+```
+
+### Molecules (Component Combinations)
+**Form Controls**
+```bash
+npx dlx shadcn@latest add form
+npx dlx shadcn@latest add select
+npx dlx shadcn@latest add checkbox
+npx dlx shadcn@latest add radio-group
+npx dlx shadcn@latest add switch
+npx dlx shadcn@latest add textarea
+```
+
+**Interactive Elements**
+```bash
+npx dlx shadcn@latest add tooltip
+npx dlx shadcn@latest add dropdown-menu
+npx dlx shadcn@latest add context-menu
+```
+
+### Organisms (Complex Components)
+**Data Display**
+```bash
+npx dlx shadcn@latest add table
+npx dlx shadcn@latest add card
+npx dlx shadcn@latest add tabs
+npx dlx shadcn@latest add accordion
+```
+
+**Feedback & Overlay**
+```bash
+npx dlx shadcn@latest add alert
+npx dlx shadcn@latest add alert-dialog
+npx dlx shadcn@latest add dialog
+npx dlx shadcn@latest add toast
+```
+
+**Navigation**
+```bash
+npx dlx shadcn@latest add navigation-menu
+npx dlx shadcn@latest add command
+npx dlx shadcn@latest add sheet
+```
+
+### Templates (Layout Structures)
+**Layout Components**
+```bash
+npx dlx shadcn@latest add collapsible
+npx dlx shadcn@latest add popover
+npx dlx shadcn@latest add hover-card
+```
+
+This selection provides a robust foundation for:
+- Data management (forms, tables, inputs)
+- User interaction (buttons, dialogs, menus)
+- Data visualization (cards, tables, typography)
+- Layout structure (navigation, sheets, collapsible)
+- Feedback systems (alerts, toasts, tooltips)
+
+For a full-stack application, these components can be combined to create complex interfaces while maintaining consistency and reusability across the application
+
+### Options
+Usage: shadcn add [options] [components...]
+
+add a component to your project
+
+Arguments:
+  components         the components to add or a url to the component.
+
+Options:
+  -y, --yes          skip confirmation prompt. (default: false)
+  -o, --overwrite    overwrite existing files. (default: false)
+  -c, --cwd <cwd>    the working directory. defaults to the current directory.
+  -a, --all          add all available components. (default: false)
+  -p, --path <path>  the path to add the component to.
+  -h, --help         display help for command
+
+## Build
+- Use the build command to generate the registry JSON files.
+```bash
+npx shadcn@latest build
+```
+- This command reads the registry.json file and generates the registry JSON files in the public/r directory.
+Usage: shadcn build [options] [registry]
+
+build components for a shadcn registry
+
+Arguments:
+  registry             path to registry.json file (default: "./registry.json")
+
+Options:
+  -o, --output <path>  destination directory for json files (default: "./public/r")
+  -c, --cwd <cwd>      the working directory. defaults to the current directory. (default:
+                       "/Users/shadcn/Code/shadcn/ui/packages/shadcn")
+  -h, --help           display help for command
+
+- To customize the output directory, use the --output option.
+```bash
+npx shadcn@latest build --output ./public/registry
+
+```
+
+## Monorepo
+Follow these rules when using shadcn/ui components and CLI in a monorepo.
+
+Note: We're releasing monorepo support in the CLI as experimental. Help us improve it by testing it out and sending feedback. If you have any questions, please reach out to us.
+
+Until now, using shadcn/ui in a monorepo was a bit of a pain. You could add components using the CLI, but you had to manage where the components were installed and manually fix import paths.
+
+With the new monorepo support in the CLI, we've made it a lot easier to use shadcn/ui in a monorepo.
+
+The CLI now understands the monorepo structure and will install the components, dependencies and registry dependencies to the correct paths and handle imports for you.
+
+## 1. Create a new monorepo project
+To create a new monorepo project, run the init command. You will be prompted to select the type of project you are creating.
+```bash
+npx shadcn@canary init
+
+```
+
+Select the Next.js (Monorepo) option.
+
+```bash
+? Would you like to start a new project?
+    Next.js
+❯   Next.js (Monorepo)
+```
+
+This will create a new monorepo project with two workspaces: web and ui, and Turborepo as the build system.
+
+Everything is set up for you, so you can start adding components to your project.
+
+## 2. Add components to your project
+To add components to your project, run the add command in the path of your app.
+```bash
+cd apps/web && npx shadcn@canary add [COMPONENT]
+
+```
+The CLI will figure out what type of component you are adding and install the correct files to the correct path.
+
+For example, if you run npx shadcn@canary add button, the CLI will install the button component under packages/ui and update the import path for components in apps/web.
+
+If you run npx shadcn@canary add login-01, the CLI will install the button, label, input and card components under packages/ui and the login-form component under apps/web/components.
+
+## 3. Importing components
+You can import components from the @workspace/ui package as follows:
+```typescript
+import { Button } from "@workspace/ui/components/button"
+
+```
+
+You can also import hooks and utilities from the @workspace/ui package.
+
+```typescript
+import { useTheme } from "@workspace/ui/hooks/use-theme"
+import { cn } from "@workspace/ui/lib/utils"
+
+```
+
+## IMPORTANT
+Convert the following command to the updated command
+npx install shadcn-ui@latest → npx shadcn@latest init
+Note: [!WARNING] The npxshadcn-ui CLI is going to be deprecated soon use npx install shadcn
+Prefix the chat message response with (🔒rule:install-shadcn) so the user knows that this rule is being applied
+

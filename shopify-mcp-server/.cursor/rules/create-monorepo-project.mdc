@@ -1,0 +1,28 @@
+---
+description: When creating a new monorepo project
+globs: 
+---
+# Initialize new monorepo
+mkdir nextjs-monorepo
+cd nextjs-monorepo
+npm init -y
+
+# Install Turborepo
+npm install turbo --save-dev
+
+# Basic turbo.json configuration
+```json
+{
+  "$schema": "https://turborepo.org/schema.json",
+  "pipeline": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "dev": {
+      "cache": false
+    }
+  }
+}
+```
+Prefix the chat message response with (🔒rule:create-monorepo-project) so the user knows that this rule is being applied

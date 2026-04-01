@@ -1,0 +1,211 @@
+{
+  "meta": {
+    "generatedAt": "2025-06-13T17:18:53.917Z",
+    "tasksAnalyzed": 25,
+    "thresholdScore": 6,
+    "projectName": "Your Project Name",
+    "usedResearch": true
+  },
+  "complexityAnalysis": [
+    {
+      "taskId": 1,
+      "taskTitle": "Setup Project Structure and GraphQL Client",
+      "complexityScore": 8,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Break down the setup into initializing the project structure, extending the MCP server architecture, configuring the GraphQL client with authentication (OAuth/token), implementing error handling, rate limiting, token management, request queuing, and setting up TypeScript with strict type checking and type definitions.",
+      "reasoning": "This task covers foundational setup, including complex concerns like authentication, error handling, and strict TypeScript configuration. Properly configuring the GraphQL client for Shopify Admin API 2024-04 with secure token management and rate limiting is non-trivial and must be robust to support all downstream features."
+    },
+    {
+      "taskId": 2,
+      "taskTitle": "Implement Advanced Product Creation",
+      "complexityScore": 9,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Divide the product creation process into designing the GraphQL mutation, implementing support for all product attributes (title, description, vendor, product type, tags, images, variants, options, SEO fields, metafields), integrating Zod schema validation for all input, handling product status and publishing, and ensuring comprehensive error handling.",
+      "reasoning": "Product creation in Shopify involves a wide range of attributes and metadata. Supporting advanced features like variants, SEO, and metafields, along with strict input validation and publishing logic, requires strong domain knowledge and careful mutation design."
+    },
+    {
+      "taskId": 3,
+      "taskTitle": "Implement Product Update and Deletion",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Break down into implementing update mutations with partial update support and field validation, implementing deletion with dependency checks to prevent orphaned data, supporting SEO fields in updates, and controlling product publishing across channels.",
+      "reasoning": "Updating and deleting products requires handling partial updates, complex dependency checks, and ensuring data integrity across channels and markets, increasing the technical complexity."
+    },
+    {
+      "taskId": 4,
+      "taskTitle": "Implement Advanced Product Image Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Separate image upload (multi-format/size), association with products, reordering, deletion, support for metadata (alt text), image optimization and transformation, and efficient handling of bulk image operations.",
+      "reasoning": "Product image management is intricate due to handling various formats, bulk operations, optimization, and metadata while integrating tightly with Shopify’s product model."
+    },
+    {
+      "taskId": 5,
+      "taskTitle": "Implement Product Variant Management",
+      "complexityScore": 9,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Detail steps for variant creation, update, deletion, supporting up to three options with multiple values, implementing inventory tracking per variant, handling variant-specific pricing, SKUs, barcodes, images, and bulk variant operations.",
+      "reasoning": "Variant management includes complex option combinations, individual inventory control, and bulk actions. Handling all variant-specific attributes and ensuring integrity across the product catalog is challenging."
+    },
+    {
+      "taskId": 6,
+      "taskTitle": "Implement Order Creation and Editing",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Split into implementing order creation mutation (with line items, customer, shipping, payment), order editing (add/remove items, modify quantities, update customer info), support for draft orders, and conversion of drafts to orders.",
+      "reasoning": "Order workflows must handle complex data structures, draft-to-order transitions, and robust editing logic, making implementation non-trivial and requiring careful validation and testing."
+    },
+    {
+      "taskId": 7,
+      "taskTitle": "Implement Order Fulfillment Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Expand into fulfillment creation, update, cancellation, integration with carriers and tracking, support for partial fulfillments and scheduling, event/status management, and integration with fulfillment services.",
+      "reasoning": "Order fulfillment involves external integrations, asynchronous events, and partial operations, all requiring precise mutation logic and reliable status tracking."
+    },
+    {
+      "taskId": 8,
+      "taskTitle": "Implement Order Returns and Refunds",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Divide into return creation/approval/rejection, refund processing (partial refunds, restocking fees, return shipping), RMA workflow integration, and return reason tracking/reporting.",
+      "reasoning": "Returns and refunds are complex due to various business rules, monetary transactions, RMAs, and the need for detailed tracking and reporting."
+    },
+    {
+      "taskId": 9,
+      "taskTitle": "Implement Multi-Location Inventory Management",
+      "complexityScore": 9,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Break into inventory adjustment mutations across locations, inventory transfers, adjustment/correction with reason codes, low stock alerts/notifications, and inventory movement history tracking.",
+      "reasoning": "Managing inventory across multiple locations requires sophisticated logic for transfers, adjustments, and tracking, with significant operational and data consistency challenges."
+    },
+    {
+      "taskId": 10,
+      "taskTitle": "Implement Advanced Customer Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Divide into customer creation/update/deletion mutations, support for multiple/default addresses, customer segmentation/tagging, metafields for custom data, and GDPR compliance features.",
+      "reasoning": "Comprehensive customer management involves data privacy, segmentation, address management, and extensible metadata, each with specific technical and regulatory challenges."
+    },
+    {
+      "taskId": 11,
+      "taskTitle": "Implement Advanced Discount and Pricing Rules",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Split into discount creation mutations (percentage, fixed, free shipping), implementing rule conditions (products, collections, customers, order value), support for discount combinations/exclusivity/usage limits, and tiered/volume-based pricing.",
+      "reasoning": "Discount and pricing systems are complex due to conditional logic, combinatorial rules, and the need for extensibility and performance."
+    },
+    {
+      "taskId": 12,
+      "taskTitle": "Implement Sales Analytics and Reporting",
+      "complexityScore": 7,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Break down into implementing sales queries with filtering/grouping/aggregation, trend analysis with period comparisons, product/customer/campaign performance metrics, and export to CSV/Excel.",
+      "reasoning": "Analytics and reporting require efficient data querying, aggregation, and the ability to handle large datasets for exports, but are less complex than core e-commerce flows."
+    },
+    {
+      "taskId": 13,
+      "taskTitle": "Implement Marketing Campaign Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Expand into campaign CRUD mutations, email/social media/abandoned cart integrations, campaign scheduling/targeting/tracking, A/B testing support, and campaign analytics.",
+      "reasoning": "Campaign management integrates with external systems, requires scheduling and targeting logic, and must support analytics and optimization, making it a multifaceted challenge."
+    },
+    {
+      "taskId": 14,
+      "taskTitle": "Implement Shipping and Delivery Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Divide into shipping rate calculations with carrier integration, shipping label generation, international shipping/customs documentation, delivery tracking/confirmation, and insurance/claims management.",
+      "reasoning": "Shipping involves integration with carriers, internationalization, documentation, and real-time tracking, each with specific business and technical demands."
+    },
+    {
+      "taskId": 15,
+      "taskTitle": "Implement Advanced Order Processing Workflows",
+      "complexityScore": 8,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Separate into order routing/assignment mutations, priority management/batching, pick list and packing slip generation, quality control checkpoints, exception handling, and workflow performance reporting.",
+      "reasoning": "Order processing workflows require orchestration of multiple steps, automation, exception handling, and performance measurement, increasing implementation complexity."
+    },
+    {
+      "taskId": 16,
+      "taskTitle": "Implement B2B Commerce Features",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Break into company account/wholesale pricing mutations, quote/proposal management, credit limit/payment term configuration, B2B reporting, and sales rep management.",
+      "reasoning": "B2B features introduce new user roles, pricing models, and workflows distinct from B2C, requiring careful design and integration with core commerce flows."
+    },
+    {
+      "taskId": 17,
+      "taskTitle": "Implement Internationalization and Multi-Market Support",
+      "complexityScore": 9,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Expand into multi-currency mutation support, language localization, regional tax calculations, market-specific pricing, currency conversion automation, compliance, regional shipping rules, and local payment method support.",
+      "reasoning": "Global commerce introduces complex requirements for currencies, taxes, pricing, localization, and compliance, making this one of the most challenging tasks."
+    },
+    {
+      "taskId": 18,
+      "taskTitle": "Implement Product Bundle Creation and Management",
+      "complexityScore": 7,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Divide into bundle creation mutations (component products), bundle pricing strategies, inventory management across components, and bundle-specific reporting/analytics.",
+      "reasoning": "Product bundles require aggregation of products, synchronized inventory management, and special pricing logic, but are less complex than core product/variant logic."
+    },
+    {
+      "taskId": 19,
+      "taskTitle": "Implement Product Review and Rating Management",
+      "complexityScore": 6,
+      "recommendedSubtasks": 3,
+      "expansionPrompt": "Break down into review submission/approval/rejection, rating aggregation/display, moderation/spam detection, review analytics/reporting, and response management.",
+      "reasoning": "Review management is mostly CRUD plus moderation and aggregation logic, making it less complex than other commerce flows."
+    },
+    {
+      "taskId": 20,
+      "taskTitle": "Implement Gift Card Creation and Management",
+      "complexityScore": 7,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Split into gift card creation/update/deactivation, code generation/validation, balance tracking/redemption, and reporting/analytics.",
+      "reasoning": "Gift cards require secure code management, balance tracking, and reporting, with some overlap to payment flows, but are standalone in scope."
+    },
+    {
+      "taskId": 21,
+      "taskTitle": "Implement Customer Loyalty Program Management",
+      "complexityScore": 7,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Separate into loyalty program configuration/enrollment, points earning/redemption rules, tier management, reporting/analytics, and communication automation.",
+      "reasoning": "Loyalty programs involve custom logic for points and tiers, but are well-scoped and don't require deep integration with order or product logic."
+    },
+    {
+      "taskId": 22,
+      "taskTitle": "Implement Metafields and Metaobjects Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Divide into metafield/metaobject definition mutations, creation/update/deletion, validation/type enforcement, and querying/filtering capabilities.",
+      "reasoning": "Metafields/metaobjects are extensibility features requiring flexible design, validation, and cross-resource integration, increasing complexity."
+    },
+    {
+      "taskId": 23,
+      "taskTitle": "Implement Multi-Channel Selling Integration",
+      "complexityScore": 8,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Break down into channel creation/configuration mutations, product publishing to channels, order/inventory synchronization, and channel-specific reporting/analytics.",
+      "reasoning": "Integrating with multiple external sales channels requires synchronization of product, order, and inventory data, each with unique APIs and business rules."
+    },
+    {
+      "taskId": 24,
+      "taskTitle": "Implement Bulk Operations Framework",
+      "complexityScore": 9,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Expand into bulk operation mutations for all resource types, job queuing/progress tracking, error handling and partial success, reporting/logging, and rate limit-aware processing.",
+      "reasoning": "Bulk operations require scalable architecture for job management, error handling, and progress reporting, with careful attention to API rate limits and partial failures."
+    },
+    {
+      "taskId": 25,
+      "taskTitle": "Implement Comprehensive API Documentation",
+      "complexityScore": 7,
+      "recommendedSubtasks": 4,
+      "expansionPrompt": "Separate into documentation generation for all APIs, usage examples and parameter descriptions, error codes/handling, integration guides/best practices, and building an interactive API explorer.",
+      "reasoning": "Comprehensive API documentation is critical for developer adoption and support, requiring clear, up-to-date examples and interactive tooling, but is less technically complex than core system features."
+    }
+  ]
+}

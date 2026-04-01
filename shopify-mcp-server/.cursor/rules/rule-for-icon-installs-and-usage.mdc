@@ -1,0 +1,553 @@
+---
+description: Use this rule when adding Icons to UI elements
+globs: 
+alwaysApply: false
+---
+# Icon Libraries Integration and Usage Guide
+
+This comprehensive guide provides rules for integrating popular icon libraries into web applications. These rules will help Cursor AI and other LLM agents generate correct installation commands and usage patterns for Heroicons, RemixIcon, Tabler Icons, and Lucide.
+
+## Cursor Rules
+
+```
+# Icon Libraries Installation and Usage Guide
+
+You're a frontend development expert specialized in integrating icon libraries. When generating code involving icon libraries, follow these guidelines for:
+
+## Heroicons (Tailwind Icons)
+
+### Installation
+
+- Basic SVG usage:
+  No installation needed, copy directly from heroicons.com
+
+- React:
+  ```
+  npm install @heroicons/react
+  # or
+  yarn add @heroicons/react
+  # or
+  pnpm add @heroicons/react
+  ```
+
+- Vue:
+  ```
+  npm install @heroicons/vue
+  # or
+  yarn add @heroicons/vue
+  # or
+  pnpm add @heroicons/vue
+  ```
+
+### Usage Patterns
+
+#### Basic SVG Usage
+```
+<svg class="size-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+  <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+</svg>
+```
+
+#### React Component Usage
+```
+import { BeakerIcon } from '@heroicons/react/24/solid'
+// or
+import { BeakerIcon } from '@heroicons/react/24/outline'
+// or
+import { BeakerIcon } from '@heroicons/react/20/solid'
+// or
+import { BeakerIcon } from '@heroicons/react/16/solid'
+
+function MyComponent() {
+  return (
+    <div>
+      <BeakerIcon className="size-6 text-blue-500" />
+      <p>...</p>
+    </div>
+  )
+}
+```
+
+#### Vue Component Usage
+```
+<template>
+  <div>
+    <BeakerIcon class="size-6 text-blue-500" />
+    <p>...</p>
+  </div>
+</template>
+
+<script setup>
+import { BeakerIcon } from '@heroicons/vue/24/solid'
+// or other variants as above
+</script>
+```
+
+## RemixIcon
+
+### Installation
+
+- npm:
+  ```
+  npm install remixicon --save
+  ```
+
+- yarn:
+  ```
+  yarn add remixicon
+  ```
+
+- pnpm:
+  ```
+  pnpm install remixicon
+  ```
+
+- Import CSS:
+  ```
+  import 'remixicon/fonts/remixicon.css'
+  ```
+
+- CDN:
+  ```
+  <link href="https://cdn.jsdelivr.net/npm/remixicon@4.5.0/fonts/remixicon.css" rel="stylesheet" />
+  ```
+
+### Usage Patterns
+
+#### SVG Usage
+```
+<img height="32" width="32" src="path/to/icon.svg" />
+```
+
+#### Webfont Usage
+```
+<i class="ri-admin-fill"></i>
+<!-- Class naming: ri-{name}-{style} where style is 'fill' or 'line' -->
+```
+
+## Tabler Icons
+
+### Installation
+
+- Basic:
+  ```
+  npm install @tabler/icons
+  # or
+  yarn add @tabler/icons
+  # or
+  pnpm install @tabler/icons
+  ```
+
+- React:
+  ```
+  npm install @tabler/icons-react
+  # or
+  yarn add @tabler/icons-react
+  # or
+  pnpm install @tabler/icons-react
+  ```
+
+### Usage Patterns
+
+#### HTML Usage
+```
+<img src="path/to/icon.svg" width="24" height="24" alt="icon description" />
+```
+
+#### Inline SVG
+```
+<svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler" width="24" height="24" viewBox="0 0 24 24" 
+     stroke-width="1.25" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- path data here -->
+</svg>
+```
+
+#### React Component Usage
+```
+import { IconArrowLeft } from '@tabler/icons-react';
+
+const App = () => {
+  return <IconArrowLeft color="red" size={48} stroke={2} />;
+};
+```
+
+## Lucide Icons
+
+### Installation
+
+- Basic Web:
+  ```
+  npm install lucide
+  # or
+  yarn add lucide
+  # or
+  pnpm install lucide
+  ```
+
+- React:
+  ```
+  npm install lucide-react
+  # or
+  yarn add lucide-react
+  # or
+  pnpm install lucide-react
+  ```
+
+- Vue 3:
+  ```
+  npm install lucide-vue-next
+  # or
+  yarn add lucide-vue-next
+  # or
+  pnpm install lucide-vue-next
+  ```
+
+- Other frameworks available: lucide-svelte, lucide-angular, lucide-solid, lucide-preact
+
+- CDN:
+  ```
+  <script src="https://unpkg.com/lucide@latest"></script>
+  ```
+
+### Usage Patterns
+
+#### Basic Web Usage with ESModules
+```
+import { createIcons, Menu, ArrowRight } from 'lucide';
+
+// Only import icons you need for tree-shaking
+createIcons({
+  icons: {
+    Menu,
+    ArrowRight
+  }
+});
+```
+
+#### HTML Usage with data attributes
+```
+<i data-lucide="menu"></i>
+
+<script src="https://unpkg.com/lucide@latest"></script>
+<script>
+  lucide.createIcons();
+</script>
+```
+
+#### React Component Usage
+```
+import { Menu } from 'lucide-react';
+
+const App = () => {
+  return <Menu color="red" size={24} />;
+};
+```
+```
+
+## Roocoder Rules
+
+```
+# Icon Libraries Performance and Optimization Guide
+
+You're a performance optimization expert for frontend applications. Follow these guidelines to ensure optimal loading and rendering for icon libraries:
+
+## General Icon Performance Best Practices
+
+- Only import specific icons needed, not entire libraries
+- Use a bundler plugin to automatically tree-shake unused icons
+- Set explicit width and height attributes to prevent layout shifts
+- Add appropriate aria attributes (aria-hidden="true" for decorative icons)
+
+## Heroicons Performance Guide
+
+### Optimal Imports
+```
+// GOOD: Only import needed icons
+import { BeakerIcon } from '@heroicons/react/24/solid'
+
+// BAD: Importing entire library
+import * as HeroIcons from '@heroicons/react/24/solid'
+```
+
+### Sizing and Rendering
+- Use icons at their designed sizes: 24x24, 20x20, or 16x16 pixels
+- When using Tailwind, use size utility classes (size-6) instead of inline styles
+- Utilize currentColor to inherit color from parent text
+
+## RemixIcon Performance Guide
+
+### Webfont vs SVG Decision
+- For <20 icons: use individual SVGs
+- For many icons across the application: use webfont approach
+- Never include both webfont and SVG versions
+
+### Webfont Optimization
+```
+<!-- Preload icon font if critical -->
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/remixicon@4.5.0/fonts/remixicon.woff2" 
+      as="font" type="font/woff2" crossorigin>
+```
+
+### SVG Optimization
+- Use SVGO to optimize individual SVG files
+- For React apps, use @svgr/webpack to import SVGs as components
+
+## Tabler Icons Performance Guide
+
+### Bundle Size Optimization
+```
+// GOOD: Only import needed icons
+import { IconArrowLeft, IconUser } from '@tabler/icons-react';
+
+// BAD: Importing everything
+import * as TablerIcons from '@tabler/icons-react';
+```
+
+### Rendering Performance
+- Avoid changing icon props frequently (triggers re-renders)
+- Use React.memo when appropriate for icon components
+- Set appropriate key props when rendering icon lists
+
+## Lucide Icons Performance Guide
+
+### Tree-shaking Setup
+```
+// GOOD: Only import needed icons
+import { createIcons, Menu, ArrowRight } from 'lucide';
+
+createIcons({
+  icons: {
+    Menu,
+    ArrowRight
+  }
+});
+
+// BAD: Importing all icons
+import { createIcons, icons } from 'lucide';
+createIcons({ icons });
+```
+
+### Framework-Specific Optimizations
+
+#### React
+```
+// Memoize icon components that don't change frequently
+import { memo } from 'react';
+import { AlertCircle } from 'lucide-react';
+
+const AlertIcon = memo(() => <AlertCircle color="red" size={24} />);
+```
+
+#### Vue
+- Use defineAsyncComponent for lazy-loading icons
+- Use shallowRef when storing icon components
+
+### Loading Strategies
+- Dynamic import icons for specific routes
+- Consider using intersection observer to lazy-load below-fold icons
+```
+
+## Windsurf Rules
+
+```
+# Icon Libraries Accessibility and Design Systems Guide
+
+You're a UI/UX expert specializing in accessible, consistent design systems. Follow these guidelines for implementing icon libraries:
+
+## Accessibility for All Icon Libraries
+
+### Decorative Icons
+```
+// For decorative icons that don't convey meaning
+<BeakerIcon aria-hidden="true" className="size-6" />
+```
+
+### Meaningful Icons
+```
+// For icons that convey meaning without text
+<button aria-label="Close dialog" className="p-2">
+  <XMarkIcon className="size-5" />
+</button>
+```
+
+### Icon + Text Combinations
+```
+// When text accompanies an icon
+<button className="flex items-center gap-2">
+  <TrashIcon aria-hidden="true" className="size-5" />
+  <span>Delete item</span>
+</button>
+```
+
+## Design System Integration
+
+### Heroicons Integration
+
+#### Component System
+```
+// Create reusable icon component
+function Icon({ icon: IconComponent, label, size = "md", className, ...props }) {
+  const sizeMap = {
+    sm: "size-4",  // 16px with Tailwind
+    md: "size-6",  // 24px with Tailwind
+    lg: "size-8"   // 32px with Tailwind
+  };
+  
+  const ariaProps = label 
+    ? { 'aria-label': label, role: 'img' } 
+    : { 'aria-hidden': true };
+  
+  return (
+    <IconComponent 
+      className={`${sizeMap[size]} ${className || ''}`}
+      {...ariaProps}
+      {...props}
+    />
+  );
+}
+
+// Usage
+import { BeakerIcon } from '@heroicons/react/24/outline';
+<Icon icon={BeakerIcon} size="lg" className="text-blue-500" />
+```
+
+### RemixIcon Integration
+
+#### Design System Component
+```
+function RemixIcon({ name, size = 'md', variant = 'line', className, label }) {
+  const sizeMap = {
+    sm: '16px',
+    md: '24px',
+    lg: '32px'
+  };
+  
+  const aria = label ? { 'aria-label': label, role: 'img' } : { 'aria-hidden': true };
+  
+  return (
+    <i 
+      className={`ri-${name}-${variant} ${className || ''}`}
+      style={{ 
+        fontSize: sizeMap[size]
+      }}
+      {...aria}
+    ></i>
+  );
+}
+
+// Usage
+<RemixIcon name="home" variant="fill" size="lg" className="text-primary" label="Home" />
+```
+
+### Tabler Icons Integration
+
+#### Design System Component
+```
+// Create consistent wrapper for Tabler icons
+import { IconHeart } from '@tabler/icons-react';
+
+function TablerIcon({ component: IconComponent, size = 'md', color = 'current', label, ...props }) {
+  const sizeMap = {
+    sm: 16,
+    md: 24,
+    lg: 32
+  };
+  
+  const ariaProps = label 
+    ? { 'aria-label': label, role: 'img' } 
+    : { 'aria-hidden': true };
+  
+  return (
+    <IconComponent 
+      size={sizeMap[size]} 
+      color={color === 'current' ? 'currentColor' : color}
+      stroke={1.5}
+      {...ariaProps}
+      {...props} 
+    />
+  );
+}
+
+// Usage
+<TablerIcon component={IconHeart} size="lg" color="#FF0000" label="Favorite" />
+```
+
+### Lucide Icons Integration
+
+#### Design System Component
+```
+import { createElement } from 'react';
+import * as icons from 'lucide-react';
+
+function LucideIcon({ name, size = 'md', color, label, ...props }) {
+  if (!icons[name]) {
+    console.warn(`Icon "${name}" not found in lucide-react`);
+    return null;
+  }
+  
+  const sizeMap = {
+    sm: 16,
+    md: 24,
+    lg: 32
+  };
+  
+  const ariaProps = label 
+    ? { 'aria-label': label, role: 'img' } 
+    : { 'aria-hidden': true };
+  
+  return createElement(icons[name], {
+    size: sizeMap[size] || size,
+    color,
+    ...ariaProps,
+    ...props
+  });
+}
+
+// Usage
+<LucideIcon name="Menu" size="md" color="currentColor" label="Open menu" />
+```
+
+## Interactive Patterns
+
+### Loading States
+```
+import { Loader2 } from 'lucide-react';
+
+function LoadingButton({ loading, children, ...props }) {
+  return (
+    <button 
+      disabled={loading} 
+      className="flex items-center gap-2 p-2 rounded bg-blue-500 text-white"
+      {...props}
+    >
+      {loading && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+      <span>{children}</span>
+    </button>
+  );
+}
+```
+
+### Toggle States
+```
+import { useState } from 'react';
+import { BookmarkIcon } from '@heroicons/react/24/outline';
+import { BookmarkIcon as BookmarkSolidIcon } from '@heroicons/react/24/solid';
+
+function BookmarkButton() {
+  const [saved, setSaved] = useState(false);
+  
+  return (
+    <button
+      aria-label={saved ? 'Remove bookmark' : 'Add bookmark'}
+      aria-pressed={saved}
+      onClick={() => setSaved(!saved)}
+      className="p-2"
+    >
+      {saved 
+        ? <BookmarkSolidIcon className="size-5 text-blue-500" aria-hidden="true" /> 
+        : <BookmarkIcon className="size-5" aria-hidden="true" />
+      }
+    </button>
+  );
+}
+```

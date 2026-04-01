@@ -1,0 +1,113 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+ ---
+description: Memory Bank Protocol defining structure, update procedures, and usage patterns for the shared context system
+globs: [".context/shared/memory-bank/**", ".context/shared/**/*.md"]
+alwaysApply: false
+---
+
+# Memory Bank Protocol
+
+## Overview
+The Memory Bank is a hierarchical documentation structure that serves as the central source of truth for the project, enabling context sharing across multiple agents.
+
+## Core Memory Bank Files
+
+1. **projectbrief.md** - Foundation document defining core requirements and goals
+   - Primary Owner: Orchestrator Agent (Agent 4)
+   - Update Frequency: Low (major project changes only)
+   - Required Sections: Goals, Requirements, Constraints, Stakeholders
+
+2. **productContext.md** - Why the project exists and how it should work
+   - Primary Owner: UX Agent (Agent 3)
+   - Update Frequency: Medium (product evolution)
+   - Required Sections: User Needs, Use Cases, Workflows, Business Rules
+
+3. **activeContext.md** - Current work focus, recent changes, and next steps
+   - Primary Owner: Orchestrator Agent (Agent 4)
+   - Update Frequency: High (daily/weekly updates)
+   - Required Sections: Current Focus, Recent Changes, Blockers, Next Steps
+
+4. **systemPatterns.md** - System architecture and key technical decisions
+   - Primary Owner: System Architect (Agent 1)
+   - Update Frequency: Medium (architectural evolution)
+   - Required Sections: Architecture Overview, Components, Patterns, Decisions
+
+5. **techContext.md** - Technologies used and technical constraints
+   - Primary Owner: System Architect (Agent 1)
+   - Update Frequency: Medium (technology stack changes)
+   - Required Sections: Tech Stack, Development Environment, Constraints, Dependencies
+
+6. **progress.md** - Implementation status and known issues
+   - Primary Owner: Orchestrator Agent (Agent 4)
+   - Update Frequency: High (status tracking)
+   - Required Sections: Completed Items, In Progress, Blocked, Issues
+
+7. **codeContext.md** - Explicit mapping between code and documentation
+   - Primary Owner: Development Agent (Agent 2)
+   - Update Frequency: High (code changes)
+   - Required Sections: Component Map, File Structure, Implementation Notes, Tests
+
+## Update Protocol
+
+1. **Announce Intent**:
+   - Signal update intention in agent_chat.md
+   - Specify which files will be modified
+   - Tag relevant agents using @agent{N} syntax
+
+2. **Make Changes**:
+   - Update owned Memory Bank files
+   - Add version header with changelog
+   - Use Markdown formatting consistently
+   - Include cross-references to other Memory Bank files
+   - Follow file-specific structure and sections
+
+3. **Review Process**:
+   - Request review from relevant agents
+   - Address feedback and make corrections
+   - Resolve conflicts using the Conflict Resolution Protocol
+   - Document significant decisions with [DECISION] tag
+
+4. **Notification**:
+   - Announce completion with [MB-UPDATE] prefix
+   - Summarize changes and implications
+   - Flag required actions for other agents
+
+## Formatting Standards
+
+1. **Version Headers**:
+```
+# [Filename] - v1.2.3
+Last Updated: YYYY-MM-DD
+Updated By: Agent N
+Changes: Summary of changes in this version
+```
+
+2. **Cross-References**:
+```
+See [MB: filename.md#section] for related information
+```
+
+3. **Decision Records**:
+```
+## Decision: [Topic]
+- Date: YYYY-MM-DD
+- Decision: [Summary]
+- Rationale: [Explanation]
+- Alternatives Considered: [Options]
+- Implications: [Consequences]
+- Participants: @agent1, @agent2
+```
+
+4. **Action Items**:
+```
+## Action Items
+- [ ] Task description (@agent2, Due: YYYY-MM-DD)
+- [x] Completed task (@agent1, Completed: YYYY-MM-DD)
+```
+
+## Special Instructions
+When working with Memory Bank files, I should follow the update protocol, use consistent formatting, respect ownership boundaries, and ensure cross-references are maintained. All significant changes should be announced and documented appropriately.

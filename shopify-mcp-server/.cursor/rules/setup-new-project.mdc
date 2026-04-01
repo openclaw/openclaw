@@ -1,0 +1,25 @@
+---
+description: Install or setup or create nextjs app with this default setup
+globs: 
+---
+When asked to set up a new project or install Next.js, run the following instructions sequentially. 
+First check for the presence of a package.json file and do not run this if it is present. 
+
+## Step 1
+```bash
+mkdir temp; cd temp; npx create-next-app@latest . -y --typescript --tailwind --eslint --app --use-npm --src-dir --import-alias "@/*" --no
+```
+
+## Step 2
+```bash
+cd .. && mv temp/* temp/.* 2>/dev/null || true && rm -rf temp
+
+```
+
+## Step 3
+```bash
+npx shadcn@latest init
+```
+
+[!WARNING] The command "npx shadcn-ui" (CLI) is deprecated use "npx install shadcn@latest"
+Prefix the chat message response with (🔒rule:create-new-project) so the user knows that this rule is being applied

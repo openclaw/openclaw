@@ -1,0 +1,84 @@
+---
+description: Use this rule for managing python dependency
+globs: 
+alwaysApply: false
+---
+
+# Python  de
+```python
+# dependency_check.py
+import subprocess
+import pkg_resources
+import sys
+
+def install_python_dependencies(dependencies):
+    installed = {pkg.key for pkg in pkg_resources.working_set}
+    missing = [pkg for pkg in dependencies if pkg.split('==')[0] not in installed]
+    
+    if missing:
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing)
+        subprocess.check_call([sys.executable, '-m', 'pip', 'freeze', '>', 'requirements.txt'])
+        print(f"Installed new dependencies: {missing}")
+```
+
+## Best Practices
+
+1. Dependency Documentation:
+   - Maintain clear documentation
+   - Include purpose of each dependency
+   - Document version constraints
+
+2. Security:
+   - Regular security audits
+   - Update vulnerable packages
+   - Use trusted sources only
+
+3. Performance:
+   - Minimize dependency count
+   - Use lightweight alternatives
+   - Remove unused dependencies
+
+4. Maintenance:
+   - Regular updates
+   - Dependency cleanup
+   - Version compatibility checks
+
+## Integration with CI/CD
+
+1. Automated Checks:
+   ```yaml
+   dependency_check:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v3
+       - name: Check Dependencies
+         run: |
+           ./scripts/check_dependencies.sh
+   ```
+
+2. Version Control:
+   - Commit dependency files
+   - Review dependency changes
+   - Track version updates
+
+## Error Messages and Solutions
+
+Common errors and their solutions:
+```text
+Error: Cannot find module 'xyz'
+Solution: Auto-run `npm install xyz`
+
+Error: ModuleNotFoundError: No module named 'xyz'
+Solution: Auto-run `pip install xyz`
+```
+
+## Rule Enforcement
+
+This rule should be enforced:
+1. During code generation
+2. Before running tests
+3. In CI/CD pipelines
+4. During code review
+
+## Prefix Convention
+Prefix chat messages with (📦 rule:dependency-management) when this rule is referenced 

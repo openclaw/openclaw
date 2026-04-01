@@ -1,0 +1,13 @@
+---
+description:  Apply this rule when nameing container services
+globs: 
+---
+Container Service Naming Convention
+<examples>
+- Base services should use format: service-name
+- Extension services should use format: service-name-{capability}
+Example:
+ollama -> ollama-cpu
+ollama -> ollama-gpu
+</examples>
+Prefix the chat message response with (🛑 rule:container_naming) when this rule is referenced

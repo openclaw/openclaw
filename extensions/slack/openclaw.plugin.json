@@ -1,0 +1,9 @@
+{
+  "id": "slack",
+  "channels": ["slack"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

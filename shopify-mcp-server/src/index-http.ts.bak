@@ -1,0 +1,1096 @@
+#!/usr/bin/env node
+
+import { config } from "dotenv";
+// Load environment variables from .env file
+config();
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { ShopifyClient } from "./ShopifyClient/ShopifyClient.js";
+import {
+  CustomError,
+  ProductNode,
+  ShopifyOrderGraphql,
+  CreateBasicDiscountCodeInput,
+  CreateDraftOrderPayload,
+  ShopifyWebhookTopic,
+} from "./ShopifyClient/ShopifyClientPort.js";
+
+/**
+ * Shopify MCP Server - Admin & Store Management
+ * 
+ * A focused MCP server for Shopify store administration and management.
+ * Provides comprehensive tools for managing products, orders, customers,
+ * collections, pages, navigation, themes, and store settings.
+ */
+const server = new McpServer({
+  name: "shopify-admin-tools",
+  version: "2.0.0",
+});
+
+const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+if (!SHOPIFY_ACCESS_TOKEN) {
+  console.error("Error: SHOPIFY_ACCESS_TOKEN environment variable is required");
+  process.exit(1);
+}
+
+// Hardcoded Shopify domain for simplified credential management
+const MYSHOPIFY_DOMAIN = "vividwalls-2.myshopify.com";
+
+/**
+ * Format product data for display
+ */
+function formatProduct(product: ProductNode): string {
+  return `
+  Product: ${product.title} 
+  description: ${product.description} 
+  handle: ${product.handle}
+  variants: ${product.variants.edges
+    .map(
+      (variant) => `variant.title: ${variant.node.title}
+    variant.id: ${variant.node.id}
+    variant.price: ${variant.node.price}
+    variant.sku: ${variant.node.sku}
+    variant.inventoryPolicy: ${variant.node.inventoryPolicy}
+    `
+    )
+    .join(", ")}
+  `;
+}
+
+/**
+ * Format order data for display
+ */
+function formatOrder(order: ShopifyOrderGraphql): string {
+  return `
+  Order: ${order.name} (${order.id})
+  Created At: ${order.createdAt}
+  Status: ${order.displayFinancialStatus || "N/A"}
+  Email: ${order.email || "N/A"}
+  Phone: ${order.phone || "N/A"}
+  
+  Total Price: ${order.totalPriceSet.shopMoney.amount} ${
+    order.totalPriceSet.shopMoney.currencyCode
+  }
+  
+  Customer: ${
+    order.customer
+      ? `
+    ID: ${order.customer.id}
+    Email: ${order.customer.email}`
+      : "No customer information"
+  }
+
+  Shipping Address: ${
+    order.shippingAddress
+      ? `
+    Province: ${order.shippingAddress.provinceCode || "N/A"}
+    Country: ${order.shippingAddress.countryCode}`
+      : "No shipping address"
+  }
+
+  Line Items: ${
+    order.lineItems.nodes.length > 0
+      ? order.lineItems.nodes
+          .map(
+            (item) => `
+    Title: ${item.title}
+    Quantity: ${item.quantity}
+    Price: ${item.originalTotalSet.shopMoney.amount} ${
+              item.originalTotalSet.shopMoney.currencyCode
+            }
+    Variant: ${
+      item.variant
+        ? `
+      Title: ${item.variant.title}
+      SKU: ${item.variant.sku || "N/A"}
+      Price: ${item.variant.price}`
+        : "No variant information"
+    }`
+          )
+          .join("\n")
+      : "No items"
+  }
+  `;
+}
+
+// ============= PRODUCT MANAGEMENT TOOLS =============
+
+server.tool(
+  "get-products",
+  "Get all products or search by title",
+  {
+    searchTitle: z
+      .string()
+      .optional()
+      .describe("Search title, if missing, will return all products"),
+    limit: z.number().describe("Maximum number of products to return"),
+  },
+  async ({ searchTitle, limit }) => {
+    const client = new ShopifyClient();
+    try {
+      const products = await client.loadProducts(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        searchTitle ?? null,
+        limit
+      );
+      const formattedProducts = products.products.map(formatProduct);
+      return {
+        content: [{ type: "text", text: formattedProducts.join("\n") }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve products data", error);
+    }
+  }
+);
+
+server.tool(
+  "get-products-by-collection",
+  "Get products from a specific collection",
+  {
+    collectionId: z
+      .string()
+      .describe("ID of the collection to get products from"),
+    limit: z
+      .number()
+      .optional()
+      .default(10)
+      .describe("Maximum number of products to return"),
+  },
+  async ({ collectionId, limit }) => {
+    const client = new ShopifyClient();
+    try {
+      const products = await client.loadProductsByCollectionId(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        collectionId,
+        limit
+      );
+      const formattedProducts = products.products.map(formatProduct);
+      return {
+        content: [{ type: "text", text: formattedProducts.join("\n") }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve products from collection", error);
+    }
+  }
+);
+
+server.tool(
+  "get-products-by-ids",
+  "Get products by their IDs",
+  {
+    productIds: z
+      .array(z.string())
+      .describe("Array of product IDs to retrieve"),
+  },
+  async ({ productIds }) => {
+    const client = new ShopifyClient();
+    try {
+      const products = await client.loadProductsByIds(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        productIds
+      );
+      const formattedProducts = products.products.map(formatProduct);
+      return {
+        content: [{ type: "text", text: formattedProducts.join("\n") }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve products by IDs", error);
+    }
+  }
+);
+
+server.tool(
+  "get-variants-by-ids",
+  "Get product variants by their IDs",
+  {
+    variantIds: z
+      .array(z.string())
+      .describe("Array of variant IDs to retrieve"),
+  },
+  async ({ variantIds }) => {
+    const client = new ShopifyClient();
+    try {
+      const variants = await client.loadVariantsByIds(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        variantIds
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(variants, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve variants", error);
+    }
+  }
+);
+
+// ============= CUSTOMER MANAGEMENT TOOLS =============
+
+server.tool(
+  "get-customers",
+  "Get shopify customers with pagination support",
+  {
+    limit: z.number().optional().describe("Limit of customers to return"),
+    next: z.string().optional().describe("Next page cursor"),
+  },
+  async ({ limit, next }) => {
+    const client = new ShopifyClient();
+    try {
+      const response = await client.loadCustomers(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        limit,
+        next
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve customers data", error);
+    }
+  }
+);
+
+server.tool(
+  "tag-customer",
+  "Add tags to a customer",
+  {
+    customerId: z.string().describe("Customer ID to tag"),
+    tags: z.array(z.string()).describe("Tags to add to the customer"),
+  },
+  async ({ customerId, tags }) => {
+    const client = new ShopifyClient();
+    try {
+      const success = await client.tagCustomer(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        tags,
+        customerId
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: success
+              ? "Successfully tagged customer"
+              : "Failed to tag customer",
+          },
+        ],
+      };
+    } catch (error) {
+      return handleError("Failed to tag customer", error);
+    }
+  }
+);
+
+// ============= ORDER MANAGEMENT TOOLS =============
+
+server.tool(
+  "get-orders",
+  "Get shopify orders with advanced filtering and sorting",
+  {
+    first: z.number().optional().describe("Limit of orders to return"),
+    after: z.string().optional().describe("Next page cursor"),
+    query: z.string().optional().describe("Filter orders using query syntax"),
+    sortKey: z
+      .enum([
+        "PROCESSED_AT",
+        "TOTAL_PRICE",
+        "ID",
+        "CREATED_AT",
+        "UPDATED_AT",
+        "ORDER_NUMBER",
+      ])
+      .optional()
+      .describe("Field to sort by"),
+    reverse: z.boolean().optional().describe("Reverse sort order"),
+  },
+  async ({ first, after, query, sortKey, reverse }) => {
+    const client = new ShopifyClient();
+    try {
+      const response = await client.loadOrders(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        {
+          first,
+          after,
+          query,
+          sortKey,
+          reverse,
+        }
+      );
+      const formattedOrders = response.orders.map(formatOrder);
+      return {
+        content: [{ type: "text", text: formattedOrders.join("\n---\n") }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve orders data", error);
+    }
+  }
+);
+
+server.tool(
+  "get-order",
+  "Get a single order by ID",
+  {
+    orderId: z.string().describe("ID of the order to retrieve"),
+  },
+  async ({ orderId }) => {
+    const client = new ShopifyClient();
+    try {
+      const order = await client.loadOrder(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        { orderId }
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(order, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve order", error);
+    }
+  }
+);
+
+// ============= DISCOUNT MANAGEMENT TOOLS =============
+
+server.tool(
+  "create-discount",
+  "Create a basic discount code",
+  {
+    title: z.string().describe("Title of the discount"),
+    code: z.string().describe("Discount code that customers will enter"),
+    valueType: z
+      .enum(["percentage", "fixed_amount"])
+      .describe("Type of discount"),
+    value: z
+      .number()
+      .describe("Discount value (percentage as decimal or fixed amount)"),
+    startsAt: z.string().describe("Start date in ISO format"),
+    endsAt: z.string().optional().describe("Optional end date in ISO format"),
+    appliesOncePerCustomer: z
+      .boolean()
+      .describe("Whether discount can be used only once per customer"),
+  },
+  async ({
+    title,
+    code,
+    valueType,
+    value,
+    startsAt,
+    endsAt,
+    appliesOncePerCustomer,
+  }) => {
+    const client = new ShopifyClient();
+    try {
+      const discountInput: CreateBasicDiscountCodeInput = {
+        title,
+        code,
+        valueType,
+        value,
+        startsAt,
+        endsAt,
+        includeCollectionIds: [],
+        excludeCollectionIds: [],
+        appliesOncePerCustomer,
+        combinesWith: {
+          productDiscounts: true,
+          orderDiscounts: true,
+          shippingDiscounts: true,
+        },
+      };
+      const discount = await client.createBasicDiscountCode(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        discountInput
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(discount, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to create discount", error);
+    }
+  }
+);
+
+// ============= DRAFT ORDER TOOLS =============
+
+server.tool(
+  "create-draft-order",
+  "Create a draft order",
+  {
+    lineItems: z
+      .array(
+        z.object({
+          variantId: z.string(),
+          quantity: z.number(),
+        })
+      )
+      .describe("Line items to add to the order"),
+    email: z.string().email().describe("Customer email"),
+    shippingAddress: z
+      .object({
+        address1: z.string(),
+        city: z.string(),
+        province: z.string(),
+        country: z.string(),
+        zip: z.string(),
+        firstName: z.string(),
+        lastName: z.string(),
+        countryCode: z.string(),
+      })
+      .describe("Shipping address details"),
+    note: z.string().optional().describe("Optional note for the order"),
+  },
+  async ({ lineItems, email, shippingAddress, note }) => {
+    const client = new ShopifyClient();
+    try {
+      const draftOrderData: CreateDraftOrderPayload = {
+        lineItems,
+        email,
+        shippingAddress,
+        billingAddress: shippingAddress, // Using same address for billing
+        tags: "draft",
+        note: note || "",
+      };
+      const draftOrder = await client.createDraftOrder(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        draftOrderData
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(draftOrder, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to create draft order", error);
+    }
+  }
+);
+
+server.tool(
+  "complete-draft-order",
+  "Complete a draft order",
+  {
+    draftOrderId: z.string().describe("ID of the draft order to complete"),
+    variantId: z.string().describe("ID of the variant in the draft order"),
+  },
+  async ({ draftOrderId, variantId }) => {
+    const client = new ShopifyClient();
+    try {
+      const completedOrder = await client.completeDraftOrder(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        draftOrderId,
+        variantId
+      );
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(completedOrder, null, 2) },
+        ],
+      };
+    } catch (error) {
+      return handleError("Failed to complete draft order", error);
+    }
+  }
+);
+
+// ============= COLLECTION MANAGEMENT TOOLS =============
+
+server.tool(
+  "get-collections",
+  "Get all collections",
+  {
+    limit: z
+      .number()
+      .optional()
+      .default(10)
+      .describe("Maximum number of collections to return"),
+    name: z.string().optional().describe("Filter collections by name"),
+  },
+  async ({ limit, name }) => {
+    const client = new ShopifyClient();
+    try {
+      const collections = await client.loadCollections(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        { limit, name }
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(collections, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve collections", error);
+    }
+  }
+);
+
+// ============= STORE INFORMATION TOOLS =============
+
+server.tool("get-shop", "Get shop details", {}, async () => {
+  const client = new ShopifyClient();
+  try {
+    const shop = await client.loadShop(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN);
+    return {
+      content: [{ type: "text", text: JSON.stringify(shop, null, 2) }],
+    };
+  } catch (error) {
+    return handleError("Failed to retrieve shop details", error);
+  }
+});
+
+server.tool(
+  "get-shop-details",
+  "Get extended shop details including shipping countries",
+  {},
+  async () => {
+    const client = new ShopifyClient();
+    try {
+      const shopDetails = await client.loadShopDetail(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(shopDetails, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve extended shop details", error);
+    }
+  }
+);
+
+// ============= WEBHOOK MANAGEMENT TOOLS =============
+
+server.tool(
+  "manage-webhook",
+  "Subscribe, find, or unsubscribe webhooks",
+  {
+    action: z
+      .enum(["subscribe", "find", "unsubscribe"])
+      .describe("Action to perform with webhook"),
+    callbackUrl: z.string().url().describe("Webhook callback URL"),
+    topic: z
+      .nativeEnum(ShopifyWebhookTopic)
+      .describe("Webhook topic to subscribe to"),
+    webhookId: z
+      .string()
+      .optional()
+      .describe("Webhook ID (required for unsubscribe)"),
+  },
+  async ({ action, callbackUrl, topic, webhookId }) => {
+    const client = new ShopifyClient();
+    try {
+      switch (action) {
+        case "subscribe": {
+          const webhook = await client.subscribeWebhook(
+            SHOPIFY_ACCESS_TOKEN,
+            MYSHOPIFY_DOMAIN,
+            callbackUrl,
+            topic
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(webhook, null, 2) }],
+          };
+        }
+        case "find": {
+          const webhook = await client.findWebhookByTopicAndCallbackUrl(
+            SHOPIFY_ACCESS_TOKEN,
+            MYSHOPIFY_DOMAIN,
+            callbackUrl,
+            topic
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(webhook, null, 2) }],
+          };
+        }
+        case "unsubscribe": {
+          if (!webhookId) {
+            throw new Error("webhookId is required for unsubscribe action");
+          }
+          await client.unsubscribeWebhook(
+            SHOPIFY_ACCESS_TOKEN,
+            MYSHOPIFY_DOMAIN,
+            webhookId
+          );
+          return {
+            content: [
+              { type: "text", text: "Webhook unsubscribed successfully" },
+            ],
+          };
+        }
+      }
+    } catch (error) {
+      return handleError("Failed to manage webhook", error);
+    }
+  }
+);
+
+// ============= PAGE MANAGEMENT TOOLS =============
+
+server.tool(
+  "get-pages",
+  "Get all pages from the store",
+  {
+    limit: z.number().optional().default(50).describe("Maximum number of pages to return"),
+  },
+  async ({ limit }) => {
+    const client = new ShopifyClient();
+    try {
+      const pages = await client.loadPages(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, limit);
+      return {
+        content: [{ type: "text", text: JSON.stringify(pages, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve pages", error);
+    }
+  }
+);
+
+server.tool(
+  "get-page",
+  "Get a specific page by ID",
+  {
+    pageId: z.string().describe("ID of the page to retrieve"),
+  },
+  async ({ pageId }) => {
+    const client = new ShopifyClient();
+    try {
+      const page = await client.getPage(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, pageId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(page, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve page", error);
+    }
+  }
+);
+
+server.tool(
+  "create-page",
+  "Create a new page in the store",
+  {
+    title: z.string().describe("Title of the page"),
+    bodyHtml: z.string().describe("HTML content of the page"),
+    handle: z.string().optional().describe("URL handle for the page"),
+    summaryBody: z.string().optional().describe("Summary of the page"),
+    author: z.string().optional().describe("Author of the page"),
+    published: z.boolean().optional().default(true).describe("Whether the page is published"),
+    templateSuffix: z.string().optional().describe("Template suffix for the page"),
+  },
+  async ({ title, bodyHtml, handle, summaryBody, author, published, templateSuffix }) => {
+    const client = new ShopifyClient();
+    try {
+      const pageData = {
+        title,
+        body_html: bodyHtml,
+        handle,
+        summary_body: summaryBody,
+        author,
+        published,
+        template_suffix: templateSuffix,
+      };
+      const page = await client.createPage(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, pageData);
+      return {
+        content: [{ type: "text", text: JSON.stringify(page, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to create page", error);
+    }
+  }
+);
+
+server.tool(
+  "update-page",
+  "Update an existing page",
+  {
+    id: z.string().describe("ID of the page to update"),
+    title: z.string().optional().describe("New title of the page"),
+    bodyHtml: z.string().optional().describe("New HTML content of the page"),
+    handle: z.string().optional().describe("New URL handle for the page"),
+    summaryBody: z.string().optional().describe("New summary of the page"),
+    author: z.string().optional().describe("New author of the page"),
+    published: z.boolean().optional().describe("Whether the page is published"),
+    templateSuffix: z.string().optional().describe("New template suffix for the page"),
+  },
+  async ({ id, title, bodyHtml, handle, summaryBody, author, published, templateSuffix }) => {
+    const client = new ShopifyClient();
+    try {
+      const pageData = {
+        id,
+        title,
+        body_html: bodyHtml,
+        handle,
+        summary_body: summaryBody,
+        author,
+        published,
+        template_suffix: templateSuffix,
+      };
+      const page = await client.updatePage(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, pageData);
+      return {
+        content: [{ type: "text", text: JSON.stringify(page, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to update page", error);
+    }
+  }
+);
+
+server.tool(
+  "delete-page",
+  "Delete a page from the store",
+  {
+    pageId: z.string().describe("ID of the page to delete"),
+  },
+  async ({ pageId }) => {
+    const client = new ShopifyClient();
+    try {
+      await client.deletePage(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, pageId);
+      return {
+        content: [{ type: "text", text: "Page deleted successfully" }],
+      };
+    } catch (error) {
+      return handleError("Failed to delete page", error);
+    }
+  }
+);
+
+// ============= NAVIGATION MENU TOOLS =============
+
+server.tool(
+  "get-navigation-menus",
+  "Get all navigation menus",
+  {},
+  async () => {
+    const client = new ShopifyClient();
+    try {
+      const menus = await client.loadNavMenus(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN);
+      return {
+        content: [{ type: "text", text: JSON.stringify(menus, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve navigation menus", error);
+    }
+  }
+);
+
+server.tool(
+  "create-navigation-menu",
+  "Create a new navigation menu",
+  {
+    title: z.string().describe("Title of the navigation menu"),
+    handle: z.string().optional().describe("Handle for the navigation menu"),
+  },
+  async ({ title, handle }) => {
+    const client = new ShopifyClient();
+    try {
+      const menuData = { title, handle };
+      const menu = await client.createNavMenu(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, menuData);
+      return {
+        content: [{ type: "text", text: JSON.stringify(menu, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to create navigation menu", error);
+    }
+  }
+);
+
+server.tool(
+  "get-menu-items",
+  "Get menu items for a specific navigation menu",
+  {
+    menuId: z.string().describe("ID of the navigation menu"),
+  },
+  async ({ menuId }) => {
+    const client = new ShopifyClient();
+    try {
+      const items = await client.loadMenuItems(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, menuId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(items, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve menu items", error);
+    }
+  }
+);
+
+server.tool(
+  "create-menu-item",
+  "Create a new menu item",
+  {
+    menuId: z.string().describe("ID of the navigation menu"),
+    title: z.string().describe("Title of the menu item"),
+    url: z.string().describe("URL for the menu item"),
+    parentId: z.string().optional().describe("Parent menu item ID (for submenus)"),
+    position: z.number().optional().describe("Position of the menu item"),
+  },
+  async ({ menuId, title, url, parentId, position }) => {
+    const client = new ShopifyClient();
+    try {
+      const itemData = {
+        menu_id: menuId,
+        title,
+        url,
+        parent_id: parentId,
+        position,
+      };
+      const item = await client.createMenuItem(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, itemData);
+      return {
+        content: [{ type: "text", text: JSON.stringify(item, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to create menu item", error);
+    }
+  }
+);
+
+// ============= THEME MANAGEMENT TOOLS =============
+
+server.tool(
+  "get-themes",
+  "Get all themes in the store",
+  {},
+  async () => {
+    const client = new ShopifyClient();
+    try {
+      const themes = await client.loadThemes(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN);
+      return {
+        content: [{ type: "text", text: JSON.stringify(themes, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve themes", error);
+    }
+  }
+);
+
+server.tool(
+  "get-theme",
+  "Get a specific theme by ID",
+  {
+    themeId: z.string().describe("ID of the theme to retrieve"),
+  },
+  async ({ themeId }) => {
+    const client = new ShopifyClient();
+    try {
+      const theme = await client.getTheme(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(theme, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve theme", error);
+    }
+  }
+);
+
+server.tool(
+  "create-theme",
+  "Create a new theme",
+  {
+    name: z.string().describe("Name of the new theme"),
+    src: z.string().optional().describe("URL to ZIP file containing theme"),
+    role: z.enum(["main", "unpublished"]).optional().describe("Role of the theme"),
+  },
+  async ({ name, src, role }) => {
+    const client = new ShopifyClient();
+    try {
+      const themeData = { name, src, role };
+      const theme = await client.createTheme(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeData);
+      return {
+        content: [{ type: "text", text: JSON.stringify(theme, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to create theme", error);
+    }
+  }
+);
+
+server.tool(
+  "duplicate-theme",
+  "Duplicate an existing theme",
+  {
+    themeId: z.string().describe("ID of the theme to duplicate"),
+    name: z.string().describe("Name for the duplicated theme"),
+  },
+  async ({ themeId, name }) => {
+    const client = new ShopifyClient();
+    try {
+      const theme = await client.duplicateTheme(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeId, name);
+      return {
+        content: [{ type: "text", text: JSON.stringify(theme, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to duplicate theme", error);
+    }
+  }
+);
+
+server.tool(
+  "get-theme-assets",
+  "Get all assets for a specific theme",
+  {
+    themeId: z.string().describe("ID of the theme"),
+  },
+  async ({ themeId }) => {
+    const client = new ShopifyClient();
+    try {
+      const assets = await client.loadThemeAssets(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(assets, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve theme assets", error);
+    }
+  }
+);
+
+server.tool(
+  "get-theme-asset",
+  "Get a specific theme asset",
+  {
+    themeId: z.string().describe("ID of the theme"),
+    assetKey: z.string().describe("Key of the asset (e.g., 'templates/index.liquid')"),
+  },
+  async ({ themeId, assetKey }) => {
+    const client = new ShopifyClient();
+    try {
+      const asset = await client.getThemeAsset(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeId, assetKey);
+      return {
+        content: [{ type: "text", text: JSON.stringify(asset, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve theme asset", error);
+    }
+  }
+);
+
+server.tool(
+  "update-theme-asset",
+  "Update a theme asset",
+  {
+    themeId: z.string().describe("ID of the theme"),
+    assetKey: z.string().describe("Key of the asset (e.g., 'templates/index.liquid')"),
+    value: z.string().optional().describe("Text content of the asset"),
+    attachment: z.string().optional().describe("Base64 encoded binary content"),
+  },
+  async ({ themeId, assetKey, value, attachment }) => {
+    const client = new ShopifyClient();
+    try {
+      const assetData = {
+        theme_id: themeId,
+        key: assetKey,
+        value,
+        attachment,
+      };
+      const asset = await client.updateThemeAsset(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, assetData);
+      return {
+        content: [{ type: "text", text: JSON.stringify(asset, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to update theme asset", error);
+    }
+  }
+);
+
+server.tool(
+  "get-theme-settings",
+  "Get theme settings",
+  {
+    themeId: z.string().describe("ID of the theme"),
+  },
+  async ({ themeId }) => {
+    const client = new ShopifyClient();
+    try {
+      const settings = await client.getThemeSettings(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(settings, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to retrieve theme settings", error);
+    }
+  }
+);
+
+server.tool(
+  "update-theme-settings",
+  "Update theme settings",
+  {
+    themeId: z.string().describe("ID of the theme"),
+    settings: z.record(z.any()).describe("Theme settings object"),
+  },
+  async ({ themeId, settings }) => {
+    const client = new ShopifyClient();
+    try {
+      const updatedSettings = await client.updateThemeSettings(SHOPIFY_ACCESS_TOKEN, MYSHOPIFY_DOMAIN, themeId, settings);
+      return {
+        content: [{ type: "text", text: JSON.stringify(updatedSettings, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to update theme settings", error);
+    }
+  }
+);
+
+// ============= GRAPHQL TOOLS =============
+
+server.tool(
+  "custom-graphql-query",
+  "Execute custom GraphQL query against Shopify Admin API",
+  {
+    query: z.string().describe("GraphQL query string"),
+    variables: z.record(z.any()).optional().describe("Query variables"),
+  },
+  async ({ query, variables }) => {
+    const client = new ShopifyClient();
+    try {
+      const result = await client.shopifyGraphqlRequest({
+        url: `https://${MYSHOPIFY_DOMAIN}/admin/api/2024-04/graphql.json`,
+        accessToken: SHOPIFY_ACCESS_TOKEN,
+        query,
+        variables,
+      });
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
+      };
+    } catch (error) {
+      return handleError("Failed to execute GraphQL query", error);
+    }
+  }
+);
+
+/**
+ * Utility function to handle errors consistently
+ */
+function handleError(
+  defaultMessage: string,
+  error: unknown
+): {
+  content: { type: "text"; text: string }[];
+  isError: boolean;
+} {
+  let errorMessage = defaultMessage;
+  if (error instanceof CustomError) {
+    errorMessage = `${defaultMessage}: ${error.message}`;
+  }
+  return {
+    content: [{ type: "text", text: errorMessage }],
+    isError: true,
+  };
+}
+
+/**
+ * Main server initialization
+ */
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Shopify Admin MCP Server running on stdio");
+}
+
+main().catch((error) => {
+  console.error("Fatal error in main():", error);
+  process.exit(1);
+});

@@ -1,0 +1,78 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Vector Database Connection Rule (Postgres + pgvector)
+
+## Overview
+This rule documents the connection string, host, port, and usage pattern for the project's primary vector database: a Postgres instance with the `pgvector` extension enabled. This database is used for all vector search, embedding storage, and AI-powered workflows (e.g., n8n agent workflows, Supabase integrations).
+
+## Connection String Format
+
+- **Docker Compose (internal):**
+  ```
+  postgresql://postgres:<POSTGRES_PASSWORD>@db:5432/postgres
+  ```
+- **Droplet Public IP (external):**
+  ```
+  postgresql://postgres:<POSTGRES_PASSWORD>@157.230.13.13:5432/postgres
+  ```
+- **Localhost (if running directly on the droplet):**
+  ```
+  postgresql://postgres:<POSTGRES_PASSWORD>@localhost:5432/postgres
+  ```
+
+Replace `<POSTGRES_PASSWORD>` with the value from your `.env` file.
+
+## Host and Port
+- **Host:** `db` (inside Docker), `localhost` (on droplet), or `157.230.13.13` (public IP)
+- **Port:** `5432`
+- **Database:** `postgres`
+- **User:** `postgres`
+
+## pgvector Extension
+- The `pgvector` extension is enabled by default via the setup script:
+  ```sql
+  CREATE EXTENSION IF NOT EXISTS vector;
+  ```
+- All vector embedding operations (e.g., similarity search, AI recommendations) use this extension.
+
+## Usage Patterns
+- **n8n Workflows:**
+  - Use the above connection string in n8n's Postgres or Supabase credentials.
+  - All product classification, embedding storage, and vector search operations connect here.
+- **Supabase:**
+  - Supabase services use this database for relational and vector data.
+  - The REST API and direct SQL access both point to this instance.
+- **Direct SQL:**
+  - Use `psql` or any Postgres client with the connection string above.
+
+## Security Notes
+- **Password:** Store `POSTGRES_PASSWORD` securely in `.env` and never commit to version control.
+- **Firewall:** Only expose port 5432 to trusted IPs or keep it internal to Docker for security.
+- **SSL:** Use SSL for external connections if possible.
+
+## Example
+```env
+POSTGRES_PASSWORD=your_password_here
+```
+
+**Connection string (internal):**
+```
+postgresql://postgres:your_password_here@db:5432/postgres
+```
+**Connection string (external):**
+```
+postgresql://postgres:your_password_here@157.230.13.13:5432/postgres
+```
+
+## References
+- [pgvector documentation](https://github.com/pgvector/pgvector)
+- [Supabase self-hosting guide](https://supabase.com/docs/guides/self-hosting/docker)
+- [n8n Postgres integration](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.postgres/)
+
+- **Main Points in Bold**
+  - Always use the documented connection string format for all vector/embedding operations.
+  - The `pgvector` extension is required for all AI-powered search and recommendation features.
+  - Secure your credentials and restrict database access to trusted services and IPs.

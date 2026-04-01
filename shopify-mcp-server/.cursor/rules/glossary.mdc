@@ -1,0 +1,27 @@
+---
+description: Glossary of other Cursor rules
+globs: **/*
+alwaysApply: true
+---
+# Glossary of Task Master Cursor Rules
+
+This file provides a quick reference to the purpose of each rule file located in the `.cursor/rules` directory.
+
+- **[`architecture.mdc`](mdc:.cursor/rules/architecture.mdc)**: Describes the high-level architecture of the Task Master CLI application.
+- **[`changeset.mdc`](mdc:.cursor/rules/changeset.mdc)**: Guidelines for using Changesets (npm run changeset) to manage versioning and changelogs.
+- **[`commands.mdc`](mdc:.cursor/rules/commands.mdc)**: Guidelines for implementing CLI commands using Commander.js.
+- **[`cursor_rules.mdc`](mdc:.cursor/rules/cursor_rules.mdc)**: Guidelines for creating and maintaining Cursor rules to ensure consistency and effectiveness.
+- **[`dependencies.mdc`](mdc:.cursor/rules/dependencies.mdc)**: Guidelines for managing task dependencies and relationships.
+- **[`dev_workflow.mdc`](mdc:.cursor/rules/dev_workflow.mdc)**: Guide for using Task Master to manage task-driven development workflows.
+- **[`docker-compose-protection.mdc`](mdc:.cursor/rules/docker-compose-protection.mdc)**: Protects critical Docker services (especially WordPress) from accidental removal during updates.
+- **[`glossary.mdc`](mdc:.cursor/rules/glossary.mdc)**: This file; provides a glossary of other Cursor rules.
+- **[`mcp.mdc`](mdc:.cursor/rules/mcp.mdc)**: Guidelines for implementing and interacting with the Task Master MCP Server.
+- **[`new_features.mdc`](mdc:.cursor/rules/new_features.mdc)**: Guidelines for integrating new features into the Task Master CLI.
+- **[`self_improve.mdc`](mdc:.cursor/rules/self_improve.mdc)**: Guidelines for continuously improving Cursor rules based on emerging code patterns and best practices.
+- **[`taskmaster.mdc`](mdc:.cursor/rules/taskmaster.mdc)**: Comprehensive reference for Taskmaster MCP tools and CLI commands.
+- **[`tasks.mdc`](mdc:.cursor/rules/tasks.mdc)**: Guidelines for implementing task management operations.
+- **[`tests.mdc`](mdc:.cursor/rules/tests.mdc)**: Guidelines for implementing and maintaining tests for Task Master CLI.
+- **[`ui.mdc`](mdc:.cursor/rules/ui.mdc)**: Guidelines for implementing and maintaining user interface components.
+- **[`utilities.mdc`](mdc:.cursor/rules/utilities.mdc)**: Guidelines for implementing utility functions.
+- **[`vector-database-connection.mdc`](mdc:.cursor/rules/vector-database-connection.mdc)**: Documents the connection string, host, and usage pattern for the project's Postgres database with pgvector extension, as used by n8n agent workflows and Supabase integrations.
+

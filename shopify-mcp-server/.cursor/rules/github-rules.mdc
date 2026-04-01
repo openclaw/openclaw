@@ -1,0 +1,194 @@
+---
+description: Follow these termainal command rules when creating, commiting and pushing repos to Github
+globs: 
+alwaysApply: false
+---
+# Creating GitHub Repositories from the Terminal: Commands Guide for SSH and Personal Access Tokens
+
+GitHub repositories can be created and managed entirely from the command line using various approaches including GitHub CLI, direct API calls, or traditional git commands. This comprehensive guide explains how to create repositories for the GitHub account https://github.com/kingler/ using both SSH keys and Personal Access Tokens (PATs) for authentication.
+
+## Setting Up Authentication
+
+Before creating repositories, you need to set up proper authentication using either SSH keys or Personal Access Tokens.
+
+### SSH Key Authentication
+
+To use SSH for GitHub operations:
+
+1. Check for existing SSH keys:
+
+   ```bash
+   ls -al ~/.ssh
+   ```
+
+   Location should be: /Users/kinglerbercy/.ssh
+
+2. Generate a new SSH key if needed:
+
+   ```bash
+   ssh-keygen -t ed25519 -C "kingler@vividwalls.co"
+   ```
+
+3. Start the SSH agent and add your key:
+
+   ```bash
+   eval "$(ssh-agent -s)"
+   ssh-add ~/.ssh/ed25519
+   ```
+
+4. Add the SSH key to your GitHub account
+
+### Personal Access Token Authentication
+
+For PAT-based authentication:
+
+1. Go to GitHub Settings > Developer Settings > Personal Access Tokens
+2. Click "Generate new token"
+3. Add a descriptive note and select appropriate scopes (at minimum, select "repo")
+4. Click "Generate token" and save it securely - it's only shown once
+
+## Creating Repositories Using GitHub CLI
+
+GitHub CLI (gh) provides the simplest approach for repository creation from the terminal.
+
+### Installation and Authentication
+
+1. Install GitHub CLI (if not already installed)
+2. Authenticate with SSH:
+
+   ```bash
+   gh auth login --git-protocol ssh
+   ```
+
+3. Configure default protocol as SSH:
+
+   ```bash
+   gh config set -h github.com git_protocol ssh
+   ```
+
+### Creating Repositories
+
+To create a repository interactively:
+
+```bash
+gh repo create
+```
+
+To create a public repository non-interactively:
+
+```bash
+gh repo create repo-name --public
+```
+
+For a private repository:
+
+```bash
+gh repo create repo-name --private
+```
+
+To create and clone in one command:
+
+```bash
+gh repo create repo-name --private --clone
+```
+
+For using a template
+
+```bash
+gh repo create repo-name --template vividwalls-studio/template-name --private
+```
+
+## Creating Repositories Using GitHub API with curl
+
+You can create repositories directly via the GitHub API using curl commands and your Personal Access Token.
+
+```bash
+curl -H "Authorization: token YOUR_PERSONAL_ACCESS_TOKEN" https://api.github.com/user/repos -d '{"name":"repo-name","private":true}'
+```
+
+For a public repository, set "private":false or omit the parameter
+
+Alternatively, using basic authentication (less recommended):
+
+```bash
+curl -u kingler https://api.github.com/user/repos -d '{"name":"repo-name"}'
+```
+
+This will prompt for your password, where you should enter your Personal Access Token.
+
+# Personal access token
+
+cwd = /.env
+GITHUB_ACCESS_TOKEN={GITHUB_ACCESS_TOKEN}
+
+## Initializing and Pushing to the New Repository
+
+After creating the repository via any method above, you can initialize a local repository and push to it:
+
+```bash
+git init
+git add README.md
+git commit -m "first commit"
+git remote add origin git@github.com:vividwalls-studio/repo-name.git
+git push -u origin main
+```
+https://github.com/vividwalls-studio/vivid_mas#
+
+
+For existing repositories:
+
+```bash
+git remote add origin git@github.com:vividwalls-studio/repo-name.git
+git push -u origin main
+```
+
+## Working with Non-Standard SSH Ports
+
+If your SSH connection uses a non-standard port:
+
+```bash
+git remote add origin ssh://git@github.com:port-number/vividwalls-studio/repo-name.git
+```
+
+Location of SSD: /Users/kinglerbercy/.ssh/vividwalls_github
+
+## Troubleshooting Common Issues
+
+### Authentication Problems
+
+If you encounter "Bad credentials" errors:
+
+- Ensure your Personal Access Token has the correct scopes (typically "repo")
+- Check that your token hasn't expired
+- Verify you're using the token correctly in the command
+
+### Repository Not Found Error with GitHub CLI
+
+If you see "ERROR: Repository not found" after creating a repository with GitHub CLI:
+
+- This may be due to SSH key conflicts when using multiple identities
+- Try explicitly setting the SSH key for the operation:
+
+  ```bash
+  GIT_SSH_COMMAND="ssh -i ~/.ssh/specific_key" gh repo create
+  ```
+
+- Or ensure your SSH config properly routes to the correct key for github.com domains
+
+### Branch Name Issues
+
+If push fails with branch name errors:
+
+- Modern GitHub repositories default to "main" instead of "master"
+- Update your branch name if needed:
+
+  ```bash
+  git branch -M main
+  git push -u origin main
+  ```
+
+## Conclusion
+
+Creating GitHub repositories from the terminal offers powerful automation opportunities for developers. The GitHub CLI provides the most straightforward approach with built-in SSH support, while direct API calls with curl offer more customization options. Both methods can be effectively used with either SSH keys or Personal Access Tokens for authentication.
+
+For the Kingler GitHub account, ensure that the proper authentication is set up before attempting to create repositories, and consider using the GitHub CLI for the simplest experience.

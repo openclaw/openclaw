@@ -1,0 +1,278 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# VividWalls Shopify Integration Guidelines
+
+## **VividWalls Store Context**
+- **Store**: vividwalls-2.myshopify.com
+- **Product Focus**: Limited edition digital artwork with multiple size variants
+- **Key Theme**: Updated copy of Dawn (Theme ID: 172527026463)
+- **Integration**: MCP server with comprehensive theme development tools
+
+## **Product Structure Standards**
+- **Target Products**: 15 fixed products with 6-variant structure
+- **Variants**: 24x36, 36x48, 53x72 (Gallery Wrapped Canvas + Canvas Roll)
+- **Inventory Model**: Limited edition with 300 pieces per product
+- **SKU Pattern**: `PRODUCT-NAME-TYPE-SIZE` format
+- **Tags**: `limited-edition` for widget activation
+
+˚
+
+## **Custom Widget Implementation**
+
+### **VividWalls Inventory Widget**
+```liquid
+{% comment %} ✅ DO: Use for limited edition products {% endcomment %}
+{% if product.tags contains 'limited-edition' %}
+  {% render 'vividwalls-inventory-widget' %}
+{% endif %}
+
+{% comment %} ✅ DO: Include widget files {% endcomment %}
+<!-- snippets/vividwalls-inventory-widget.liquid -->
+<!-- sections/vividwalls-inventory.liquid -->
+<!-- snippets/vividwalls-inventory-api.liquid -->
+```
+
+### **Product Page Template**
+```liquid
+{% comment %} ✅ DO: Use custom VividWalls template {% endcomment %}
+{% comment %} File: templates/product.vividwalls.liquid {% endcomment %}
+{% section 'main-product-vividwalls' %}
+
+{% comment %} ✅ DO: Include CSS assets {% endcomment %}
+{{ 'vividwalls-product-page.css' | asset_url | stylesheet_tag }}
+```
+
+## **Design System Implementation**
+
+### **VividWalls Color Palette**
+```css
+/* ✅ DO: Use VividWalls design tokens */
+:root {
+  --vw-primary-bg: #fafafa;
+  --vw-text-primary: #000000;
+  --vw-text-secondary: #71717a;
+  --vw-text-muted: #525252;
+  --vw-button-primary: #262626;
+  --vw-button-secondary: #4f46e5;
+  --vw-container-max: 1658px;
+  --vw-content-max: 1100px;
+}
+```
+
+### **Typography Standards**
+```css
+/* ✅ DO: Use Inter font family */
+.vividwalls-theme {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ✅ DO: Responsive breakpoints */
+@media (max-width: 768px) { /* Mobile */ }
+@media (max-width: 1200px) { /* Tablet */ }
+@media (max-width: 1400px) { /* Desktop */ }
+```
+
+## **Inventory Management Integration**
+
+### **Inventory Import Process**
+```javascript
+// ✅ DO: Use production-ready inventory import
+// File: import-inventory-production.js
+const targetProducts = [
+  'vivid-mosaic-no4', 'purple-shade', 'emerald-shade',
+  'earthy-shade', 'rusty-shade', 'primary-hue',
+  'teal-earth', 'noir-structures', 'earth-echoes',
+  'emerald-echoes', 'noir-echoes', 'vista-echoes',
+  'space-form-no4', 'deep-echoes', 'intersecting-perspectives-no2'
+];
+
+// ✅ DO: Include safety features
+const REQUIRED_ENV = ['SHOPIFY_ACCESS_TOKEN', 'MYSHOPIFY_DOMAIN'];
+```
+
+### **GraphQL Inventory Updates**
+```graphql
+# ✅ DO: Use inventorySetOnHandQuantities mutation
+mutation InventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+  inventorySetOnHandQuantities(input: $input) {
+    inventoryAdjustmentGroup {
+      createdAt
+      reason
+      changes {
+        name
+        delta
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+```
+
+## **MCP Server Integration**
+
+### **Environment Configuration**
+```bash
+# ✅ DO: Set required environment variables
+export SHOPIFY_ACCESS_TOKEN="shpat_your_token_here"
+export MYSHOPIFY_DOMAIN="vividwalls-2.myshopify.com"
+export THEME_WORKSPACE="./themes"
+```
+
+### **Theme Development Tools**
+```bash
+# ✅ DO: Use comprehensive MCP tools
+theme-create --name "vividwalls-theme" --template "dawn"
+theme-file-write --directory "./themes/vividwalls" --filePath "snippets/vividwalls-inventory-widget.liquid"
+theme-file-create --fileType "section" --templateName "product-section"
+theme-search-replace --searchPattern "old-class" --replacement "vividwalls-class"
+```
+
+## **Deployment Workflows**
+
+### **Automated Deployment**
+```bash
+# ✅ DO: Use deployment scripts
+./scripts/deploy-inventory-widget.sh
+node scripts/deploy-vividwalls-product-page.js
+node import-inventory-production.js --execute
+```
+
+### **File Structure Management**
+```
+themes/vividwalls/
+├── assets/
+│   └── vividwalls-product-page.css
+├── sections/
+│   ├── main-product-vividwalls.liquid
+│   └── vividwalls-inventory.liquid
+├── snippets/
+│   ├── vividwalls-inventory-widget.liquid
+│   └── vividwalls-inventory-api.liquid
+└── templates/
+    └── product.vividwalls.liquid
+```
+
+## **Quality Assurance Standards**
+
+### **Testing Checklist**
+```liquid
+{% comment %} ✅ DO: Test URL patterns {% endcomment %}
+<!-- Test URLs with preview theme ID -->
+https://vividwalls-2.myshopify.com/products/product-handle?preview_theme_id=172527026463
+
+{% comment %} ✅ DO: Validate inventory widget functionality {% endcomment %}
+<!-- Check variant selection, pricing updates, add to cart -->
+```
+
+### **Validation Scripts**
+```javascript
+// ✅ DO: Use validation tools
+node inventory-import-plan.js // Read-only validation
+node scripts/test-theme-editing.js // Theme functionality tests
+```
+
+## **Troubleshooting Patterns**
+
+### **Template Assignment Issues**
+```liquid
+{% comment %} ✅ DO: Verify template assignment {% endcomment %}
+<!-- Check in Shopify Admin > Online Store > Themes > Customize -->
+<!-- Ensure "product.vividwalls" template is selected -->
+
+{% comment %} ❌ DON'T: Use default template for VividWalls products {% endcomment %}
+<!-- Products should use custom VividWalls template -->
+```
+
+### **Widget Integration Issues**
+```javascript
+// ✅ DO: Debug widget loading
+console.log('VividWalls widget loaded');
+// Check browser console for JavaScript errors
+// Verify CSS loading in Network tab
+```
+
+## **Performance Optimization**
+
+### **Asset Loading**
+```liquid
+{% comment %} ✅ DO: Optimize asset loading {% endcomment %}
+{{ 'vividwalls-product-page.css' | asset_url | stylesheet_tag: preload: true }}
+
+{% comment %} ✅ DO: Use responsive images {% endcomment %}
+{% assign image_sizes = '(max-width: 767px) 100vw, 715px' %}
+{{ product.featured_image | image_url: width: 1430 | image_tag: 
+   sizes: image_sizes,
+   widths: '358,715,1430',
+   loading: 'eager' }}
+```
+
+### **JavaScript Optimization**
+```javascript
+// ✅ DO: Use efficient DOM updates
+function updateInventoryDisplay(variantId, quantity) {
+  const widget = document.querySelector('[data-variant-id="' + variantId + '"]');
+  if (widget) {
+    widget.querySelector('.inventory-count').textContent = quantity;
+    widget.classList.toggle('low-stock', quantity < 4);
+    widget.classList.toggle('sold-out', quantity === 0);
+  }
+}
+```
+
+## **Security & Safety**
+
+### **Environment Protection**
+```bash
+# ✅ DO: Never commit credentials
+echo "SHOPIFY_ACCESS_TOKEN=*" >> .gitignore
+echo ".env" >> .gitignore
+```
+
+### **Production Safety**
+```javascript
+// ✅ DO: Use explicit execution flags
+if (!process.argv.includes('--execute')) {
+  console.log('This is a preview. Use --execute to make changes.');
+  return;
+}
+```
+
+## **Common Anti-Patterns**
+
+```liquid
+{% comment %} ❌ DON'T: Hardcode store-specific values {% endcomment %}
+<div data-store="vividwalls-2">
+
+{% comment %} ❌ DON'T: Skip inventory validation {% endcomment %}
+<!-- Always validate 300 pieces per product -->
+
+{% comment %} ❌ DON'T: Use generic templates for VividWalls products {% endcomment %}
+<!-- Use custom vividwalls template -->
+
+{% comment %} ❌ DON'T: Ignore limited edition tags {% endcomment %}
+<!-- Tags are crucial for widget functionality -->
+```
+
+## **Integration with VividMAS Platform**
+
+### **N8N Workflow Integration**
+- Real-time inventory sync workflows
+- Automated reorder triggers for low stock
+- Customer notification systems
+
+### **Database Integration**
+- PostgreSQL inventory tracking
+- Analytics and reporting capabilities
+- Multi-agent system coordination
+
+## **Success Metrics**
+- **Inventory Accuracy**: 300 pieces per product across 6 variants
+- **Widget Performance**: Real-time updates, mobile responsiveness
+- **Conversion Optimization**: Clear CTAs, trust signals
+- **Template Application**: 100% coverage for limited edition products

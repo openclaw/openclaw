@@ -1,0 +1,32 @@
+---
+description: Ensures proper test-driven development workflow is followed, with tests written before implementation and verified before committing code
+globs: *.ts, *.tsx, *.js, *.jsx, *.test.ts, *.test.tsx, *.test.js, *.test.jsx, *.spec.ts, *.spec.tsx, *.spec.js, *.spec.jsx, *.py, *_test.py, *_tests.py, test_*.py, tests_*.py
+alwaysApply: false
+---
+
+# STRICTLY FOLLOW RULE CONTENT
+
+## Test-First Development
+
+- Write tests before implementing functionality to ensure requirements are clearly understood
+- Run tests immediately after implementation to verify correctness
+- Verify all tests pass before committing code to any branch
+- Never merge code with failing tests into the main branch
+- Document test coverage gaps with TODOs for future implementation
+
+## Test Integrity
+
+- Never modify tests to make them pass by removing core functionality requirements
+- Do not implement adversarial techniques to force test success
+- Ensure tests accurately reflect the required functionality
+- If a test fails, fix the implementation, not the test expectations
+- Tests should verify real functionality, not implementation details
+- Maintain the original intent of tests even when refactoring
+
+## When Tests Persistently Fail
+
+- Document the issue with detailed analysis in code comments
+- Seek peer review before considering test modification
+- If test modification is necessary, ensure it still validates the original requirement
+- Create follow-up tasks to address underlying issues
+- Add comments explaining why a test was modified if changes were necessary

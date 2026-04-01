@@ -1,0 +1,130 @@
+---
+description: Use this rule for managing node.js dependency
+globs: 
+alwaysApply: false
+---
+ # Dependency Management Rules
+
+## Overview
+These rules ensure that any code generation involving external libraries triggers immediate dependency installation to prevent import errors and streamline testing.
+
+## Node.js Dependencies
+
+### Package Management
+1. When generating code with npm dependencies:
+   ```bash
+   # Check if package.json exists
+   if [ ! -f package.json ]; then
+     npm init -y
+   fi
+   
+   # Install dependencies immediately
+   npm install <package-name> --save
+   
+   # For dev dependencies
+   npm install <package-name> --save-dev
+   ```
+
+2. Version Specification:
+   - Always specify version constraints
+   - Use exact versions for critical dependencies
+   - Use caret (^) for flexible minor version updates
+   - Example: `"express": "^4.18.2"`
+
+3. Package Lock:
+   - Always commit package-lock.json
+   - Never modify package-lock.json manually
+   - Run `npm ci` for clean installs
+
+## Python Dependencies
+
+### Package Management
+1. When generating code with pip dependencies:
+   ```bash
+   # Check if requirements.txt exists
+   if [ ! -f requirements.txt ]; then
+     touch requirements.txt
+   fi
+   
+   # Install dependencies immediately
+   pip install <package-name>
+   
+   # Update requirements.txt
+   pip freeze > requirements.txt
+   ```
+
+2. Virtual Environment:
+   ```bash
+   # Create venv if not exists
+   if [ ! -d venv ]; then
+     python -m venv venv
+   fi
+   
+   # Activate venv
+   source venv/bin/activate  # Unix
+   # or
+   .\venv\Scripts\activate  # Windows
+   ```
+
+3. Version Specification:
+   - Use exact versions for reproducibility
+   - Example: `requests==2.31.0`
+
+## Implementation Guidelines
+
+### For Code Generation
+1. Pre-generation Checks:
+   - Verify package manager availability
+   - Check for existing dependency files
+   - Validate environment setup
+
+2. During Generation:
+   - Add imports at the top of files
+   - Document required dependencies
+   - Include version requirements
+
+3. Post-generation Actions:
+   - Auto-install dependencies
+   - Update lock files
+   - Verify installations
+
+### For Testing
+1. Before Tests:
+   - Verify all dependencies are installed
+   - Check for version conflicts
+   - Ensure virtual environment activation
+
+2. Test Environment:
+   - Use isolated test environments
+   - Include test-specific dependencies
+   - Maintain separate test requirements
+
+### Error Prevention
+1. Dependency Conflicts:
+   - Check for compatibility
+   - Resolve version conflicts
+   - Document breaking changes
+
+2. Missing Dependencies:
+   - Auto-detect missing imports
+   - Suggest installations
+   - Provide fallback options
+
+## Automation Scripts
+
+### Node.js
+```javascript
+// dependency-check.js
+const fs = require('fs');
+const { execSync } = require('child_process');
+
+function installNodeDependencies(dependencies) {
+  const pkgJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const newDeps = dependencies.filter(dep => !pkgJson.dependencies[dep]);
+  
+  if (newDeps.length > 0) {
+    execSync(`npm install ${newDeps.join(' ')} --save`);
+    console.log('Installed new dependencies:', newDeps);
+  }
+}
+```

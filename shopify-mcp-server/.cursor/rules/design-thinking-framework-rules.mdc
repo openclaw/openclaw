@@ -1,0 +1,260 @@
+---
+description: Design Thinking Framework Implementation Guide
+globs: 
+alwaysApply: false
+---
+# Design Thinking Framework Implementation Guide
+
+## AI Agent Quick Reference
+
+```yml
+name: design-thinking-framework
+description: Guide for implementing design thinking methodology in software development
+purpose: "Assist AI agents in applying design thinking principles to software solutions"
+application: "Use when approaching user-centered design challenges and solution development"
+```
+
+### Framework Overview for AI Agents
+This framework guides AI-driven design thinking processes. When to apply:
+- User-centered feature development
+- Interface design decisions
+- Solution ideation and validation
+- Iterative improvement cycles
+
+Key Principles:
+- Always start with user empathy
+- Maintain iterative approach
+- Validate assumptions through testing
+- Focus on tangible solutions
+
+## Implementation Components
+
+### Empathy Phase Components
+
+```yml
+empathy_components:
+  description: "Tools for understanding user needs and perspectives"
+  
+  components:
+    UserResearch:
+      description: "User behavior and needs analysis"
+      required: true
+      features:
+        - Behavioral analysis
+        - Need identification
+        - Pain point mapping
+        - Context understanding
+    
+    PersonaDevelopment:
+      description: "User persona creation and mapping"
+      required: true
+      features:
+        - Persona creation
+        - Empathy mapping
+        - Journey mapping
+        - Experience documentation
+```
+
+### Problem Definition Components
+
+```yml
+problem_definition:
+  description: "Tools for articulating user-centric problems"
+  
+  components:
+    ProblemStatement:
+      description: "Clear problem articulation"
+      required: true
+      features:
+        - User perspective focus
+        - Challenge identification
+        - Need clarification
+        - Opportunity mapping
+    
+    InsightGeneration:
+      description: "Research-based insight development"
+      required: true
+      features:
+        - Pattern recognition
+        - Insight extraction
+        - Opportunity identification
+        - Priority setting
+```
+
+### Ideation Components
+
+```yml
+ideation:
+  description: "Creative solution generation tools"
+  
+  components:
+    Brainstorming:
+      description: "Systematic idea generation"
+      required: true
+      features:
+        - Divergent thinking
+        - Solution exploration
+        - Innovation focus
+        - Creativity techniques
+    
+    IdeaRefinement:
+      description: "Solution convergence process"
+      required: true
+      features:
+        - Idea evaluation
+        - Solution prioritization
+        - Feasibility assessment
+        - Implementation planning
+```
+
+### Prototyping Components
+
+```yml
+prototyping:
+  description: "Solution visualization and testing tools"
+  
+  components:
+    PrototypeDevelopment:
+      description: "Rapid prototype creation"
+      required: true
+      features:
+        - Low-fidelity prototyping
+        - Quick visualization
+        - Concept testing
+        - Iterative refinement
+    
+    PrototypeIteration:
+      description: "Prototype refinement process"
+      required: true
+      features:
+        - Feedback incorporation
+        - Design improvement
+        - Solution validation
+        - Implementation testing
+```
+
+## Implementation Process
+
+### Empathy Phase Implementation
+
+```typescript
+interface EmpathyPhase {
+  userResearch: {
+    conductResearch(): ResearchFindings;
+    analyzeBehaviors(): BehaviorAnalysis;
+    mapPainPoints(): PainPointMap;
+  };
+  
+  personaDevelopment: {
+    createPersonas(): UserPersona[];
+    developEmpathyMaps(): EmpathyMap[];
+    documentJourneys(): UserJourney[];
+  };
+}
+```
+
+### Problem Definition Implementation
+
+```typescript
+interface ProblemDefinition {
+  problemStatement: {
+    defineChallenge(): ProblemStatement;
+    identifyNeeds(): UserNeeds[];
+    mapOpportunities(): Opportunity[];
+  };
+  
+  insightGeneration: {
+    extractInsights(): Insight[];
+    prioritizeFindings(): PrioritizedFindings;
+  };
+}
+```
+
+## Best Practices
+
+```yml
+best_practices:
+  empathy:
+    - Focus on user perspective
+    - Gather diverse feedback
+    - Document all observations
+    - Validate assumptions
+  
+  problem_definition:
+    - Clear articulation
+    - Evidence-based insights
+    - User-centered focus
+    - Measurable outcomes
+  
+  ideation:
+    - Encourage creativity
+    - Build on ideas
+    - Consider feasibility
+    - Document process
+  
+  prototyping:
+    - Start simple
+    - Iterate quickly
+    - Test early
+    - Gather feedback
+```
+
+## Validation Requirements
+
+```yml
+validation:
+  research:
+    - User feedback verification
+    - Data quality check
+    - Insight validation
+    - Assumption testing
+  
+  solutions:
+    - User need alignment
+    - Feasibility assessment
+    - Implementation viability
+    - Impact measurement
+```
+
+## Usage Examples
+
+1. Initialize Empathy Phase:
+```typescript
+const empathyPhase = new EmpathyPhase({
+  researchMethods: ['interviews', 'observation'],
+  documentationRequired: true
+});
+```
+
+2. Define Problem:
+```typescript
+const problemDefinition = new ProblemDefinition({
+  userInsights: researchFindings,
+  validationRequired: true
+});
+```
+
+3. Generate Solutions:
+```typescript
+const ideationPhase = new IdeationPhase({
+  brainstormingMethods: ['divergent', 'convergent'],
+  documentationRequired: true
+});
+```
+
+## Monitoring and Metrics
+
+```yml
+monitoring:
+  success_metrics:
+    - User satisfaction
+    - Solution effectiveness
+    - Implementation feasibility
+    - Iteration efficiency
+  
+  validation_metrics:
+    - Research quality
+    - Insight accuracy
+    - Solution viability
+    - User feedback
+```

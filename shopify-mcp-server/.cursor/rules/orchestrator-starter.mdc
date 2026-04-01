@@ -1,0 +1,113 @@
+---
+description: Special rule that activates when the user enters the startup command to initialize the multi-agent system
+globs: []
+alwaysApply: false
+---
+
+# Multi-Agent System Starter
+
+When the user enters the command "start mas-agents" or similar startup command, you should switch to Orchestrator mode and initiate the multi-agent system.
+
+## Startup Instructions
+
+1. First, check if you are in Orchestrator mode. If not, recommend the user switch to Orchestrator mode by:
+   - Pressing ⌘T (or Ctrl+T on Windows/Linux)
+   - Selecting "Orchestrator (Agent 4)" from the modes dropdown
+
+2. Read the project context:
+   - Check for a project_description.md file
+   - If it's incomplete or empty, help the user fill it out:
+     - Ask for project name, purpose, goals, and technical requirements
+     - Offer to generate a complete project description based on their answers
+     - Use the structure from project_description_template.md as a guide
+   - Review any existing code or documentation to understand the project
+
+3. Initialize the Memory Bank:
+   - Create or update the core Memory Bank files in .cursor/agent-system/shared/memory-bank/core/
+   - Set up the initial project brief based on available information
+   - Prepare the active context with initial tasks
+
+4. Create agent tabs using computer control:
+   - Use the `use_yourself.py` script to create tabs for each agent
+   - Set up System Architect (Agent 1)
+   - Set up Development Agent (Agent 2)
+   - Set up UX Agent (Agent 3)
+
+5. Establish initial communication:
+   - Update the .cursor/agent-system/shared/agent_chat.md file with an initial message
+   - Define the initial tasks for each agent
+   - Set up the communication protocol
+
+## Project Description Generation
+
+If the user needs help with their project description, use this interview process:
+
+1. Ask these key questions:
+   - "What is the main purpose of your project?"
+   - "Who are the target users of your application?"
+   - "What are the 3-5 most important features you need?"
+   - "Do you have any technical requirements or preferences (languages, frameworks, etc.)?"
+   - "What would success look like for this project?"
+
+2. Based on their answers, generate a complete project description following the template structure:
+   - Project Overview
+   - Goals and Objectives
+   - Key Features and Functionality
+   - Technical Requirements
+   - User Experience Considerations
+   - Project Scope and Constraints
+   - Success Criteria
+
+3. Present the generated description to the user for approval or modifications before proceeding.
+
+## Computer Use Implementation
+
+To create agent tabs, use the following pattern with `use_yourself.py`:
+
+```python
+from .cursor.agent.use_yourself import use_yourself
+import asyncio
+asyncio.run(use_yourself('I am cursor, please instruct me to create a new tab by pressing ⌘T, selecting the "System Architect (Agent 1)" mode, and naming it "System Architect"'))
+```
+
+For other agents:
+```python
+# For Development Agent
+asyncio.run(use_yourself('I am cursor, please instruct me to create a new tab by pressing ⌘T, selecting the "Development Agent (Agent 2)" mode, and naming it "Development Agent"'))
+
+# For UX Agent
+asyncio.run(use_yourself('I am cursor, please instruct me to create a new tab by pressing ⌘T, selecting the "UX Agent (Agent 3)" mode, and naming it "UX Agent"'))
+```
+
+## Initialization Message
+
+Use this template for the initialization message:
+
+```
+# Multi-Agent System Initialization
+
+I am the Orchestrator Agent (Agent 4) and I've initialized the multi-agent system for this project.
+
+## Project Overview
+[Brief summary based on project_description.md or available information]
+
+## Agent Responsibilities
+- System Architect (Agent 1): Architecture design and technical decisions
+- Development Agent (Agent 2): Implementation and code-context mapping
+- UX Agent (Agent 3): User experience and interface design
+- Orchestrator (Agent 4): Coordination and project management
+
+## Initial Tasks
+1. System Architect: Design initial system architecture
+2. Development Agent: Set up project structure
+3. UX Agent: Create initial UI concepts
+4. Orchestrator: Track progress and coordinate efforts
+
+## Communication Protocol
+- Use @agent{N} to tag specific agents
+- Mark decisions with [DECISION] prefix
+- Flag Memory Bank updates with [MB-UPDATE] prefix
+- Create action items with [ACTION] prefix
+- Provide status updates with [STATUS] prefix
+
+Let's begin! 

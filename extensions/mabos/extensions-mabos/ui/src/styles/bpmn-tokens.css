@@ -1,0 +1,57 @@
+@layer base {
+  :root {
+    /* ── BPMN Shape Colors ── */
+    --bpmn-event-start-bg: color-mix(in srgb, var(--accent-green) 12%, transparent);
+    --bpmn-event-start-border: var(--accent-green);
+    --bpmn-event-end-bg: color-mix(in srgb, var(--accent-red) 12%, transparent);
+    --bpmn-event-end-border: var(--accent-red);
+    --bpmn-event-intermediate-bg: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+    --bpmn-event-intermediate-border: var(--accent-blue);
+
+    --bpmn-task-bg: var(--bg-card);
+    --bpmn-task-border: var(--border-mabos);
+    --bpmn-task-hover: var(--border-hover);
+    --bpmn-task-selected: var(--accent-blue);
+
+    --bpmn-gateway-bg: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card));
+    --bpmn-gateway-border: var(--accent-orange);
+
+    --bpmn-subprocess-bg: var(--bg-secondary);
+    --bpmn-subprocess-border: var(--border-mabos);
+
+    --bpmn-pool-bg: var(--bg-primary);
+    --bpmn-pool-header: var(--bg-secondary);
+    --bpmn-pool-border: var(--border-mabos);
+
+    --bpmn-lane-border: color-mix(in srgb, var(--border-mabos) 60%, transparent);
+    --bpmn-lane-label-bg: var(--bg-secondary);
+
+    --bpmn-data-bg: var(--bg-card);
+    --bpmn-data-border: var(--text-muted);
+
+    --bpmn-annotation-color: var(--text-muted);
+
+    /* ── BPMN Flow Colors ── */
+    --bpmn-flow-sequence: var(--text-secondary);
+    --bpmn-flow-message: var(--accent-blue);
+    --bpmn-flow-association: var(--text-muted);
+    --bpmn-flow-default-marker: var(--text-muted);
+
+    /* ── BPMN Status Colors ── */
+    --bpmn-status-active: var(--accent-green);
+    --bpmn-status-completed: var(--accent-blue);
+    --bpmn-status-paused: var(--accent-orange);
+    --bpmn-status-pending: var(--text-muted);
+
+    /* ── BPMN Validation ── */
+    --bpmn-invalid-border: var(--accent-red);
+    --bpmn-invalid-bg: color-mix(in srgb, var(--accent-red) 8%, transparent);
+
+    /* ── BPMN Shape Sizes ── */
+    --bpmn-event-size: 40px;
+    --bpmn-task-w: 160px;
+    --bpmn-task-h: 80px;
+    --bpmn-gateway-size: 50px;
+    --bpmn-pool-header-w: 36px;
+  }
+}

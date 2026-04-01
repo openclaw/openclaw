@@ -1,0 +1,1202 @@
+---
+description: Use this rule when creating shopify themes
+globs: 
+alwaysApply: false
+---
+# Advanced Shopify Theme Development Guidelines
+
+## **Design System Integration Requirements**
+
+### **Design Thinking Framework Application**
+```javascript
+// ✅ DO: Apply design thinking methodology for UI decisions
+// Invoke: @design-thinking-framework-rules.mdc
+class ThemeDesignProcess {
+  constructor() {
+    this.empathyPhase = new EmpathyPhase();
+    this.problemDefinition = new ProblemDefinition();
+    this.ideationPhase = new IdeationPhase();
+    this.prototyping = new PrototypingPhase();
+  }
+  
+  async designFeature(featureRequirements) {
+    // 1. Empathy: Understand user needs
+    const userInsights = await this.empathyPhase.conductUserResearch(featureRequirements);
+    
+    // 2. Define: Articulate the problem
+    const problemStatement = await this.problemDefinition.defineChallenge(userInsights);
+    
+    // 3. Ideate: Generate solutions
+    const solutions = await this.ideationPhase.brainstormSolutions(problemStatement);
+    
+    // 4. Prototype: Create and test
+    const prototype = await this.prototyping.createPrototype(solutions);
+    
+    return prototype;
+  }
+}
+```
+
+### **Design Rubric Evaluation Standards**
+```javascript
+// ✅ DO: Evaluate all design decisions against comprehensive rubric
+// Invoke: @design-rubric-rule.mdc and @design-principle-rubric.mdc
+const DESIGN_EVALUATION_CRITERIA = {
+  informationArchitecture: {
+    weight: 1,
+    criteria: ['logical navigation', 'consistent categorization', 'clear pathways'],
+    minimumScore: 4 // Out of 5
+  },
+  visualDesign: {
+    weight: 1,
+    criteria: ['cohesive typography', 'color consistency', 'visual hierarchy'],
+    minimumScore: 4
+  },
+  interactionDesign: {
+    weight: 1,
+    criteria: ['discoverable elements', 'smooth transitions', 'predictable outcomes'],
+    minimumScore: 4
+  },
+  accessibility: {
+    weight: 1,
+    criteria: ['semantic HTML', 'color contrast', 'keyboard compatibility'],
+    minimumScore: 5 // Must be perfect
+  },
+  performance: {
+    weight: 1,
+    criteria: ['fast load times', 'responsive design', 'optimized assets'],
+    minimumScore: 4
+  }
+};
+
+// ✅ DO: Apply color palette evaluation
+const COLOR_EVALUATION = {
+  brandAlignment: 'A', // Colors masterfully reflect brand
+  contrastRatio: 'A',  // Optimal usability and accessibility
+  hierarchy: 'A',      // Clear visual hierarchy maintained
+  consistency: 'A'     // Consistent application across theme
+};
+```
+
+### **Atomic Design Token Implementation**
+```javascript
+// ✅ DO: Implement comprehensive design tokens using atomic methodology
+// Invoke: @design-system-token-gen-rules.mdc
+const SHOPIFY_DESIGN_TOKENS = {
+  // ATOMS: Fundamental values
+  atoms: {
+    color: {
+      primary: {
+        "50": { "$value": "#f0f9ff", "$type": "color" },
+        "500": { "$value": "#0ea5e9", "$type": "color" },
+        "900": { "$value": "#0c4a6e", "$type": "color" }
+      },
+      neutral: {
+        "100": { "$value": "#f5f5f5", "$type": "color" },
+        "900": { "$value": "#171717", "$type": "color" }
+      },
+      semantic: {
+        success: { "$value": "#10b981", "$type": "color" },
+        warning: { "$value": "#f59e0b", "$type": "color" },
+        error: { "$value": "#ef4444", "$type": "color" }
+      }
+    },
+    spacing: {
+      unit: { "$value": "8px", "$type": "dimension" },
+      scale: {
+        "xs": { "$value": "{atoms.spacing.unit}", "$type": "dimension" },
+        "sm": { "$value": "calc({atoms.spacing.unit} * 2)", "$type": "dimension" },
+        "md": { "$value": "calc({atoms.spacing.unit} * 3)", "$type": "dimension" },
+        "lg": { "$value": "calc({atoms.spacing.unit} * 4)", "$type": "dimension" },
+        "xl": { "$value": "calc({atoms.spacing.unit} * 6)", "$type": "dimension" }
+      }
+    },
+    typography: {
+      fontFamily: {
+        primary: { "$value": "system-ui, -apple-system, sans-serif", "$type": "fontFamily" },
+        secondary: { "$value": "Georgia, serif", "$type": "fontFamily" }
+      },
+      fontSize: {
+        "sm": { "$value": "14px", "$type": "dimension" },
+        "base": { "$value": "16px", "$type": "dimension" },
+        "lg": { "$value": "18px", "$type": "dimension" },
+        "xl": { "$value": "20px", "$type": "dimension" },
+        "2xl": { "$value": "24px", "$type": "dimension" }
+      }
+    }
+  },
+  
+  // MOLECULES: Component-level tokens
+  molecules: {
+    button: {
+      primary: {
+        background: {
+          "$value": {
+            "default": "{atoms.color.primary.500}",
+            "hover": "{atoms.color.primary.600}",
+            "active": "{atoms.color.primary.700}",
+            "disabled": "{atoms.color.neutral.300}"
+          },
+          "$type": "color"
+        },
+        padding: {
+          "$value": "{atoms.spacing.scale.sm} {atoms.spacing.scale.md}",
+          "$type": "dimension"
+        },
+        borderRadius: {
+          "$value": "4px",
+          "$type": "dimension"
+        }
+      }
+    },
+    input: {
+      border: {
+        "$value": {
+          "default": "1px solid {atoms.color.neutral.300}",
+          "focus": "2px solid {atoms.color.primary.500}",
+          "error": "2px solid {atoms.color.semantic.error}"
+        },
+        "$type": "border"
+      }
+    },
+    inventory: {
+      progress: {
+        background: {
+          "$value": {
+            "available": "{atoms.color.semantic.success}",
+            "low": "{atoms.color.semantic.warning}",
+            "soldOut": "{atoms.color.semantic.error}"
+          },
+          "$type": "color"
+        }
+      }
+    }
+  },
+  
+  // ORGANISMS: Complex component sections
+  organisms: {
+    header: {
+      background: {
+        "$value": {
+          "light": "{atoms.color.neutral.100}",
+          "dark": "{atoms.color.neutral.900}"
+        },
+        "$type": "color"
+      },
+      padding: {
+        "$value": "{atoms.spacing.scale.md} {atoms.spacing.scale.lg}",
+        "$type": "dimension"
+      }
+    },
+    productCard: {
+      spacing: {
+        "$value": "{atoms.spacing.scale.md}",
+        "$type": "dimension"
+      },
+      shadow: {
+        "$value": "0 4px 6px rgba(0, 0, 0, 0.1)",
+        "$type": "shadow"
+      }
+    }
+  },
+  
+  // TEMPLATES: Layout-level tokens
+  templates: {
+    layout: {
+      maxWidth: {
+        "$value": "1200px",
+        "$type": "dimension"
+      },
+      grid: {
+        columns: { "$value": 12, "$type": "number" },
+        gutter: { "$value": "{atoms.spacing.scale.md}", "$type": "dimension" }
+      }
+    }
+  }
+};
+```
+
+## **MCP Server Integration Architecture**
+
+### **Required MCP Servers**
+```json
+{
+  "shopify-mcp-server": {
+    "command": "node",
+    "args": ["/path/to/shopify-mcp-server/build/index.js"],
+    "env": {
+      "SHOPIFY_ACCESS_TOKEN": "your_access_token",
+      "MYSHOPIFY_DOMAIN": "your-store.myshopify.com"
+    }
+  },
+  "taskmaster-ai": {
+    "command": "npx",
+    "args": ["-y", "@taskmaster/mcp-server"]
+  },
+  "context7": {
+    "command": "npx", 
+    "args": ["-y", "@upstash/context7-mcp@latest"]
+  }
+}
+```
+
+### **Environment Configuration**
+```bash
+# ✅ DO: Set required environment variables
+export SHOPIFY_ACCESS_TOKEN="shpat_your_token_here"
+export MYSHOPIFY_DOMAIN="vividwalls-2.myshopify.com"
+export THEME_WORKSPACE="./themes"
+```
+
+## **Design-First Development Approach**
+
+### **Layout System Implementation**
+```css
+/* ✅ DO: Use design token-based CSS custom properties */
+/* Invoke: @design-system-token-gen-rules.mdc for token generation */
+:root {
+  /* Atomic Design Tokens - Generated from design system */
+  
+  /* ATOMS: Base Values */
+  --atoms-color-primary-500: #0ea5e9;
+  --atoms-color-neutral-100: #f5f5f5;
+  --atoms-color-neutral-900: #171717;
+  --atoms-spacing-unit: 8px;
+  --atoms-spacing-sm: calc(var(--atoms-spacing-unit) * 2);
+  --atoms-spacing-md: calc(var(--atoms-spacing-unit) * 3);
+  --atoms-typography-font-primary: system-ui, -apple-system, sans-serif;
+  
+  /* MOLECULES: Component Tokens */
+  --molecules-button-primary-bg: var(--atoms-color-primary-500);
+  --molecules-button-primary-padding: var(--atoms-spacing-sm) var(--atoms-spacing-md);
+  --molecules-inventory-available-color: #10b981;
+  --molecules-inventory-low-color: #f59e0b;
+  --molecules-inventory-sold-out-color: #ef4444;
+  
+  /* ORGANISMS: Section Tokens */
+  --organisms-header-bg-light: var(--atoms-color-neutral-100);
+  --organisms-header-bg-dark: var(--atoms-color-neutral-900);
+  --organisms-product-card-spacing: var(--atoms-spacing-md);
+  
+  /* TEMPLATES: Layout Tokens */
+  --templates-layout-max-width: 1200px;
+  --templates-grid-columns: 12;
+  --templates-grid-gutter: var(--atoms-spacing-md);
+}
+
+/* ✅ DO: Apply design rubric evaluation for layout decisions */
+/* Invoke: @design-principle-rubric.mdc for evaluation criteria */
+.theme-layout {
+  /* A-Grade Layout & Grid: Expertly executed grid usage */
+  max-width: var(--templates-layout-max-width);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(var(--templates-grid-columns), 1fr);
+  gap: var(--templates-grid-gutter);
+  
+  /* A-Grade Spacing & Alignment: Perfectly balanced layout */
+  padding: var(--atoms-spacing-md);
+}
+
+/* ✅ DO: Implement accessible color contrast (Accessibility: A-Grade) */
+.inventory-status {
+  /* Ensures WCAG 2.1 AA compliance minimum 4.5:1 contrast ratio */
+  &.available {
+    background-color: var(--molecules-inventory-available-color);
+    color: white; /* Contrast ratio: 4.9:1 ✓ */
+  }
+  
+  &.low-stock {
+    background-color: var(--molecules-inventory-low-color);
+    color: #1a1a1a; /* Contrast ratio: 8.2:1 ✓ */
+  }
+  
+  &.sold-out {
+    background-color: var(--molecules-inventory-sold-out-color);
+    color: white; /* Contrast ratio: 5.1:1 ✓ */
+  }
+}
+```
+
+### **Typography System with Design Tokens**
+```css
+/* ✅ DO: Implement A-Grade Typography with design tokens */
+/* Invoke: @design-principle-rubric.mdc for typography evaluation */
+.typography-system {
+  /* Base typography atoms */
+  font-family: var(--atoms-typography-font-primary);
+  line-height: 1.6; /* Optimal readability */
+  letter-spacing: -0.01em; /* Subtle kerning improvement */
+}
+
+/* Heading hierarchy using design tokens */
+.heading-1 {
+  font-size: var(--atoms-typography-size-2xl);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--atoms-spacing-md);
+  color: var(--atoms-color-neutral-900);
+}
+
+.heading-2 {
+  font-size: var(--atoms-typography-size-xl);
+  font-weight: 600;
+  line-height: 1.3;
+  margin-bottom: var(--atoms-spacing-sm);
+}
+
+.body-text {
+  font-size: var(--atoms-typography-size-base);
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--atoms-color-neutral-700);
+}
+```
+
+## **Inventory Management Patterns with Design Integration**
+
+### **Limited Edition Model Implementation**
+```javascript
+// ✅ DO: Use configurable inventory structures with design thinking
+// Invoke: @design-thinking-framework-rules.mdc for user-centered approach
+const INVENTORY_MODELS = {
+  limitedEdition: {
+    totalPerProduct: 100, // Configurable based on business model
+    trackingMethod: 'variant-level',
+    displayProgress: true,
+    showScarcity: true,
+    designTokens: {
+      progressBar: 'molecules-inventory-progress',
+      scarcityIndicator: 'molecules-inventory-scarcity',
+      statusColors: 'molecules-inventory-status'
+    }
+  },
+  standard: {
+    totalPerProduct: null, // Unlimited
+    trackingMethod: 'simple',
+    displayProgress: false,
+    showScarcity: false,
+    designTokens: {
+      statusIndicator: 'molecules-inventory-simple'
+    }
+  },
+  preOrder: {
+    totalPerProduct: 0, // Coming soon
+    trackingMethod: 'waitlist',
+    displayProgress: false,
+    showScarcity: false,
+    designTokens: {
+      waitlistIndicator: 'molecules-inventory-waitlist'
+    }
+  }
+};
+```
+
+### **Design Token-Based Inventory Widget Implementation**
+```liquid
+{% comment %} ✅ DO: Create flexible inventory widgets using design tokens {% endcomment %}
+{% comment %} Invoke: @design-system-token-gen-rules.mdc for token structure {% endcomment %}
+
+{% liquid
+  assign total_inventory = product.metafields.inventory.total | default: 100
+  assign current_inventory = product.variants.first.inventory_quantity
+  assign percentage = current_inventory | times: 100 | divided_by: total_inventory
+  assign status_class = 'available'
+  assign design_tokens_class = 'molecules-inventory-available'
+  
+  if percentage < 20
+    assign status_class = 'low'
+    assign design_tokens_class = 'molecules-inventory-low'
+  elsif percentage == 0
+    assign status_class = 'sold-out'
+    assign design_tokens_class = 'molecules-inventory-sold-out'
+  endif
+%}
+
+<div class="inventory-widget {{ design_tokens_class }}" 
+     data-inventory-model="{{ product.metafields.inventory.model | default: 'standard' }}"
+     data-total="{{ total_inventory }}"
+     data-current="{{ current_inventory }}">
+  
+  {% if product.metafields.inventory.model == 'limited-edition' %}
+    <!-- A-Grade Visual Hierarchy: Progress bar with design tokens -->
+    <div class="inventory-progress {{ status_class }}" 
+         style="--progress-percentage: {{ percentage }}%">
+      <div class="progress-bar">
+        <div class="progress-fill"></div>
+      </div>
+      <span class="inventory-text">{{ current_inventory }} of {{ total_inventory }} available</span>
+    </div>
+    
+    <!-- Scarcity indicators with proper color contrast -->
+    {% if percentage < 30 %}
+      <div class="scarcity-indicator {{ status_class }}">
+        <span class="scarcity-text">Only {{ current_inventory }} left!</span>
+      </div>
+    {% endif %}
+    
+  {% elsif product.metafields.inventory.model == 'scarcity' %}
+    <div class="inventory-simple {{ status_class }}">
+      <span class="status-indicator">
+        {% if current_inventory > 0 %}
+          In Stock ({{ current_inventory }} available)
+        {% else %}
+          Sold Out
+        {% endif %}
+      </span>
+    </div>
+  {% endif %}
+</div>
+
+<style>
+/* Design token-based styling with A-Grade evaluation standards */
+.inventory-widget {
+  /* ORGANISM: Complex component using design tokens */
+  padding: var(--organisms-product-card-spacing);
+  border-radius: 8px;
+  background: var(--atoms-color-neutral-50);
+  
+  /* A-Grade Accessibility: Proper semantic structure */
+  &[aria-label] {
+    /* Screen reader accessible */
+  }
+}
+
+.inventory-progress {
+  /* MOLECULE: Component-level design tokens */
+  &.available .progress-fill {
+    background-color: var(--molecules-inventory-available-color);
+  }
+  
+  &.low .progress-fill {
+    background-color: var(--molecules-inventory-low-color);
+  }
+  
+  &.sold-out .progress-fill {
+    background-color: var(--molecules-inventory-sold-out-color);
+  }
+}
+
+.progress-bar {
+  /* A-Grade Layout: Precisely aligned for maximum readability */
+  width: 100%;
+  height: 8px;
+  background-color: var(--atoms-color-neutral-200);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  /* A-Grade Performance: CSS transforms for smooth animations */
+  height: 100%;
+  width: var(--progress-percentage);
+  transition: width 0.3s ease-in-out;
+  transform: translateZ(0); /* Hardware acceleration */
+}
+
+.inventory-text {
+  /* A-Grade Typography: Optimal hierarchy and readability */
+  font-size: var(--atoms-typography-size-sm);
+  font-weight: 500;
+  color: var(--atoms-color-neutral-700);
+  margin-top: var(--atoms-spacing-xs);
+  display: block;
+}
+</style>
+```
+
+### **Real-Time Inventory Updates with Design Standards**
+```javascript
+// ✅ DO: Implement real-time inventory tracking with design evaluation
+// Invoke: @design-rubric-rule.mdc for interaction design standards
+class InventoryTracker {
+  constructor(productId, model = 'standard') {
+    this.productId = productId;
+    this.model = model;
+    this.updateInterval = model === 'limited-edition' ? 5000 : 30000;
+    this.designTokens = this.loadDesignTokens();
+  }
+  
+  loadDesignTokens() {
+    // Load design tokens for consistent styling
+    return {
+      colors: {
+        available: getComputedStyle(document.documentElement)
+          .getPropertyValue('--molecules-inventory-available-color'),
+        low: getComputedStyle(document.documentElement)
+          .getPropertyValue('--molecules-inventory-low-color'),
+        soldOut: getComputedStyle(document.documentElement)
+          .getPropertyValue('--molecules-inventory-sold-out-color')
+      },
+      spacing: {
+        unit: getComputedStyle(document.documentElement)
+          .getPropertyValue('--atoms-spacing-unit')
+      }
+    };
+  }
+  
+  async updateDisplay() {
+    try {
+      const inventory = await this.fetchInventory();
+      
+      // A-Grade Interaction Design: Smooth transitions and clear feedback
+      this.renderInventoryStatus(inventory);
+      
+      if (this.model === 'limited-edition') {
+        // A-Grade Performance: Optimized updates with design tokens
+        this.updateProgressBars(inventory);
+        this.updateScarcityIndicators(inventory);
+        
+        // A-Grade Accessibility: Screen reader announcements
+        this.announceInventoryChange(inventory);
+      }
+      
+      // Design rubric validation: Ensure consistent visual hierarchy
+      this.validateDesignStandards();
+      
+    } catch (error) {
+      console.error('Inventory update failed:', error);
+      this.showFallbackMessage();
+    }
+  }
+  
+  validateDesignStandards() {
+    // Invoke: @design-principle-rubric.mdc for validation
+    const elements = document.querySelectorAll('.inventory-widget');
+    elements.forEach(element => {
+      // Check color contrast ratios
+      this.validateColorContrast(element);
+      // Verify spacing consistency
+      this.validateSpacing(element);
+      // Ensure typography hierarchy
+      this.validateTypography(element);
+    });
+  }
+  
+  validateColorContrast(element) {
+    // A-Grade Accessibility: Ensure 4.5:1 minimum contrast ratio
+    const backgroundColor = getComputedStyle(element).backgroundColor;
+    const textColor = getComputedStyle(element).color;
+    const contrastRatio = this.calculateContrastRatio(backgroundColor, textColor);
+    
+    if (contrastRatio < 4.5) {
+      console.warn(`Insufficient color contrast: ${contrastRatio}:1`);
+      // Apply fallback colors with proper contrast
+      this.applyFallbackColors(element);
+    }
+  }
+}
+```
+
+## **GraphQL Integration Patterns with Design Context**
+
+### **Inventory Queries and Mutations**
+```graphql
+# ✅ DO: Use comprehensive inventory queries with design metadata
+query GetProductInventory($handle: String!) {
+  product(handle: $handle) {
+    id
+    title
+    totalInventory
+    variants(first: 50) {
+      edges {
+        node {
+          id
+          sku
+          inventoryQuantity
+          inventoryItem {
+            id
+            tracked
+          }
+        }
+      }
+    }
+    metafields(first: 20) {
+      edges {
+        node {
+          key
+          value
+          namespace
+        }
+      }
+    }
+  }
+}
+
+# ✅ DO: Include design system metadata in product updates
+mutation UpdateProductWithDesignTokens($input: ProductInput!) {
+  productUpdate(input: $input) {
+    product {
+      id
+      metafields(first: 20) {
+        edges {
+          node {
+            key
+            value
+            namespace
+          }
+        }
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+```
+
+### **Design Token Integration in GraphQL**
+```javascript
+// ✅ DO: Integrate design tokens with product data
+// Invoke: @design-system-token-gen-rules.mdc for token structure
+async function enhanceProductWithDesignTokens(productData) {
+  const designTokens = await loadDesignTokens();
+  
+  return {
+    ...productData,
+    designContext: {
+      inventoryModel: productData.metafields?.inventory?.model || 'standard',
+      colorTokens: {
+        primary: designTokens.molecules.inventory.progress.background.available,
+        warning: designTokens.molecules.inventory.progress.background.low,
+        danger: designTokens.molecules.inventory.progress.background.soldOut
+      },
+      spacingTokens: {
+        cardPadding: designTokens.organisms.productCard.spacing,
+        progressHeight: designTokens.molecules.inventory.progress.height
+      },
+      typographyTokens: {
+        priceFont: designTokens.atoms.typography.fontSize.lg,
+        statusFont: designTokens.atoms.typography.fontSize.sm
+      }
+    }
+  };
+}
+```
+
+## **Theme Development Tools Integration**
+
+### **MCP Theme Development Workflow with Design Standards**
+```bash
+# ✅ DO: Use comprehensive theme development tools with design validation
+# Invoke: @design-principle-rubric.mdc for quality standards
+theme-create --name "business-theme" --template "skeleton" --design-tokens
+theme-dev --directory "./themes/business-theme" --port 3000 --liveReload --design-validation
+theme-file-create --fileType "section" --templateName "inventory-section" --design-tokens
+theme-snippet-create --snippetName "inventory-widget" --parameters ["product", "model"] --accessibility-check
+theme-section-create --sectionName "product-inventory" --sectionType "dynamic" --design-evaluation
+```
+
+### **Automated Asset Management with Design Validation**
+```javascript
+// ✅ DO: Implement automated asset optimization with design standards
+// Invoke: @design-rubric-rule.mdc for comprehensive evaluation
+async function optimizeThemeAssets(directory) {
+  const tasks = [
+    { 
+      name: 'Design Token Validation', 
+      task: () => validateDesignTokens(directory),
+      rubricCriteria: ['consistency', 'accessibility', 'scalability']
+    },
+    { 
+      name: 'CSS Optimization', 
+      task: () => optimizeCSS(directory),
+      rubricCriteria: ['performance', 'maintainability']
+    },
+    { 
+      name: 'Typography Hierarchy Check', 
+      task: () => validateTypographyHierarchy(directory),
+      rubricCriteria: ['readability', 'hierarchy', 'accessibility']
+    },
+    { 
+      name: 'Color Contrast Validation', 
+      task: () => validateColorContrast(directory),
+      rubricCriteria: ['accessibility', 'usability']
+    },
+    { 
+      name: 'Layout Grid Verification', 
+      task: () => validateLayoutGrid(directory),
+      rubricCriteria: ['alignment', 'consistency', 'responsiveness']
+    },
+    { 
+      name: 'JavaScript Bundling', 
+      task: () => bundleJS(directory),
+      rubricCriteria: ['performance', 'maintainability']
+    },
+    { 
+      name: 'Image Compression', 
+      task: () => compressImages(directory),
+      rubricCriteria: ['performance', 'quality']
+    },
+    { 
+      name: 'SVG Optimization', 
+      task: () => optimizeSVGs(directory),
+      rubricCriteria: ['performance', 'accessibility']
+    }
+  ];
+  
+  const results = [];
+  for (const task of tasks) {
+    console.log(`🔧 ${task.name}...`);
+    
+    try {
+      const result = await task.task();
+      const rubricScore = await evaluateAgainstRubric(result, task.rubricCriteria);
+      
+      results.push({
+        task: task.name,
+        status: 'completed',
+        rubricScore,
+        result
+      });
+      
+      console.log(`✅ ${task.name} complete (Score: ${rubricScore.overall}/5)`);
+      
+      // Ensure minimum quality standards
+      if (rubricScore.overall < 4) {
+        console.warn(`⚠️ ${task.name} below quality threshold. Applying improvements...`);
+        await applyQualityImprovements(task, result);
+      }
+      
+    } catch (error) {
+      console.error(`❌ ${task.name} failed:`, error);
+      results.push({
+        task: task.name,
+        status: 'failed',
+        error: error.message
+      });
+    }
+  }
+  
+  return results;
+}
+
+// ✅ DO: Evaluate against design rubric standards
+async function evaluateAgainstRubric(result, criteria) {
+  // Invoke: @design-principle-rubric.mdc for evaluation
+  const rubricEvaluation = {
+    colorPalette: await evaluateColorPalette(result),
+    layoutGrid: await evaluateLayoutGrid(result),
+    typography: await evaluateTypography(result),
+    hierarchyNavigation: await evaluateHierarchy(result),
+    accessibility: await evaluateAccessibility(result),
+    spacingAlignment: await evaluateSpacing(result)
+  };
+  
+  const overall = Object.values(rubricEvaluation)
+    .reduce((sum, score) => sum + score, 0) / Object.keys(rubricEvaluation).length;
+  
+  return {
+    ...rubricEvaluation,
+    overall: Math.round(overall * 10) / 10
+  };
+}
+```
+
+## **Production-Ready Deployment Patterns with Design Validation**
+
+### **Environment-Specific Configuration with Design Standards**
+```javascript
+// ✅ DO: Use environment-aware deployment with design validation
+// Invoke: @design-rubric-rule.mdc for quality gates
+const DEPLOYMENT_CONFIG = {
+  development: {
+    themeId: null, // Create new theme
+    allowLive: false,
+    backup: true,
+    validation: true,
+    designValidation: {
+      rubricMinimumScore: 3,
+      accessibilityCompliance: 'WCAG-AA',
+      performanceThreshold: 85
+    }
+  },
+  staging: {
+    themeId: process.env.STAGING_THEME_ID,
+    allowLive: false,
+    backup: true,
+    validation: true,
+    designValidation: {
+      rubricMinimumScore: 4,
+      accessibilityCompliance: 'WCAG-AA',
+      performanceThreshold: 90
+    }
+  },
+  production: {
+    themeId: process.env.PRODUCTION_THEME_ID,
+    allowLive: true,
+    backup: true,
+    validation: true,
+    requireApproval: true,
+    designValidation: {
+      rubricMinimumScore: 4.5,
+      accessibilityCompliance: 'WCAG-AAA',
+      performanceThreshold: 95
+    }
+  }
+};
+```
+
+### **Comprehensive Testing Pipeline with Design Evaluation**
+```javascript
+// ✅ DO: Include comprehensive testing with design standards
+// Invoke: @design-principle-rubric.mdc and @design-rubric-rule.mdc
+async function runThemeTests(directory) {
+  const tests = [
+    {
+      name: 'Design Token Validation',
+      test: () => validateDesignTokenImplementation(directory),
+      rubricCriteria: ['consistency', 'scalability']
+    },
+    {
+      name: 'Liquid Syntax Validation',
+      test: () => validateLiquidSyntax(directory),
+      rubricCriteria: ['maintainability']
+    },
+    {
+      name: 'Inventory Widget Functionality',
+      test: () => testInventoryWidgets(directory),
+      rubricCriteria: ['usability', 'accessibility']
+    },
+    {
+      name: 'Design Rubric Evaluation',
+      test: () => runDesignRubricEvaluation(directory),
+      rubricCriteria: ['all']
+    },
+    {
+      name: 'Color Contrast Compliance',
+      test: () => testColorContrast(directory),
+      rubricCriteria: ['accessibility']
+    },
+    {
+      name: 'Typography Hierarchy',
+      test: () => testTypographyHierarchy(directory),
+      rubricCriteria: ['readability', 'hierarchy']
+    },
+    {
+      name: 'Layout Grid System',
+      test: () => testLayoutGrid(directory),
+      rubricCriteria: ['alignment', 'consistency']
+    },
+    {
+      name: 'Mobile Responsiveness',
+      test: () => testMobileLayout(directory),
+      rubricCriteria: ['responsiveness', 'usability']
+    },
+    {
+      name: 'Performance Metrics',
+      test: () => runPerformanceAudit(directory),
+      rubricCriteria: ['performance']
+    },
+    {
+      name: 'Accessibility Compliance',
+      test: () => runA11yTests(directory),
+      rubricCriteria: ['accessibility']
+    }
+  ];
+  
+  const results = [];
+  for (const test of tests) {
+    try {
+      const result = await test.test();
+      const rubricScore = await evaluateAgainstRubric(result, test.rubricCriteria);
+      
+      results.push({ 
+        name: test.name, 
+        status: 'passed', 
+        result,
+        rubricScore 
+      });
+      
+      // Ensure quality standards are met
+      if (rubricScore.overall < 4) {
+        console.warn(`⚠️ ${test.name} below quality threshold`);
+        // Trigger improvement recommendations
+        await generateImprovementRecommendations(test, result, rubricScore);
+      }
+      
+    } catch (error) {
+      results.push({ 
+        name: test.name, 
+        status: 'failed', 
+        error,
+        recommendedAction: await getFailureRecommendations(test, error)
+      });
+    }
+  }
+  
+  return results;
+}
+```
+
+## **Error Handling & Recovery with Design Considerations**
+
+### **Comprehensive Error Management**
+```javascript
+// ✅ DO: Implement robust error handling with design fallbacks
+// Invoke: @design-system-token-gen-rules.mdc for fallback tokens
+class ThemeDeploymentError extends Error {
+  constructor(message, code, recoverable = true, designImpact = false) {
+    super(message);
+    this.code = code;
+    this.recoverable = recoverable;
+    this.designImpact = designImpact;
+    this.timestamp = new Date().toISOString();
+    this.fallbackStrategy = this.determineFallbackStrategy();
+  }
+  
+  determineFallbackStrategy() {
+    if (this.designImpact) {
+      return {
+        useDesignTokenFallbacks: true,
+        applyMinimalViableDesign: true,
+        maintainAccessibility: true
+      };
+    }
+    return { useStandardFallbacks: true };
+  }
+}
+
+async function deployWithRecovery(operation, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await operation();
+      
+      // Validate design standards even on successful deployment
+      const designValidation = await validateDesignStandards(result);
+      if (designValidation.score < 4) {
+        console.warn(`⚠️ Design standards below threshold: ${designValidation.score}/5`);
+        await applyDesignImprovements(result, designValidation);
+      }
+      
+      console.log(`✅ Operation successful on attempt ${attempt}`);
+      return result;
+      
+    } catch (error) {
+      console.warn(`⚠️ Attempt ${attempt} failed: ${error.message}`);
+      
+      // Apply design fallbacks if needed
+      if (error.designImpact) {
+        await applyDesignFallbacks(error.fallbackStrategy);
+      }
+      
+      if (!error.recoverable || attempt === maxRetries) {
+        console.error(`❌ Operation failed permanently: ${error.message}`);
+        throw error;
+      }
+      
+      // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+    }
+  }
+}
+```
+
+## **Task Management Integration with Design Standards**
+
+### **TaskMaster AI Integration with Design Evaluation**
+```javascript
+// ✅ DO: Structure projects with TaskMaster and design validation
+// Invoke: @design-thinking-framework-rules.mdc for methodology
+async function initializeThemeProject(projectName, businessModel) {
+  // Initialize TaskMaster project with design thinking approach
+  await taskmaster.initializeProject({
+    projectName,
+    projectDescription: `Modern Shopify theme for ${businessModel} business with comprehensive design system`,
+    projectRoot: process.cwd()
+  });
+  
+  // Create design-focused task structure
+  const designTasks = [
+    {
+      title: 'Design Research & User Empathy',
+      description: 'Conduct user research using design thinking methodology',
+      framework: 'design-thinking-framework',
+      priority: 'high'
+    },
+    {
+      title: 'Design System & Token Architecture',
+      description: 'Implement atomic design tokens following DTCG standards',
+      framework: 'design-system-token-gen',
+      priority: 'high'
+    },
+    {
+      title: 'Environment Setup & MCP Configuration',
+      description: 'Configure development environment with design validation',
+      priority: 'medium'
+    },
+    {
+      title: 'Theme Foundation & Skeleton',
+      description: 'Implement skeleton theme with design token integration',
+      designStandards: 'rubric-evaluation-required',
+      priority: 'medium'
+    },
+    {
+      title: 'Component Library Development',
+      description: 'Create reusable components using atomic design methodology',
+      framework: 'design-system-token-gen',
+      priority: 'medium'
+    },
+    {
+      title: 'Product Page Optimization',
+      description: 'Implement product pages with inventory management and design excellence',
+      designEvaluation: 'comprehensive-rubric',
+      priority: 'medium'
+    },
+    {
+      title: 'Inventory Management System',
+      description: 'Advanced inventory tracking with design token integration',
+      designStandards: 'accessibility-first',
+      priority: 'medium'
+    },
+    {
+      title: 'Mobile Responsiveness & Performance',
+      description: 'Optimize for mobile with performance benchmarks',
+      designEvaluation: 'performance-accessibility',
+      priority: 'medium'
+    },
+    {
+      title: 'Design Quality Assurance',
+      description: 'Comprehensive design rubric evaluation and validation',
+      framework: 'design-principle-rubric',
+      priority: 'high'
+    },
+    {
+      title: 'Deployment & Launch Preparation',
+      description: 'Production deployment with design validation gates',
+      designStandards: 'production-ready',
+      priority: 'high'
+    }
+  ];
+  
+  for (const task of designTasks) {
+    await taskmaster.addTask({
+      prompt: `${task.title}: ${task.description}`,
+      priority: task.priority,
+      metadata: {
+        framework: task.framework,
+        designStandards: task.designStandards,
+        designEvaluation: task.designEvaluation
+      }
+    });
+  }
+  
+  // Add design validation checkpoints
+  await taskmaster.addTask({
+    prompt: 'Design Milestone 1: Complete design research and token architecture validation',
+    priority: 'high',
+    dependencies: ['1', '2'],
+    metadata: { checkpoint: 'design-foundation' }
+  });
+  
+  await taskmaster.addTask({
+    prompt: 'Design Milestone 2: Component library and page implementation validation',
+    priority: 'high',
+    dependencies: ['4', '5', '6'],
+    metadata: { checkpoint: 'implementation-quality' }
+  });
+  
+  await taskmaster.addTask({
+    prompt: 'Design Milestone 3: Final quality assurance and production readiness',
+    priority: 'high',
+    dependencies: ['8', '9'],
+    metadata: { checkpoint: 'production-ready' }
+  });
+}
+```
+
+## **Business Model Adaptations with Design Excellence**
+
+### **Flexible Inventory Models with Design Integration**
+```liquid
+{% comment %} ✅ DO: Support multiple business models with design token consistency {% endcomment %}
+{% comment %} Invoke: @design-system-token-gen-rules.mdc for token structure {% endcomment %}
+
+{% case product.metafields.business.model %}
+  {% when 'limited-edition' %}
+    {% render 'inventory-limited-edition', 
+       product: product,
+       design_tokens: 'molecules-inventory-limited',
+       accessibility_level: 'AA' %}
+       
+  {% when 'subscription' %}
+    {% render 'inventory-subscription', 
+       product: product,
+       design_tokens: 'molecules-inventory-subscription',
+       accessibility_level: 'AA' %}
+       
+  {% when 'pre-order' %}
+    {% render 'inventory-pre-order', 
+       product: product,
+       design_tokens: 'molecules-inventory-preorder',
+       accessibility_level: 'AA' %}
+       
+  {% when 'digital' %}
+    {% render 'inventory-digital', 
+       product: product,
+       design_tokens: 'molecules-inventory-digital',
+       accessibility_level: 'AA' %}
+       
+  {% else %}
+    {% render 'inventory-standard', 
+       product: product,
+       design_tokens: 'molecules-inventory-standard',
+       accessibility_level: 'AA' %}
+{% endcase %}
+```
+
+### **Configurable Features with Design Token Support**
+```javascript
+// ✅ DO: Use feature flags with design token integration
+// Invoke: @design-system-token-gen-rules.mdc for consistent theming
+const THEME_FEATURES = {
+  inventoryTracking: {
+    enabled: true,
+    models: ['standard', 'limited', 'subscription', 'digital'],
+    designTokens: {
+      standard: 'molecules-inventory-standard',
+      limited: 'molecules-inventory-limited',
+      subscription: 'molecules-inventory-subscription',
+      digital: 'molecules-inventory-digital'
+    },
+    accessibilityCompliance: 'WCAG-AA'
+  },
+  socialProof: {
+    enabled: true,
+    types: ['reviews', 'recent-purchases', 'visitor-count'],
+    designTokens: {
+      container: 'organisms-social-proof',
+      indicators: 'molecules-social-indicators'
+    },
+    rubricStandards: {
+      visualHierarchy: 'A',
+      accessibility: 'A'
+    }
+  },
+  urgencyIndicators: {
+    enabled: true,
+    triggers: ['low-stock', 'time-limited', 'high-demand'],
+    designTokens: {
+      urgent: 'molecules-urgency-high',
+      moderate: 'molecules-urgency-medium',
+      low: 'molecules-urgency-low'
+    },
+    designValidation: {
+      colorContrast: 'minimum-4.5-to-1',
+      readability: 'A-grade'
+    }
+  },
+  personalizedRecommendations: {
+    enabled: false,
+    provider: 'shopify', // or 'custom', 'third-party'
+    designTokens: {
+      container: 'organisms-recommendations',
+      cards: 'molecules-recommendation-card'
+    }
+  }
+};
+```
+
+This comprehensive framework now integrates all design-related cursor rules to ensure that every aspect of Shopify theme development follows design excellence standards, from atomic design tokens to comprehensive rubric evaluation, while maintaining the sophisticated inventory management and MCP server integration capabilities.

@@ -1,0 +1,211 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Multi-Agent System MCP Integration
+
+## Overview
+This rule defines how the VividWalls Multi-Agent System (MAS) integrates with Model Context Protocol (MCP) servers to provide enhanced capabilities to all agents.
+
+## Available MCP Servers for Agents
+
+### 🎨 Creative Services (Ports 8001-8010)
+- **Color Psychology MCP** (8001)
+  - Analyze artwork colors and psychological profiles
+  - Extract dominant colors from images
+  - Generate color palettes
+  - **Primary Agent**: UX Agent (Agent 3)
+  - **Secondary Agent**: Development Agent (Agent 2)
+
+### 📊 Analytics Services (Ports 8011-8020)
+- **KPI Dashboard MCP** (8002)
+  - Access business metrics and analytics
+  - Generate performance reports
+  - Track sales and customer data
+  - **Primary Agent**: Orchestrator (Agent 4)
+  - **Secondary Agent**: System Architect (Agent 1)
+
+### 🔍 Research Services (Ports 8021-8030)
+- **Tavily Research MCP** (8003)
+  - AI-powered web research
+  - Market analysis and trends
+  - **All Agents**: Can use for research
+  
+- **SEO Research MCP** (8004)
+  - Keyword analysis and SEO optimization
+  - Competitor tracking
+  - **Primary Agent**: UX Agent (Agent 3)
+  - **Secondary Agent**: Development Agent (Agent 2)
+
+### 📱 Social Media Services (Ports 8031-8040)
+- **Facebook Ads MCP** (8005)
+  - Campaign management and analytics
+  - **Primary Agent**: Orchestrator (Agent 4)
+  
+- **Pinterest MCP** (8006)
+  - Content and board management
+  - **Primary Agent**: UX Agent (Agent 3)
+
+### 🏪 Core Business Services (Ports 8041-8050)
+- **Shopify MCP** (8007)
+  - E-commerce operations
+  - Product and order management
+  - **Primary Agent**: Development Agent (Agent 2)
+  - **Secondary Agent**: System Architect (Agent 1)
+  
+- **WordPress MCP** (8008)
+  - Content management
+  - **Primary Agent**: UX Agent (Agent 3)
+  
+- **Email Marketing MCP** (8009)
+  - Campaign management
+  - **Primary Agent**: Orchestrator (Agent 4)
+
+## Agent Usage Guidelines
+
+### System Architect (Agent 1)
+When designing system architecture:
+```javascript
+// Research best practices for architecture patterns
+const research = await callMCPService('tavily_research', '/research', 'POST', {
+  query: 'microservices architecture best practices 2024'
+});
+
+// Check current system performance
+const metrics = await callMCPService('kpi_dashboard', '/metrics', 'GET', {
+  period: 'last_30_days',
+  metrics: ['api_response_time', 'error_rate']
+});
+```
+
+### Development Agent (Agent 2)
+When implementing features:
+```javascript
+// Check Shopify product structure
+const products = await callMCPService('shopify', '/products', 'GET');
+
+// Analyze color requirements for UI
+const colorAnalysis = await callMCPService('color_psychology', '/analyze', 'POST', {
+  image_path: '/design/mockup.png'
+});
+```
+
+### UX Agent (Agent 3)
+When designing user interfaces:
+```javascript
+// Analyze artwork for color inspiration
+const colors = await callMCPService('color_psychology', '/analyze', 'POST', {
+  image_path: '/artwork/sample.jpg'
+});
+
+// Research UI trends
+const trends = await callMCPService('seo_research', '/keywords', 'POST', {
+  target: 'modern UI design trends'
+});
+
+// Check Pinterest for design inspiration
+const pins = await callMCPService('pinterest', '/boards', 'GET', {
+  query: 'abstract art gallery websites'
+});
+```
+
+### Orchestrator Agent (Agent 4)
+When managing projects:
+```javascript
+// Monitor business metrics
+const kpis = await callMCPService('kpi_dashboard', '/metrics', 'GET', {
+  period: 'current_quarter'
+});
+
+// Check marketing campaign performance
+const campaigns = await callMCPService('facebook_ads', '/campaigns', 'GET');
+
+// Schedule email updates
+const emailCampaign = await callMCPService('email_marketing', '/campaigns', 'POST', {
+  template: 'weekly_update',
+  list: 'stakeholders'
+});
+```
+
+## Integration with n8n Workflows
+
+Agents can trigger n8n workflows that utilize MCP servers:
+
+### Service Discovery
+```javascript
+// In any agent context
+const serviceConfig = {
+  "color_psychology": "http://host.docker.internal:8001",
+  "kpi_dashboard": "http://host.docker.internal:8002",
+  "tavily_research": "http://host.docker.internal:8003",
+  "seo_research": "http://host.docker.internal:8004",
+  "facebook_ads": "http://host.docker.internal:8005",
+  "pinterest": "http://host.docker.internal:8006",
+  "shopify": "http://host.docker.internal:8007",
+  "wordpress": "http://host.docker.internal:8008",
+  "email_marketing": "http://host.docker.internal:8009"
+};
+```
+
+### Error Handling
+All agents should implement proper error handling when calling MCP services:
+```javascript
+try {
+  const result = await callMCPService(service, endpoint, method, payload);
+  // Process result
+} catch (error) {
+  console.error(`MCP service ${service} failed:`, error);
+  // Fallback logic or notify orchestrator
+}
+```
+
+## Communication About MCP Usage
+
+When agents use MCP services, they should communicate in agent_chat.md:
+
+```
+[MCP-USE] @agent4 Used color_psychology MCP to analyze artwork
+Service: color_psychology
+Endpoint: /analyze
+Purpose: Extract color palette for new design
+Result: 5 dominant colors identified, primary: #181e14
+```
+
+## MCP Service Health Monitoring
+
+The Orchestrator should periodically check MCP service health:
+
+```javascript
+// Run health check every hour
+const healthStatus = await checkMCPHealth();
+if (healthStatus.some(s => s.status === 'unhealthy')) {
+  // Alert agents about service issues
+  console.warn('MCP services with issues:', 
+    healthStatus.filter(s => s.status === 'unhealthy')
+  );
+}
+```
+
+## Security Considerations
+
+1. **Internal Access Only**: MCP services are only accessible internally via Docker network
+2. **External Access**: Through Caddy reverse proxy with proper authentication
+3. **Input Validation**: All agents must validate inputs before sending to MCP services
+4. **Rate Limiting**: Respect rate limits to prevent service overload
+
+## Best Practices for Agents
+
+1. **Cache Results**: Cache frequently accessed data to reduce MCP calls
+2. **Batch Requests**: Combine multiple related requests when possible
+3. **Document Usage**: Log all MCP interactions for debugging
+4. **Share Insights**: Share useful MCP results with other agents via Memory Bank
+5. **Error Recovery**: Implement graceful degradation when services are unavailable
+
+## Integration with Memory Bank
+
+MCP results should be stored in appropriate Memory Bank files:
+- Research results → `techContext.md` or `productContext.md`
+- Analytics data → `progress.md`
+- Design insights → `productContext.md`
+- System metrics → `systemPatterns.md`

@@ -1,0 +1,339 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Digital Ocean Droplet SSH Management
+
+This rule provides guidelines for securely connecting to and managing Digital Ocean droplets via SSH, including key management, connection patterns, and common administrative tasks.
+
+## **SSH Key Configuration**
+
+### **1. Multiple SSH Keys Setup**
+- **Store keys in organized structure:**
+  ```bash
+  ~/.ssh/digitalocean          # For Digital Ocean droplets
+  ~/.ssh/digitalocean.pub      # Public key
+  ~/.ssh/github_personal       # For personal GitHub
+  ~/.ssh/github_work          # For work GitHub
+  ```
+
+### When prompt to enter the users passphrase enter the following  
+
+To log in to a DigitalOcean Droplet using SSH from your terminal, you need the following:
+
+- The Droplet’s IP address
+- The username (default is usually root)
+- Your SSH private key (if using SSH key authentication) or the password (if using password authentication)
+
+The basic SSH command is:
+
+```
+ssh username@droplet_ip
+```
+
+For most new DigitalOcean Droplets, the default username is root, so the command typically looks like:
+
+```
+ssh root@your_droplet_ip
+```
+Replace `your_droplet_ip` with your actual Droplet’s IP address.
+
+If you are using an SSH key that is not the default, specify the private key file with the `-i` option:
+
+```
+ssh -i /Users/kinglerbercy/.ssh/digitalocean root@157.230.13.13
+```
+Replace `/path/to/private_key` with the path to your SSH private key file[2][8].
+
+- Used password authentication, you’ll be prompted for the password after running the command.
+- Use configured SSH keys, you’ll be logged in without a password prompt
+
+**Summary Table**
+
+| Scenario                   | Example Command                                     |
+|----------------------------|----------------------------------------------------|
+| Default (root, no key)     | `ssh root@your_droplet_ip`                         |
+| With custom user           | `ssh your_username@your_droplet_ip`                |
+| With SSH key               | `ssh -i /path/to/private_key root@your_droplet_ip` |
+
+
+```bash
+Enter passphrase for key '/Users/kinglerbercy/.ssh/digitalocean': freedom
+```
+
+- **Set proper permissions:**
+  ```bash
+  chmod 600 ~/.ssh/digitalocean
+  chmod 644 ~/.ssh/digitalocean.pub
+  ```
+
+### **2. SSH Config File Setup**
+- **Create `~/.ssh/config` for easier connections:**
+  ```bash
+  # Digital Ocean Droplets
+  Host do-production
+      HostName 157.230.13.13
+      User root
+      IdentityFile ~/.ssh/digitalocean
+      StrictHostKeyChecking no
+      UserKnownHostsFile /dev/null
+
+  Host do-staging
+      HostName 167.172.123.456
+      User vivid
+      IdentityFile ~/.ssh/digitalocean
+      Port 22
+  ```
+
+## **Connection Patterns**
+
+### **3. Basic SSH Connections**
+- **Direct connection:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@157.230.13.13
+  ```
+
+- **Using SSH config:**
+  ```bash
+  ssh do-production
+  ```
+
+- **With specific user:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean vivid@157.230.13.13
+  ```
+
+### **4. SSH Command Execution**
+- **Single command execution:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@157.230.13.13 "docker ps"
+  ```
+
+- **Multiple commands:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@157.230.13.13 "cd /app && docker-compose ps && df -h"
+  ```
+
+- **Commands with user switching:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@157.230.13.13 "su - vivid -c 'cd vivid_mas && docker ps'"
+  ```
+
+## **File Transfer Operations**
+
+### **5. SCP File Transfers**
+- **Upload files:**
+  ```bash
+  scp -i ~/.ssh/digitalocean deploy-script.sh root@157.230.13.13:~/
+  scp -i ~/.ssh/digitalocean -r ./config-dir root@157.230.13.13:/opt/
+  ```
+
+- **Download files:**
+  ```bash
+  scp -i ~/.ssh/digitalocean root@157.230.13.13:~/logs.tar.gz ./
+  ```
+
+- **With SSH config:**
+  ```bash
+  scp deploy-script.sh do-production:~/
+  ```
+
+### **6. RSYNC for Large Transfers**
+- **Sync directories:**
+  ```bash
+  rsync -avz -e "ssh -i ~/.ssh/digitalocean" ./app/ root@157.230.13.13:/opt/app/
+  ```
+
+## **Common Management Tasks**
+
+### **7. System Administration**
+- **Check system status:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "systemctl status docker && df -h && free -m"
+  ```
+
+- **Update system packages:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "apt update && apt upgrade -y"
+  ```
+
+- **Monitor system resources:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "htop"
+  ```
+
+### **8. Docker Management**
+- **Check container status:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+  ```
+
+- **View logs:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "docker logs container-name --tail 100 -f"
+  ```
+
+- **Restart services:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "cd /app && docker-compose restart"
+  ```
+
+### **9. User Management**
+- **Create non-root user:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "adduser --disabled-password --gecos '' username"
+  ssh -i ~/.ssh/digitalocean root@$IP "usermod -aG sudo username"
+  ```
+
+- **Setup passwordless sudo:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "echo 'username ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/username"
+  ```
+
+## **Security Best Practices**
+
+### **10. Connection Security**
+- **Always use specific SSH keys:**
+  ```bash
+  # ✅ DO: Use specific key
+  ssh -i ~/.ssh/digitalocean root@$IP
+  
+  # ❌ DON'T: Rely on default keys
+  ssh root@$IP
+  ```
+
+- **Disable password authentication:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config"
+  ```
+
+### **11. Firewall Configuration**
+- **Setup UFW firewall:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "ufw allow ssh && ufw allow 80 && ufw allow 443 && ufw --force enable"
+  ```
+
+- **Allow specific ports:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "ufw allow 3000 && ufw allow 5678"
+  ```
+
+## **Deployment Automation**
+
+### **12. Deployment Scripts**
+- **Create deployment script template:**
+  ```bash
+  #!/bin/bash
+  set -e
+  
+  DROPLET_IP="157.230.13.13"
+  SSH_KEY="~/.ssh/digitalocean"
+  
+  echo "🚀 Deploying to $DROPLET_IP..."
+  
+  # Upload files
+  scp -i $SSH_KEY deploy-files.tar.gz root@$DROPLET_IP:~/
+  
+  # Execute deployment
+  ssh -i $SSH_KEY root@$DROPLET_IP "
+    cd /app &&
+    tar -xzf ~/deploy-files.tar.gz &&
+    docker-compose down &&
+    docker-compose up -d &&
+    echo 'Deployment complete!'
+  "
+  ```
+
+### **13. Environment Variables**
+- **Set common variables:**
+  ```bash
+  export DO_SSH_KEY="~/.ssh/digitalocean"
+  export DO_DROPLET_IP="157.230.13.13"
+  export DO_USER="vivid"
+  ```
+
+## **Monitoring and Maintenance**
+
+### **14. Health Checks**
+- **Service health check script:**
+  ```bash
+  #!/bin/bash
+  ssh -i ~/.ssh/digitalocean root@$IP "
+    echo '=== System Status ==='
+    uptime
+    echo '=== Disk Usage ==='
+    df -h
+    echo '=== Memory Usage ==='
+    free -m
+    echo '=== Docker Status ==='
+    docker ps --format 'table {{.Names}}\t{{.Status}}'
+  "
+  ```
+
+### **15. Log Management**
+- **Collect logs:**
+  ```bash
+  ssh -i ~/.ssh/digitalocean root@$IP "journalctl -u docker --since '1 hour ago' > /tmp/docker.log"
+  scp -i ~/.ssh/digitalocean root@$IP:/tmp/docker.log ./logs/
+  ```
+
+## **Troubleshooting**
+
+### **16. Common Issues**
+- **Permission denied:**
+  ```bash
+  # Check key permissions
+  ls -la ~/.ssh/digitalocean
+  chmod 600 ~/.ssh/digitalocean
+  ```
+
+- **Host key verification:**
+  ```bash
+  # Remove old host key
+  ssh-keygen -R 157.230.13.13
+  ```
+
+- **Connection timeout:**
+  ```bash
+  # Test with verbose output
+  ssh -v -i ~/.ssh/digitalocean root@157.230.13.13
+  ```
+
+### **17. Emergency Access**
+- **Digital Ocean Console Access:**
+  - Use DO web console if SSH fails
+  - Reset root password via DO control panel
+  - Rebuild droplet if necessary
+
+## **Best Practices Summary**
+
+- **Always specify SSH keys explicitly**
+- **Use SSH config for frequently accessed droplets**
+- **Create non-root users for regular operations**
+- **Set up proper firewall rules**
+- **Regularly update system packages**
+- **Monitor resource usage**
+- **Backup important data regularly**
+- **Use deployment scripts for consistency**
+- **Test connections before critical operations**
+- **Keep SSH keys secure and backed up**
+
+## **Quick Reference Commands**
+
+```bash
+# Connect to droplet
+ssh -i ~/.ssh/digitalocean root@$IP
+
+# Check system status
+ssh -i ~/.ssh/digitalocean root@$IP "systemctl status docker && df -h"
+
+# Upload file
+scp -i ~/.ssh/digitalocean file.txt root@$IP:~/
+
+# Run docker commands
+ssh -i ~/.ssh/digitalocean root@$IP "docker ps && docker-compose logs"
+
+# Create user and setup sudo
+ssh -i ~/.ssh/digitalocean root@$IP "adduser username && usermod -aG sudo username"
+```

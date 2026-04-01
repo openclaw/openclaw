@@ -1,0 +1,17 @@
+---
+description: Docker rules to execute automatically and conditionaly
+globs: 
+---
+
+# Docker Rules
+Docker rules to execute automatically and conditionaly
+
+## Rule 1
+
+Automatically run 
+```bash 
+docker compose down && docker compose up -d 
+```
+to rebuild containers when you make changes to the [docker-compose.yml](mdc:docker-compose.yml)  configuation file
+
+## Rule 2

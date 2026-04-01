@@ -1,0 +1,282 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Shopify Theme Development Guidelines
+
+## **Project Initialization**
+- **Use Shopify Skeleton Theme as Foundation**: Always start with [skeleton-theme](https://github.com/Shopify/skeleton-theme.git) for new projects
+- **Development Environment Setup**:
+  ```bash
+  # Initialize theme
+  shopify theme init my-theme-name
+  cd my-theme-name
+  
+  # Start development server
+  shopify theme dev --store {store-name}
+  
+  # Preview at http://127.0.0.1:9292
+  ```
+- **Required Tools**: Shopify CLI, VS Code with Shopify Liquid extension
+- **MCP Server Integration**: Use shopify-mcp-server for store connection and API operations
+
+## **Theme Architecture Standards**
+- **Follow Skeleton Theme Structure**:
+  ```
+  ├── assets/          # Static assets (CSS, JS, images, fonts)
+  ├── blocks/          # Reusable, nestable UI components  
+  ├── config/          # Global theme settings
+  ├── layout/          # Top-level page wrappers
+  ├── locales/         # Translation files
+  ├── sections/        # Modular full-width components
+  ├── snippets/        # Reusable Liquid/HTML fragments
+  └── templates/       # Page structure definitions (JSON templates)
+  ```
+
+## **Component Development**
+- **Sections with Schema**:
+  ```liquid
+  {% comment %} ✅ DO: Include comprehensive schema {% endcomment %}
+  <section class="hero {{ section.settings.layout }}" style="--gap: {{ section.settings.gap }}px">
+    <!-- Section content -->
+  </section>
+
+  {% schema %}
+  {
+    "name": "Hero Section",
+    "settings": [
+      {
+        "type": "select",
+        "id": "layout",
+        "label": "Layout",
+        "options": [
+          { "value": "hero--full-width", "label": "Full Width" },
+          { "value": "hero--narrow", "label": "Narrow" }
+        ],
+        "default": "hero--full-width"
+      },
+      {
+        "type": "range",
+        "id": "gap",
+        "label": "Gap",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "unit": "px",
+        "default": 20
+      }
+    ],
+    "blocks": [
+      {
+        "type": "heading",
+        "name": "Heading",
+        "settings": [
+          {
+            "type": "text",
+            "id": "title",
+            "label": "Title"
+          }
+        ]
+      }
+    ],
+    "presets": [
+      {
+        "name": "Hero Section",
+        "blocks": [
+          {
+            "type": "heading"
+          }
+        ]
+      }
+    ]
+  }
+  {% endschema %}
+  ```
+
+- **Blocks Structure**:
+  ```liquid
+  {% comment %} ✅ DO: Create flexible, reusable blocks {% endcomment %}
+  <div class="block-{{ block.type }} {{ block.settings.alignment }}">
+    {% case block.type %}
+      {% when 'heading' %}
+        <h{{ block.settings.heading_level }} class="heading">
+          {{ block.settings.title }}
+        </h{{ block.settings.heading_level }}>
+      {% when 'text' %}
+        <div class="text-content">
+          {{ block.settings.content }}
+        </div>
+    {% endcase %}
+  </div>
+  ```
+
+## **CSS & JavaScript Best Practices**
+- **Use Embedded Styles**: Prefer `{% stylesheet %}` and `{% javascript %}` tags
+- **Critical CSS Separation**:
+  ```liquid
+  {% comment %} ✅ DO: Separate critical CSS {% endcomment %}
+  {{ 'critical.css' | asset_url | stylesheet_tag }}
+  
+  {% stylesheet %}
+    /* Component-specific styles */
+    .hero {
+      /* Essential styles */
+    }
+  {% endstylesheet %}
+  ```
+
+- **CSS Variable Usage**:
+  ```liquid
+  {% comment %} ✅ DO: Use CSS variables for single properties {% endcomment %}
+  <div style="--primary-color: {{ settings.primary_color }}; --font-size: {{ settings.font_size }}px">
+  
+  {% stylesheet %}
+    .component {
+      color: var(--primary-color);
+      font-size: var(--font-size);
+    }
+  {% endstylesheet %}
+  ```
+
+- **CSS Classes for Multiple Properties**:
+  ```liquid
+  {% comment %} ✅ DO: Use classes for complex styling {% endcomment %}
+  <div class="layout {{ section.settings.layout_type }}">
+  
+  {% stylesheet %}
+    .layout--grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+    
+    .layout--flex {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+  {% endstylesheet %}
+  ```
+
+## **Modern UX/UI Standards**
+- **Responsive Design**:
+  ```css
+  /* ✅ DO: Mobile-first approach */
+  .component {
+    /* Mobile styles */
+  }
+  
+  @media (min-width: 768px) {
+    .component {
+      /* Tablet styles */
+    }
+  }
+  
+  @media (min-width: 1024px) {
+    .component {
+      /* Desktop styles */
+    }
+  }
+  ```
+
+- **Performance Optimizations**:
+  ```liquid
+  {% comment %} ✅ DO: Optimize images with responsive loading {% endcomment %}
+  {% assign image_sizes = '(max-width: 767px) 100vw, (max-width: 1023px) 50vw, 33vw' %}
+  {{ product.featured_image | image_url: width: 800 | image_tag: 
+     loading: 'lazy', 
+     sizes: image_sizes,
+     widths: '300,600,800,1200' }}
+  ```
+
+- **Accessibility Standards**:
+  ```liquid
+  {% comment %} ✅ DO: Include proper ARIA labels and semantic HTML {% endcomment %}
+  <button type="button" 
+          aria-expanded="false" 
+          aria-controls="mobile-menu"
+          aria-label="Toggle navigation menu">
+    <span class="sr-only">Menu</span>
+  </button>
+  ```
+
+## **Task Management Integration**
+- **Use TaskMaster MCP**: Break down theme development into manageable tasks
+- **Task Structure Example**:
+  ```
+  1. Theme Setup & Configuration
+     1.1. Initialize skeleton theme
+     1.2. Configure development environment
+     1.3. Set up MCP server connections
+  
+  2. Design System Implementation
+     2.1. Create color palette variables
+     2.2. Define typography system
+     2.3. Build component library
+  
+  3. Section Development
+     3.1. Header & navigation
+     3.2. Hero sections
+     3.3. Product showcase
+     3.4. Footer
+  ```
+
+## **Store Integration**
+- **Shopify MCP Server Usage**:
+  - Connect to store via environment variables
+  - Use for product data fetching
+  - Theme installation and management
+  - Real-time preview and testing
+
+## **Quality Assurance**
+- **Code Validation**:
+  ```bash
+  # Theme check validation
+  shopify theme check
+  
+  # Performance testing
+  shopify theme dev --store {store} --host 0.0.0.0
+  ```
+
+- **Testing Checklist**:
+  - Cross-browser compatibility (Chrome, Firefox, Safari, Edge)
+  - Mobile responsiveness (iOS, Android)
+  - Page speed optimization
+  - Accessibility compliance (WCAG 2.1)
+  - SEO optimization
+
+## **Deployment Standards**
+- **Staging Process**:
+  ```bash
+  # Push to development theme
+  shopify theme push --development
+  
+  # Publish to live store
+  shopify theme publish
+  ```
+
+- **Version Control**: Use Git with proper branching strategy
+- **Documentation**: Include README with setup instructions and feature documentation
+
+## **Common Anti-Patterns**
+```liquid
+{% comment %} ❌ DON'T: Hardcode values {% endcomment %}
+<div style="color: #ff0000; font-size: 16px;">
+
+{% comment %} ❌ DON'T: Skip schema definitions {% endcomment %}
+<!-- Section without {% schema %} -->
+
+{% comment %} ❌ DON'T: Inline large CSS blocks {% endcomment %}
+<style>
+  /* Hundreds of lines of CSS */
+</style>
+
+{% comment %} ❌ DON'T: Ignore accessibility {% endcomment %}
+<div onclick="toggleMenu()">Menu</div>
+```
+
+## **Integration with Development Tools**
+- **Context7 MCP**: Use for documentation lookup and code examples
+- **Browser Tools MCP**: For testing and debugging
+- **Sequential Thinking MCP**: For complex problem-solving workflows

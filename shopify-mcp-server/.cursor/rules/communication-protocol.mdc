@@ -1,0 +1,121 @@
+---
+description: Communication Protocol for structured, efficient inter-agent collaboration
+globs: [".context/shared/communication/**", ".context/shared/agent_chat.md"]
+alwaysApply: false
+---
+---
+description: Communication Protocol for structured, efficient inter-agent collaboration
+globs: [".context/shared/communication/**", ".context/shared/agent_chat.md"]
+alwaysApply: false
+---
+
+# Inter-Agent Communication Protocol
+
+## Overview
+This protocol defines the structure, formatting, and procedures for communication between agents in the Multi-Agent Memory System.
+
+## Communication Channels
+
+### Primary Channels
+- **Global Chat** (`agent_chat.md`): System-wide communication visible to all agents
+- **Team Channels** (`teams/`): Team-specific discussions
+- **Topic Threads** (`topics/`): Subject-specific threads
+- **Direct Messages** (`direct/`): One-on-one communication
+
+### Channel Selection Guidelines
+1. Use the **most specific** channel appropriate for the conversation
+2. Prefer **topic threads** for technical discussions
+3. Use **direct messages** for agent-specific coordination
+4. Use **global chat** for announcements and decisions
+
+## Message Types
+
+### 1. Standard Communication
+```
+@agent2 I've reviewed the authentication component. The implementation looks good.
+```
+
+### 2. Decision Requests
+```
+[DECISION-REQ] @agent1 @agent3 Should we implement JWT or session-based authentication?
+Options:
+1. JWT for stateless auth
+2. Session-based for better security
+```
+
+### 3. Decision Records
+```
+[DECISION] Authentication: JWT selected for stateless architecture
+Rationale: Better scalability with microservices
+Implications: Need to implement token refresh mechanism
+Participants: @agent1 @agent2 @agent3
+```
+
+### 4. Memory Bank Updates
+```
+[MB-UPDATE] Updated systemPatterns.md
+Changes: Added authentication pattern documentation
+Related files: techContext.md
+Review requested: @agent1
+```
+
+### 5. Action Items
+```
+[ACTION] @agent2 Implement token refresh mechanism
+Priority: High
+Deadline: 2025-03-25
+Dependencies: Authentication system
+```
+
+### 6. Status Updates
+```
+[STATUS] Authentication implementation: 80% complete
+Completed: Basic auth flow, token generation
+In progress: Token refresh, error handling
+Blockers: None
+```
+
+### 7. Computer Control Requests (Orchestrator Only)
+```
+[CONTROL] Taking screenshot of current state
+Purpose: Verify UI implementation
+Safety: Visual verification only, no system changes
+```
+
+## Multi-Tab Integration
+
+### Tab Usage Guidelines
+1. **Agent Separation**: Each agent should operate in its dedicated tab
+2. **Tab Naming**: Name tabs according to agent role (e.g., "System Architect")
+3. **Context Preservation**: Maintain continuity within each tab
+4. **Cross-Tab Reference**: Reference decisions and discussions from other tabs using message IDs
+
+### Tab Transition Process
+1. Announce tab switch in current conversation
+2. Summarize context to be carried forward
+3. Reference specific message IDs for continuity
+4. Include Memory Bank file references
+
+## Decision Process
+
+### Decision-Making Protocol
+1. **Initiation**: Any agent can initiate with [DECISION-REQ]
+2. **Deliberation**: 
+   - All tagged agents must provide input
+   - Clear options must be presented
+   - Rationale for positions should be explicit
+3. **Resolution**:
+   - Orchestrator Agent (or initiator) summarizes discussion
+   - Final decision documented with [DECISION] tag
+   - Added to Decision Log
+4. **Implementation**:
+   - Action items created with [ACTION] tag
+   - Memory Bank updates made with [MB-UPDATE] tag
+
+### Decision Log Maintenance
+- All decisions maintained in chronological order
+- Decision records should be cross-referenced in relevant Memory Bank files
+- Decision IDs should be used for referencing (e.g., DEC-2023-001)
+
+## Special Instructions
+When communicating in agent_chat.md, I should use structured message formats, appropriate tags, and follow the channel selection guidelines. All decisions should be properly documented and cross-referenced in the Memory Bank. 

@@ -1,0 +1,305 @@
+---
+description: These rules will guide you through software development with Neo SDLC orchestration and MCP Server tools. They define when and how to apply different tools and workflows throughout the development lifecycl
+globs: 
+alwaysApply: false
+---
+These rules will guide you through software development with Neo SDLC orchestration and MCP Server tools. They define when and how to apply different tools and workflows throughout the development lifecycle.
+
+## Core Rules Structure
+
+### 1. Project Initialization Rules
+
+When initializing a new project:
+
+```yaml
+rule:
+  name: "project-init"
+  applies_to: "/**"
+  when:
+    - "Starting a new project"
+    - "Onboarding existing project"
+  use_tools:
+    - projectInitTool:
+        for: "Basic project setup and scaffolding"
+    - rootFileGeneratorTool:
+        for: "Creating initial project structure"
+    - techStackManagerTool:
+        for: "Defining and setting up tech stack"
+  guidance:
+    - "Use /init_project for new projects"
+    - "Use /init_existing_project for existing codebases"
+    - "Always generate knowledge graph after initialization"
+```
+
+### 2. Documentation Management Rules
+
+When working with project documentation:
+
+```yaml
+rule:
+  name: "documentation-management"
+  applies_to: 
+    - "docs/**"
+    - "**/*.md"
+  when:
+    - "Creating new documentation"
+    - "Updating existing docs"
+    - "Generating API documentation"
+  use_tools:
+    - docGeneratorTool:
+        for: "Automated documentation generation"
+    - contextManagerTool:
+        for: "Maintaining documentation context"
+  guidance:
+    - "Run /init_requirement_docs for requirements documentation"
+    - "Use /init_design_docs for design documentation"
+    - "Apply /init_dev_docs for development documentation"
+```
+
+### 3. Design System Rules
+
+For UI/UX development and design system management:
+
+```yaml
+rule:
+  name: "design-system"
+  applies_to:
+    - "src/components/**"
+    - "src/styles/**"
+  when:
+    - "Creating new components"
+    - "Updating design tokens"
+    - "Implementing UI layouts"
+  use_tools:
+    - designSystemAgentTool:
+        for: "Design system maintenance"
+    - componentLayoutAgentTool:
+        for: "Component layout generation"
+    - designTokenGeneratorTool:
+        for: "Design token management"
+    - svgComponentGeneratorTool:
+        for: "SVG component creation"
+  guidance:
+    - "Run /init_ui_interpretation_chain for new UI features"
+    - "Use /compare_design_system for consistency checks"
+```
+
+### 4. Code Quality Rules
+
+For maintaining code quality and standards:
+
+```yaml
+rule:
+  name: "code-quality"
+  applies_to: "**/*.{ts,tsx,js,jsx}"
+  when:
+    - "Writing new code"
+    - "Refactoring existing code"
+    - "Performing code reviews"
+  use_tools:
+    - auditProcessorTool:
+        for: "Code quality audits"
+    - knowledgeGraphTool:
+        for: "Dependency analysis"
+  guidance:
+    - "Run /evaluate_code before commits"
+    - "Use /analyze_code for deep analysis"
+    - "Apply /optimize_code for improvements"
+```
+
+### 5. Context Management Rules
+
+For maintaining project context and knowledge:
+
+```yaml
+rule:
+  name: "context-management"
+  applies_to: "/**"
+  when:
+    - "Updating project structure"
+    - "Adding new features"
+    - "Modifying dependencies"
+  use_tools:
+    - contextManagerTool:
+        for: "Context updates"
+    - vectorDbTool:
+        for: "Semantic search"
+    - knowledgeGraphTool:
+        for: "Relationship tracking"
+  guidance:
+    - "Update context after significant changes"
+    - "Maintain knowledge graph accuracy"
+    - "Keep vector database current"
+```
+
+### 6. Agent Collaboration Rules
+
+For multi-agent coordination:
+
+```yaml
+rule:
+  name: "agent-collaboration"
+  applies_to: "/**"
+  when:
+    - "Complex feature development"
+    - "Cross-functional tasks"
+    - "Research requirements"
+  use_tools:
+    - neoOrchestratorTool:
+        for: "SDLC orchestration"
+    - uxResearcherTool:
+        for: "UX research tasks"
+    - productOwnerTool:
+        for: "Product requirements"
+  guidance:
+    - "Coordinate through Neo orchestrator"
+    - "Follow agent-specific workflows"
+    - "Maintain clear communication channels"
+```
+
+## Command Integration Guidelines
+
+### Tool Selection Rules
+
+1. Project Phase Matching:
+   - Use appropriate tools for current SDLC phase
+   - Follow Neo's workflow sequences
+   - Maintain tool chain dependencies
+
+2. Context Awareness:
+   - Consider current project state
+   - Check existing documentation
+   - Verify tool prerequisites
+
+3. Output Validation:
+   - Validate tool outputs
+   - Ensure consistency
+   - Update related documentation
+
+### Workflow Integration
+
+1. Sequential Processing:
+   ```yaml
+   workflow:
+     sequence:
+       - requirements
+       - architecture
+       - system_design
+       - ux_research
+       - ux_design
+       - ui_design
+       - development
+       - testing
+       - deployment
+   ```
+
+2. Tool Chain Dependencies:
+   ```yaml
+   dependencies:
+     context_management:
+       requires:
+         - documentation
+         - code_quality
+     sprint_management:
+       requires:
+         - requirements
+         - product_management
+     quality_assurance:
+       requires:
+         - code_quality
+         - testing
+   ```
+
+## Best Practices
+
+1. Documentation Consistency:
+   - Follow standardized formats
+   - Maintain cross-references
+   - Update documentation with code changes
+
+2. Code Quality Standards:
+   - Follow project style guides
+   - Maintain test coverage
+   - Document complex logic
+
+3. Context Management:
+   - Regular context updates
+   - Accurate knowledge graphs
+   - Clear dependency tracking
+
+4. Tool Usage:
+   - Follow tool-specific workflows
+   - Validate inputs and outputs
+   - Maintain tool chain integrity
+
+## Error Handling
+
+1. Tool Failures:
+   ```yaml
+   error_handling:
+     on_failure:
+       - Log error details
+       - Rollback if necessary
+       - Update status
+     recovery:
+       - Validate state
+       - Retry with adjustments
+       - Document issues
+   ```
+
+2. Validation Errors:
+   ```yaml
+   validation:
+     checks:
+       - Configuration completeness
+       - Schema compliance
+       - Dependency satisfaction
+     actions:
+       - Report issues
+       - Suggest fixes
+       - Update documentation
+   ```
+
+## Usage Examples
+
+1. Initializing a New Project:
+   ```bash
+   /init_project \
+     --name="new-project" \
+     --type="web" \
+     --path="./projects"
+   ```
+
+2. Generating Documentation:
+   ```bash
+   /generate_docs \
+     --output="docs" \
+     --format="markdown" \
+     --include="all" \
+     --toc=true
+   ```
+
+3. Running Code Analysis:
+   ```bash
+   /analyze_code \
+     --path="src" \
+     --depth="full" \
+     --type="all"
+   ```
+
+## Maintenance Guidelines
+
+1. Regular Updates:
+   - Review and update rules periodically
+   - Validate against current needs
+   - Incorporate feedback
+
+2. Tool Chain Management:
+   - Monitor tool versions
+   - Update dependencies
+   - Test integrations
+
+3. Documentation:
+   - Keep examples current
+   - Update usage guidelines
+   - Maintain changelog
