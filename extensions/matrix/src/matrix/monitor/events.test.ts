@@ -26,7 +26,7 @@ function createHarness(params?: {
   selfUserIdError?: Error;
   allowFrom?: string[];
   dmEnabled?: boolean;
-  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy?: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   storeAllowFrom?: string[];
   accountDataByType?: Record<string, unknown>;
   joinedMembersByRoom?: Record<string, string[]>;

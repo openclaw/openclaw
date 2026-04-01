@@ -85,7 +85,7 @@ export type MatrixMonitorHandlerParams = {
   dmThreadReplies?: "off" | "inbound" | "always";
   streaming: "partial" | "off";
   dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   textLimit: number;
   mediaMaxBytes: number;
   historyLimit: number;

@@ -68,7 +68,6 @@ describe("createChannelPairingChallengeIssuer", () => {
 
     await issueChallenge({
       senderId: "user-2",
-      senderIdLine: "Your id: user-2",
       sendPairingReply,
     });
 
@@ -77,5 +76,6 @@ describe("createChannelPairingChallengeIssuer", () => {
       meta: undefined,
     });
     expect(replies[0]).toContain("654321");
+    expect(replies[0]).not.toContain("Your id:");
   });
 });

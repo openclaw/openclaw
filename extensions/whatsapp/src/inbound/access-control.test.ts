@@ -36,6 +36,17 @@ function expectSilentlyBlocked(result: { allowed: boolean }) {
 }
 
 describe("checkInboundAccessControl pairing grace", () => {
+  beforeEach(() => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    });
+  });
+
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
     return await checkInboundAccessControl({
@@ -72,6 +83,41 @@ describe("checkInboundAccessControl pairing grace", () => {
 });
 
 describe("WhatsApp dmPolicy precedence", () => {
+  it("defaults to silent blocking when no policy is set", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              allowFrom: ["+15559999999"],
+            },
+          },
+        },
+      },
+    });
+
+    const result = await checkUnauthorizedWorkDmSender();
+    expectSilentlyBlocked(result);
+  });
+
+  it("silently blocks unauthorized senders when dmPolicy is silent", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "silent",
+          accounts: {
+            work: {
+              allowFrom: ["+15559999999"],
+            },
+          },
+        },
+      },
+    });
+
+    const result = await checkUnauthorizedWorkDmSender();
+    expectSilentlyBlocked(result);
+  });
+
   it("uses account-level dmPolicy instead of channel-level (#8736)", async () => {
     // Channel-level says "pairing" but the account-level says "allowlist".
     // The account-level override should take precedence, so an unauthorized
@@ -160,5 +206,32 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(result.allowed).toBe(true);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit pairing replies but removes the phone number line", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    });
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: true });
+
+    const result = await checkUnauthorizedWorkDmSender();
+
+    expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).toHaveBeenCalledOnce();
+    expect(sendMessageMock).toHaveBeenCalledOnce();
+    const sendMessageCalls = (
+      sendMessageMock as unknown as { mock: { calls: Array<Array<unknown>> } }
+    ).mock.calls;
+    const text = String((sendMessageCalls[0]?.[1] as { text?: string } | undefined)?.text ?? "");
+    expect(text).toContain("pairing approve whatsapp PAIRCODE");
+    expect(text).not.toContain("Your WhatsApp phone number");
+    expect(text).not.toContain("+15550001111");
   });
 });

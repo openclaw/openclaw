@@ -36,7 +36,7 @@ export function registerMatrixMonitorEvents(params: {
   auth: MatrixAuth;
   allowFrom: string[];
   dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
   directTracker?: {
     invalidateRoom: (roomId: string) => void;

@@ -144,7 +144,7 @@ async function promptWhatsAppDmAccess(params: {
   forceAllowFrom: boolean;
   prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
-  const existingPolicy = params.cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
+  const existingPolicy = params.cfg.channels?.whatsapp?.dmPolicy ?? "silent";
   const existingAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
@@ -161,7 +161,8 @@ async function promptWhatsAppDmAccess(params: {
   await params.prompter.note(
     [
       "WhatsApp direct chats are gated by `channels.whatsapp.dmPolicy` + `channels.whatsapp.allowFrom`.",
-      "- pairing (default): unknown senders get a pairing code; owner approves",
+      "- silent (default): unknown senders are blocked with no reply",
+      "- pairing: unknown senders get a pairing code; owner approves",
       "- allowlist: unknown senders are blocked",
       '- open: public inbound DMs (requires allowFrom to include "*")',
       "- disabled: ignore WhatsApp DMs",
@@ -196,7 +197,8 @@ async function promptWhatsAppDmAccess(params: {
   const policy = (await params.prompter.select({
     message: "WhatsApp DM policy",
     options: [
-      { value: "pairing", label: "Pairing (recommended)" },
+      { value: "silent", label: "Silent (recommended)" },
+      { value: "pairing", label: "Pairing (opt-in)" },
       { value: "allowlist", label: "Allowlist only (block unknown senders)" },
       { value: "open", label: "Open (public inbound DMs)" },
       { value: "disabled", label: "Disabled (ignore WhatsApp DMs)" },

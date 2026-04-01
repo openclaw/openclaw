@@ -10,13 +10,15 @@ export function expectPairingReplyText(
   text: string,
   params: {
     channel: string;
-    idLine: string;
+    idLine?: string;
     code?: string;
   },
 ): string {
   const code = params.code ?? extractPairingCode(text);
   expect(text).toContain("OpenClaw: access not configured.");
-  expect(text).toContain(params.idLine);
+  if (params.idLine) {
+    expect(text).toContain(params.idLine);
+  }
   expect(text).toContain("Pairing code:");
   expect(text).toContain(`\n\`\`\`\n${code}\n\`\`\`\n`);
   expect(text).toContain(`pairing approve ${params.channel} ${code}`);

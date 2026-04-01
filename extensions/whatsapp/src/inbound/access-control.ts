@@ -49,6 +49,7 @@ export async function checkInboundAccessControl(params: {
   messageTimestampMs?: number;
   connectedAtMs?: number;
   pairingGraceMs?: number;
+  suppressPairingReply?: boolean;
   sock: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
@@ -59,7 +60,7 @@ export async function checkInboundAccessControl(params: {
     cfg,
     accountId: params.accountId,
   });
-  const dmPolicy = account.dmPolicy ?? "pairing";
+  const dmPolicy = account.dmPolicy ?? "silent";
   const configuredAllowFrom = account.allowFrom ?? [];
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "whatsapp",
@@ -146,7 +147,7 @@ export async function checkInboundAccessControl(params: {
     };
   }
 
-  // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
+  // DM access control (secure defaults): "silent" (default) / "pairing" / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
       logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
@@ -168,8 +169,8 @@ export async function checkInboundAccessControl(params: {
     }
     if (access.decision === "pairing" && !isSamePhone) {
       const candidate = params.from;
-      if (suppressPairingReply) {
-        logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
+      if (params.suppressPairingReply || suppressPairingReply) {
+        logVerbose(`Skipping pairing reply for suppressed DM from ${candidate}.`);
       } else {
         await createChannelPairingChallengeIssuer({
           channel: "whatsapp",
@@ -182,7 +183,6 @@ export async function checkInboundAccessControl(params: {
             }),
         })({
           senderId: candidate,
-          senderIdLine: `Your WhatsApp phone number: ${candidate}`,
           meta: { name: (params.pushName ?? "").trim() || undefined },
           onCreated: () => {
             logVerbose(

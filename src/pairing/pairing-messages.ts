@@ -3,7 +3,7 @@ import type { PairingChannel } from "./pairing-store.js";
 
 export function buildPairingReply(params: {
   channel: PairingChannel;
-  idLine: string;
+  idLine?: string;
   code: string;
 }): string {
   const { channel, idLine, code } = params;
@@ -11,7 +11,7 @@ export function buildPairingReply(params: {
   return [
     "OpenClaw: access not configured.",
     "",
-    idLine,
+    ...(idLine ? [idLine] : []),
     "Pairing code:",
     "```",
     code,

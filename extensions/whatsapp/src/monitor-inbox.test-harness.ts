@@ -121,7 +121,7 @@ function expectInboxPairingReplyText(
   text: string,
   params: {
     channel: string;
-    idLine: string;
+    idLine?: string;
     code?: string;
   },
 ): string {
@@ -129,7 +129,9 @@ function expectInboxPairingReplyText(
   expect(code).toBeDefined();
   const resolvedCode = params.code ?? code ?? "";
   expect(text).toContain("OpenClaw: access not configured.");
-  expect(text).toContain(params.idLine);
+  if (params.idLine) {
+    expect(text).toContain(params.idLine);
+  }
   expect(text).toContain("Pairing code:");
   expect(text).toContain(`\n\`\`\`\n${resolvedCode}\n\`\`\`\n`);
   expect(text).toContain(`pairing approve ${params.channel} ${resolvedCode}`);
@@ -200,14 +202,12 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls[0];
   expect(sendCall?.[0]).toBe(jid);
-  expectInboxPairingReplyText(
-    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
-    {
-      channel: "whatsapp",
-      idLine: `Your WhatsApp phone number: ${senderE164}`,
-      code: "PAIRCODE",
-    },
-  );
+  const text = String((sendCall?.[1] as { text?: string } | undefined)?.text ?? "");
+  expectInboxPairingReplyText(text, {
+    channel: "whatsapp",
+    code: "PAIRCODE",
+  });
+  expect(text).not.toContain(senderE164);
 }
 
 let authDir: string | undefined;

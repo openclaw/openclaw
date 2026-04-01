@@ -22,7 +22,7 @@ export function setupAccessControlTestHarness(): void {
     config = {
       channels: {
         whatsapp: {
-          dmPolicy: "pairing",
+          dmPolicy: "silent",
           allowFrom: [],
         },
       },

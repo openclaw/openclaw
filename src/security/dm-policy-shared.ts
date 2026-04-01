@@ -92,7 +92,11 @@ export async function readStoreAllowFromForDmPolicy(params: {
   shouldRead?: boolean | null;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<string[]> {
-  if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+  if (
+    params.shouldRead === false ||
+    params.dmPolicy === "allowlist" ||
+    params.dmPolicy === "silent"
+  ) {
     return [];
   }
   const readStore =

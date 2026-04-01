@@ -1,6 +1,8 @@
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import {
+  mockLoadConfig,
+  upsertPairingRequestMock,
   installWebMonitorInboxUnitTestHooks,
   settleInboundWork,
   startInboxMonitor,
@@ -103,6 +105,38 @@ describe("append upsert handling (#20952)", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("does not send pairing replies for recent append DMs", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    const recentTs = Math.floor(Date.now() / 1000) - 5;
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "append-dm-1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "hello from history" },
+          messageTimestamp: recentTs,
+          pushName: "HistoryUser",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     await listener.close();
   });

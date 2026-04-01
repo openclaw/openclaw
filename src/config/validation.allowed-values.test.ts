@@ -28,7 +28,7 @@ describe("config validation allowed-values metadata", () => {
       expect(issue).toBeDefined();
       expect(issue?.message).toContain("expected one of");
       expect(issue?.message).not.toContain("(allowed:");
-      expect(issue?.allowedValues).toEqual(["pairing", "allowlist", "open", "disabled"]);
+      expect(issue?.allowedValues).toEqual(["silent", "pairing", "allowlist", "open", "disabled"]);
       expect(issue?.allowedValuesHiddenCount).toBe(0);
     }
   });

@@ -100,7 +100,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dmPolicy: {
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -308,7 +308,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -879,19 +879,12 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dmPolicy: {
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
           items: {
-            anyOf: [
-              {
-                type: "string",
-              },
-              {
-                type: "number",
-              },
-            ],
+            type: "string",
           },
         },
         defaultTo: {
@@ -905,19 +898,12 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
             policy: {
               type: "string",
-              enum: ["pairing", "allowlist", "open", "disabled"],
+              enum: ["silent", "pairing", "allowlist", "open", "disabled"],
             },
             allowFrom: {
               type: "array",
               items: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "number",
-                  },
-                ],
+                type: "string",
               },
             },
             groupEnabled: {
@@ -926,14 +912,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             groupChannels: {
               type: "array",
               items: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "number",
-                  },
-                ],
+                type: "string",
               },
             },
           },
@@ -1017,27 +996,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               users: {
                 type: "array",
                 items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
+                  type: "string",
                 },
               },
               roles: {
                 type: "array",
                 items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
+                  type: "string",
                 },
               },
               channels: {
@@ -1123,27 +1088,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     users: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     roles: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     systemPrompt: {
@@ -1224,14 +1175,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             approvers: {
               type: "array",
               items: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "number",
-                  },
-                ],
+                type: "string",
               },
             },
             agentFilter: {
@@ -2087,19 +2031,12 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
                 items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
+                  type: "string",
                 },
               },
               defaultTo: {
@@ -2113,19 +2050,12 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
+                    enum: ["silent", "pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
                     items: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "number",
-                        },
-                      ],
+                      type: "string",
                     },
                   },
                   groupEnabled: {
@@ -2134,14 +2064,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   groupChannels: {
                     type: "array",
                     items: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "number",
-                        },
-                      ],
+                      type: "string",
                     },
                   },
                 },
@@ -2225,27 +2148,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     users: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     roles: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     channels: {
@@ -2331,27 +2240,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           users: {
                             type: "array",
                             items: {
-                              anyOf: [
-                                {
-                                  type: "string",
-                                },
-                                {
-                                  type: "number",
-                                },
-                              ],
+                              type: "string",
                             },
                           },
                           roles: {
                             type: "array",
                             items: {
-                              anyOf: [
-                                {
-                                  type: "string",
-                                },
-                                {
-                                  type: "number",
-                                },
-                              ],
+                              type: "string",
                             },
                           },
                           systemPrompt: {
@@ -2432,14 +2327,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   approvers: {
                     type: "array",
                     items: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "number",
-                        },
-                      ],
+                      type: "string",
                     },
                   },
                   agentFilter: {
@@ -4592,7 +4480,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             policy: {
               default: "pairing",
               type: "string",
-              enum: ["pairing", "allowlist", "open", "disabled"],
+              enum: ["silent", "pairing", "allowlist", "open", "disabled"],
             },
             allowFrom: {
               type: "array",
@@ -4974,7 +4862,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   policy: {
                     default: "pairing",
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
+                    enum: ["silent", "pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
@@ -5087,7 +4975,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -5363,7 +5251,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -5677,7 +5565,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -5963,7 +5851,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -6836,7 +6724,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
             policy: {
               type: "string",
-              enum: ["pairing", "allowlist", "open", "disabled"],
+              enum: ["silent", "pairing", "allowlist", "open", "disabled"],
             },
             allowFrom: {
               type: "array",
@@ -6864,6 +6752,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: {
             type: "object",
             properties: {
+              account: {
+                type: "string",
+              },
               enabled: {
                 type: "boolean",
               },
@@ -6943,6 +6834,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: {
             type: "object",
             properties: {
+              account: {
+                type: "string",
+              },
               enabled: {
                 type: "boolean",
               },
@@ -7169,7 +7063,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -7450,7 +7344,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -7746,7 +7640,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -8237,7 +8131,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         webhookPort: {
           type: "integer",
@@ -8568,7 +8462,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               webhookPort: {
                 type: "integer",
@@ -8843,7 +8737,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dmPolicy: {
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -9340,7 +9234,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -9652,7 +9546,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -10551,7 +10445,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dmPolicy: {
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -10577,7 +10471,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
             policy: {
               type: "string",
-              enum: ["pairing", "allowlist", "open", "disabled"],
+              enum: ["silent", "pairing", "allowlist", "open", "disabled"],
             },
             allowFrom: {
               type: "array",
@@ -11397,7 +11291,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -11423,7 +11317,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["pairing", "allowlist", "open", "disabled"],
+                    enum: ["silent", "pairing", "allowlist", "open", "disabled"],
                   },
                   allowFrom: {
                     type: "array",
@@ -11869,7 +11763,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dmPolicy: {
           default: "pairing",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         botToken: {
           anyOf: [
@@ -12203,7 +12097,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             properties: {
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               tools: {
                 type: "object",
@@ -12865,7 +12759,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 default: "pairing",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               botToken: {
                 anyOf: [
@@ -13199,7 +13093,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     dmPolicy: {
                       type: "string",
-                      enum: ["pairing", "allowlist", "open", "disabled"],
+                      enum: ["silent", "pairing", "allowlist", "open", "disabled"],
                     },
                     tools: {
                       type: "object",
@@ -14272,9 +14166,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
         },
         dmPolicy: {
-          default: "pairing",
+          default: "silent",
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         selfChatMode: {
           type: "boolean",
@@ -14521,9 +14415,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
               dmPolicy: {
-                default: "pairing",
+                default: "silent",
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               selfChatMode: {
                 type: "boolean",
@@ -14781,7 +14675,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       dmPolicy: {
         label: "WhatsApp DM Policy",
-        help: 'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+        help: 'Direct message access control ("silent" default, "pairing" opt-in). "open" requires channels.whatsapp.allowFrom=["*"].',
       },
       selfChatMode: {
         label: "WhatsApp Self-Phone Mode",
@@ -14965,7 +14859,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dmPolicy: {
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -15171,7 +15065,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",
@@ -15256,7 +15150,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dmPolicy: {
           type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
+          enum: ["silent", "pairing", "allowlist", "open", "disabled"],
         },
         allowFrom: {
           type: "array",
@@ -15373,7 +15267,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dmPolicy: {
                 type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
+                enum: ["silent", "pairing", "allowlist", "open", "disabled"],
               },
               allowFrom: {
                 type: "array",

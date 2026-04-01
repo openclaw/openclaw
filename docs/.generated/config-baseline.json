@@ -1087,6 +1087,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.compaction.notifyUser",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Compaction Notify User",
+      "help": "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.compaction.postCompactionSections",
       "kind": "core",
       "type": "array",
@@ -2194,16 +2208,6 @@
       "path": "agents.defaults.memorySearch.multimodal.modalities.*",
       "kind": "core",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.defaults.memorySearch.notifyUser",
-      "kind": "core",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -8984,6 +8988,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -9531,6 +9536,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -10209,10 +10215,7 @@
     {
       "path": "channels.discord.accounts.*.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10462,10 +10465,7 @@
     {
       "path": "channels.discord.accounts.*.dm.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10495,10 +10495,7 @@
     {
       "path": "channels.discord.accounts.*.dm.groupChannels.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10521,6 +10518,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -10547,6 +10545,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -10720,10 +10719,7 @@
     {
       "path": "channels.discord.accounts.*.execApprovals.approvers.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10947,10 +10943,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11150,10 +11143,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11209,10 +11199,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11392,10 +11379,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12635,10 +12619,7 @@
     {
       "path": "channels.discord.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12946,10 +12927,7 @@
     {
       "path": "channels.discord.dm.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12979,10 +12957,7 @@
     {
       "path": "channels.discord.dm.groupChannels.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13005,6 +12980,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -13037,6 +13013,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -13250,10 +13227,7 @@
     {
       "path": "channels.discord.execApprovals.approvers.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13477,10 +13451,7 @@
     {
       "path": "channels.discord.guilds.*.channels.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13680,10 +13651,7 @@
     {
       "path": "channels.discord.guilds.*.channels.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13739,10 +13707,7 @@
     {
       "path": "channels.discord.guilds.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13922,10 +13887,7 @@
     {
       "path": "channels.discord.guilds.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -17279,6 +17241,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -17960,6 +17923,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -18612,6 +18576,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -19282,6 +19247,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -19922,6 +19888,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -20654,6 +20621,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -22367,6 +22335,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -22469,6 +22438,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.groups.*.account",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.matrix.groups.*.allow",
@@ -22838,6 +22817,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.rooms.*.account",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.matrix.rooms.*.allow",
@@ -23528,6 +23517,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -24081,6 +24071,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -24510,6 +24501,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -25582,6 +25574,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -26207,6 +26200,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -26624,6 +26618,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -27823,6 +27818,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -28572,6 +28568,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -29891,6 +29888,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -29927,6 +29925,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -31381,6 +31380,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -31423,6 +31423,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -32758,6 +32759,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -33162,6 +33164,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -34920,6 +34923,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -35324,6 +35328,7 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -37713,12 +37718,13 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
         "disabled"
       ],
-      "defaultValue": "pairing",
+      "defaultValue": "silent",
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -38421,12 +38427,13 @@
       "type": "string",
       "required": true,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
         "disabled"
       ],
-      "defaultValue": "pairing",
+      "defaultValue": "silent",
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -38435,7 +38442,7 @@
         "network"
       ],
       "label": "WhatsApp DM Policy",
-      "help": "Direct message access control (\"pairing\" recommended). \"open\" requires channels.whatsapp.allowFrom=[\"*\"].",
+      "help": "Direct message access control (\"silent\" default, \"pairing\" opt-in). \"open\" requires channels.whatsapp.allowFrom=[\"*\"].",
       "hasChildren": false
     },
     {
@@ -38984,6 +38991,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -39273,6 +39281,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -39549,6 +39558,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",
@@ -39853,6 +39863,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "silent",
         "pairing",
         "allowlist",
         "open",

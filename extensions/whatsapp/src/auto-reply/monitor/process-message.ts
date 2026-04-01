@@ -7,8 +7,8 @@ import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-detection";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHistoryContextFromEntries,
@@ -78,7 +78,7 @@ async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
-  const dmPolicy = account.dmPolicy ?? "pairing";
+  const dmPolicy = account.dmPolicy ?? "silent";
   const groupPolicy = account.groupPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
   const configuredGroupAllowFrom =

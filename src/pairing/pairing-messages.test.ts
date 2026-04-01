@@ -44,7 +44,6 @@ describe("buildPairingReply", () => {
     },
     {
       channel: "whatsapp",
-      idLine: "Your WhatsApp phone number: +15550003333",
       code: "MNO345",
     },
   ] as const;
@@ -64,5 +63,14 @@ describe("buildPairingReply", () => {
 
   it.each(pairingReplyCases)("formats pairing reply for $channel", (testCase) => {
     expectProfileAwarePairingReply(testCase);
+  });
+
+  it("omits the identifier line when it is not provided", () => {
+    const text = buildPairingReply({
+      channel: "whatsapp",
+      code: "MNO345",
+    });
+    expect(text).not.toContain("Your WhatsApp phone number:");
+    expectPairingApproveCommand(text, { channel: "whatsapp", code: "MNO345" });
   });
 });

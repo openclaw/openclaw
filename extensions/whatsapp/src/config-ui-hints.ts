@@ -7,7 +7,7 @@ export const whatsAppChannelConfigUiHints = {
   },
   dmPolicy: {
     label: "WhatsApp DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+    help: 'Direct message access control ("silent" default, "pairing" opt-in). "open" requires channels.whatsapp.allowFrom=["*"].',
   },
   selfChatMode: {
     label: "WhatsApp Self-Phone Mode",

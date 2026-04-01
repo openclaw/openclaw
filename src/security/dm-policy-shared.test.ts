@@ -20,7 +20,7 @@ describe("security/dm-policy-shared", () => {
   async function expectStoreReadSkipped(params: {
     provider: string;
     accountId: string;
-    dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+    dmPolicy?: "silent" | "open" | "allowlist" | "pairing" | "disabled";
     shouldRead?: boolean;
   }) {
     let called = false;
@@ -90,6 +90,14 @@ describe("security/dm-policy-shared", () => {
         provider: "demo-channel-a",
         accountId: "default",
         dmPolicy: "allowlist" as const,
+      },
+    },
+    {
+      name: "dmPolicy is silent",
+      params: {
+        provider: "demo-channel-c",
+        accountId: "default",
+        dmPolicy: "silent" as const,
       },
     },
     {
@@ -185,6 +193,17 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
   });
 
+  it("excludes storeAllowFrom when dmPolicy is silent", () => {
+    const lists = resolveEffectiveAllowFromLists({
+      allowFrom: ["+1111"],
+      groupAllowFrom: ["group:abc"],
+      storeAllowFrom: ["+2222", "+3333"],
+      dmPolicy: "silent",
+    });
+    expect(lists.effectiveAllowFrom).toEqual(["+1111"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
+  });
+
   it("keeps group allowlist explicit when dmPolicy is pairing", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["+1111"],
@@ -211,6 +230,22 @@ describe("security/dm-policy-shared", () => {
     expect(resolved.reason).toBe("dmPolicy=pairing (allowlisted)");
     expect(resolved.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
     expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room"]);
+  });
+
+  it("blocks unauthorized silent dms without pairing", () => {
+    const resolved = resolveDmGroupAccessWithLists({
+      isGroup: false,
+      dmPolicy: "silent",
+      groupPolicy: "allowlist",
+      allowFrom: ["owner"],
+      groupAllowFrom: ["group:room"],
+      storeAllowFrom: ["paired-user"],
+      isSenderAllowed: () => false,
+    });
+    expect(resolved.decision).toBe("block");
+    expect(resolved.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED);
+    expect(resolved.reason).toBe("dmPolicy=silent (not allowlisted)");
+    expect(resolved.effectiveAllowFrom).toEqual(["owner"]);
   });
 
   it("resolves command gate with dm/group parity for groups", () => {

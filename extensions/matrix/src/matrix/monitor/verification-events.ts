@@ -343,7 +343,7 @@ async function isVerificationNoticeAuthorized(params: {
   senderId: string;
   allowFrom: string[];
   dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
 }): Promise<boolean> {
@@ -382,7 +382,7 @@ export function createMatrixVerificationEventRouter(params: {
   client: MatrixClient;
   allowFrom: string[];
   dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
 }) {

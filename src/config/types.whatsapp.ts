@@ -44,7 +44,7 @@ export type WhatsAppAckReactionConfig = {
 type WhatsAppSharedConfig = {
   /** Whether the WhatsApp channel is enabled. */
   enabled?: boolean;
-  /** Direct message access policy (default: pairing). */
+  /** Direct message access policy (default: silent). */
   dmPolicy?: DmPolicy;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;

@@ -66,7 +66,7 @@ type DiscordReactionRoutingParams = {
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   allowFrom: string[];
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
@@ -308,7 +308,7 @@ type DiscordReactionIngressAuthorizationParams = {
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  dmPolicy: "open" | "pairing" | "allowlist" | "silent" | "disabled";
   allowFrom: string[];
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;

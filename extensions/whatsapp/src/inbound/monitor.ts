@@ -207,6 +207,7 @@ export async function monitorWebInbox(options: {
 
   const normalizeInboundMessage = async (
     msg: WAMessage,
+    opts?: { suppressPairingReply?: boolean },
   ): Promise<NormalizedInboundMessage | null> => {
     const id = msg.key?.id ?? undefined;
     const remoteJid = msg.key?.remoteJid;
@@ -271,6 +272,7 @@ export async function monitorWebInbox(options: {
       isFromMe: Boolean(msg.key?.fromMe),
       messageTimestampMs,
       connectedAtMs,
+      suppressPairingReply: opts?.suppressPairingReply,
       sock: { sendMessage: (jid, content) => sendTrackedMessage(jid, content) },
       remoteJid,
     });
@@ -464,20 +466,8 @@ export async function monitorWebInbox(options: {
       return;
     }
     for (const msg of upsert.messages ?? []) {
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
-      const inbound = await normalizeInboundMessage(msg);
-      if (!inbound) {
-        continue;
-      }
-
-      await maybeMarkInboundAsRead(inbound);
-
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
-      if (upsert.type === "append") {
+      const isAppend = upsert.type === "append";
+      if (isAppend) {
         const APPEND_RECENT_GRACE_MS = 60_000;
         const msgTsRaw = msg.messageTimestamp;
         const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
@@ -486,6 +476,17 @@ export async function monitorWebInbox(options: {
           continue;
         }
       }
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
+      const inbound = await normalizeInboundMessage(msg, { suppressPairingReply: isAppend });
+      if (!inbound) {
+        continue;
+      }
+
+      await maybeMarkInboundAsRead(inbound);
 
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {

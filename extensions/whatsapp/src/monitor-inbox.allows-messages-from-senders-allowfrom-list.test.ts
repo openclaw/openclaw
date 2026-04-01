@@ -136,12 +136,9 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("locks down when no config is present (pairing for unknown senders)", async () => {
-    // No config file => locked-down defaults apply (pairing for unknown senders)
+  it("locks down silently when no config is present", async () => {
+    // No config file => locked-down defaults apply (silent block for unknown senders)
     mockLoadConfig.mockReturnValue({});
-    upsertPairingRequestMock
-      .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
-      .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
@@ -154,14 +151,10 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await vi.waitFor(
-      () => {
-        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000, interval: 5 },
-    );
+    await settleInboundWork();
     expect(onMessage).not.toHaveBeenCalled();
-    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     const upsertBlockedAgain = buildNotifyMessageUpsert({
       id: "no-config-1b",
@@ -173,7 +166,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsertBlockedAgain);
     await settleInboundWork();
     expect(onMessage).not.toHaveBeenCalled();
-    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     // Message from self should be allowed
     const upsertSelf = buildNotifyMessageUpsert({
@@ -194,6 +187,39 @@ describe("web monitor inbox", () => {
         to: "+123",
       }),
     );
+
+    await listener.close();
+  });
+
+  it("still sends pairing replies when dmPolicy is explicitly pairing", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: true });
+
+    const { onMessage, listener, sock } = await openInboxMonitor();
+    const upsertBlocked = buildNotifyMessageUpsert({
+      id: "pairing-1",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: nowSeconds(),
+    });
+
+    sock.ev.emit("messages.upsert", upsertBlocked);
+    await vi.waitFor(
+      () => {
+        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000, interval: 5 },
+    );
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });
@@ -337,7 +363,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("handles append messages by marking them read but skipping auto-reply", async () => {
+  it("skips stale append messages before normalization and auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
     const staleTs = Math.floor(Date.now() / 1000) - 300;
 
@@ -358,21 +384,9 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await vi.waitFor(
-      () => {
-        expect(sock.readMessages).toHaveBeenCalledWith([
-          {
-            remoteJid: "999@s.whatsapp.net",
-            id: "history1",
-            participant: undefined,
-            fromMe: false,
-          },
-        ]);
-      },
-      { timeout: 5_000, interval: 5 },
-    );
+    await settleInboundWork();
 
-    // Verify it WAS NOT passed to onMessage
+    expect(sock.readMessages).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();

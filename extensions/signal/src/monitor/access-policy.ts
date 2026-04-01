@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 
-type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
+type SignalDmPolicy = "open" | "pairing" | "allowlist" | "silent" | "disabled";
 type SignalGroupPolicy = "open" | "allowlist" | "disabled";
 
 export async function resolveSignalAccessState(params: {
