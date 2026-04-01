@@ -1781,15 +1781,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         (error as { code?: string; details?: string }).details = details;
         throw error;
       }
-      if (validated.warnings.length > 0) {
-        const details = validated.warnings
-          .map(
-            (iss) =>
-              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
-          )
-          .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
-      }
+      // Warnings are captured in the snapshot and surfaced once by
+      // runDoctorConfigPreflight (the bordered "Config warnings" box).
+      // Emitting them here via logger.warn would duplicate that output on
+      // every CLI command that loads config.
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = materializeRuntimeConfig(validated.config, "load");
       observeLoadConfigSnapshot({
@@ -2113,12 +2108,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const issueMessage = issue?.message ?? "invalid";
       throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
-    if (validated.warnings.length > 0) {
-      const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
-        .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
-    }
+    // Warnings are captured in snapshot.warnings and already surfaced to the
+    // user by runDoctorConfigPreflight before the write is triggered.
+    // Re-emitting them here would print the same warning a second time for
+    // every config write operation (config set, models set, plugins enable, etc.).
 
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
