@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import chokidar from "chokidar";
 import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
@@ -27,7 +26,54 @@ const resolveRepoPath = (filePath, cwd) => {
 const isIgnoredWatchPath = (filePath, cwd) =>
   !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
 
+const isInvalidPackageConfigError = (err) =>
+  err?.code === "ERR_INVALID_PACKAGE_CONFIG" &&
+  String(err?.message ?? "").includes("node_modules/");
+
+const extractInvalidPackageConfigPath = (err) => {
+  const message = String(err?.message ?? "");
+  const match = message.match(/Invalid package config (.+?) while importing /);
+  return match?.[1] ?? null;
+};
+
+const printFriendlyWatchStartupError = (err) => {
+  if (!isInvalidPackageConfigError(err)) {
+    console.error(err);
+    return;
+  }
+
+  const packageConfigPath = extractInvalidPackageConfigPath(err);
+
+  console.error("");
+  console.error(
+    "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+  );
+  if (packageConfigPath) {
+    console.error(`[openclaw] Invalid package config: ${packageConfigPath}`);
+  }
+  console.error("[openclaw] This usually means a file in node_modules is empty or truncated.");
+  console.error("[openclaw] Recommended recovery:");
+  console.error("[openclaw]   rm -rf node_modules");
+  console.error("[openclaw]   pnpm store prune");
+  console.error("[openclaw]   pnpm install");
+  console.error("");
+  console.error("[openclaw] Original error:");
+  console.error(err);
+};
+
+const loadChokidar = async () => {
+  try {
+    const mod = await import("chokidar");
+    return mod.default ?? mod;
+  } catch (err) {
+    printFriendlyWatchStartupError(err);
+    throw err;
+  }
+};
+
 export async function runWatchMain(params = {}) {
+  const chokidarModule = params.chokidar ?? (await loadChokidar());
+
   const deps = {
     spawn: params.spawn ?? spawn,
     process: params.process ?? process,
@@ -36,7 +82,7 @@ export async function runWatchMain(params = {}) {
     env: params.env ? { ...params.env } : { ...process.env },
     now: params.now ?? Date.now,
     createWatcher:
-      params.createWatcher ?? ((watchPaths, options) => chokidar.watch(watchPaths, options)),
+      params.createWatcher ?? ((watchPaths, options) => chokidarModule.watch(watchPaths, options)),
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   };
 
@@ -145,7 +191,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runWatchMain()
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err);
+      if (!isInvalidPackageConfigError(err)) {
+        console.error(err);
+      }
       process.exit(1);
     });
 }
