@@ -114,6 +114,7 @@ def summarize_capabilities(sandbox_payload: dict) -> dict:
         sandbox_status = {}
     return {
         'sandbox_name': sandbox_status.get('sandbox_name'),
+        'phase': sandbox_status.get('phase'),
         'gpu_enabled': sandbox_status.get('gpu_enabled'),
         'policy_names': sandbox_status.get('policy_names') or [],
         'runtime_name': sandbox_status.get('runtime_name'),
@@ -168,6 +169,43 @@ def build_provider_status(provider_status: dict, start_result: dict | None) -> d
     return status
 
 
+def infer_gpu_missing_requirements(gpu_status: dict) -> list[str]:
+    missing: list[str] = []
+    phase = str(gpu_status.get('phase') or 'unknown')
+    gpu_enabled = gpu_status.get('gpu_enabled')
+    nim_status = str(gpu_status.get('nim_status') or 'unknown')
+    openshell_status = str(gpu_status.get('openshell_status') or 'unknown')
+    policy_names = gpu_status.get('policy_names') if isinstance(gpu_status.get('policy_names'), list) else []
+
+    if phase != 'Ready':
+        missing.append('sandbox not ready')
+    if gpu_enabled is False:
+        missing.append('gpu runtime not enabled')
+    if 'nvidia' not in policy_names:
+        missing.append('nvidia policy missing')
+    if nim_status.lower() != 'running':
+        missing.append('nim is not running')
+    if openshell_status.lower() != 'connected':
+        missing.append('runtime not connected')
+
+    deduped: list[str] = []
+    for item in missing:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def build_gpu_status(gpu_signals: dict) -> dict:
+    status = dict(gpu_signals)
+    policy_names = status.get('policy_names') if isinstance(status.get('policy_names'), list) else []
+    status['nvidia_policy_present'] = 'nvidia' in policy_names
+    status['gpu_required_policy_present'] = 'nvidia' in policy_names
+    missing = infer_gpu_missing_requirements(status)
+    status['missing_requirements'] = missing
+    status['gpu_ready'] = len(missing) == 0
+    return status
+
+
 def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
@@ -200,9 +238,14 @@ def main() -> int:
             response['next_step'] = followup_status.get('next_step') or response['next_step']
     elif recommended_action == 'check_gpu_runtime':
         sandbox_payload = get_sandbox_status(script_dir, args)
-        response['remediation_result'] = 'captured gpu runtime status'
-        response['followup_status'] = summarize_capabilities(sandbox_payload)
-        response['next_step'] = 'inspect_gpu_runtime'
+        gpu_status = build_gpu_status(summarize_capabilities(sandbox_payload))
+        response['remediation_result'] = 'checked gpu runtime readiness'
+        response['gpu_status'] = gpu_status
+        response['followup_status'] = gpu_status
+        if gpu_status.get('gpu_ready') is False:
+            response['next_step'] = 'configure_gpu_runtime'
+        else:
+            response['next_step'] = 'inspect_gpu_runtime'
     elif recommended_action == 'wait_for_runtime_ready':
         attempts: list[dict] = []
         last_decision = decision

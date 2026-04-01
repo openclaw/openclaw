@@ -153,3 +153,46 @@ Routing loop behavior change:
 
 This is still a minimal remediation layer.
 Provider and model may remain `unknown`, and the current logic uses them only to build `missing_requirements`, not to guess a concrete provider configuration automatically.
+
+GPU remediation notes:
+
+- `check_gpu_runtime` no longer only echoes current status
+- it now returns `gpu_status` with:
+  - `sandbox_name`
+  - `phase`
+  - `gpu_enabled`
+  - `nim_status`
+  - `runtime_name`
+  - `openshell_status`
+  - `policy_names`
+  - `provider`
+  - `model`
+  - `nvidia_policy_present`
+  - `gpu_required_policy_present`
+  - `gpu_ready`
+  - `missing_requirements[]`
+
+Current `gpu_ready` rule is intentionally simple and based on existing structured sandbox signals:
+
+- `phase == Ready`
+- `gpu_enabled == true`
+- `nim_status == running`
+- `policy_names` contains `nvidia`
+- `openshell_status == connected`
+
+Possible GPU `missing_requirements` values include:
+
+- `sandbox not ready`
+- `gpu runtime not enabled`
+- `nvidia policy missing`
+- `nim is not running`
+- `runtime not connected`
+
+Routing loop behavior change:
+
+- if remediation returns `gpu_status.gpu_ready == false`
+- the loop stops with:
+  - `final_state = gpu_not_ready`
+  - `next_step = configure_gpu_runtime`
+
+This is still a minimal remediation layer. It uses current structured sandbox fields and does not yet call a separate GPU probe or host-side scheduler inspection.
