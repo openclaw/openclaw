@@ -30,6 +30,24 @@ function canUseNodeFs(): boolean {
   }
 }
 
+// Cleanup handler: close file descriptor on graceful exit
+function setupLogFdCleanup(): void {
+  const cleanup = () => {
+    if (currentLogFileFd !== null) {
+      try {
+        fs.closeSync(currentLogFileFd);
+        currentLogFileFd = null;
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+  };
+
+  process.once("beforeExit", cleanup);
+  process.once("SIGTERM", cleanup);
+  process.once("SIGINT", cleanup);
+}
+
 function resolveDefaultLogDir(): string {
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
 }
@@ -174,8 +192,18 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
+
+  // Open file descriptor for efficient writes and proper rotation handling
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  try {
+    currentLogFileFd = fs.openSync(settings.file, "a");
+  } catch {
+    currentLogFileFd = null; // Will fall back to appendFileSync
+  }
+
   let warnedAboutSizeCap = false;
+  // Rotation threshold at 95% of maxFileBytes to avoid hitting the cap exactly
+  const rotationThreshold = settings.maxFileBytes * 0.95;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -184,6 +212,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
+
+      // Check if we've exceeded the size limit
       if (nextBytes > settings.maxFileBytes) {
         if (!warnedAboutSizeCap) {
           warnedAboutSizeCap = true;
@@ -200,8 +230,16 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         }
         return;
       }
+
+      // Check if we're approaching the limit and should rotate
+      if (currentFileBytes > rotationThreshold && isRollingPath(settings.file)) {
+        rotateLogFile(settings.file); // Rotates to .1, .2, etc.
+        currentFileBytes = 0; // Fresh file, reset counter
+        warnedAboutSizeCap = false; // Reset warning for new file
+      }
+
       if (appendLogLine(settings.file, payload)) {
-        currentFileBytes = nextBytes;
+        currentFileBytes += payloadBytes;
       }
     } catch {
       // never block on logging failures
@@ -210,6 +248,9 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   for (const transport of externalTransports) {
     attachExternalTransport(logger, transport);
   }
+
+  // Set up cleanup handler for file descriptor on process exit
+  setupLogFdCleanup();
 
   return logger;
 }
@@ -229,10 +270,64 @@ function getCurrentLogFileBytes(file: string): number {
   }
 }
 
+// File descriptor for the current log file (null if using appendFileSync)
+let currentLogFileFd: number | null = null;
+
+/**
+ * Rotate the current log file by renaming it with a numeric suffix and creating a new file.
+ * Returns the path to the rotated file.
+ * Time complexity: O(1) - rename is metadata-only, independent of file size.
+ */
+function rotateLogFile(basePath: string): string {
+  // Close the current file descriptor if tracking it
+  if (currentLogFileFd !== null) {
+    try {
+      fs.closeSync(currentLogFileFd);
+      currentLogFileFd = null;
+    } catch {
+      // Ignore errors when closing
+    }
+  }
+
+  // Find the next rotation number
+  let num = 1;
+  while (fs.existsSync(`${basePath}.${num}`)) {
+    num++;
+  }
+
+  const rotatedPath = `${basePath}.${num}`;
+
+  // Rename current file to .N (O(1) - metadata only)
+  try {
+    fs.renameSync(basePath, rotatedPath);
+  } catch {
+    // If rename fails, return original path and let logging continue
+    // This handles edge cases like cross-filesystem renames
+    return basePath;
+  }
+
+  // Create new empty file (O(1))
+  try {
+    currentLogFileFd = fs.openSync(basePath, "a");
+    return rotatedPath;
+  } catch {
+    // Fallback to appendFileSync if fd approach fails
+    currentLogFileFd = null;
+    return rotatedPath;
+  }
+}
+
 function appendLogLine(file: string, line: string): boolean {
   try {
-    fs.appendFileSync(file, line, { encoding: "utf8" });
-    return true;
+    if (currentLogFileFd !== null) {
+      // Use existing file descriptor (more efficient)
+      fs.writeSync(currentLogFileFd, line);
+      return true;
+    } else {
+      // Fallback to appendFileSync
+      fs.appendFileSync(file, line, { encoding: "utf8" });
+      return true;
+    }
   } catch {
     return false;
   }
