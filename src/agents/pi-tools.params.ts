@@ -4,7 +4,14 @@ export type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
   label?: string;
+  /**
+   * If true, this parameter group is optional and will not cause a validation
+   * error when absent. All non-optional groups must still be satisfied.
+   * For edit tool: oldText/newText are optional if edits array is provided.
+   */
+  optional?: boolean;
   validator?: (record: Record<string, unknown>) => boolean;
+};
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
@@ -21,16 +28,24 @@ export const CLAUDE_PARAM_GROUPS = {
   ],
   edit: [
     { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
+    // Edit tool supports two modes:
+    // 1. Single replacement: oldText + newText
+    // 2. Multi replacement: edits array
+    // oldText/newText are marked optional because they are only required for single replacement mode.
+    // The underlying tool's normalizeEditInput will validate the correct mode-specific parameters.
     {
       keys: ["oldText", "old_string", "old_text", "oldString"],
-      label: "oldText alias",
+      label: "oldText alias (for single replacement mode)",
+      optional: true,
       validator: hasValidEditReplacements,
     },
     {
       keys: ["newText", "new_string", "new_text", "newString"],
-      label: "newText alias",
+      label: "newText alias (for single replacement mode)",
       allowEmpty: true,
+      optional: true,
       validator: hasValidEditReplacements,
+    },
     },
   ],
 } as const;
@@ -181,11 +196,11 @@ function addClaudeParamAliasesToSchema(params: {
       params.properties[alias] = params.properties[original];
       changed = true;
     }
-    const idx = params.required.indexOf(original);
-    if (idx !== -1) {
-      params.required.splice(idx, 1);
-      changed = true;
-    }
+    // Note: We intentionally do NOT modify the 'required' array here.
+    // The canonical key (e.g., 'path') remains in 'required' for schema validation.
+    // Multiple aliases (file_path, filePath, file) are added to 'properties' only.
+    // Runtime normalization via normalizeClaudeParamAliases handles all accepted forms.
+    // See: https://github.com/openclaw/openclaw/pull/57716
   }
   return changed;
 }
@@ -249,6 +264,7 @@ export function assertRequiredParams(
   }
 
   const missingLabels: string[] = [];
+
   for (const group of groups) {
     const satisfied =
       group.validator?.(record) ??
@@ -266,12 +282,13 @@ export function assertRequiredParams(
         return value.trim().length > 0;
       });
 
-    if (!satisfied) {
+    if (!satisfied && !group.optional) {
       const label = group.label ?? group.keys.join(" or ");
       missingLabels.push(label);
     }
   }
 
+  // All non-optional groups must be satisfied
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
@@ -295,6 +312,26 @@ export function wrapToolParamNormalization(
       if (requiredParamGroups?.length) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
+
+      // Cross-field validation for edit tool: requires either 'edits' array or both 'oldText' and 'newText'
+      if (tool.name === "edit" && record) {
+        const hasEdits =
+          "edits" in record && Array.isArray(record.edits) && record.edits.length > 0;
+        const hasOldText = ["oldText", "old_string", "old_text", "oldString"].some(
+          (key) =>
+            key in record && typeof record[key] === "string" && record[key].trim().length > 0,
+        );
+        const hasNewText = ["newText", "new_string", "new_text", "newString"].some(
+          (key) => key in record && typeof record[key] === "string",
+        );
+
+        if (!hasEdits && !(hasOldText && hasNewText)) {
+          throw parameterValidationError(
+            "Edit tool requires either 'edits' array or both 'oldText' and 'newText' (single replacement mode). Supply correct parameters before retrying.",
+          );
+        }
+      }
+
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
     },
   };
