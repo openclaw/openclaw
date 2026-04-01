@@ -6,6 +6,7 @@ export type ExecToolDefaults = {
   host?: ExecTarget;
   security?: ExecSecurity;
   ask?: ExecAsk;
+  trigger?: string;
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];

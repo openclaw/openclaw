@@ -142,7 +142,7 @@ export type DiscordVoiceConfig = {
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Optional: falls back to owner IDs inferred from allowFrom/defaultTo when possible. */
+  /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
