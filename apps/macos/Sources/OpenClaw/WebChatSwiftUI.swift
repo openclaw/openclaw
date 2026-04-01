@@ -460,6 +460,7 @@ final class WebChatSwiftUIWindowController {
     }
 
     private static func color(fromHex raw: String?) -> Color? {
-        ColorHexSupport.color(fromHex: raw)
+        guard let raw else { return nil }
+        return OpenClawKit.ColorHexSupport.color(fromHex: raw)
     }
 }

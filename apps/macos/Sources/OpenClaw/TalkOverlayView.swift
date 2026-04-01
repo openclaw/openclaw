@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawKit
 import SwiftUI
 
 struct TalkOverlayView: View {
@@ -53,7 +54,10 @@ struct TalkOverlayView: View {
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
     private var seamColor: Color {
-        ColorHexSupport.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor
+        if let hex = self.appState.seamColorHex {
+            return OpenClawKit.ColorHexSupport.color(fromHex: hex) ?? Self.defaultSeamColor
+        }
+        return Self.defaultSeamColor
     }
 }
 
