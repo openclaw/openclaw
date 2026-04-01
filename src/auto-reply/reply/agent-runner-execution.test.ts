@@ -9,6 +9,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
+  isInternalMessageChannelMock: vi.fn((_: unknown) => false),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -74,7 +75,7 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   isMarkdownCapableMessageChannel: () => true,
   resolveMessageChannel: () => "whatsapp",
-  isInternalMessageChannel: () => false,
+  isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
 vi.mock("../heartbeat.js", () => ({
@@ -167,6 +168,8 @@ describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
     state.runEmbeddedPiAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
+    state.isInternalMessageChannelMock.mockReset();
+    state.isInternalMessageChannelMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -270,8 +273,126 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("Agent failed before reply");
+      expect(result.payload.text).toContain("Something went wrong while processing your request");
       expect(result.payload.text).not.toContain("Rate-limited");
+    }
+  });
+
+  it("returns a friendly generic error on external chat channels", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("INVALID_ARGUMENT: some other failure"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+      );
+    }
+  });
+
+  it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "The number of toolResult blocks at messages.186.content exceeds the number of toolUse blocks of previous turn.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
+      );
+    }
+  });
+
+  it("keeps raw generic errors on internal control surfaces", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("INVALID_ARGUMENT: some other failure"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "chat",
+        Surface: "chat",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Agent failed before reply");
+      expect(result.payload.text).toContain("INVALID_ARGUMENT: some other failure");
+      expect(result.payload.text).toContain("Logs: openclaw logs --follow");
     }
   });
 

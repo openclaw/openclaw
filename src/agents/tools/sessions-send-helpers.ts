@@ -2,9 +2,9 @@ import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
+import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { parseSessionConversationRef } from "../../sessions/session-key-utils.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -19,7 +19,7 @@ export type AnnounceTarget = {
 };
 
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
-  const parsed = parseSessionConversationRef(sessionKey);
+  const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
     return null;
   }
