@@ -63,7 +63,7 @@ export function buildMediaUnderstandingRegistry(
       if (api === "anthropic-messages" || api === "openai-responses" || api === "openai-completions") {
         const rawModels = record?.models;
         const models: Array<Record<string, unknown>> = Array.isArray(rawModels)
-          ? (rawModels as Array<Record<string, unknown>>)
+          ? rawModels
           : [];
         const hasImageModel = models.some(
           (m) => Array.isArray(m?.input) && m.input.includes("image"),
