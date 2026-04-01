@@ -443,6 +443,8 @@ export const CliBackendSchema = z
   .object({
     command: z.string(),
     args: z.array(z.string()).optional(),
+    server: z.string().optional(),
+    tool: z.string().optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
@@ -652,9 +654,11 @@ export const MediaUnderstandingModelSchema = z
     provider: z.string().optional(),
     model: z.string().optional(),
     capabilities: MediaUnderstandingCapabilitiesSchema,
-    type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
+    type: z.union([z.literal("provider"), z.literal("cli"), z.literal("mcp")]).optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
+    server: z.string().optional(),
+    tool: z.string().optional(),
     maxChars: z.number().int().positive().optional(),
     maxBytes: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
@@ -695,6 +699,8 @@ export const LinkModelSchema = z
     type: z.literal("cli").optional(),
     command: z.string().min(1),
     args: z.array(z.string()).optional(),
+    server: z.string().optional(),
+    tool: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
   })
   .strict();
