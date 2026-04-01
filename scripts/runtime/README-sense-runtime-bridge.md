@@ -14,62 +14,59 @@ Formal runtime-plane entrypoints for the T550 control plane live in:
 - `scripts/runtime/sense-runtime-dispatcher.sh`
 - `scripts/runtime/sense_runtime_decision.py`
 - `scripts/runtime/sense-runtime-decision.sh`
+- `scripts/runtime/sense_runtime_remediation.py`
+- `scripts/runtime/sense-runtime-remediation.sh`
 
-Decision step flow:
+Minimal remediation mapping:
 
-- manager requests `sense sandbox status`
-- `sense-runtime-manager-tool.sh` returns structured `details.sandbox_status`
-- `sense-runtime-dispatcher.sh` evaluates readiness from structured fields only
-- `sense-runtime-decision.sh` wires the two together and returns:
-  - `readiness`
-  - `recommended_action`
-  - `reasons`
-  - `next_step`
+- `check_runtime_provider`
+  - call `sense runtime start`
+  - then re-run readiness decision
+- `check_gpu_runtime`
+  - re-read structured sandbox status
+  - return GPU/NIM/policy capability fields
+- `wait_for_runtime_ready`
+  - retry decision check with backoff `2s, 4s, 8s`
+- `review_runtime_capabilities`
+  - summarize runtime capability fields from structured sandbox status
 
-Dispatcher fields used:
-
-- `phase`
-- `gpu_enabled`
-- `policy_names`
-- `nim_status`
-- `runtime_name`
-- `openshell_status`
-
-Decision rules:
-
-- `readiness == ready`
-  - next runtime task may proceed
-  - `next_step = run_runtime_task`
-- `readiness == degraded`
-  - route to provider or GPU checks
-  - examples: `check_runtime_provider`, `check_gpu_runtime`
-- `readiness == not_ready`
-  - re-check or start the runtime first
-  - `next_step = sense_runtime_status`
-- `provider` and `model` may remain `unknown`
-  - manager does not use those fields yet for readiness decisions
-
-Example:
-
-```bash
-scripts/runtime/sense-runtime-decision.sh \
-  --token "$SENSE_WORKER_TOKEN" \
-  --sandbox-name sense-wsl-agent
-```
-
-Current observed result on Sense:
+Remediation output shape:
 
 ```json
 {
   "readiness": "degraded",
   "recommended_action": "check_runtime_provider",
-  "reasons": ["gpu is not enabled", "nim_status is not running"],
+  "remediation_action": "check_runtime_provider",
+  "remediation_result": "triggered sense runtime start",
+  "followup_status": {...},
   "next_step": "sense_runtime_start"
 }
 ```
 
-Natural next extension:
+Decision + remediation sequence:
 
-- wire `check_runtime_provider` to a remediation step
-- wire `check_gpu_runtime` to a GPU health probe
-- wire `wait_for_runtime_ready` to retry / backoff around `sense runtime status`
+- `sense-runtime-decision.sh`
+  - readiness decision only
+- `sense-runtime-remediation.sh`
+  - decision + minimal remediation
+  - if `--recommended-action` is omitted, it uses the current decision result
+
+Examples:
+
+```bash
+scripts/runtime/sense-runtime-remediation.sh \
+  --token "$SENSE_WORKER_TOKEN" \
+  --sandbox-name sense-wsl-agent
+
+scripts/runtime/sense-runtime-remediation.sh \
+  --token "$SENSE_WORKER_TOKEN" \
+  --sandbox-name sense-wsl-agent \
+  --recommended-action review_runtime_capabilities
+```
+
+Notes:
+
+- remediation is intentionally minimal and reuses the existing runtime tool chain
+- `401 unauthorized` still propagates as a hard failure
+- `provider` and `model` may remain `unknown`; remediation does not branch on them yet
+- the next natural step is to bind `recommended_action` values to richer automatic provider/GPU remediation workflows
