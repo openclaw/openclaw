@@ -28,8 +28,6 @@ import {
 import {
   hasDifferentLiveSessionModelSelection,
   LiveSessionModelSwitchError,
-  resolveLiveSessionModelSelection,
-  shouldTrackPersistedLiveSessionModelSelection,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {
@@ -238,18 +236,6 @@ export async function runEmbeddedPiAgent(
         authProfileId: preferredProfileId,
         authProfileIdSource: params.authProfileIdSource,
       });
-      const resolvePersistedLiveSelection = () =>
-        resolveLiveSessionModelSelection({
-          cfg: params.config,
-          sessionKey: params.sessionKey,
-          agentId: workspaceResolution.agentId,
-          defaultProvider: provider,
-          defaultModel: modelId,
-        });
-      const shouldTrackPersistedLiveSelection = shouldTrackPersistedLiveSessionModelSelection(
-        resolveCurrentLiveSelection(),
-        resolvePersistedLiveSelection(),
-      );
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -457,15 +443,6 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = shouldTrackPersistedLiveSelection
-            ? resolvePersistedLiveSelection()
-            : null;
-          if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
-            log.info(
-              `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(nextSelection);
-          }
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -614,23 +591,6 @@ export async function runEmbeddedPiAgent(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
-          const failedOrAbortedAttempt =
-            aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection =
-            failedOrAbortedAttempt && shouldTrackPersistedLiveSelection
-              ? resolvePersistedLiveSelection()
-              : null;
-          if (
-            failedOrAbortedAttempt &&
-            canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), persistedSelection)
-          ) {
-            log.info(
-              `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(persistedSelection);
-          }
-
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
