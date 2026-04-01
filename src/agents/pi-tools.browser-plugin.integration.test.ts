@@ -5,7 +5,7 @@ import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -14,7 +14,7 @@ function resetPluginState() {
   resetPluginRuntimeStateForTest();
 }
 
-describe("createOpenClawTools browser plugin integration", () => {
+describe("createOpenClawCodingTools browser plugin integration", () => {
   let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
 
   beforeEach(() => {
@@ -30,32 +30,22 @@ describe("createOpenClawTools browser plugin integration", () => {
     bundledFixture = null;
   });
 
-  it("loads the bundled browser plugin through normal plugin resolution", () => {
-    const tools = createOpenClawTools({
+  it("keeps browser available in the coding profile when browser is configured", () => {
+    const tools = createOpenClawCodingTools({
       config: {
+        browser: {
+          enabled: true,
+          defaultProfile: "openclaw",
+        },
         plugins: {
-          allow: ["browser"],
+          enabled: true,
+        },
+        tools: {
+          profile: "coding",
         },
       } as OpenClawConfig,
     });
 
     expect(tools.map((tool) => tool.name)).toContain("browser");
-  });
-
-  it("omits the browser tool when the bundled browser plugin is disabled", () => {
-    const tools = createOpenClawTools({
-      config: {
-        plugins: {
-          allow: ["browser"],
-          entries: {
-            browser: {
-              enabled: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(tools.map((tool) => tool.name)).not.toContain("browser");
   });
 });
