@@ -3480,6 +3480,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 additionalProperties: false,
               },
+              tokenLimits: {
+                type: "object",
+                properties: {
+                  toolResultMax: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
               llm: {
                 type: "object",
                 properties: {
@@ -22724,7 +22735,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.compaction.recentTurnsPreserve": {
       label: "Compaction Preserve Recent Turns",
-      help: "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
+      help: "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 10). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard": {

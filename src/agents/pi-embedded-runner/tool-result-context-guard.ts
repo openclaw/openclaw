@@ -57,7 +57,7 @@ function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringify(item)).join(",")}]`;
   }
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+  const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
     a.localeCompare(b),
   );
   return `{${entries
@@ -126,7 +126,7 @@ function resolveToolResultFingerprint(messages: AgentMessage[], index: number): 
     return stored;
   }
   const toolCallId =
-    message.role === "toolResult" ? extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>) : null;
+    message.role === "toolResult" ? extractToolResultId(message) : null;
   const linkedToolCall = findMatchingAssistantToolCall({
     messages,
     toolResultIndex: index,
