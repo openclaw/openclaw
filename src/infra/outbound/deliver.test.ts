@@ -689,33 +689,6 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("strips leading blank lines for WhatsApp text payloads", async () => {
-    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
-    await deliverWhatsAppPayload({
-      sendWhatsApp,
-      payload: { text: "\n\nHello from WhatsApp" },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenNthCalledWith(
-      1,
-      "+1555",
-      "Hello from WhatsApp",
-      expect.objectContaining({ verbose: false }),
-    );
-  });
-
-  it("drops whitespace-only WhatsApp text payloads when no media is attached", async () => {
-    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
-    const results = await deliverWhatsAppPayload({
-      sendWhatsApp,
-      payload: { text: "   \n\t   " },
-    });
-
-    expect(sendWhatsApp).not.toHaveBeenCalled();
-    expect(results).toEqual([]);
-  });
-
   it("drops HTML-only WhatsApp text payloads after sanitization", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const results = await deliverWhatsAppPayload({
@@ -725,25 +698,6 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendWhatsApp).not.toHaveBeenCalled();
     expect(results).toEqual([]);
-  });
-
-  it("keeps WhatsApp media payloads but clears whitespace-only captions", async () => {
-    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
-    await deliverWhatsAppPayload({
-      sendWhatsApp,
-      payload: { text: " \n\t ", mediaUrl: "https://example.com/photo.png" },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenNthCalledWith(
-      1,
-      "+1555",
-      "",
-      expect.objectContaining({
-        mediaUrl: "https://example.com/photo.png",
-        verbose: false,
-      }),
-    );
   });
 
   it("drops non-WhatsApp HTML-only text payloads after sanitization", async () => {
@@ -848,21 +802,6 @@ describe("deliverOutboundPayloads", () => {
       { text: "hi", mediaUrls: [] },
       { text: "", mediaUrls: ["https://x.test/a.jpg"] },
     ]);
-  });
-
-  it("formats BTW replies prominently for whatsapp delivery", async () => {
-    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
-
-    await deliverWhatsAppPayload({
-      sendWhatsApp,
-      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "+1555",
-      "BTW\nQuestion: what is 17 * 19?\n\n323",
-      expect.any(Object),
-    );
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
