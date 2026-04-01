@@ -6,7 +6,7 @@
  * configuration issues and emits actionable fix suggestions.
  *
  * Checks performed:
- *   1. .wslconfig resource limits — memory / processors / swap
+ *   1. .wslconfig resource limits — memory / processors / swap (WSL2 only)
  *   2. WSL version and kernel — informational context for diagnostics
  *   3. systemd status — displayed in summary (detailed systemd
  *      diagnostics are handled by the gateway daemon flow to
@@ -179,6 +179,12 @@ export async function resolveWindowsUserProfilePath(): Promise<string | null> {
 /**
  * Read the Windows-side .wslconfig file from within WSL.
  * Uses resolveWindowsUserProfilePath() for reliable path resolution.
+ *
+ * Returns null when:
+ *   - The Windows profile path cannot be resolved
+ *   - The .wslconfig file does not exist or is unreadable
+ *   - The file exists but has no [wsl2] section (treated as
+ *     unconfigured so downstream fallback diagnostics still fire)
  */
 export async function readWSLConfigResources(): Promise<WSLConfigResources | null> {
   const profilePath = await resolveWindowsUserProfilePath();
@@ -191,7 +197,9 @@ export async function readWSLConfigResources(): Promise<WSLConfigResources | nul
     const ini = parseINI(content);
     const wsl2Section = ini["wsl2"];
     if (!wsl2Section) {
-      return { memory: null, processors: null, swap: null };
+      // File exists but has no [wsl2] section — treat as unconfigured
+      // so the missing-config fallback path in diagnostics still fires.
+      return null;
     }
     return {
       memory: wsl2Section["memory"] ?? null,
@@ -299,6 +307,10 @@ export function parseMemoryToMB(value: string | null): number | null {
  * resource limits and environment information that no other
  * Doctor contribution covers.
  *
+ * Resource limit checks (.wslconfig) are gated behind isWSL2
+ * because .wslconfig only controls resource allocation in WSL2.
+ * WSL1 uses different mechanisms and the advice would be misleading.
+ *
  * Memory note: inside WSL, os.totalmem() returns the memory visible
  * to the WSL VM (roughly 50% of Windows host RAM by default when
  * no .wslconfig is present), not the Windows host total. We compare
@@ -311,7 +323,13 @@ export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
 
   const notes: string[] = [];
 
-  // ── Resource limit checks ──
+  // .wslconfig resource checks apply to WSL2 only — WSL1 does not
+  // use .wslconfig for resource allocation.
+  if (!diag.isWSL2) {
+    return notes;
+  }
+
+  // ── Resource limit checks (WSL2 only) ──
   if (diag.wslconfig) {
     const memoryMB = parseMemoryToMB(diag.wslconfig.memory);
     if (memoryMB !== null && memoryMB < 4096) {
@@ -327,8 +345,9 @@ export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
       notes.push("Edit %USERPROFILE%\\.wslconfig [wsl2] processors=4");
     }
   } else {
-    // No .wslconfig found. os.totalmem() inside WSL reflects the VM
-    // allocation (not the Windows host total), so compare directly.
+    // No .wslconfig found (or file has no [wsl2] section).
+    // os.totalmem() inside WSL reflects the VM allocation directly,
+    // so compare against the 4GB threshold without halving.
     const wslMemGB = Math.round(diag.wslVisibleMemoryBytes / (1024 * 1024 * 1024));
     if (wslMemGB > 0 && wslMemGB < 4) {
       notes.push(`No .wslconfig found. WSL is currently limited to ~${wslMemGB}GB memory.`);
