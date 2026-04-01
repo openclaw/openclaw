@@ -139,6 +139,7 @@ import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
 } from "../tool-schema-runtime.js";
+import { resolveToolResultMaxTokens } from "../tool-result-truncation.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -886,6 +887,15 @@ export async function runEmbeddedAttempt(
           Math.floor(
             params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
           ),
+        ),
+        toolResultMaxTokens: resolveToolResultMaxTokens(
+          Math.max(
+            1,
+            Math.floor(
+              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            ),
+          ),
+          params.config,
         ),
       });
       const cacheTrace = createCacheTrace({

@@ -1,7 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../../config/config.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { estimateTextTokensApprox } from "../token-approximation.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
@@ -20,6 +22,38 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  * This acts as a safety net when we don't know the context window size.
  */
 export const HARD_MAX_TOOL_RESULT_CHARS = 400_000;
+export const DEFAULT_TOOL_RESULT_MAX_TOKENS = 2_000;
+const TOOL_RESULT_HEAD_TOKENS = 500;
+const TOOL_RESULT_TAIL_TOKENS = 500;
+const MIN_TOOL_RESULT_BODY_TOKENS = 64;
+const TOKEN_TRUNCATION_OMISSION_MARKER =
+  "\n\n[... middle content omitted — showing head and tail ...]\n\n";
+
+function resolvePositiveInt(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+/**
+ * Resolve the configured single-tool-result budget. The configured max acts as
+ * a hard ceiling, but very small context windows still clamp below it so one
+ * tool result cannot dominate the prompt.
+ */
+export function resolveToolResultMaxTokens(
+  contextWindowTokens: number,
+  cfg?: OpenClawConfig,
+  override?: number,
+): number {
+  const configured =
+    resolvePositiveInt(override) ??
+    resolvePositiveInt(cfg?.agents?.defaults?.tokenLimits?.toolResultMax) ??
+    DEFAULT_TOOL_RESULT_MAX_TOKENS;
+  const contextShareCap = Math.max(256, Math.floor(Math.max(1, contextWindowTokens) * 0.5));
+  return Math.max(MIN_TOOL_RESULT_BODY_TOKENS, Math.min(configured, contextShareCap));
+}
+
+function buildTokenTruncationNotice(originalTokens: number, truncatedTokens: number): string {
+  return `[Truncated: original ${originalTokens} tokens → ${truncatedTokens} tokens. Full output available via tool recall.]`;
+}
 
 /**
  * Minimum characters to keep when truncating.
@@ -152,6 +186,161 @@ export function getToolResultTextLength(msg: AgentMessage): number {
   return totalLength;
 }
 
+export function getToolResultTextTokenCount(msg: AgentMessage): number {
+  if (!msg || (msg as { role?: string }).role !== "toolResult") {
+    return 0;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let totalTokens = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+      continue;
+    }
+    const text = (block as TextContent).text;
+    if (typeof text === "string") {
+      totalTokens += estimateTextTokensApprox(text);
+    }
+  }
+  return totalTokens;
+}
+
+function takeHeadByApproxTokens(text: string, maxTokens: number): string {
+  if (!text || maxTokens <= 0) {
+    return "";
+  }
+  if (estimateTextTokensApprox(text) <= maxTokens) {
+    return text;
+  }
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = text.slice(0, mid);
+    if (estimateTextTokensApprox(candidate) <= maxTokens) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const best = text.slice(0, low);
+  const newline = best.lastIndexOf("\n");
+  return newline > best.length * 0.7 ? best.slice(0, newline) : best;
+}
+
+function takeTailByApproxTokens(text: string, maxTokens: number): string {
+  if (!text || maxTokens <= 0) {
+    return "";
+  }
+  if (estimateTextTokensApprox(text) <= maxTokens) {
+    return text;
+  }
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = text.slice(text.length - mid);
+    if (estimateTextTokensApprox(candidate) <= maxTokens) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const best = text.slice(text.length - low);
+  const newline = best.indexOf("\n");
+  return newline !== -1 && newline < best.length * 0.3 ? best.slice(newline + 1) : best;
+}
+
+function resolveHeadTailTokenBudgets(maxTokens: number, noticeBudgetTokens: number) {
+  const bodyBudget = Math.max(MIN_TOOL_RESULT_BODY_TOKENS, maxTokens - noticeBudgetTokens);
+  if (bodyBudget >= TOOL_RESULT_HEAD_TOKENS + TOOL_RESULT_TAIL_TOKENS) {
+    return {
+      headTokens: TOOL_RESULT_HEAD_TOKENS,
+      tailTokens: TOOL_RESULT_TAIL_TOKENS,
+    };
+  }
+  const headTokens = Math.max(32, Math.floor(bodyBudget / 2));
+  const tailTokens = Math.max(32, bodyBudget - headTokens);
+  return { headTokens, tailTokens };
+}
+
+/**
+ * Token-aware truncation used for prompt context shaping. It preserves the
+ * first and last ~500 tokens by default, then prepends a recall hint so the
+ * agent knows more output exists off-context.
+ */
+export function truncateToolResultTextToTokens(text: string, maxTokens: number): string {
+  const resolvedMaxTokens = Math.max(MIN_TOOL_RESULT_BODY_TOKENS, Math.floor(maxTokens));
+  const originalTokens = estimateTextTokensApprox(text);
+  if (originalTokens <= resolvedMaxTokens) {
+    return text;
+  }
+
+  let noticeBudgetTokens = estimateTextTokensApprox(
+    buildTokenTruncationNotice(originalTokens, resolvedMaxTokens) +
+      TOKEN_TRUNCATION_OMISSION_MARKER,
+  );
+  let { headTokens, tailTokens } = resolveHeadTailTokenBudgets(resolvedMaxTokens, noticeBudgetTokens);
+  let head = takeHeadByApproxTokens(text, headTokens);
+  let tail = takeTailByApproxTokens(text, tailTokens);
+  let body = `${head}${TOKEN_TRUNCATION_OMISSION_MARKER}${tail}`;
+  let truncatedTokens = estimateTextTokensApprox(body);
+  let truncatedText =
+    `${buildTokenTruncationNotice(originalTokens, truncatedTokens)}\n\n${body}`.trim();
+  let totalTokens = estimateTextTokensApprox(truncatedText);
+  let attempts = 0;
+
+  while (totalTokens > resolvedMaxTokens && attempts < 8) {
+    attempts += 1;
+    noticeBudgetTokens = estimateTextTokensApprox(
+      buildTokenTruncationNotice(originalTokens, totalTokens) + TOKEN_TRUNCATION_OMISSION_MARKER,
+    );
+    ({ headTokens, tailTokens } = resolveHeadTailTokenBudgets(resolvedMaxTokens, noticeBudgetTokens));
+    const shrinkBy = Math.max(16, totalTokens - resolvedMaxTokens);
+    head = takeHeadByApproxTokens(text, Math.max(32, headTokens - Math.ceil(shrinkBy / 2)));
+    tail = takeTailByApproxTokens(text, Math.max(32, tailTokens - Math.floor(shrinkBy / 2)));
+    body = `${head}${TOKEN_TRUNCATION_OMISSION_MARKER}${tail}`;
+    truncatedTokens = estimateTextTokensApprox(body);
+    truncatedText = `${buildTokenTruncationNotice(originalTokens, truncatedTokens)}\n\n${body}`.trim();
+    totalTokens = estimateTextTokensApprox(truncatedText);
+  }
+
+  return truncatedText;
+}
+
+export function truncateToolResultMessageToTokens(
+  msg: AgentMessage,
+  maxTokens: number,
+): AgentMessage {
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return msg;
+  }
+  const totalTokens = getToolResultTextTokenCount(msg);
+  if (totalTokens <= maxTokens) {
+    return msg;
+  }
+
+  const textParts: string[] = [];
+  const nonTextBlocks: unknown[] = [];
+  for (const block of content) {
+    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
+      const text = (block as TextContent).text;
+      if (typeof text === "string") {
+        textParts.push(text);
+      }
+      continue;
+    }
+    nonTextBlocks.push(block);
+  }
+
+  const truncatedText = truncateToolResultTextToTokens(textParts.join("\n"), maxTokens);
+  const nextContent = [{ type: "text", text: truncatedText }, ...nonTextBlocks];
+  return { ...msg, content: nextContent } as AgentMessage;
+}
+
 /**
  * Truncate a tool result message's text content blocks to fit within maxChars.
  * Returns a new message (does not mutate the original).
@@ -209,11 +398,17 @@ export function truncateToolResultMessage(
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
+  toolResultMaxTokens?: number;
+  cfg?: OpenClawConfig;
   sessionId?: string;
   sessionKey?: string;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxTokens = resolveToolResultMaxTokens(
+    contextWindowTokens,
+    params.cfg,
+    params.toolResultMaxTokens,
+  );
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
   try {
@@ -236,12 +431,12 @@ export async function truncateOversizedToolResultsInSession(params: {
       if ((msg as { role?: string }).role !== "toolResult") {
         continue;
       }
-      const textLength = getToolResultTextLength(msg);
-      if (textLength > maxChars) {
+      const tokenCount = getToolResultTextTokenCount(msg);
+      if (tokenCount > maxTokens) {
         oversizedIndices.push(i);
         log.info(
           `[tool-result-truncation] Found oversized tool result: ` +
-            `entry=${entry.id} chars=${textLength} maxChars=${maxChars} ` +
+            `entry=${entry.id} tokens=${tokenCount} maxTokens=${maxTokens} ` +
             `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
         );
       }
@@ -256,11 +451,11 @@ export async function truncateOversizedToolResultsInSession(params: {
       if (!entry || entry.type !== "message") {
         return [];
       }
-      const message = truncateToolResultMessage(entry.message, maxChars);
-      const newLength = getToolResultTextLength(message);
+      const message = truncateToolResultMessageToTokens(entry.message, maxTokens);
+      const newTokens = getToolResultTextTokenCount(message);
       log.info(
         `[tool-result-truncation] Truncated tool result: ` +
-          `originalEntry=${entry.id} newChars=${newLength} ` +
+          `originalEntry=${entry.id} newTokens=${newTokens} ` +
           `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
       );
       return [{ entryId: entry.id, message }];
@@ -276,7 +471,7 @@ export async function truncateOversizedToolResultsInSession(params: {
 
     log.info(
       `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-        `(contextWindow=${contextWindowTokens} maxChars=${maxChars}) ` +
+        `(contextWindow=${contextWindowTokens} maxTokens=${maxTokens}) ` +
         `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
     );
 
@@ -304,20 +499,25 @@ export async function truncateOversizedToolResultsInSession(params: {
 export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
   contextWindowTokens: number,
+  options: { toolResultMaxTokens?: number; cfg?: OpenClawConfig } = {},
 ): { messages: AgentMessage[]; truncatedCount: number } {
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxTokens = resolveToolResultMaxTokens(
+    contextWindowTokens,
+    options.cfg,
+    options.toolResultMaxTokens,
+  );
   let truncatedCount = 0;
 
   const result = messages.map((msg) => {
     if ((msg as { role?: string }).role !== "toolResult") {
       return msg;
     }
-    const textLength = getToolResultTextLength(msg);
-    if (textLength <= maxChars) {
+    const tokenCount = getToolResultTextTokenCount(msg);
+    if (tokenCount <= maxTokens) {
       return msg;
     }
     truncatedCount++;
-    return truncateToolResultMessage(msg, maxChars);
+    return truncateToolResultMessageToTokens(msg, maxTokens);
   });
 
   return { messages: result, truncatedCount };
@@ -326,12 +526,20 @@ export function truncateOversizedToolResultsInMessages(
 /**
  * Check if a tool result message exceeds the size limit for a given context window.
  */
-export function isOversizedToolResult(msg: AgentMessage, contextWindowTokens: number): boolean {
+export function isOversizedToolResult(
+  msg: AgentMessage,
+  contextWindowTokens: number,
+  options: { toolResultMaxTokens?: number; cfg?: OpenClawConfig } = {},
+): boolean {
   if ((msg as { role?: string }).role !== "toolResult") {
     return false;
   }
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
-  return getToolResultTextLength(msg) > maxChars;
+  const maxTokens = resolveToolResultMaxTokens(
+    contextWindowTokens,
+    options.cfg,
+    options.toolResultMaxTokens,
+  );
+  return getToolResultTextTokenCount(msg) > maxTokens;
 }
 
 /**
@@ -342,16 +550,22 @@ export function isOversizedToolResult(msg: AgentMessage, contextWindowTokens: nu
 export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
+  toolResultMaxTokens?: number;
+  cfg?: OpenClawConfig;
 }): boolean {
   const { messages, contextWindowTokens } = params;
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const maxTokens = resolveToolResultMaxTokens(
+    contextWindowTokens,
+    params.cfg,
+    params.toolResultMaxTokens,
+  );
 
   for (const msg of messages) {
     if ((msg as { role?: string }).role !== "toolResult") {
       continue;
     }
-    const textLength = getToolResultTextLength(msg);
-    if (textLength > maxChars) {
+    const tokenCount = getToolResultTextTokenCount(msg);
+    if (tokenCount > maxTokens) {
       return true;
     }
   }

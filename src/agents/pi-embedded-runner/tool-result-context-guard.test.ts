@@ -166,7 +166,7 @@ describe("installToolResultContextGuard", () => {
     expect(toolResultTexts.join("\n")).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("truncates an individually oversized tool result with a context-limit notice", async () => {
+  it("truncates an individually oversized tool result with a recall notice", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -180,7 +180,8 @@ describe("installToolResultContextGuard", () => {
 
     const newResultText = getToolResultText(contextForNextCall[0]);
     expect(newResultText.length).toBeLessThan(5_000);
-    expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expect(newResultText).toContain("[Truncated: original");
+    expect(newResultText).toContain("Full output available via tool recall.");
   });
 
   it("keeps compacting newest-first until overflow clears, reaching older tool results when needed", async () => {

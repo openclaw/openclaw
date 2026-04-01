@@ -10,6 +10,10 @@ import {
   invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import {
+  getToolResultTextTokenCount,
+  truncateToolResultMessageToTokens,
+} from "./tool-result-truncation.js";
 
 // Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
 const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
@@ -74,17 +78,16 @@ function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function truncateToolResultToChars(
+function truncateToolResultToTokens(
   msg: AgentMessage,
-  maxChars: number,
-  cache: MessageCharEstimateCache,
+  maxTokens: number,
 ): AgentMessage {
   if (!isToolResultMessage(msg)) {
     return msg;
   }
 
-  const estimatedChars = estimateMessageCharsCached(msg, cache);
-  if (estimatedChars <= maxChars) {
+  const estimatedTokens = getToolResultTextTokenCount(msg);
+  if (estimatedTokens <= maxTokens) {
     return msg;
   }
 
@@ -93,8 +96,7 @@ function truncateToolResultToChars(
     return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
   }
 
-  const truncatedText = truncateTextToBudget(rawText, maxChars);
-  return replaceToolResultText(msg, truncatedText);
+  return truncateToolResultMessageToTokens(msg, maxTokens);
 }
 
 function compactExistingToolResultsInPlace(params: {
@@ -162,9 +164,9 @@ function applyMessageMutationInPlace(
 function enforceToolResultContextBudgetInPlace(params: {
   messages: AgentMessage[];
   contextBudgetChars: number;
-  maxSingleToolResultChars: number;
+  maxSingleToolResultTokens: number;
 }): void {
-  const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const { messages, contextBudgetChars, maxSingleToolResultTokens } = params;
   const estimateCache = createMessageCharEstimateCache();
 
   // Ensure each tool result has an upper bound before considering total context usage.
@@ -172,7 +174,7 @@ function enforceToolResultContextBudgetInPlace(params: {
     if (!isToolResultMessage(message)) {
       continue;
     }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
+    const truncated = truncateToolResultToTokens(message, maxSingleToolResultTokens);
     applyMessageMutationInPlace(message, truncated, estimateCache);
   }
 
@@ -193,16 +195,26 @@ function enforceToolResultContextBudgetInPlace(params: {
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
+  toolResultMaxTokens?: number;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const contextBudgetChars = Math.max(
     1_024,
     Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * CONTEXT_INPUT_HEADROOM_RATIO),
   );
-  const maxSingleToolResultChars = Math.max(
-    1_024,
-    Math.floor(
-      contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
+  const maxSingleToolResultTokens = Math.max(
+    64,
+    Math.min(
+      Math.max(64, Math.floor(params.toolResultMaxTokens ?? Number.POSITIVE_INFINITY)),
+      Math.max(
+        64,
+        Math.floor(
+          contextWindowTokens *
+            TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE *
+            SINGLE_TOOL_RESULT_CONTEXT_SHARE /
+            CHARS_PER_TOKEN_ESTIMATE,
+        ),
+      ),
     ),
   );
   const preemptiveOverflowChars = Math.max(
@@ -224,7 +236,7 @@ export function installToolResultContextGuard(params: {
     enforceToolResultContextBudgetInPlace({
       messages: contextMessages,
       contextBudgetChars,
-      maxSingleToolResultChars,
+      maxSingleToolResultTokens,
     });
 
     // After tool-result compaction, check if context still exceeds the high-water mark.
