@@ -3012,7 +3012,8 @@ Notes:
 ```
 
 - Per-agent profiles are stored at `<agentDir>/auth-profiles.json`.
-- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
+- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
+- OAuth-mode profiles (`auth.profiles.<id>.mode = "oauth"`) do not support SecretRef-backed auth-profile credentials.
 - Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
 - See [OAuth](/concepts/oauth).
@@ -3028,6 +3029,9 @@ Notes:
       billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
       billingMaxHours: 24,
       failureWindowHours: 24,
+      overloadedProfileRotations: 1,
+      overloadedBackoffMs: 0,
+      rateLimitedProfileRotations: 1,
     },
   },
 }
@@ -3037,6 +3041,9 @@ Notes:
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
+- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
+- `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
+- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`).
 
 ---
 

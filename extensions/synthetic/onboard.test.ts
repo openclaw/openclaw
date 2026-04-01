@@ -1,5 +1,5 @@
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { SYNTHETIC_DEFAULT_MODEL_ID } from "openclaw/plugin-sdk/synthetic";
+import { SYNTHETIC_DEFAULT_MODEL_REF as SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC } from "openclaw/plugin-sdk/synthetic";
 import { describe, expect, it } from "vitest";
 import { createLegacyProviderConfig } from "../../test/helpers/plugins/onboard-config.js";
 import {
@@ -16,7 +16,7 @@ describe("synthetic onboard", () => {
       api: "anthropic-messages",
     });
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-      SYNTHETIC_DEFAULT_MODEL_REF,
+      SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC,
     );
   });
 
@@ -32,6 +32,6 @@ describe("synthetic onboard", () => {
     expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
     const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
     expect(ids).toContain("old-model");
-    expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_ID);
+    expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_REF.replace(/^synthetic\//, ""));
   });
 });

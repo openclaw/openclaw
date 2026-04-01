@@ -55,7 +55,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 146,
+            "line": 147,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -64,7 +64,7 @@
           "exportName": "ChannelAgentTool",
           "kind": "type",
           "source": {
-            "line": 18,
+            "line": 19,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -73,7 +73,7 @@
           "exportName": "ChannelAgentToolFactory",
           "kind": "type",
           "source": {
-            "line": 23,
+            "line": 24,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -82,7 +82,7 @@
           "exportName": "ChannelCapabilities",
           "kind": "type",
           "source": {
-            "line": 232,
+            "line": 233,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -109,7 +109,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 650,
+            "line": 653,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -118,7 +118,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 655,
+            "line": 658,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 671,
+            "line": 674,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 268,
+            "line": 271,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -145,7 +145,7 @@
           "exportName": "ChannelId",
           "kind": "type",
           "source": {
-            "line": 13,
+            "line": 14,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -154,7 +154,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 526,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -163,7 +163,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 492,
+            "line": 520,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -190,7 +190,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 62,
+            "line": 63,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -199,7 +199,7 @@
           "exportName": "ChannelSetupInput",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 64,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -226,7 +226,7 @@
           "exportName": "ChannelStatusIssue",
           "kind": "type",
           "source": {
-            "line": 101,
+            "line": 102,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -979,7 +979,7 @@
           "exportName": "buildCatchallMultiAccountChannelSchema",
           "kind": "function",
           "source": {
-            "line": 31,
+            "line": 32,
             "path": "src/channels/plugins/config-schema.ts"
           }
         },
@@ -988,12 +988,12 @@
           "exportName": "buildChannelConfigSchema",
           "kind": "function",
           "source": {
-            "line": 75,
+            "line": 76,
             "path": "src/channels/plugins/config-schema.ts"
           }
         },
         {
-          "declaration": "export function buildNestedDmConfigSchema(): ZodOptional<ZodObject<{ enabled: ZodOptional<ZodBoolean>; policy: ZodOptional<ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: ZodOptional<...>; }, $strip>>;",
+          "declaration": "export function buildNestedDmConfigSchema<TExtraShape extends ZodRawShape = {}>(extraShape?: TExtraShape | undefined): ZodOptional<ZodObject<{ enabled: ZodOptional<ZodBoolean>; policy: ZodOptional<ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: ZodOptional<...>; }, $strip>>;",
           "exportName": "buildNestedDmConfigSchema",
           "kind": "function",
           "source": {
@@ -1069,7 +1069,7 @@
           "exportName": "IMessageConfigSchema",
           "kind": "const",
           "source": {
-            "line": 1314,
+            "line": 1324,
             "path": "src/config/zod-schema.providers-core.ts"
           }
         },
@@ -1087,7 +1087,7 @@
           "exportName": "MSTeamsConfigSchema",
           "kind": "const",
           "source": {
-            "line": 1496,
+            "line": 1506,
             "path": "src/config/zod-schema.providers-core.ts"
           }
         },
@@ -1114,16 +1114,16 @@
           "exportName": "SignalConfigSchema",
           "kind": "const",
           "source": {
-            "line": 1072,
+            "line": 1082,
             "path": "src/config/zod-schema.providers-core.ts"
           }
         },
         {
-          "declaration": "export const SlackConfigSchema: z.ZodObject<{ name: z.ZodOptional<z.ZodString>; capabilities: z.ZodOptional<z.ZodUnion<readonly [z.ZodArray<z.ZodString>, z.ZodObject<{ interactiveReplies: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>]>>; markdown: z.ZodOptional<z.ZodObject<{ tables: z.ZodOptional<z.ZodEnum<{ off: \"off\"; bullets: \"bullets\"; code: \"code\"; block: \"block\"; }>>; }, z.core.$strict>>; enabled: z.ZodOptional<z.ZodBoolean>; commands: z.ZodOptional<z.ZodObject<{ native: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; nativeSkills: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; }, z.core.$strict>>; configWrites: z.ZodOptional<z.ZodBoolean>; botToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; appToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userTokenReadOnly: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>; allowBots: z.ZodOptional<z.ZodBoolean>; dangerouslyAllowNameMatching: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; historyLimit: z.ZodOptional<z.ZodNumber>; dmHistoryLimit: z.ZodOptional<z.ZodNumber>; dms: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ historyLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>>>; textChunkLimit: z.ZodOptional<z.ZodNumber>; chunkMode: z.ZodOptional<z.ZodEnum<{ length: \"length\"; newline: \"newline\"; }>>; blockStreaming: z.ZodOptional<z.ZodBoolean>; blockStreamingCoalesce: z.ZodOptional<z.ZodObject<{ minChars: z.ZodOptional<z.ZodNumber>; maxChars: z.ZodOptional<z.ZodNumber>; idleMs: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; streaming: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodEnum<{ off: \"off\"; block: \"block\"; partial: \"partial\"; progress: \"progress\"; }>]>>; nativeStreaming: z.ZodOptional<z.ZodBoolean>; streamMode: z.ZodOptional<z.ZodEnum<{ replace: \"replace\"; status_final: \"status_final\"; append: \"append\"; }>>; mediaMaxMb: z.ZodOptional<z.ZodNumber>; reactionNotifications: z.ZodOptional<z.ZodEnum<{ allowlist: \"allowlist\"; off: \"off\"; all: \"all\"; own: \"own\"; }>>; reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; replyToModeByChatType: z.ZodOptional<z.ZodObject<{ direct: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; group: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; channel: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; thread: z.ZodOptional<z.ZodObject<{ historyScope: z.ZodOptional<z.ZodEnum<{ channel: \"channel\"; thread: \"thread\"; }>>; inheritParent: z.ZodOptional<z.ZodBoolean>; initialHistoryLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; actions: z.ZodOptional<z.ZodObject<{ reactions: z.ZodOptional<z.ZodBoolean>; messages: z.ZodOptional<z.ZodBoolean>; pins: z.ZodOptional<z.ZodBoolean>; search: z.ZodOptional<z.ZodBoolean>; permissions: z.ZodOptional<z.ZodBoolean>; memberInfo: z.ZodOptional<z.ZodBoolean>; channelInfo: z.ZodOptional<z.ZodBoolean>; emojiList: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; slashCommand: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; name: z.ZodOptional<z.ZodString>; sessionPrefix: z.ZodOptional<z.ZodString>; ephemeral: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; dmPolicy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; defaultTo: z.ZodOptional<z.ZodString>; dm: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; policy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; groupEnabled: z.ZodOptional<z.ZodBoolean>; groupChannels: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; channels: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; allow: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; tools: z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>; toolsBySender: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>>>; allowBots: z.ZodOptional<z.ZodBoolean>; users: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; skills: z.ZodOptional<z.ZodArray<z.ZodString>>; systemPrompt: z.ZodOptional<z.ZodString>; }, z.core.$strict>>>>; heartbeat: z.ZodOptional<z.ZodObject<{ showOk: z.ZodOptional<z.ZodBoolean>; showAlerts: z.ZodOptional<z.ZodBoolean>; useIndicator: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; healthMonitor: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; responsePrefix: z.ZodOptional<z.ZodString>; ackReaction: z.ZodOptional<z.ZodString>; typingReaction: z.ZodOptional<z.ZodString>; mode: z.ZodDefault<z.ZodOptional<z.ZodEnum<{ socket: \"socket\"; http: \"http\"; }>>>; signingSecret: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; webhookPath: z.ZodDefault<z.ZodOptional<z.ZodString>>; groupPolicy: z.ZodDefault<z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; allowlist: \"allowlist\"; open: \"open\"; }>>>; accounts: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ name: z.ZodOptional<z.ZodString>; mode: z.ZodOptional<z.ZodEnum<{ socket: \"socket\"; http: \"http\"; }>>; signingSecret: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; webhookPath: z.ZodOptional<z.ZodString>; capabilities: z.ZodOptional<z.ZodUnion<readonly [z.ZodArray<z.ZodString>, z.ZodObject<{ interactiveReplies: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>]>>; markdown: z.ZodOptional<z.ZodObject<{ tables: z.ZodOptional<z.ZodEnum<{ off: \"off\"; bullets: \"bullets\"; code: \"code\"; block: \"block\"; }>>; }, z.core.$strict>>; enabled: z.ZodOptional<z.ZodBoolean>; commands: z.ZodOptional<z.ZodObject<{ native: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; nativeSkills: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; }, z.core.$strict>>; configWrites: z.ZodOptional<z.ZodBoolean>; botToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; appToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userTokenReadOnly: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>; allowBots: z.ZodOptional<z.ZodBoolean>; dangerouslyAllowNameMatching: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; groupPolicy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; allowlist: \"allowlist\"; open: \"open\"; }>>; historyLimit: z.ZodOptional<z.ZodNumber>; dmHistoryLimit: z.ZodOptional<z.ZodNumber>; dms: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ historyLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>>>; textChunkLimit: z.ZodOptional<z.ZodNumber>; chunkMode: z.ZodOptional<z.ZodEnum<{ length: \"length\"; newline: \"newline\"; }>>; blockStreaming: z.ZodOptional<z.ZodBoolean>; blockStreamingCoalesce: z.ZodOptional<z.ZodObject<{ minChars: z.ZodOptional<z.ZodNumber>; maxChars: z.ZodOptional<z.ZodNumber>; idleMs: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; streaming: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodEnum<{ off: \"off\"; block: \"block\"; partial: \"partial\"; progress: \"progress\"; }>]>>; nativeStreaming: z.ZodOptional<z.ZodBoolean>; streamMode: z.ZodOptional<z.ZodEnum<{ replace: \"replace\"; status_final: \"status_final\"; append: \"append\"; }>>; mediaMaxMb: z.ZodOptional<z.ZodNumber>; reactionNotifications: z.ZodOptional<z.ZodEnum<{ allowlist: \"allowlist\"; off: \"off\"; all: \"all\"; own: \"own\"; }>>; reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; replyToModeByChatType: z.ZodOptional<z.ZodObject<{ direct: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; group: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; channel: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; thread: z.ZodOptional<z.ZodObject<{ historyScope: z.ZodOptional<z.ZodEnum<{ channel: \"channel\"; thread: \"thread\"; }>>; inheritParent: z.ZodOptional<z.ZodBoolean>; initialHistoryLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; actions: z.ZodOptional<z.ZodObject<{ reactions: z.ZodOptional<z.ZodBoolean>; messages: z.ZodOptional<z.ZodBoolean>; pins: z.ZodOptional<z.ZodBoolean>; search: z.ZodOptional<z.ZodBoolean>; permissions: z.ZodOptional<z.ZodBoolean>; memberInfo: z.ZodOptional<z.ZodBoolean>; channelInfo: z.ZodOptional<z.ZodBoolean>; emojiList: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; slashCommand: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; name: z.ZodOptional<z.ZodString>; sessionPrefix: z.ZodOptional<z.ZodString>; ephemeral: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; dmPolicy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; defaultTo: z.ZodOptional<z.ZodString>; dm: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; policy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; groupEnabled: z.ZodOptional<z.ZodBoolean>; groupChannels: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; channels: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; allow: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; tools: z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>; toolsBySender: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>>>; allowBots: z.ZodOptional<z.ZodBoolean>; users: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; skills: z.ZodOptional<z.ZodArray<z.ZodString>>; systemPrompt: z.ZodOptional<z.ZodString>; }, z.core.$strict>>>>; heartbeat: z.ZodOptional<z.ZodObject<{ showOk: z.ZodOptional<z.ZodBoolean>; showAlerts: z.ZodOptional<z.ZodBoolean>; useIndicator: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; healthMonitor: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; responsePrefix: z.ZodOptional<z.ZodString>; ackReaction: z.ZodOptional<z.ZodString>; typingReaction: z.ZodOptional<z.ZodString>; }, z.core.$strict>>>>; defaultAccount: z.ZodOptional<z.ZodString>; }, z.core.$strict>;",
+          "declaration": "export const SlackConfigSchema: z.ZodObject<{ name: z.ZodOptional<z.ZodString>; capabilities: z.ZodOptional<z.ZodUnion<readonly [z.ZodArray<z.ZodString>, z.ZodObject<{ interactiveReplies: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>]>>; execApprovals: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; approvers: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; agentFilter: z.ZodOptional<z.ZodArray<z.ZodString>>; sessionFilter: z.ZodOptional<z.ZodArray<z.ZodString>>; target: z.ZodOptional<z.ZodEnum<{ channel: \"channel\"; dm: \"dm\"; both: \"both\"; }>>; }, z.core.$strict>>; markdown: z.ZodOptional<z.ZodObject<{ tables: z.ZodOptional<z.ZodEnum<{ off: \"off\"; bullets: \"bullets\"; code: \"code\"; block: \"block\"; }>>; }, z.core.$strict>>; enabled: z.ZodOptional<z.ZodBoolean>; commands: z.ZodOptional<z.ZodObject<{ native: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; nativeSkills: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; }, z.core.$strict>>; configWrites: z.ZodOptional<z.ZodBoolean>; botToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; appToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userTokenReadOnly: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>; allowBots: z.ZodOptional<z.ZodBoolean>; dangerouslyAllowNameMatching: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; historyLimit: z.ZodOptional<z.ZodNumber>; dmHistoryLimit: z.ZodOptional<z.ZodNumber>; dms: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ historyLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>>>; textChunkLimit: z.ZodOptional<z.ZodNumber>; chunkMode: z.ZodOptional<z.ZodEnum<{ length: \"length\"; newline: \"newline\"; }>>; blockStreaming: z.ZodOptional<z.ZodBoolean>; blockStreamingCoalesce: z.ZodOptional<z.ZodObject<{ minChars: z.ZodOptional<z.ZodNumber>; maxChars: z.ZodOptional<z.ZodNumber>; idleMs: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; streaming: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodEnum<{ off: \"off\"; block: \"block\"; partial: \"partial\"; progress: \"progress\"; }>]>>; nativeStreaming: z.ZodOptional<z.ZodBoolean>; streamMode: z.ZodOptional<z.ZodEnum<{ replace: \"replace\"; status_final: \"status_final\"; append: \"append\"; }>>; mediaMaxMb: z.ZodOptional<z.ZodNumber>; reactionNotifications: z.ZodOptional<z.ZodEnum<{ allowlist: \"allowlist\"; off: \"off\"; all: \"all\"; own: \"own\"; }>>; reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; replyToModeByChatType: z.ZodOptional<z.ZodObject<{ direct: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; group: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; channel: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; thread: z.ZodOptional<z.ZodObject<{ historyScope: z.ZodOptional<z.ZodEnum<{ channel: \"channel\"; thread: \"thread\"; }>>; inheritParent: z.ZodOptional<z.ZodBoolean>; initialHistoryLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; actions: z.ZodOptional<z.ZodObject<{ reactions: z.ZodOptional<z.ZodBoolean>; messages: z.ZodOptional<z.ZodBoolean>; pins: z.ZodOptional<z.ZodBoolean>; search: z.ZodOptional<z.ZodBoolean>; permissions: z.ZodOptional<z.ZodBoolean>; memberInfo: z.ZodOptional<z.ZodBoolean>; channelInfo: z.ZodOptional<z.ZodBoolean>; emojiList: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; slashCommand: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; name: z.ZodOptional<z.ZodString>; sessionPrefix: z.ZodOptional<z.ZodString>; ephemeral: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; dmPolicy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; defaultTo: z.ZodOptional<z.ZodString>; dm: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; policy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; groupEnabled: z.ZodOptional<z.ZodBoolean>; groupChannels: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; channels: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; allow: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; tools: z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>; toolsBySender: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>>>; allowBots: z.ZodOptional<z.ZodBoolean>; users: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; skills: z.ZodOptional<z.ZodArray<z.ZodString>>; systemPrompt: z.ZodOptional<z.ZodString>; }, z.core.$strict>>>>; heartbeat: z.ZodOptional<z.ZodObject<{ showOk: z.ZodOptional<z.ZodBoolean>; showAlerts: z.ZodOptional<z.ZodBoolean>; useIndicator: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; healthMonitor: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; responsePrefix: z.ZodOptional<z.ZodString>; ackReaction: z.ZodOptional<z.ZodString>; typingReaction: z.ZodOptional<z.ZodString>; mode: z.ZodDefault<z.ZodOptional<z.ZodEnum<{ socket: \"socket\"; http: \"http\"; }>>>; signingSecret: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; webhookPath: z.ZodDefault<z.ZodOptional<z.ZodString>>; groupPolicy: z.ZodDefault<z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; allowlist: \"allowlist\"; open: \"open\"; }>>>; accounts: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ name: z.ZodOptional<z.ZodString>; mode: z.ZodOptional<z.ZodEnum<{ socket: \"socket\"; http: \"http\"; }>>; signingSecret: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; webhookPath: z.ZodOptional<z.ZodString>; capabilities: z.ZodOptional<z.ZodUnion<readonly [z.ZodArray<z.ZodString>, z.ZodObject<{ interactiveReplies: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>]>>; execApprovals: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; approvers: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; agentFilter: z.ZodOptional<z.ZodArray<z.ZodString>>; sessionFilter: z.ZodOptional<z.ZodArray<z.ZodString>>; target: z.ZodOptional<z.ZodEnum<{ channel: \"channel\"; dm: \"dm\"; both: \"both\"; }>>; }, z.core.$strict>>; markdown: z.ZodOptional<z.ZodObject<{ tables: z.ZodOptional<z.ZodEnum<{ off: \"off\"; bullets: \"bullets\"; code: \"code\"; block: \"block\"; }>>; }, z.core.$strict>>; enabled: z.ZodOptional<z.ZodBoolean>; commands: z.ZodOptional<z.ZodObject<{ native: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; nativeSkills: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<\"auto\">]>>; }, z.core.$strict>>; configWrites: z.ZodOptional<z.ZodBoolean>; botToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; appToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userToken: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{ source: z.ZodLiteral<\"env\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"file\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ source: z.ZodLiteral<\"exec\">; provider: z.ZodString; id: z.ZodString; }, z.core.$strict>], \"source\">]>>; userTokenReadOnly: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>; allowBots: z.ZodOptional<z.ZodBoolean>; dangerouslyAllowNameMatching: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; groupPolicy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; allowlist: \"allowlist\"; open: \"open\"; }>>; historyLimit: z.ZodOptional<z.ZodNumber>; dmHistoryLimit: z.ZodOptional<z.ZodNumber>; dms: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ historyLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>>>; textChunkLimit: z.ZodOptional<z.ZodNumber>; chunkMode: z.ZodOptional<z.ZodEnum<{ length: \"length\"; newline: \"newline\"; }>>; blockStreaming: z.ZodOptional<z.ZodBoolean>; blockStreamingCoalesce: z.ZodOptional<z.ZodObject<{ minChars: z.ZodOptional<z.ZodNumber>; maxChars: z.ZodOptional<z.ZodNumber>; idleMs: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; streaming: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodEnum<{ off: \"off\"; block: \"block\"; partial: \"partial\"; progress: \"progress\"; }>]>>; nativeStreaming: z.ZodOptional<z.ZodBoolean>; streamMode: z.ZodOptional<z.ZodEnum<{ replace: \"replace\"; status_final: \"status_final\"; append: \"append\"; }>>; mediaMaxMb: z.ZodOptional<z.ZodNumber>; reactionNotifications: z.ZodOptional<z.ZodEnum<{ allowlist: \"allowlist\"; off: \"off\"; all: \"all\"; own: \"own\"; }>>; reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; replyToModeByChatType: z.ZodOptional<z.ZodObject<{ direct: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; group: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; channel: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; thread: z.ZodOptional<z.ZodObject<{ historyScope: z.ZodOptional<z.ZodEnum<{ channel: \"channel\"; thread: \"thread\"; }>>; inheritParent: z.ZodOptional<z.ZodBoolean>; initialHistoryLimit: z.ZodOptional<z.ZodNumber>; }, z.core.$strict>>; actions: z.ZodOptional<z.ZodObject<{ reactions: z.ZodOptional<z.ZodBoolean>; messages: z.ZodOptional<z.ZodBoolean>; pins: z.ZodOptional<z.ZodBoolean>; search: z.ZodOptional<z.ZodBoolean>; permissions: z.ZodOptional<z.ZodBoolean>; memberInfo: z.ZodOptional<z.ZodBoolean>; channelInfo: z.ZodOptional<z.ZodBoolean>; emojiList: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; slashCommand: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; name: z.ZodOptional<z.ZodString>; sessionPrefix: z.ZodOptional<z.ZodString>; ephemeral: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; dmPolicy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; defaultTo: z.ZodOptional<z.ZodString>; dm: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; policy: z.ZodOptional<z.ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; groupEnabled: z.ZodOptional<z.ZodBoolean>; groupChannels: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; replyToMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<\"off\">, z.ZodLiteral<\"first\">, z.ZodLiteral<\"all\">]>>; }, z.core.$strict>>; channels: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; allow: z.ZodOptional<z.ZodBoolean>; requireMention: z.ZodOptional<z.ZodBoolean>; tools: z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>; toolsBySender: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<z.ZodObject<{ allow: z.ZodOptional<z.ZodArray<z.ZodString>>; alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>; deny: z.ZodOptional<z.ZodArray<z.ZodString>>; }, z.core.$strict>>>>; allowBots: z.ZodOptional<z.ZodBoolean>; users: z.ZodOptional<z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>; skills: z.ZodOptional<z.ZodArray<z.ZodString>>; systemPrompt: z.ZodOptional<z.ZodString>; }, z.core.$strict>>>>; heartbeat: z.ZodOptional<z.ZodObject<{ showOk: z.ZodOptional<z.ZodBoolean>; showAlerts: z.ZodOptional<z.ZodBoolean>; useIndicator: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; healthMonitor: z.ZodOptional<z.ZodObject<{ enabled: z.ZodOptional<z.ZodBoolean>; }, z.core.$strict>>; responsePrefix: z.ZodOptional<z.ZodString>; ackReaction: z.ZodOptional<z.ZodString>; typingReaction: z.ZodOptional<z.ZodString>; }, z.core.$strict>>>>; defaultAccount: z.ZodOptional<z.ZodString>; }, z.core.$strict>;",
           "exportName": "SlackConfigSchema",
           "kind": "const",
           "source": {
-            "line": 940,
+            "line": 950,
             "path": "src/config/zod-schema.providers-core.ts"
           }
         },
@@ -1170,7 +1170,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 569,
+            "line": 599,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1179,7 +1179,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 575,
+            "line": 605,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1188,7 +1188,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 146,
+            "line": 147,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1197,7 +1197,7 @@
           "exportName": "ChannelAgentTool",
           "kind": "type",
           "source": {
-            "line": 18,
+            "line": 19,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1206,7 +1206,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 659,
+            "line": 662,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1215,7 +1215,7 @@
           "exportName": "ChannelGroupContext",
           "kind": "type",
           "source": {
-            "line": 218,
+            "line": 219,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1224,7 +1224,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 526,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1233,7 +1233,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 492,
+            "line": 520,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1242,7 +1242,7 @@
           "exportName": "ChannelMessageActionDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 31,
+            "line": 32,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1260,7 +1260,7 @@
           "exportName": "ChannelMessageToolDiscovery",
           "kind": "type",
           "source": {
-            "line": 56,
+            "line": 57,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1269,7 +1269,7 @@
           "exportName": "ChannelMessageToolSchemaContribution",
           "kind": "type",
           "source": {
-            "line": 51,
+            "line": 52,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1278,7 +1278,7 @@
           "exportName": "ChannelStatusIssue",
           "kind": "type",
           "source": {
-            "line": 101,
+            "line": 102,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1287,7 +1287,7 @@
           "exportName": "ChannelThreadingContext",
           "kind": "type",
           "source": {
-            "line": 367,
+            "line": 368,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1296,7 +1296,7 @@
           "exportName": "ChannelThreadingToolContext",
           "kind": "type",
           "source": {
-            "line": 381,
+            "line": 382,
             "path": "src/channels/plugins/types.core.ts"
           }
         }
@@ -1455,8 +1455,8 @@
           "exportName": "createAccountStatusSink",
           "kind": "function",
           "source": {
-            "line": 23,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 15,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1518,8 +1518,8 @@
           "exportName": "keepHttpServerTaskAlive",
           "kind": "function",
           "source": {
-            "line": 79,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 71,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1698,8 +1698,8 @@
           "exportName": "waitUntilAbort",
           "kind": "function",
           "source": {
-            "line": 38,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 30,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1752,7 +1752,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 569,
+            "line": 599,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1761,7 +1761,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 575,
+            "line": 605,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1770,7 +1770,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 146,
+            "line": 147,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1779,7 +1779,7 @@
           "exportName": "ChannelAccountState",
           "kind": "type",
           "source": {
-            "line": 109,
+            "line": 110,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1788,7 +1788,7 @@
           "exportName": "ChannelActionAvailabilityState",
           "kind": "type",
           "source": {
-            "line": 31,
+            "line": 32,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1797,7 +1797,7 @@
           "exportName": "ChannelAgentPromptAdapter",
           "kind": "type",
           "source": {
-            "line": 465,
+            "line": 493,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1806,7 +1806,7 @@
           "exportName": "ChannelAgentTool",
           "kind": "type",
           "source": {
-            "line": 18,
+            "line": 19,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1815,7 +1815,7 @@
           "exportName": "ChannelAgentToolFactory",
           "kind": "type",
           "source": {
-            "line": 23,
+            "line": 24,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1824,7 +1824,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 594,
+            "line": 597,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1833,7 +1833,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 588,
+            "line": 591,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1842,7 +1842,7 @@
           "exportName": "ChannelApprovalForwardTarget",
           "kind": "type",
           "source": {
-            "line": 38,
+            "line": 39,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1851,7 +1851,7 @@
           "exportName": "ChannelApprovalInitiatingSurfaceState",
           "kind": "type",
           "source": {
-            "line": 36,
+            "line": 37,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1860,7 +1860,7 @@
           "exportName": "ChannelAuthAdapter",
           "kind": "type",
           "source": {
-            "line": 392,
+            "line": 395,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1869,7 +1869,7 @@
           "exportName": "ChannelCapabilities",
           "kind": "type",
           "source": {
-            "line": 232,
+            "line": 233,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1878,7 +1878,7 @@
           "exportName": "ChannelCapabilitiesDiagnostics",
           "kind": "type",
           "source": {
-            "line": 53,
+            "line": 54,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1887,7 +1887,7 @@
           "exportName": "ChannelCapabilitiesDisplayLine",
           "kind": "type",
           "source": {
-            "line": 48,
+            "line": 49,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1896,7 +1896,7 @@
           "exportName": "ChannelCapabilitiesDisplayTone",
           "kind": "type",
           "source": {
-            "line": 46,
+            "line": 47,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1905,7 +1905,7 @@
           "exportName": "ChannelCommandAdapter",
           "kind": "type",
           "source": {
-            "line": 489,
+            "line": 492,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1914,7 +1914,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 659,
+            "line": 662,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1923,7 +1923,7 @@
           "exportName": "ChannelConfigAdapter",
           "kind": "type",
           "source": {
-            "line": 97,
+            "line": 98,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1932,7 +1932,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 650,
+            "line": 653,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1941,7 +1941,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 655,
+            "line": 658,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1950,7 +1950,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 671,
+            "line": 674,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1959,7 +1959,7 @@
           "exportName": "ChannelConversationBindingSupport",
           "kind": "type",
           "source": {
-            "line": 687,
+            "line": 690,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1968,7 +1968,7 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 451,
+            "line": 454,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1977,7 +1977,7 @@
           "exportName": "ChannelDirectoryEntry",
           "kind": "type",
           "source": {
-            "line": 479,
+            "line": 507,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1986,7 +1986,7 @@
           "exportName": "ChannelDirectoryEntryKind",
           "kind": "type",
           "source": {
-            "line": 477,
+            "line": 505,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1995,7 +1995,7 @@
           "exportName": "ChannelElevatedAdapter",
           "kind": "type",
           "source": {
-            "line": 482,
+            "line": 485,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2004,7 +2004,7 @@
           "exportName": "ChannelGatewayAdapter",
           "kind": "type",
           "source": {
-            "line": 376,
+            "line": 379,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2013,7 +2013,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 268,
+            "line": 271,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2022,7 +2022,7 @@
           "exportName": "ChannelGroupAdapter",
           "kind": "type",
           "source": {
-            "line": 128,
+            "line": 129,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2031,7 +2031,7 @@
           "exportName": "ChannelGroupContext",
           "kind": "type",
           "source": {
-            "line": 218,
+            "line": 219,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2040,7 +2040,7 @@
           "exportName": "ChannelHeartbeatAdapter",
           "kind": "type",
           "source": {
-            "line": 417,
+            "line": 420,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2049,7 +2049,7 @@
           "exportName": "ChannelHeartbeatDeps",
           "kind": "type",
           "source": {
-            "line": 117,
+            "line": 118,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2058,7 +2058,7 @@
           "exportName": "ChannelId",
           "kind": "type",
           "source": {
-            "line": 13,
+            "line": 14,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2067,7 +2067,7 @@
           "exportName": "ChannelLifecycleAdapter",
           "kind": "type",
           "source": {
-            "line": 494,
+            "line": 497,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2076,7 +2076,7 @@
           "exportName": "ChannelLoginWithQrStartResult",
           "kind": "type",
           "source": {
-            "line": 347,
+            "line": 350,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2085,7 +2085,7 @@
           "exportName": "ChannelLoginWithQrWaitResult",
           "kind": "type",
           "source": {
-            "line": 352,
+            "line": 355,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2094,7 +2094,7 @@
           "exportName": "ChannelLogoutContext",
           "kind": "type",
           "source": {
-            "line": 357,
+            "line": 360,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2103,7 +2103,7 @@
           "exportName": "ChannelLogoutResult",
           "kind": "type",
           "source": {
-            "line": 341,
+            "line": 344,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2112,7 +2112,7 @@
           "exportName": "ChannelLogSink",
           "kind": "type",
           "source": {
-            "line": 211,
+            "line": 212,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2121,7 +2121,7 @@
           "exportName": "ChannelMentionAdapter",
           "kind": "type",
           "source": {
-            "line": 262,
+            "line": 263,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2130,7 +2130,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 526,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2139,7 +2139,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 492,
+            "line": 520,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2148,7 +2148,7 @@
           "exportName": "ChannelMessageActionDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 31,
+            "line": 32,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2175,7 +2175,7 @@
           "exportName": "ChannelMessageToolDiscovery",
           "kind": "type",
           "source": {
-            "line": 56,
+            "line": 57,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2184,7 +2184,7 @@
           "exportName": "ChannelMessageToolSchemaContribution",
           "kind": "type",
           "source": {
-            "line": 51,
+            "line": 52,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2193,7 +2193,7 @@
           "exportName": "ChannelMessagingAdapter",
           "kind": "type",
           "source": {
-            "line": 397,
+            "line": 398,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2202,7 +2202,7 @@
           "exportName": "ChannelMeta",
           "kind": "type",
           "source": {
-            "line": 123,
+            "line": 124,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2211,7 +2211,7 @@
           "exportName": "ChannelOutboundAdapter",
           "kind": "type",
           "source": {
-            "line": 172,
+            "line": 175,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2220,7 +2220,7 @@
           "exportName": "ChannelOutboundContext",
           "kind": "type",
           "source": {
-            "line": 134,
+            "line": 135,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2229,7 +2229,7 @@
           "exportName": "ChannelOutboundPayloadHint",
           "kind": "type",
           "source": {
-            "line": 157,
+            "line": 160,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2238,7 +2238,7 @@
           "exportName": "ChannelOutboundTargetMode",
           "kind": "type",
           "source": {
-            "line": 15,
+            "line": 16,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2247,7 +2247,7 @@
           "exportName": "ChannelOutboundTargetRef",
           "kind": "type",
           "source": {
-            "line": 161,
+            "line": 164,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2256,7 +2256,7 @@
           "exportName": "ChannelPairingAdapter",
           "kind": "type",
           "source": {
-            "line": 365,
+            "line": 368,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2274,7 +2274,7 @@
           "exportName": "ChannelPollContext",
           "kind": "type",
           "source": {
-            "line": 557,
+            "line": 587,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2283,7 +2283,7 @@
           "exportName": "ChannelPollResult",
           "kind": "type",
           "source": {
-            "line": 548,
+            "line": 578,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2292,7 +2292,7 @@
           "exportName": "ChannelResolveKind",
           "kind": "type",
           "source": {
-            "line": 462,
+            "line": 465,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2301,7 +2301,7 @@
           "exportName": "ChannelResolverAdapter",
           "kind": "type",
           "source": {
-            "line": 472,
+            "line": 475,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2310,7 +2310,7 @@
           "exportName": "ChannelResolveResult",
           "kind": "type",
           "source": {
-            "line": 464,
+            "line": 467,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2319,7 +2319,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 718,
+            "line": 721,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2328,7 +2328,7 @@
           "exportName": "ChannelSecurityContext",
           "kind": "type",
           "source": {
-            "line": 256,
+            "line": 257,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2337,7 +2337,7 @@
           "exportName": "ChannelSecurityDmPolicy",
           "kind": "type",
           "source": {
-            "line": 247,
+            "line": 248,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2346,7 +2346,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 62,
+            "line": 63,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2355,7 +2355,7 @@
           "exportName": "ChannelSetupInput",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 64,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2364,7 +2364,7 @@
           "exportName": "ChannelStatusAdapter",
           "kind": "type",
           "source": {
-            "line": 214,
+            "line": 217,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2373,7 +2373,7 @@
           "exportName": "ChannelStatusIssue",
           "kind": "type",
           "source": {
-            "line": 101,
+            "line": 102,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2382,7 +2382,7 @@
           "exportName": "ChannelStreamingAdapter",
           "kind": "type",
           "source": {
-            "line": 281,
+            "line": 282,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2391,7 +2391,7 @@
           "exportName": "ChannelStructuredComponents",
           "kind": "type",
           "source": {
-            "line": 290,
+            "line": 291,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2400,7 +2400,7 @@
           "exportName": "ChannelThreadingAdapter",
           "kind": "type",
           "source": {
-            "line": 324,
+            "line": 325,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2409,7 +2409,7 @@
           "exportName": "ChannelThreadingContext",
           "kind": "type",
           "source": {
-            "line": 367,
+            "line": 368,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2418,7 +2418,7 @@
           "exportName": "ChannelThreadingToolContext",
           "kind": "type",
           "source": {
-            "line": 381,
+            "line": 382,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2427,7 +2427,7 @@
           "exportName": "ChannelToolSend",
           "kind": "type",
           "source": {
-            "line": 519,
+            "line": 549,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2627,7 +2627,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 62,
+            "line": 63,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2645,7 +2645,7 @@
           "exportName": "ChannelSetupInput",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 64,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2683,7 +2683,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 1073,
+            "line": 1076,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2692,7 +2692,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 1082,
+            "line": 1085,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2728,7 +2728,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 868,
+            "line": 871,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -3342,7 +3342,7 @@
           "exportName": "buildChannelConfigSchema",
           "kind": "function",
           "source": {
-            "line": 75,
+            "line": 76,
             "path": "src/channels/plugins/config-schema.ts"
           }
         },
@@ -3738,7 +3738,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 492,
+            "line": 520,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3747,7 +3747,7 @@
           "exportName": "ChannelMessagingAdapter",
           "kind": "type",
           "source": {
-            "line": 397,
+            "line": 398,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3756,7 +3756,7 @@
           "exportName": "ChannelOutboundSessionRoute",
           "kind": "type",
           "source": {
-            "line": 311,
+            "line": 312,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -5366,11 +5366,11 @@
           }
         },
         {
-          "declaration": "export function createSlackOutboundPayloadHarness(params: { payload: ReplyPayload; sendResults?: { messageId: string; }[] | undefined; }): { run: () => Promise<OutboundDeliveryResult>; sendMock: Mock<...>; to: string; };",
+          "declaration": "export function createSlackOutboundPayloadHarness(params: { payload: ReplyPayload; sendResults?: { messageId: string; }[] | undefined; }): SlackOutboundPayloadHarness;",
           "exportName": "createSlackOutboundPayloadHarness",
           "kind": "function",
           "source": {
-            "line": 118,
+            "line": 126,
             "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
@@ -5397,7 +5397,7 @@
           "exportName": "expectChannelInboundContextContract",
           "kind": "function",
           "source": {
-            "line": 848,
+            "line": 856,
             "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
@@ -5483,11 +5483,11 @@
           }
         },
         {
-          "declaration": "export function primeChannelOutboundSendMock(sendMock: Mock, fallbackResult: Record<string, unknown>, sendResults?: SendResultLike[]): void;",
+          "declaration": "export function primeChannelOutboundSendMock<TArgs extends unknown[]>(sendMock: Mock<(...args: TArgs) => Promise<unknown>>, fallbackResult: Record<string, unknown>, sendResults?: Record<string, unknown>[]): void;",
           "exportName": "primeChannelOutboundSendMock",
           "kind": "function",
           "source": {
-            "line": 796,
+            "line": 804,
             "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
@@ -5667,7 +5667,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 146,
+            "line": 147,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -5676,7 +5676,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 268,
+            "line": 271,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
