@@ -23,6 +23,7 @@ import {
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import { listTasksForAgentId, listTasksForSessionKey } from "../../tasks/task-registry.js";
+import { buildTaskStatusSnapshot } from "../../tasks/task-status.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
@@ -56,33 +57,32 @@ function shouldLoadUsageSummary(params: {
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const tasks = listTasksForSessionKey(sessionKey);
-  if (tasks.length === 0) {
+  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKey(sessionKey));
+  const task = snapshot.focus;
+  if (!task) {
     return undefined;
   }
-  const latest = tasks[0];
-  const active = tasks.filter(
-    (task) => task.status === "queued" || task.status === "running",
-  ).length;
-  const headline = `${active} active · ${tasks.length} total`;
-  const title = latest.label?.trim() || latest.task.trim();
+  const headline =
+    snapshot.activeCount > 0
+      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
+      : snapshot.recentFailureCount > 0
+        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
+        : "recently finished";
+  const title = task.label?.trim() || task.task.trim();
   const detail =
-    latest.status === "running" || latest.status === "queued"
-      ? latest.progressSummary?.trim()
-      : latest.error?.trim() || latest.terminalSummary?.trim();
-  const parts = [headline, latest.runtime, title, detail].filter(Boolean);
+    task.status === "running" || task.status === "queued"
+      ? task.progressSummary?.trim()
+      : task.error?.trim() || task.terminalSummary?.trim();
+  const parts = [headline, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
-  const tasks = listTasksForAgentId(agentId);
-  if (tasks.length === 0) {
+  const snapshot = buildTaskStatusSnapshot(listTasksForAgentId(agentId));
+  if (snapshot.totalCount === 0) {
     return undefined;
   }
-  const active = tasks.filter(
-    (task) => task.status === "queued" || task.status === "running",
-  ).length;
-  return `📌 Tasks: ${active} active · ${tasks.length} total · agent-local`;
+  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
 }
 
 export async function buildStatusReply(params: {
