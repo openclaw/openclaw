@@ -519,7 +519,8 @@ describe("chat view", () => {
       renderChat(
         createProps({
           compactionStatus: {
-            active: true,
+            phase: "active",
+            runId: "run-1",
             startedAt: Date.now(),
             completedAt: null,
           },
@@ -533,6 +534,27 @@ describe("chat view", () => {
     expect(indicator?.textContent).toContain("Compacting context...");
   });
 
+  it("renders retry-pending compaction indicator as a badge", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          compactionStatus: {
+            phase: "retrying",
+            runId: "run-1",
+            startedAt: Date.now(),
+            completedAt: null,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--active");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Retrying after compaction...");
+  });
+
   it("renders completion indicator shortly after compaction", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -540,7 +562,8 @@ describe("chat view", () => {
       renderChat(
         createProps({
           compactionStatus: {
-            active: false,
+            phase: "complete",
+            runId: "run-1",
             startedAt: 900,
             completedAt: 900,
           },
@@ -562,7 +585,8 @@ describe("chat view", () => {
       renderChat(
         createProps({
           compactionStatus: {
-            active: false,
+            phase: "complete",
+            runId: "run-1",
             startedAt: 0,
             completedAt: 0,
           },
