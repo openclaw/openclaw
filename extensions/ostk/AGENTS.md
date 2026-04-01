@@ -52,6 +52,10 @@ Each Agentfile grants `shell`, `file:read`, and `file:edit` tools under the
 
 ## User configuration
 
+The ostk plugin is enabled by default — no manual plugin enable step is needed.
+Just ensure the `ostk` binary is installed and on PATH, then select it as your
+backend:
+
 ```yaml
 # Switch default backend
 agents:
