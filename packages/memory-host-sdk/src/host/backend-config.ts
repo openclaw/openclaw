@@ -317,13 +317,19 @@ function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcport
   return parsed;
 }
 
-function isCaseInsensitivePath(p: string): boolean {
+function isCaseInsensitiveFilesystem(dir: string): boolean {
   try {
-    // On macOS (APFS/HFS+), realpath normalizes case.
-    // If the canonical path differs in case, the filesystem is case-insensitive.
-    return path.resolve(p) !== fs.realpathSync.native(path.resolve(p));
+    // Probe with uppercase/lowercase stat. If both resolve to the same inode,
+    // the filesystem treats them as the same path -> case-insensitive.
+    const upper = dir.toUpperCase();
+    const lower = dir.toLowerCase();
+    if (upper === lower) return process.platform === "darwin"; // can't distinguish by case
+    const { ino: inoUpper } = fs.statSync(upper);
+    const { ino: inoLower } = fs.statSync(lower);
+    return inoUpper === inoLower;
   } catch {
-    return false;
+    // Fallback: macOS default filesystem is case-insensitive.
+    return process.platform === "darwin";
   }
 }
 
@@ -336,7 +342,7 @@ function resolveDefaultCollections(
   if (!include) {
     return [];
   }
-  const caseInsensitive = isCaseInsensitivePath(workspaceDir);
+  const caseInsensitive = isCaseInsensitiveFilesystem(workspaceDir);
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
     // On case-insensitive filesystems (macOS), "memory.md" resolves to the same
