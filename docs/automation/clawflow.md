@@ -1,9 +1,9 @@
 ---
 summary: "Compatibility note for older ClawFlow references in release notes and docs"
 read_when:
-  - You want a flow to own one or more detached tasks
-  - You want to inspect or cancel a background job as a unit
-  - You want to understand how flows relate to tasks and background work
+  - You encounter ClawFlow or openclaw flows in older release notes or docs
+  - You want to understand what ClawFlow terminology maps to in the current CLI
+  - You want to translate older flow references into the supported task commands
 title: "ClawFlow"
 ---
 

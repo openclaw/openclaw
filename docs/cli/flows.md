@@ -1,8 +1,8 @@
 ---
 summary: "Compatibility note for the mistakenly documented `openclaw flows` command"
 read_when:
-  - You want to inspect or cancel a flow
-  - You want to see how background tasks roll up into a higher-level job
+  - You encounter openclaw flows in older release notes, issue threads, or search results
+  - You want to know what command replaced openclaw flows
 title: "flows"
 ---
 
