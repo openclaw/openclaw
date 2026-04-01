@@ -152,8 +152,9 @@ describe("pw-session connection scoping", () => {
     vi.useFakeTimers();
     try {
       const pending = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+      const assertion = expect(pending).rejects.toThrow("listPagesViaPlaywright timed out");
       await vi.advanceTimersByTimeAsync(15_000);
-      await expect(pending).rejects.toThrow("listPagesViaPlaywright timed out");
+      await assertion;
     } finally {
       vi.useRealTimers();
     }
