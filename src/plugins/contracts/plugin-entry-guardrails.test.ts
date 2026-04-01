@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   bundledPluginFile,
-} from "../../test/helpers/bundled-plugin-paths.js";
+} from "../../../test/helpers/bundled-plugin-paths.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const EXTENSIONS_DIR = resolve(REPO_ROOT, BUNDLED_PLUGIN_ROOT_DIR);
 const CORE_PLUGIN_ENTRY_IMPORT_RE =

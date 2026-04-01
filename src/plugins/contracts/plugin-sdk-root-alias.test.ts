@@ -6,10 +6,10 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const rootSdk = require("./root-alias.cjs") as Record<string, unknown>;
-const rootAliasPath = fileURLToPath(new URL("./root-alias.cjs", import.meta.url));
+const rootAliasPath = fileURLToPath(new URL("../../plugin-sdk/root-alias.cjs", import.meta.url));
+const rootSdk = require(rootAliasPath) as Record<string, unknown>;
 const rootAliasSource = fs.readFileSync(rootAliasPath, "utf-8");
-const packageJsonPath = fileURLToPath(new URL("../../package.json", import.meta.url));
+const packageJsonPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
 
 type EmptySchema = {
   safeParse: (value: unknown) =>

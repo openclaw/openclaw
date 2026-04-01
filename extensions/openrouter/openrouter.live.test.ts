@@ -23,19 +23,6 @@ const registerOpenRouterPlugin = () =>
     name: "OpenRouter Provider",
   });
 
-describe("openrouter plugin", () => {
-  it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } =
-      registerOpenRouterPlugin();
-
-    expect(providers).toHaveLength(1);
-    expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
-    expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
-    expect(imageProviders).toHaveLength(0);
-  });
-});
-
 describeLive("openrouter plugin live", () => {
   it("registers an OpenRouter provider that can complete a live request", async () => {
     const { providers } = registerOpenRouterPlugin();
