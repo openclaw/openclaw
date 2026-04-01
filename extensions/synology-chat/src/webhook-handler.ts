@@ -416,7 +416,10 @@ export async function parseWebhookPayloadRequest(params: {
 
 /** Detect whether the payload originates from a group/channel context. */
 function isGroupMessage(payload: SynologyWebhookPayload): boolean {
-  return typeof payload.channel_id === "string" && payload.channel_id.trim().length > 0;
+  return (
+    (typeof payload.channel_id === "string" && payload.channel_id.trim().length > 0) ||
+    (typeof payload.channel_name === "string" && payload.channel_name.trim().length > 0)
+  );
 }
 
 export function authorizeSynologyWebhook(params: {

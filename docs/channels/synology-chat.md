@@ -160,6 +160,7 @@ webhook URL, plus a distinct `webhookPath`.
           token: "channel-outgoing-token",
           incomingUrl: "https://nas.example.com/...&method=incoming&token=...",
           webhookPath: "/webhook/synology-general",
+          dmPolicy: "disabled",
           groupPolicy: "open",
           allowInsecureSsl: false,
         },
@@ -188,6 +189,7 @@ webhook URL, plus a distinct `webhookPath`.
           token: "channel-outgoing-token",
           incomingUrl: "https://nas.example.com/...&method=incoming&token=...",
           webhookPath: "/webhook/synology-general",
+          dmPolicy: "disabled",
           groupPolicy: "allowlist",
           groupAllowFrom: ["123456", "789012"],
           allowInsecureSsl: false,
@@ -213,6 +215,7 @@ with a `"*"` wildcard as fallback.
           token: "channel-outgoing-token",
           incomingUrl: "https://nas.example.com/...&method=incoming&token=...",
           webhookPath: "/webhook/synology-general",
+          dmPolicy: "disabled",
           groupPolicy: "allowlist",
           groupAllowFrom: ["123456"],
           channels: {

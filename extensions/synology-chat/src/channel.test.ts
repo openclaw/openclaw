@@ -17,6 +17,9 @@ const securityAccountDefaults: ResolvedSynologyChatAccount = {
   rateLimitPerMinute: 30,
   botName: "Bot",
   allowInsecureSsl: false,
+  groupPolicy: "disabled" as const,
+  groupAllowFrom: [],
+  channels: {},
 };
 
 function makeSecurityAccount(
