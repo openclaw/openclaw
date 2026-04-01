@@ -582,27 +582,6 @@ describe("monitorDiscordProvider", () => {
     expect(params?.workerRunTimeoutMs).toBe(300_000);
   });
 
-  it("registers plugin commands as native Discord commands", async () => {
-    listNativeCommandSpecsForConfigMock.mockReturnValue([
-      { name: "cmd", description: "built-in", acceptsArgs: false },
-    ]);
-    getPluginCommandSpecsMock.mockReturnValue([
-      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
-    ]);
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
-      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
-      .filter((value): value is string => typeof value === "string");
-    expect(getPluginCommandSpecsMock).toHaveBeenCalledWith("discord");
-    expect(commandNames).toContain("cmd");
-    expect(commandNames).toContain("cron_jobs");
-  });
-
   it("registers plugin commands from the real registry as native Discord commands", async () => {
     const {
       clearPluginCommands,
