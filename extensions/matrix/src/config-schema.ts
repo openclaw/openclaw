@@ -31,6 +31,16 @@ const matrixThreadBindingsSchema = z
   })
   .optional();
 
+const matrixExecApprovalsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    approvers: AllowFromListSchema,
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: z.enum(["dm", "channel", "both"]).optional(),
+  })
+  .optional();
+
 const matrixRoomSchema = z
   .object({
     account: z.string().optional(),
@@ -90,6 +100,7 @@ export const MatrixConfigSchema = z.object({
   dm: buildNestedDmConfigSchema({
     threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   }),
+  execApprovals: matrixExecApprovalsSchema,
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,
