@@ -206,7 +206,7 @@ export function resolveAnnounceOrigin(
   const entryThreadIdAllowed = requesterSessionKey
     ? isThreadSessionKey(requesterSessionKey)
     : true; // preserve existing behavior when session key is not available
-  const sanitizedEntry =
+  const sanitizedEntry: DeliveryContext | undefined =
     normalizedEntry && !entryThreadIdAllowed && normalizedEntry.threadId != null
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
