@@ -234,6 +234,13 @@ export type ExecToolConfig = {
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
+  /**
+   * When exec.host=node, use this directory as the default working directory on the **node**
+   * (unless the exec tool passes an explicit `workdir`). The agent workspace path on the
+   * gateway (e.g. `/home/node/...` in a container) often does not exist on the worker; set
+   * this to a real path on the node (e.g. `/home/ubuntu/openclaw-workspaces`).
+   */
+  nodeCwd?: string;
   /** Directories to prepend to PATH when running exec (gateway/sandbox). */
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */

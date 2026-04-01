@@ -184,6 +184,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.security": "Exec Security",
   "tools.exec.ask": "Exec Ask",
   "tools.exec.node": "Exec Node Binding",
+  "tools.exec.nodeCwd": "Exec Node Default Cwd",
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
   "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
   "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",

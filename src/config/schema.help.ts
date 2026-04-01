@@ -319,6 +319,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
+  "tools.exec.nodeCwd":
+    "Default working directory on the paired node for host=node when the exec tool does not pass workdir. Use when the gateway workspace path does not exist on the worker (avoids SYSTEM_RUN_DENIED canonical cwd errors).",
   "tools.agentToAgent":
     "Policy for allowing agent-to-agent tool calls and constraining which target agents can be reached. Keep disabled or tightly scoped unless cross-agent orchestration is intentionally enabled.",
   "tools.agentToAgent.enabled":

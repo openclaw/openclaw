@@ -4595,6 +4595,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         node: {
                           type: "string",
                         },
+                        nodeCwd: {
+                          type: "string",
+                        },
                         pathPrepend: {
                           type: "array",
                           items: {
@@ -7080,6 +7083,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 enum: ["off", "on-miss", "always"],
               },
               node: {
+                type: "string",
+              },
+              nodeCwd: {
                 type: "string",
               },
               pathPrepend: {
@@ -12521,6 +12527,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.exec.node": {
       label: "Exec Node Binding",
       help: "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
+      tags: ["tools"],
+    },
+    "tools.exec.nodeCwd": {
+      label: "Exec Node Default Cwd",
+      help: "Default working directory on the paired node for host=node when the exec tool does not pass workdir. Use when the gateway workspace path does not exist on the worker (avoids SYSTEM_RUN_DENIED canonical cwd errors).",
       tags: ["tools"],
     },
     "tools.agentToAgent": {

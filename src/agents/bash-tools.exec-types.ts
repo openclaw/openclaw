@@ -7,6 +7,8 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
+  /** Default cwd on the paired node when host=node (no explicit exec workdir). */
+  nodeCwd?: string;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;

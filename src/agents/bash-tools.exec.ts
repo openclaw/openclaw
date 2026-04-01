@@ -371,7 +371,8 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
+      const explicitExecWorkdir = params.workdir?.trim();
+      const rawWorkdir = explicitExecWorkdir || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
@@ -384,6 +385,10 @@ export function createExecTool(
         containerWorkdir = resolved.containerWorkdir;
       } else {
         workdir = resolveWorkdir(rawWorkdir, warnings);
+      }
+      const nodeCwdOverride = defaults?.nodeCwd?.trim();
+      if (host === "node" && !explicitExecWorkdir && nodeCwdOverride) {
+        workdir = resolveWorkdir(nodeCwdOverride, warnings);
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
