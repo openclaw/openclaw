@@ -35,6 +35,7 @@ import {
 } from "./agent-runner-utils.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
+  PRECOMPACTION_TRIGGER_RATIO,
   resolveMemoryFlushContextWindowTokens,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -338,29 +339,24 @@ export async function runPreflightCompactionIfNeeded(params: {
     20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
-  const persistedTotalTokens = entry.totalTokens;
-  const hasPersistedTotalTokens =
-    typeof persistedTotalTokens === "number" &&
-    Number.isFinite(persistedTotalTokens) &&
-    persistedTotalTokens > 0;
-  const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
-    return entry ?? params.sessionEntry;
-  }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
   const transcriptPromptTokens =
-    typeof freshPersistedTokens === "number"
-      ? undefined
-      : estimatePromptTokensFromSessionTranscript({
+    freshPersistedTokens === undefined
+      ? estimatePromptTokensFromSessionTranscript({
           sessionId: entry.sessionId,
           storePath: params.storePath,
           sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
-        });
+        })
+      : undefined;
+  const promptTokensSnapshot =
+    typeof freshPersistedTokens === "number" && Number.isFinite(freshPersistedTokens)
+      ? freshPersistedTokens
+      : transcriptPromptTokens;
   const projectedTokenCount =
-    typeof transcriptPromptTokens === "number"
-      ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
+    typeof promptTokensSnapshot === "number"
+      ? resolveEffectivePromptTokens(promptTokensSnapshot, undefined, promptTokenEstimate)
       : undefined;
   const tokenCountForCompaction =
     typeof projectedTokenCount === "number" &&
@@ -369,7 +365,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const threshold = Math.max(1, Math.floor(contextWindowTokens * PRECOMPACTION_TRIGGER_RATIO));
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +

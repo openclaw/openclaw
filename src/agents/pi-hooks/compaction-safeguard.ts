@@ -54,7 +54,7 @@ const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
-const DEFAULT_RECENT_TURNS_PRESERVE = 3;
+const DEFAULT_RECENT_TURNS_PRESERVE = 10;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
@@ -344,6 +344,22 @@ function formatNonTextPlaceholder(content: unknown): string | null {
   return `[non-text content: ${parts.join(", ")}]`;
 }
 
+function isPinnedMessage(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  if (record.pinned === true || record.pin === true) {
+    return true;
+  }
+  const metadata = record.metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return false;
+  }
+  const metaRecord = metadata as Record<string, unknown>;
+  return metaRecord.pinned === true || metaRecord.pin === true;
+}
+
 function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
@@ -352,7 +368,13 @@ function splitPreservedRecentTurns(params: {
     MAX_RECENT_TURNS_PRESERVE,
     clampNonNegativeInt(params.recentTurnsPreserve, 0),
   );
-  if (preserveTurns <= 0) {
+  const preservedIndexSet = new Set<number>();
+  for (let i = 0; i < params.messages.length; i += 1) {
+    if (isPinnedMessage(params.messages[i])) {
+      preservedIndexSet.add(i);
+    }
+  }
+  if (preserveTurns <= 0 && preservedIndexSet.size === 0) {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
   const conversationIndexes: number[] = [];
@@ -367,11 +389,20 @@ function splitPreservedRecentTurns(params: {
     }
   }
   if (conversationIndexes.length === 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
+    if (preservedIndexSet.size === 0) {
+      return { summarizableMessages: params.messages, preservedMessages: [] };
+    }
+    const summarizableMessages = params.messages.filter((_, idx) => !preservedIndexSet.has(idx));
+    const preservedMessages = params.messages
+      .filter((_, idx) => preservedIndexSet.has(idx))
+      .filter((msg) => {
+        const role = (msg as { role?: unknown }).role;
+        return role === "user" || role === "assistant" || role === "toolResult";
+      });
+    return { summarizableMessages, preservedMessages };
   }
 
-  const preservedIndexSet = new Set<number>();
-  if (userIndexes.length >= preserveTurns) {
+  if (preserveTurns > 0 && userIndexes.length >= preserveTurns) {
     const boundaryStartIndex = userIndexes[userIndexes.length - preserveTurns] ?? -1;
     if (boundaryStartIndex >= 0) {
       for (const index of conversationIndexes) {
@@ -380,7 +411,7 @@ function splitPreservedRecentTurns(params: {
         }
       }
     }
-  } else {
+  } else if (preserveTurns > 0) {
     const fallbackMessageCount = preserveTurns * 2;
     for (const userIndex of userIndexes) {
       preservedIndexSet.add(userIndex);

@@ -3,6 +3,8 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 
+export const PRECOMPACTION_TRIGGER_RATIO = 0.8;
+
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   agentCfgContextTokens?: number;
@@ -89,8 +91,16 @@ export function shouldRunPreflightCompaction(params: {
   reserveTokensFloor: number;
   softThresholdTokens: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
-  return Boolean(state && state.totalTokens >= state.threshold);
+  const totalTokens =
+    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+  if (!totalTokens || totalTokens <= 0) {
+    return false;
+  }
+  const threshold = Math.max(
+    1,
+    Math.floor(Math.max(1, Math.floor(params.contextWindowTokens)) * PRECOMPACTION_TRIGGER_RATIO),
+  );
+  return totalTokens >= threshold;
 }
 
 /**

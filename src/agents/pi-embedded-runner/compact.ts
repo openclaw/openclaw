@@ -936,6 +936,21 @@ export async function compactEmbeddedPiSessionDirect(
           fullSessionTokensBefore,
           estimateTokensFn: estimateTokens,
         });
+        const tokensBeforeForLog = Math.max(
+          0,
+          Math.floor(observedTokenCount ?? fullSessionTokensBefore ?? result.tokensBefore ?? 0),
+        );
+        const tokensAfterForLog = Math.max(0, Math.floor(tokensAfter ?? 0));
+        if (tokensBeforeForLog > 0 && tokensAfterForLog > 0) {
+          const savedPercentage = Math.max(
+            0,
+            Math.round(((tokensBeforeForLog - tokensAfterForLog) / tokensBeforeForLog) * 100),
+          );
+          log.info(
+            `[compaction] Compacted session: ${tokensBeforeForLog} -> ${tokensAfterForLog} tokens ` +
+              `(saved ${savedPercentage}%) sessionKey=${params.sessionKey ?? params.sessionId}`,
+          );
+        }
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;

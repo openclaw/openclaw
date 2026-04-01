@@ -799,7 +799,7 @@ describe("config help copy quality", () => {
 
     const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
     expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
-    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*10/i.test(recentTurnsPreserve)).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);

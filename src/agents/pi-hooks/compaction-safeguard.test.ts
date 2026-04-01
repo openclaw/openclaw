@@ -732,6 +732,46 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).toContain("- User: recent ask");
   });
 
+  it("preserves pinned messages even when they fall outside the recent-turn window", () => {
+    const split = splitPreservedRecentTurns({
+      messages: [
+        {
+          role: "user",
+          content: "pinned onboarding note",
+          pinned: true,
+          timestamp: 1,
+        } as unknown as AgentMessage,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older answer" }],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+        { role: "user", content: "recent ask", timestamp: 3 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "recent answer" }],
+          timestamp: 4,
+        } as unknown as AgentMessage,
+      ],
+      recentTurnsPreserve: 1,
+    });
+
+    expect(
+      split.preservedMessages.some(
+        (msg) =>
+          msg.role === "user" &&
+          (msg as { content?: unknown }).content === "pinned onboarding note",
+      ),
+    ).toBe(true);
+    expect(
+      split.summarizableMessages.some(
+        (msg) =>
+          msg.role === "user" &&
+          (msg as { content?: unknown }).content === "pinned onboarding note",
+      ),
+    ).toBe(false);
+  });
+
   it("formats preserved non-text messages with placeholders", () => {
     const section = formatPreservedTurnsSection([
       {
@@ -855,7 +895,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("clamps preserve count into a safe range", () => {
-    expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
+    expect(resolveRecentTurnsPreserve(undefined)).toBe(10);
     expect(resolveRecentTurnsPreserve(-1)).toBe(0);
     expect(resolveRecentTurnsPreserve(99)).toBe(12);
   });

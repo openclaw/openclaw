@@ -327,6 +327,28 @@ describe("shouldRunPreflightCompaction", () => {
       }),
     ).toBe(true);
   });
+
+  it("triggers from a fresh persisted snapshot at 80 percent of the context window", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 80_000, totalTokensFresh: true },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 20_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not trigger below the 80 percent preflight threshold", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 79_999, totalTokensFresh: true },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 20_000,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
