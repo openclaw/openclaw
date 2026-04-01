@@ -31,11 +31,9 @@ export function guardSessionManager(
     allowedToolNames?: Iterable<string>;
   },
 ): GuardedSessionManager {
-  if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
-    return sessionManager as GuardedSessionManager;
-  }
-
   // Audit: log inter-session message delivery for isolation observability
+  // Placed before the idempotency guard to ensure every delivery is logged,
+  // even if the session manager is already guarded.
   if (opts?.inputProvenance && isInterSessionInputProvenance(opts.inputProvenance)) {
     log.info("inter_session_delivery", {
       from: opts.inputProvenance.sourceSessionKey,
@@ -43,6 +41,10 @@ export function guardSessionManager(
       channel: opts.inputProvenance.sourceChannel,
       tool: opts.inputProvenance.sourceTool,
     });
+  }
+
+  if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
+    return sessionManager as GuardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
