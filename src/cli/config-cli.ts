@@ -8,6 +8,7 @@ import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildConfigPathSuggestionHint } from "../config/suggest-path.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -1660,6 +1661,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
+      const hint = buildConfigPathSuggestionHint(opts.path);
+      if (hint) {
+        runtime.error(info(hint));
+      }
       runtime.exit(1);
       return;
     }
@@ -1694,6 +1699,10 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     const removed = unsetAtPath(next, parsedPath);
     if (!removed) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
+      const hint = buildConfigPathSuggestionHint(opts.path);
+      if (hint) {
+        runtime.error(info(hint));
+      }
       runtime.exit(1);
       return;
     }
