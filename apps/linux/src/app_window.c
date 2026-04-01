@@ -24,6 +24,8 @@
 #include "gateway_client.h"
 #include "diagnostics.h"
 #include "onboarding.h"
+#include "gateway_rpc.h"
+#include "gateway_data.h"
 #include "log.h"
 
 /* ── Section metadata ── */
@@ -38,6 +40,8 @@ static const SectionMeta section_meta[SECTION_COUNT] = {
     [SECTION_DASHBOARD]    = { "dashboard",    "Dashboard",    "computer-symbolic" },
     [SECTION_GENERAL]      = { "general",      "General",      "preferences-system-symbolic" },
     [SECTION_CONFIG]       = { "config",       "Config",       "document-properties-symbolic" },
+    [SECTION_CHANNELS]     = { "channels",     "Channels",     "mail-send-symbolic" },
+    [SECTION_SKILLS]       = { "skills",       "Skills",       "applications-science-symbolic" },
     [SECTION_ENVIRONMENT]  = { "environment",  "Environment",  "system-run-symbolic" },
     [SECTION_DIAGNOSTICS]  = { "diagnostics",  "Diagnostics",  "utilities-system-monitor-symbolic" },
     [SECTION_ABOUT]        = { "about",        "About",        "help-about-symbolic" },
@@ -53,6 +57,20 @@ static GtkWidget *main_window = NULL;
 static GtkWidget *content_stack = NULL;
 static GtkWidget *sidebar_list = NULL;
 static guint refresh_timer_id = 0;
+static AppSection active_section = SECTION_DASHBOARD;
+
+/* Per-section RPC freshness: last successful fetch time (monotonic µs) */
+static gint64 rpc_last_fetch_us[SECTION_COUNT] = {0};
+#define RPC_FRESH_INTERVAL_US (30 * G_USEC_PER_SEC)  /* 30 s TTL */
+
+static gboolean rpc_section_is_stale(AppSection s) {
+    gint64 now = g_get_monotonic_time();
+    return (now - rpc_last_fetch_us[s]) >= RPC_FRESH_INTERVAL_US;
+}
+
+static void rpc_section_mark_fresh(AppSection s) {
+    rpc_last_fetch_us[s] = g_get_monotonic_time();
+}
 
 /* Section content widgets that need updating */
 static GtkWidget *section_pages[SECTION_COUNT] = {0};
@@ -68,14 +86,21 @@ static GtkWidget* build_environment_section(void);
 static GtkWidget* build_about_section(void);
 static GtkWidget* build_instances_section(void);
 static GtkWidget* build_debug_section(void);
+static GtkWidget* build_channels_section(void);
+static GtkWidget* build_skills_section(void);
 static GtkWidget* build_sessions_section(void);
 static GtkWidget* build_cron_section(void);
 static void refresh_dashboard_content(void);
 static void refresh_general_content(void);
 static void refresh_config_content(void);
+static void refresh_channels_content(void);
+static void refresh_skills_content(void);
+static void refresh_sessions_content(void);
+static void refresh_cron_content(void);
 static void refresh_diagnostics_content(void);
 static void refresh_environment_content(void);
-static void refresh_instances_content(void);
+static void refresh_instances_local_content(void);
+static void refresh_instances_remote_content(void);
 static void refresh_debug_content(void);
 static void on_sidebar_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer user_data);
 static void on_window_destroy(GtkWindow *window, gpointer user_data);
@@ -141,6 +166,10 @@ static GtkWidget* build_content_stack(void) {
             page = build_config_section();
         } else if (i == SECTION_DIAGNOSTICS) {
             page = build_diagnostics_section();
+        } else if (i == SECTION_CHANNELS) {
+            page = build_channels_section();
+        } else if (i == SECTION_SKILLS) {
+            page = build_skills_section();
         } else if (i == SECTION_ENVIRONMENT) {
             page = build_environment_section();
         } else if (i == SECTION_ABOUT) {
@@ -165,13 +194,26 @@ static GtkWidget* build_content_stack(void) {
 
 /* ── Sidebar row activation ── */
 
+static void refresh_active_rpc_section(AppSection section) {
+    switch (section) {
+    case SECTION_CHANNELS:  refresh_channels_content();  break;
+    case SECTION_SKILLS:    refresh_skills_content();    break;
+    case SECTION_INSTANCES: refresh_instances_remote_content();  break;
+    case SECTION_SESSIONS:  refresh_sessions_content();  break;
+    case SECTION_CRON:      refresh_cron_content();      break;
+    default: break;
+    }
+}
+
 static void on_sidebar_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer user_data) {
     (void)box;
     (void)user_data;
 
     int idx = gtk_list_box_row_get_index(row);
     if (idx >= 0 && idx < SECTION_COUNT) {
+        active_section = (AppSection)idx;
         gtk_stack_set_visible_child_name(GTK_STACK(content_stack), section_meta[idx].id);
+        refresh_active_rpc_section(active_section);
     }
 }
 
@@ -1291,6 +1333,12 @@ static GtkWidget *inst_endpoint_label = NULL;
 static GtkWidget *inst_unit_label = NULL;
 static GtkWidget *inst_state_label = NULL;
 
+/* Remote nodes (from node.list RPC) */
+static GtkWidget *inst_remote_box = NULL;
+static GtkWidget *inst_remote_status_label = NULL;
+static GatewayNodesData *inst_nodes_cache = NULL;
+static gboolean inst_nodes_fetch_in_flight = FALSE;
+
 static GtkWidget* inst_card_row(const char *heading, GtkWidget **out_value) {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_margin_top(row, 2);
@@ -1363,11 +1411,140 @@ static GtkWidget* build_instances_section(void) {
     gtk_frame_set_child(GTK_FRAME(card_frame), card);
     gtk_box_append(GTK_BOX(page), card_frame);
 
+    /* Remote nodes section */
+    GtkWidget *remote_title = gtk_label_new("Remote Instances");
+    gtk_widget_add_css_class(remote_title, "heading");
+    gtk_label_set_xalign(GTK_LABEL(remote_title), 0.0);
+    gtk_widget_set_margin_top(remote_title, 16);
+    gtk_box_append(GTK_BOX(page), remote_title);
+
+    inst_remote_status_label = gtk_label_new("Loading…");
+    gtk_widget_add_css_class(inst_remote_status_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(inst_remote_status_label), 0.0);
+    gtk_box_append(GTK_BOX(page), inst_remote_status_label);
+
+    inst_remote_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_top(inst_remote_box, 4);
+    gtk_box_append(GTK_BOX(page), inst_remote_box);
+
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
     return scrolled;
 }
 
-static void refresh_instances_content(void) {
+static void inst_rebuild_remote_nodes(void) {
+    if (!inst_remote_box) return;
+
+    GtkWidget *child;
+    while ((child = gtk_widget_get_first_child(inst_remote_box)) != NULL) {
+        gtk_box_remove(GTK_BOX(inst_remote_box), child);
+    }
+
+    if (!inst_nodes_cache || inst_nodes_cache->n_nodes == 0) {
+        GtkWidget *empty = gtk_label_new("No remote instances.");
+        gtk_widget_add_css_class(empty, "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(empty), 0.0);
+        gtk_box_append(GTK_BOX(inst_remote_box), empty);
+        return;
+    }
+
+    for (gint i = 0; i < inst_nodes_cache->n_nodes; i++) {
+        GatewayNode *nd = &inst_nodes_cache->nodes[i];
+
+        GtkWidget *node_frame = gtk_frame_new(NULL);
+        gtk_widget_set_margin_top(node_frame, 4);
+
+        GtkWidget *node_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        gtk_widget_set_margin_start(node_card, 12);
+        gtk_widget_set_margin_end(node_card, 12);
+        gtk_widget_set_margin_top(node_card, 8);
+        gtk_widget_set_margin_bottom(node_card, 8);
+
+        /* Header row: status dot + name + platform */
+        GtkWidget *hdr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        GtkWidget *dot = gtk_label_new(nd->connected ? "●" : "○");
+        gtk_widget_add_css_class(dot, nd->connected ? "success" : "dim-label");
+        gtk_box_append(GTK_BOX(hdr), dot);
+
+        GtkWidget *name_lbl = gtk_label_new(
+            nd->display_name ? nd->display_name : nd->node_id);
+        gtk_widget_add_css_class(name_lbl, "heading");
+        gtk_label_set_xalign(GTK_LABEL(name_lbl), 0.0);
+        gtk_widget_set_hexpand(name_lbl, TRUE);
+        gtk_box_append(GTK_BOX(hdr), name_lbl);
+
+        if (nd->platform) {
+            GtkWidget *plat = gtk_label_new(nd->platform);
+            gtk_widget_add_css_class(plat, "dim-label");
+            gtk_box_append(GTK_BOX(hdr), plat);
+        }
+
+        gtk_box_append(GTK_BOX(node_card), hdr);
+
+        /* Detail rows */
+        if (nd->version) {
+            GtkWidget *ver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+            GtkWidget *ver_h = gtk_label_new("Version");
+            gtk_widget_add_css_class(ver_h, "dim-label");
+            gtk_widget_set_size_request(ver_h, 100, -1);
+            gtk_box_append(GTK_BOX(ver_row), ver_h);
+            gtk_box_append(GTK_BOX(ver_row), gtk_label_new(nd->version));
+            gtk_box_append(GTK_BOX(node_card), ver_row);
+        }
+
+        if (nd->device_family) {
+            GtkWidget *dev_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+            GtkWidget *dev_h = gtk_label_new("Device");
+            gtk_widget_add_css_class(dev_h, "dim-label");
+            gtk_widget_set_size_request(dev_h, 100, -1);
+            gtk_box_append(GTK_BOX(dev_row), dev_h);
+            gtk_box_append(GTK_BOX(dev_row), gtk_label_new(nd->device_family));
+            gtk_box_append(GTK_BOX(node_card), dev_row);
+        }
+
+        gtk_frame_set_child(GTK_FRAME(node_frame), node_card);
+        gtk_box_append(GTK_BOX(inst_remote_box), node_frame);
+    }
+}
+
+static void on_nodes_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    inst_nodes_fetch_in_flight = FALSE;
+
+    if (!inst_remote_box) return;
+
+    if (!response->ok) {
+        if (inst_remote_status_label) {
+            g_autofree gchar *msg = g_strdup_printf("Error: %s",
+                response->error_msg ? response->error_msg : "unknown");
+            gtk_label_set_text(GTK_LABEL(inst_remote_status_label), msg);
+        }
+        return;
+    }
+
+    rpc_section_mark_fresh(SECTION_INSTANCES);
+    gateway_nodes_data_free(inst_nodes_cache);
+    inst_nodes_cache = gateway_data_parse_nodes(response->payload);
+
+    if (inst_remote_status_label) {
+        if (inst_nodes_cache) {
+            gint connected = 0;
+            for (gint i = 0; i < inst_nodes_cache->n_nodes; i++) {
+                if (inst_nodes_cache->nodes[i].connected) connected++;
+            }
+            g_autofree gchar *msg = g_strdup_printf("%d node%s (%d online)",
+                inst_nodes_cache->n_nodes,
+                inst_nodes_cache->n_nodes == 1 ? "" : "s",
+                connected);
+            gtk_label_set_text(GTK_LABEL(inst_remote_status_label), msg);
+        } else {
+            gtk_label_set_text(GTK_LABEL(inst_remote_status_label), "Failed to parse response");
+        }
+    }
+
+    inst_rebuild_remote_nodes();
+}
+
+static void refresh_instances_local_content(void) {
     if (!inst_hostname_label) return;
 
     AppState current = state_get_current();
@@ -1406,6 +1583,25 @@ static void refresh_instances_content(void) {
     } else {
         gtk_label_set_text(GTK_LABEL(inst_state_label),
             dm.active_state ? dm.active_state : "—");
+    }
+}
+
+static void refresh_instances_remote_content(void) {
+    if (!inst_remote_box || inst_nodes_fetch_in_flight) return;
+    if (!rpc_section_is_stale(SECTION_INSTANCES)) return;
+    if (!gateway_rpc_is_ready()) {
+        if (inst_remote_status_label)
+            gtk_label_set_text(GTK_LABEL(inst_remote_status_label), "Gateway not connected");
+        return;
+    }
+
+    inst_nodes_fetch_in_flight = TRUE;
+    g_autofree gchar *req_id = gateway_rpc_request(
+        "node.list", NULL, 0, on_nodes_rpc_response, NULL);
+    if (!req_id) {
+        inst_nodes_fetch_in_flight = FALSE;
+        if (inst_remote_status_label)
+            gtk_label_set_text(GTK_LABEL(inst_remote_status_label), "Failed to send request");
     }
 }
 
@@ -1590,12 +1786,480 @@ static void on_open_dashboard_for_section(GtkButton *b, gpointer d) {
     if (url) g_app_info_launch_default_for_uri(url, NULL, NULL);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * Channels section — RPC-backed via channels.status
+ * ══════════════════════════════════════════════════════════════════ */
+
+static GtkWidget *channels_list_box = NULL;
+static GtkWidget *channels_status_label = NULL;
+static GatewayChannelsData *channels_data_cache = NULL;
+static gboolean channels_fetch_in_flight = FALSE;
+
+static void channels_rebuild_list(void) {
+    if (!channels_list_box) return;
+
+    /* Remove all existing children */
+    GtkWidget *child;
+    while ((child = gtk_widget_get_first_child(channels_list_box)) != NULL) {
+        gtk_box_remove(GTK_BOX(channels_list_box), child);
+    }
+
+    if (!channels_data_cache || channels_data_cache->n_channels == 0) {
+        GtkWidget *empty = gtk_label_new("No channels available.");
+        gtk_widget_add_css_class(empty, "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(empty), 0.0);
+        gtk_box_append(GTK_BOX(channels_list_box), empty);
+        return;
+    }
+
+    for (gint i = 0; i < channels_data_cache->n_channels; i++) {
+        GatewayChannel *ch = &channels_data_cache->channels[i];
+
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_widget_set_margin_top(row, 6);
+        gtk_widget_set_margin_bottom(row, 6);
+
+        /* Status dot */
+        GtkWidget *dot = gtk_label_new(ch->connected ? "●" : "○");
+        if (ch->connected)
+            gtk_widget_add_css_class(dot, "success");
+        else
+            gtk_widget_add_css_class(dot, "dim-label");
+        gtk_box_append(GTK_BOX(row), dot);
+
+        /* Channel name */
+        GtkWidget *name = gtk_label_new(ch->label ? ch->label : ch->channel_id);
+        gtk_widget_add_css_class(name, "heading");
+        gtk_label_set_xalign(GTK_LABEL(name), 0.0);
+        gtk_widget_set_hexpand(name, TRUE);
+        gtk_box_append(GTK_BOX(row), name);
+
+        /* Account count */
+        if (ch->account_count > 0) {
+            g_autofree gchar *acct_str = g_strdup_printf("%d account%s",
+                ch->account_count, ch->account_count == 1 ? "" : "s");
+            GtkWidget *acct = gtk_label_new(acct_str);
+            gtk_widget_add_css_class(acct, "dim-label");
+            gtk_box_append(GTK_BOX(row), acct);
+        }
+
+        gtk_box_append(GTK_BOX(channels_list_box), row);
+
+        /* Detail label if available */
+        if (ch->detail_label) {
+            GtkWidget *detail = gtk_label_new(ch->detail_label);
+            gtk_widget_add_css_class(detail, "dim-label");
+            gtk_label_set_xalign(GTK_LABEL(detail), 0.0);
+            gtk_widget_set_margin_start(detail, 24);
+            gtk_box_append(GTK_BOX(channels_list_box), detail);
+        }
+    }
+}
+
+static void on_channels_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    channels_fetch_in_flight = FALSE;
+
+    if (!channels_list_box) return;
+
+    if (!response->ok) {
+        if (channels_status_label) {
+            g_autofree gchar *msg = g_strdup_printf("Error: %s",
+                response->error_msg ? response->error_msg : "unknown");
+            gtk_label_set_text(GTK_LABEL(channels_status_label), msg);
+        }
+        return;
+    }
+
+    rpc_section_mark_fresh(SECTION_CHANNELS);
+    gateway_channels_data_free(channels_data_cache);
+    channels_data_cache = gateway_data_parse_channels(response->payload);
+
+    if (channels_status_label) {
+        if (channels_data_cache) {
+            g_autofree gchar *msg = g_strdup_printf("%d channel%s",
+                channels_data_cache->n_channels,
+                channels_data_cache->n_channels == 1 ? "" : "s");
+            gtk_label_set_text(GTK_LABEL(channels_status_label), msg);
+        } else {
+            gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to parse response");
+        }
+    }
+
+    channels_rebuild_list();
+}
+
+static void refresh_channels_content(void) {
+    if (!channels_list_box || channels_fetch_in_flight) return;
+    if (!rpc_section_is_stale(SECTION_CHANNELS)) return;
+    if (!gateway_rpc_is_ready()) {
+        if (channels_status_label)
+            gtk_label_set_text(GTK_LABEL(channels_status_label), "Gateway not connected");
+        return;
+    }
+
+    channels_fetch_in_flight = TRUE;
+    g_autofree gchar *req_id = gateway_rpc_request(
+        "channels.status", NULL, 0, on_channels_rpc_response, NULL);
+    if (!req_id) {
+        channels_fetch_in_flight = FALSE;
+        if (channels_status_label)
+            gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send request");
+    }
+}
+
+static GtkWidget* build_channels_section(void) {
+    GtkWidget *scrolled = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start(page, 24);
+    gtk_widget_set_margin_end(page, 24);
+    gtk_widget_set_margin_top(page, 24);
+    gtk_widget_set_margin_bottom(page, 24);
+
+    GtkWidget *title = gtk_label_new("Channels");
+    gtk_widget_add_css_class(title, "title-1");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    channels_status_label = gtk_label_new("Loading…");
+    gtk_widget_add_css_class(channels_status_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(channels_status_label), 0.0);
+    gtk_box_append(GTK_BOX(page), channels_status_label);
+
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 4);
+    gtk_widget_set_margin_bottom(sep, 4);
+    gtk_box_append(GTK_BOX(page), sep);
+
+    channels_list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(page), channels_list_box);
+
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
+    return scrolled;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * Skills section — RPC-backed via skills.status
+ * ══════════════════════════════════════════════════════════════════ */
+
+static GtkWidget *skills_list_box = NULL;
+static GtkWidget *skills_status_label = NULL;
+static GatewaySkillsData *skills_data_cache = NULL;
+static gboolean skills_fetch_in_flight = FALSE;
+
+static void skills_rebuild_list(void) {
+    if (!skills_list_box) return;
+
+    GtkWidget *child;
+    while ((child = gtk_widget_get_first_child(skills_list_box)) != NULL) {
+        gtk_box_remove(GTK_BOX(skills_list_box), child);
+    }
+
+    if (!skills_data_cache || skills_data_cache->n_skills == 0) {
+        GtkWidget *empty = gtk_label_new("No skills available.");
+        gtk_widget_add_css_class(empty, "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(empty), 0.0);
+        gtk_box_append(GTK_BOX(skills_list_box), empty);
+        return;
+    }
+
+    for (gint i = 0; i < skills_data_cache->n_skills; i++) {
+        GatewaySkill *sk = &skills_data_cache->skills[i];
+
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_widget_set_margin_top(row, 6);
+        gtk_widget_set_margin_bottom(row, 6);
+
+        /* Status indicator */
+        const gchar *status_text;
+        const gchar *status_class;
+        if (sk->disabled) {
+            status_text = "○";
+            status_class = "dim-label";
+        } else if (sk->installed && sk->enabled) {
+            status_text = "●";
+            status_class = "success";
+        } else if (sk->enabled && !sk->installed) {
+            status_text = "◎";
+            status_class = "warning";
+        } else {
+            status_text = "○";
+            status_class = "dim-label";
+        }
+        GtkWidget *dot = gtk_label_new(status_text);
+        gtk_widget_add_css_class(dot, status_class);
+        gtk_box_append(GTK_BOX(row), dot);
+
+        /* Skill name */
+        GtkWidget *name = gtk_label_new(sk->name ? sk->name : sk->key);
+        gtk_widget_add_css_class(name, "heading");
+        gtk_label_set_xalign(GTK_LABEL(name), 0.0);
+        gtk_widget_set_hexpand(name, TRUE);
+        gtk_box_append(GTK_BOX(row), name);
+
+        /* Source badge */
+        if (sk->source) {
+            GtkWidget *badge = gtk_label_new(sk->source);
+            gtk_widget_add_css_class(badge, "dim-label");
+            gtk_box_append(GTK_BOX(row), badge);
+        }
+
+        /* Update available indicator */
+        if (sk->has_update) {
+            GtkWidget *upd = gtk_label_new("Update available");
+            gtk_widget_add_css_class(upd, "accent");
+            gtk_box_append(GTK_BOX(row), upd);
+        }
+
+        gtk_box_append(GTK_BOX(skills_list_box), row);
+
+        /* Description */
+        if (sk->description) {
+            GtkWidget *desc = gtk_label_new(sk->description);
+            gtk_widget_add_css_class(desc, "dim-label");
+            gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
+            gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
+            gtk_widget_set_margin_start(desc, 24);
+            gtk_box_append(GTK_BOX(skills_list_box), desc);
+        }
+    }
+}
+
+static void on_skills_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    skills_fetch_in_flight = FALSE;
+
+    if (!skills_list_box) return;
+
+    if (!response->ok) {
+        if (skills_status_label) {
+            g_autofree gchar *msg = g_strdup_printf("Error: %s",
+                response->error_msg ? response->error_msg : "unknown");
+            gtk_label_set_text(GTK_LABEL(skills_status_label), msg);
+        }
+        return;
+    }
+
+    rpc_section_mark_fresh(SECTION_SKILLS);
+    gateway_skills_data_free(skills_data_cache);
+    skills_data_cache = gateway_data_parse_skills(response->payload);
+
+    if (skills_status_label) {
+        if (skills_data_cache) {
+            gint enabled = 0;
+            for (gint i = 0; i < skills_data_cache->n_skills; i++) {
+                if (skills_data_cache->skills[i].enabled && !skills_data_cache->skills[i].disabled)
+                    enabled++;
+            }
+            g_autofree gchar *msg = g_strdup_printf("%d skill%s (%d enabled)",
+                skills_data_cache->n_skills,
+                skills_data_cache->n_skills == 1 ? "" : "s",
+                enabled);
+            gtk_label_set_text(GTK_LABEL(skills_status_label), msg);
+        } else {
+            gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to parse response");
+        }
+    }
+
+    skills_rebuild_list();
+}
+
+static void refresh_skills_content(void) {
+    if (!skills_list_box || skills_fetch_in_flight) return;
+    if (!rpc_section_is_stale(SECTION_SKILLS)) return;
+    if (!gateway_rpc_is_ready()) {
+        if (skills_status_label)
+            gtk_label_set_text(GTK_LABEL(skills_status_label), "Gateway not connected");
+        return;
+    }
+
+    skills_fetch_in_flight = TRUE;
+    g_autofree gchar *req_id = gateway_rpc_request(
+        "skills.status", NULL, 0, on_skills_rpc_response, NULL);
+    if (!req_id) {
+        skills_fetch_in_flight = FALSE;
+        if (skills_status_label)
+            gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send request");
+    }
+}
+
+static GtkWidget* build_skills_section(void) {
+    GtkWidget *scrolled = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start(page, 24);
+    gtk_widget_set_margin_end(page, 24);
+    gtk_widget_set_margin_top(page, 24);
+    gtk_widget_set_margin_bottom(page, 24);
+
+    GtkWidget *title = gtk_label_new("Skills");
+    gtk_widget_add_css_class(title, "title-1");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    skills_status_label = gtk_label_new("Loading…");
+    gtk_widget_add_css_class(skills_status_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(skills_status_label), 0.0);
+    gtk_box_append(GTK_BOX(page), skills_status_label);
+
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 4);
+    gtk_widget_set_margin_bottom(sep, 4);
+    gtk_box_append(GTK_BOX(page), sep);
+
+    skills_list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(page), skills_list_box);
+
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
+    return scrolled;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * Sessions section — RPC-backed via sessions.list
+ * ══════════════════════════════════════════════════════════════════ */
+
+static GtkWidget *sessions_list_box = NULL;
+static GtkWidget *sessions_status_label = NULL;
+static GatewaySessionsData *sessions_data_cache = NULL;
+static gboolean sessions_fetch_in_flight = FALSE;
+
+static void sessions_rebuild_list(void) {
+    if (!sessions_list_box) return;
+
+    GtkWidget *child;
+    while ((child = gtk_widget_get_first_child(sessions_list_box)) != NULL) {
+        gtk_box_remove(GTK_BOX(sessions_list_box), child);
+    }
+
+    if (!sessions_data_cache || sessions_data_cache->n_sessions == 0) {
+        GtkWidget *empty = gtk_label_new("No sessions.");
+        gtk_widget_add_css_class(empty, "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(empty), 0.0);
+        gtk_box_append(GTK_BOX(sessions_list_box), empty);
+        return;
+    }
+
+    for (gint i = 0; i < sessions_data_cache->n_sessions; i++) {
+        GatewaySession *s = &sessions_data_cache->sessions[i];
+
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_widget_set_margin_top(row, 4);
+        gtk_widget_set_margin_bottom(row, 4);
+
+        /* Status indicator */
+        const gchar *dot_text = "○";
+        const gchar *dot_class = "dim-label";
+        if (s->status && g_strcmp0(s->status, "running") == 0) {
+            dot_text = "●";
+            dot_class = "success";
+        } else if (s->status && g_strcmp0(s->status, "failed") == 0) {
+            dot_text = "●";
+            dot_class = "error";
+        }
+        GtkWidget *dot = gtk_label_new(dot_text);
+        gtk_widget_add_css_class(dot, dot_class);
+        gtk_box_append(GTK_BOX(row), dot);
+
+        /* Session name */
+        const gchar *name_str = s->display_name ? s->display_name : s->key;
+        GtkWidget *name = gtk_label_new(name_str);
+        gtk_widget_add_css_class(name, "heading");
+        gtk_label_set_xalign(GTK_LABEL(name), 0.0);
+        gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END);
+        gtk_widget_set_hexpand(name, TRUE);
+        gtk_box_append(GTK_BOX(row), name);
+
+        /* Channel badge */
+        if (s->channel) {
+            GtkWidget *ch_badge = gtk_label_new(s->channel);
+            gtk_widget_add_css_class(ch_badge, "dim-label");
+            gtk_box_append(GTK_BOX(row), ch_badge);
+        }
+
+        /* Model badge */
+        if (s->model) {
+            GtkWidget *model_badge = gtk_label_new(s->model);
+            gtk_widget_add_css_class(model_badge, "dim-label");
+            gtk_box_append(GTK_BOX(row), model_badge);
+        }
+
+        gtk_box_append(GTK_BOX(sessions_list_box), row);
+
+        /* Subject detail */
+        if (s->subject) {
+            GtkWidget *subj = gtk_label_new(s->subject);
+            gtk_widget_add_css_class(subj, "dim-label");
+            gtk_label_set_xalign(GTK_LABEL(subj), 0.0);
+            gtk_label_set_ellipsize(GTK_LABEL(subj), PANGO_ELLIPSIZE_END);
+            gtk_widget_set_margin_start(subj, 24);
+            gtk_box_append(GTK_BOX(sessions_list_box), subj);
+        }
+    }
+}
+
+static void on_sessions_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    sessions_fetch_in_flight = FALSE;
+
+    if (!sessions_list_box) return;
+
+    if (!response->ok) {
+        if (sessions_status_label) {
+            g_autofree gchar *msg = g_strdup_printf("Error: %s",
+                response->error_msg ? response->error_msg : "unknown");
+            gtk_label_set_text(GTK_LABEL(sessions_status_label), msg);
+        }
+        return;
+    }
+
+    rpc_section_mark_fresh(SECTION_SESSIONS);
+    gateway_sessions_data_free(sessions_data_cache);
+    sessions_data_cache = gateway_data_parse_sessions(response->payload);
+
+    if (sessions_status_label) {
+        if (sessions_data_cache) {
+            g_autofree gchar *msg = g_strdup_printf("%d session%s",
+                sessions_data_cache->n_sessions,
+                sessions_data_cache->n_sessions == 1 ? "" : "s");
+            gtk_label_set_text(GTK_LABEL(sessions_status_label), msg);
+        } else {
+            gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to parse response");
+        }
+    }
+
+    sessions_rebuild_list();
+}
+
+static void refresh_sessions_content(void) {
+    if (!sessions_list_box || sessions_fetch_in_flight) return;
+    if (!rpc_section_is_stale(SECTION_SESSIONS)) return;
+    if (!gateway_rpc_is_ready()) {
+        if (sessions_status_label)
+            gtk_label_set_text(GTK_LABEL(sessions_status_label), "Gateway not connected");
+        return;
+    }
+
+    sessions_fetch_in_flight = TRUE;
+    g_autofree gchar *req_id = gateway_rpc_request(
+        "sessions.list", NULL, 0, on_sessions_rpc_response, NULL);
+    if (!req_id) {
+        sessions_fetch_in_flight = FALSE;
+        if (sessions_status_label)
+            gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
+    }
+}
+
 static GtkWidget* build_sessions_section(void) {
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 
-    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_widget_set_margin_start(page, 24);
     gtk_widget_set_margin_end(page, 24);
     gtk_widget_set_margin_top(page, 24);
@@ -1606,44 +2270,177 @@ static GtkWidget* build_sessions_section(void) {
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
     gtk_box_append(GTK_BOX(page), title);
 
-    GtkWidget *desc = gtk_label_new(
-        "Sessions represent active messaging conversations between "
-        "users and the AI agent. Each channel connection maintains "
-        "its own session with message history and context.");
-    gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
-    gtk_box_append(GTK_BOX(page), desc);
+    sessions_status_label = gtk_label_new("Loading…");
+    gtk_widget_add_css_class(sessions_status_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(sessions_status_label), 0.0);
+    gtk_box_append(GTK_BOX(page), sessions_status_label);
 
-    GtkWidget *info = gtk_label_new(
-        "View and manage sessions in the gateway dashboard.");
-    gtk_widget_add_css_class(info, "dim-label");
-    gtk_label_set_xalign(GTK_LABEL(info), 0.0);
-    gtk_box_append(GTK_BOX(page), info);
-
+    /* Dashboard handoff button */
     GtkWidget *btn = gtk_button_new_with_label("Open in Dashboard");
-    gtk_widget_add_css_class(btn, "suggested-action");
+    gtk_widget_add_css_class(btn, "flat");
     gtk_widget_set_halign(btn, GTK_ALIGN_START);
-    gtk_widget_set_margin_top(btn, 8);
     g_signal_connect(btn, "clicked", G_CALLBACK(on_open_dashboard_for_section), NULL);
     gtk_box_append(GTK_BOX(page), btn);
+
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 4);
+    gtk_widget_set_margin_bottom(sep, 4);
+    gtk_box_append(GTK_BOX(page), sep);
+
+    sessions_list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(page), sessions_list_box);
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
     return scrolled;
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * Cron section (Tier B — entry point)
- *
- * Header, short description, "Open in Dashboard" action.
- * Full cron management lives in the dashboard web UI.
+ * Cron section — RPC-backed via cron.list
  * ══════════════════════════════════════════════════════════════════ */
+
+static GtkWidget *cron_list_box = NULL;
+static GtkWidget *cron_status_label = NULL;
+static GatewayCronData *cron_data_cache = NULL;
+static gboolean cron_fetch_in_flight = FALSE;
+
+static void cron_rebuild_list(void) {
+    if (!cron_list_box) return;
+
+    GtkWidget *child;
+    while ((child = gtk_widget_get_first_child(cron_list_box)) != NULL) {
+        gtk_box_remove(GTK_BOX(cron_list_box), child);
+    }
+
+    if (!cron_data_cache || cron_data_cache->n_jobs == 0) {
+        GtkWidget *empty = gtk_label_new("No cron jobs.");
+        gtk_widget_add_css_class(empty, "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(empty), 0.0);
+        gtk_box_append(GTK_BOX(cron_list_box), empty);
+        return;
+    }
+
+    for (gint i = 0; i < cron_data_cache->n_jobs; i++) {
+        GatewayCronJob *job = &cron_data_cache->jobs[i];
+
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_widget_set_margin_top(row, 4);
+        gtk_widget_set_margin_bottom(row, 4);
+
+        /* Enabled/disabled dot */
+        GtkWidget *dot = gtk_label_new(job->enabled ? "●" : "○");
+        gtk_widget_add_css_class(dot, job->enabled ? "success" : "dim-label");
+        gtk_box_append(GTK_BOX(row), dot);
+
+        /* Job name */
+        GtkWidget *name = gtk_label_new(job->name ? job->name : job->id);
+        gtk_widget_add_css_class(name, "heading");
+        gtk_label_set_xalign(GTK_LABEL(name), 0.0);
+        gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END);
+        gtk_widget_set_hexpand(name, TRUE);
+        gtk_box_append(GTK_BOX(row), name);
+
+        /* Last run status badge */
+        if (job->last_run_status) {
+            GtkWidget *status_badge = gtk_label_new(job->last_run_status);
+            const gchar *badge_class = "dim-label";
+            if (g_strcmp0(job->last_run_status, "ok") == 0) badge_class = "success";
+            else if (g_strcmp0(job->last_run_status, "error") == 0) badge_class = "error";
+            gtk_widget_add_css_class(status_badge, badge_class);
+            gtk_box_append(GTK_BOX(row), status_badge);
+        }
+
+        gtk_box_append(GTK_BOX(cron_list_box), row);
+
+        /* Description or last error */
+        const gchar *detail = job->last_error ? job->last_error : job->description;
+        if (detail) {
+            GtkWidget *desc = gtk_label_new(detail);
+            gtk_widget_add_css_class(desc, job->last_error ? "error" : "dim-label");
+            gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
+            gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
+            gtk_label_set_ellipsize(GTK_LABEL(desc), PANGO_ELLIPSIZE_END);
+            gtk_label_set_max_width_chars(GTK_LABEL(desc), 80);
+            gtk_widget_set_margin_start(desc, 24);
+            gtk_box_append(GTK_BOX(cron_list_box), desc);
+        }
+    }
+
+    /* Pagination note */
+    if (cron_data_cache->has_more) {
+        g_autofree gchar *more_text = g_strdup_printf(
+            "Showing %d of %d total jobs. Open the dashboard for full list.",
+            cron_data_cache->n_jobs, cron_data_cache->total);
+        GtkWidget *more = gtk_label_new(more_text);
+        gtk_widget_add_css_class(more, "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(more), 0.0);
+        gtk_widget_set_margin_top(more, 8);
+        gtk_box_append(GTK_BOX(cron_list_box), more);
+    }
+}
+
+static void on_cron_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    cron_fetch_in_flight = FALSE;
+
+    if (!cron_list_box) return;
+
+    if (!response->ok) {
+        if (cron_status_label) {
+            g_autofree gchar *msg = g_strdup_printf("Error: %s",
+                response->error_msg ? response->error_msg : "unknown");
+            gtk_label_set_text(GTK_LABEL(cron_status_label), msg);
+        }
+        return;
+    }
+
+    rpc_section_mark_fresh(SECTION_CRON);
+    gateway_cron_data_free(cron_data_cache);
+    cron_data_cache = gateway_data_parse_cron(response->payload);
+
+    if (cron_status_label) {
+        if (cron_data_cache) {
+            gint enabled = 0;
+            for (gint i = 0; i < cron_data_cache->n_jobs; i++) {
+                if (cron_data_cache->jobs[i].enabled) enabled++;
+            }
+            g_autofree gchar *msg = g_strdup_printf("%d job%s (%d enabled, %d total)",
+                cron_data_cache->n_jobs,
+                cron_data_cache->n_jobs == 1 ? "" : "s",
+                enabled, cron_data_cache->total);
+            gtk_label_set_text(GTK_LABEL(cron_status_label), msg);
+        } else {
+            gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to parse response");
+        }
+    }
+
+    cron_rebuild_list();
+}
+
+static void refresh_cron_content(void) {
+    if (!cron_list_box || cron_fetch_in_flight) return;
+    if (!rpc_section_is_stale(SECTION_CRON)) return;
+    if (!gateway_rpc_is_ready()) {
+        if (cron_status_label)
+            gtk_label_set_text(GTK_LABEL(cron_status_label), "Gateway not connected");
+        return;
+    }
+
+    cron_fetch_in_flight = TRUE;
+    g_autofree gchar *req_id = gateway_rpc_request(
+        "cron.list", NULL, 0, on_cron_rpc_response, NULL);
+    if (!req_id) {
+        cron_fetch_in_flight = FALSE;
+        if (cron_status_label)
+            gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
+    }
+}
 
 static GtkWidget* build_cron_section(void) {
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 
-    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_widget_set_margin_start(page, 24);
     gtk_widget_set_margin_end(page, 24);
     gtk_widget_set_margin_top(page, 24);
@@ -1654,26 +2451,25 @@ static GtkWidget* build_cron_section(void) {
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
     gtk_box_append(GTK_BOX(page), title);
 
-    GtkWidget *desc = gtk_label_new(
-        "Cron jobs allow the AI agent to perform scheduled tasks "
-        "automatically. Configure recurring actions, periodic checks, "
-        "and timed workflows.");
-    gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
-    gtk_box_append(GTK_BOX(page), desc);
+    cron_status_label = gtk_label_new("Loading…");
+    gtk_widget_add_css_class(cron_status_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(cron_status_label), 0.0);
+    gtk_box_append(GTK_BOX(page), cron_status_label);
 
-    GtkWidget *info = gtk_label_new(
-        "View and manage cron jobs in the gateway dashboard.");
-    gtk_widget_add_css_class(info, "dim-label");
-    gtk_label_set_xalign(GTK_LABEL(info), 0.0);
-    gtk_box_append(GTK_BOX(page), info);
-
+    /* Dashboard handoff button */
     GtkWidget *btn = gtk_button_new_with_label("Open in Dashboard");
-    gtk_widget_add_css_class(btn, "suggested-action");
+    gtk_widget_add_css_class(btn, "flat");
     gtk_widget_set_halign(btn, GTK_ALIGN_START);
-    gtk_widget_set_margin_top(btn, 8);
     g_signal_connect(btn, "clicked", G_CALLBACK(on_open_dashboard_for_section), NULL);
     gtk_box_append(GTK_BOX(page), btn);
+
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 4);
+    gtk_widget_set_margin_bottom(sep, 4);
+    gtk_box_append(GTK_BOX(page), sep);
+
+    cron_list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(page), cron_list_box);
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
     return scrolled;
@@ -1689,8 +2485,10 @@ static gboolean on_refresh_tick(gpointer user_data) {
         refresh_config_content();
         refresh_diagnostics_content();
         refresh_environment_content();
-        refresh_instances_content();
+        refresh_instances_local_content();
         refresh_debug_content();
+        /* RPC-backed sections refresh on activation + TTL, not every tick */
+        refresh_active_rpc_section(active_section);
         return G_SOURCE_CONTINUE;
     }
     refresh_timer_id = 0;
@@ -1779,11 +2577,42 @@ static void on_window_destroy(GtkWindow *window, gpointer user_data) {
     inst_endpoint_label = NULL;
     inst_unit_label = NULL;
     inst_state_label = NULL;
+    inst_remote_box = NULL;
+    inst_remote_status_label = NULL;
+    inst_nodes_fetch_in_flight = FALSE;
+    gateway_nodes_data_free(inst_nodes_cache);
+    inst_nodes_cache = NULL;
 
     dbg_state_label = NULL;
     dbg_unit_label = NULL;
     dbg_journal_label = NULL;
 
+    channels_list_box = NULL;
+    channels_status_label = NULL;
+    channels_fetch_in_flight = FALSE;
+    gateway_channels_data_free(channels_data_cache);
+    channels_data_cache = NULL;
+
+    skills_list_box = NULL;
+    skills_status_label = NULL;
+    skills_fetch_in_flight = FALSE;
+    gateway_skills_data_free(skills_data_cache);
+    skills_data_cache = NULL;
+
+    sessions_list_box = NULL;
+    sessions_status_label = NULL;
+    sessions_fetch_in_flight = FALSE;
+    gateway_sessions_data_free(sessions_data_cache);
+    sessions_data_cache = NULL;
+
+    cron_list_box = NULL;
+    cron_status_label = NULL;
+    cron_fetch_in_flight = FALSE;
+    gateway_cron_data_free(cron_data_cache);
+    cron_data_cache = NULL;
+
+    active_section = SECTION_DASHBOARD;
+    memset(rpc_last_fetch_us, 0, sizeof(rpc_last_fetch_us));
     memset(section_pages, 0, sizeof(section_pages));
 }
 
@@ -1825,14 +2654,15 @@ void app_window_show(void) {
 
     g_signal_connect(main_window, "destroy", G_CALLBACK(on_window_destroy), NULL);
 
-    /* Initial content fill for ALL sections + start auto-refresh */
+    /* Initial content fill for local/cheap sections + start auto-refresh */
     refresh_dashboard_content();
     refresh_general_content();
     refresh_config_content();
     refresh_diagnostics_content();
     refresh_environment_content();
-    refresh_instances_content();
+    refresh_instances_local_content();
     refresh_debug_content();
+    /* RPC-backed sections will fetch on first sidebar activation */
     refresh_timer_id = g_timeout_add_seconds(1, on_refresh_tick, NULL);
 
     gtk_window_present(GTK_WINDOW(main_window));
@@ -1843,6 +2673,7 @@ void app_window_navigate_to(AppSection section) {
 
     app_window_show();
 
+    active_section = section;
     if (content_stack) {
         gtk_stack_set_visible_child_name(GTK_STACK(content_stack), section_meta[section].id);
     }
@@ -1852,6 +2683,7 @@ void app_window_navigate_to(AppSection section) {
             gtk_list_box_select_row(GTK_LIST_BOX(sidebar_list), row);
         }
     }
+    refresh_active_rpc_section(active_section);
 }
 
 gboolean app_window_is_visible(void) {

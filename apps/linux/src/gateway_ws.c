@@ -20,6 +20,7 @@
 
 #include "gateway_ws.h"
 #include "gateway_protocol.h"
+#include "gateway_rpc.h"
 #include "log.h"
 #include <libsoup/soup.h>
 #include <string.h>
@@ -184,6 +185,7 @@ static gboolean ws_on_tick_watchdog(gpointer user_data) {
         gdouble tolerance = ws_client->tick_interval_ms * 2.0;
         if (delta_ms > tolerance) {
             OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws tick missed (%.0f ms > %.0f ms tolerance), reconnecting", delta_ms, tolerance);
+            gateway_rpc_fail_all_pending("Tick missed; reconnecting");
             ws_cleanup_connection();
             ws_set_error("Tick missed; reconnecting");
             ws_set_state(GATEWAY_WS_DISCONNECTED);
@@ -315,6 +317,13 @@ static void ws_handle_frame(const gchar *text) {
                     ws_set_state(GATEWAY_WS_CONNECTED);
                 }
             }
+        } else if (ws_client->state == GATEWAY_WS_CONNECTED) {
+            /* Post-auth response: dispatch to RPC pending-request registry */
+            if (!gateway_rpc_handle_response(frame)) {
+                OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                             "ws unmatched response id=%s (no pending request)",
+                             frame->id ? frame->id : "(none)");
+            }
         }
         break;
 
@@ -348,6 +357,7 @@ static void ws_on_closed(SoupWebsocketConnection *conn, gpointer user_data) {
     ws_client->rpc_ok = FALSE;
     g_clear_object(&ws_client->ws_conn);
     ws_stop_timers();
+    gateway_rpc_fail_all_pending("WebSocket connection closed");
 
     if (ws_client->state != GATEWAY_WS_AUTH_FAILED) {
         ws_set_error("Connection closed");
@@ -478,6 +488,7 @@ void gateway_ws_connect(const gchar *ws_url, const gchar *auth_mode,
 void gateway_ws_disconnect(void) {
     if (!ws_client) return;
     ws_client->should_reconnect = FALSE;
+    gateway_rpc_fail_all_pending("Disconnected by user");
     ws_cleanup_connection();
     ws_client->rpc_ok = FALSE;
     ws_set_state(GATEWAY_WS_DISCONNECTED);
@@ -487,6 +498,7 @@ void gateway_ws_shutdown(void) {
     if (!ws_client) return;
     ws_client->should_reconnect = FALSE;
     ws_client->callback = NULL;
+    gateway_rpc_fail_all_pending("Shutdown");
     ws_cleanup_connection();
     g_clear_object(&ws_client->session);
     g_free(ws_client->url);
@@ -497,6 +509,14 @@ void gateway_ws_shutdown(void) {
     g_free(ws_client->last_error);
     g_free(ws_client);
     ws_client = NULL;
+}
+
+gboolean gateway_ws_send_text(const gchar *text) {
+    if (!ws_client || !ws_client->ws_conn || !text) return FALSE;
+    if (soup_websocket_connection_get_state(ws_client->ws_conn) != SOUP_WEBSOCKET_STATE_OPEN)
+        return FALSE;
+    soup_websocket_connection_send_text(ws_client->ws_conn, text);
+    return TRUE;
 }
 
 GatewayWsState gateway_ws_get_state(void) {

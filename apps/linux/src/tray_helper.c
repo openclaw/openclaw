@@ -7,6 +7,27 @@
  * internal helper to prevent runtime GType collisions with the main GTK4 app.
  * Handles IPC commands to render state and gate user actions.
  *
+ * ── GNOME Tray Host-Behavior Contract ──
+ *
+ * Under Ayatana AppIndicator on Ubuntu GNOME (SNI protocol):
+ *
+ *  - Left-click:  Host-controlled. GNOME Shell (via ubuntu-appindicators
+ *                 extension) opens the indicator menu. The app does NOT
+ *                 control or override this behavior and MUST NOT attempt to.
+ *
+ *  - Right-click: Host-controlled. Same as left-click on GNOME; opens the
+ *                 indicator menu. On KDE/XFCE the host may present a
+ *                 separate context menu, but the app does not differentiate.
+ *
+ *  - Middle-click: App-controlled via app_indicator_set_secondary_activate_target.
+ *                  This helper maps middle-click to "Open OpenClaw" (line 187).
+ *                  Note: GNOME Shell ignores middle-click (host limitation);
+ *                  this only fires on KDE/XFCE/other hosts that support it.
+ *
+ * Summary: the app owns only the menu contents and the middle-click target.
+ * All click-to-menu routing is host behavior. Do not add left/right click
+ * differentiation — it is unsupported and will silently fail on GNOME.
+ *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
 
