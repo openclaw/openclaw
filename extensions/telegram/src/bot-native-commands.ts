@@ -956,6 +956,7 @@ export const registerTelegramNativeCommands = ({
           senderId,
           channel: "telegram",
           isAuthorizedSender: commandAuthorized,
+          sessionKey: route.sessionKey,
           commandBody,
           config: runtimeCfg,
           from,

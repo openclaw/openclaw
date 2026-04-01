@@ -15,6 +15,8 @@ export type MatrixDmConfig = {
 };
 
 export type MatrixRoomConfig = {
+  /** Restrict this room entry to a specific Matrix account in multi-account setups. */
+  account?: string;
   /** If false, disable the bot in this room (alias for allow: false). */
   enabled?: boolean;
   /** Legacy room allow toggle; prefer enabled. */

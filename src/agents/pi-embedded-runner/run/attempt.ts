@@ -68,8 +68,6 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
-  validateAnthropicTurns,
-  validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -107,6 +105,7 @@ import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
+  validateReplayTurns,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -419,64 +418,64 @@ export async function runEmbeddedAttempt(
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
-          agentId: sessionAgentId,
-          trigger: params.trigger,
-          memoryFlushWritePath: params.memoryFlushWritePath,
-          exec: {
-            ...params.execOverrides,
-            elevated: params.bashElevated,
-          },
-          sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-          agentAccountId: params.agentAccountId,
-          messageTo: params.messageTo,
-          messageThreadId: params.messageThreadId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-          senderIsOwner: params.senderIsOwner,
-          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-          sessionKey: sandboxSessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-          spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+            agentId: sessionAgentId,
+            trigger: params.trigger,
+            memoryFlushWritePath: params.memoryFlushWritePath,
+            exec: {
+              ...params.execOverrides,
+              elevated: params.bashElevated,
+            },
             sandbox,
-            resolvedWorkspace,
-          }),
-          config: params.config,
-          abortSignal: runAbortController.signal,
-          modelProvider: params.model.provider,
-          modelId: params.modelId,
-          modelCompat: params.model.compat,
-          modelApi: params.model.api,
-          modelContextWindowTokens: params.model.contextWindow,
-          modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
-          currentChannelId: params.currentChannelId,
-          currentThreadTs: params.currentThreadTs,
-          currentMessageId: params.currentMessageId,
-          replyToMode: params.replyToMode,
-          hasRepliedRef: params.hasRepliedRef,
-          modelHasVision,
-          requireExplicitMessageTarget:
-            params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-          disableMessageTool: params.disableMessageTool,
-          onYield: (message) => {
-            yieldDetected = true;
-            yieldMessage = message;
-            queueYieldInterruptForSession?.();
-            runAbortController.abort("sessions_yield");
-            abortSessionForYield?.();
-          },
-        });
+            messageProvider: params.messageChannel ?? params.messageProvider,
+            agentAccountId: params.agentAccountId,
+            messageTo: params.messageTo,
+            messageThreadId: params.messageThreadId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
+            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionKey: sandboxSessionKey,
+            sessionId: params.sessionId,
+            runId: params.runId,
+            agentDir,
+            workspaceDir: effectiveWorkspace,
+            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+              sandbox,
+              resolvedWorkspace,
+            }),
+            config: params.config,
+            abortSignal: runAbortController.signal,
+            modelProvider: params.model.provider,
+            modelId: params.modelId,
+            modelCompat: params.model.compat,
+            modelApi: params.model.api,
+            modelContextWindowTokens: params.model.contextWindow,
+            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            replyToMode: params.replyToMode,
+            hasRepliedRef: params.hasRepliedRef,
+            modelHasVision,
+            requireExplicitMessageTarget:
+              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            disableMessageTool: params.disableMessageTool,
+            onYield: (message) => {
+              yieldDetected = true;
+              yieldMessage = message;
+              queueYieldInterruptForSession?.();
+              runAbortController.abort("sessions_yield");
+              abortSessionForYield?.();
+            },
+          });
           if (params.toolsAllow && params.toolsAllow.length > 0) {
             const allowSet = new Set(params.toolsAllow);
             return allTools.filter((tool) => allowSet.has(tool.name));
@@ -487,6 +486,12 @@ export async function runEmbeddedAttempt(
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpSessionRuntime = toolsEnabled
@@ -526,7 +531,16 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
+    logToolSchemasForGoogle({
+      tools: effectiveTools,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -568,7 +582,14 @@ export async function runEmbeddedAttempt(
           })
         : undefined;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(params.provider);
+    const reasoningTagHint = isReasoningTagProvider(params.provider, {
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
@@ -621,7 +642,7 @@ export async function runEmbeddedAttempt(
     const promptMode = resolvePromptModeForSession(params.sessionKey);
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? "minimal" as const : promptMode;
+    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
@@ -724,6 +745,10 @@ export async function runEmbeddedAttempt(
         modelApi: params.model?.api,
         provider: params.provider,
         modelId: params.modelId,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        model: params.model,
       });
 
       await prewarmSessionFile(params.sessionFile);
@@ -1098,17 +1123,26 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
           allowedToolNames,
           config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model: params.model,
           sessionManager,
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
         cacheTrace?.recordStage("session:sanitized", { messages: prior });
-        const validatedGemini = transcriptPolicy.validateGeminiTurns
-          ? validateGeminiTurns(prior)
-          : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
-          ? validateAnthropicTurns(validatedGemini)
-          : validatedGemini;
+        const validated = await validateReplayTurns({
+          messages: prior,
+          modelApi: params.model.api,
+          modelId: params.modelId,
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model: params.model,
+          sessionId: params.sessionId,
+          policy: transcriptPolicy,
+        });
         const truncated = limitHistoryTurns(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
