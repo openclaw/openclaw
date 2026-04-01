@@ -41,7 +41,6 @@ export function setupCronIssueRegressionFixtures() {
     clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
     clearAllBootstrapSnapshots();
-    vi.resetModules();
   });
   afterAll(async () => {
     useRealTime();
