@@ -100,10 +100,10 @@ export const internalHookMocks = _internalHookMocks;
 export const queueMocks = _queueMocks;
 export const logMocks = _logMocks;
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+vi.mock("../../config/sessions/transcript.runtime.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/transcript.runtime.js")
+  >("../../config/sessions/transcript.runtime.js");
   return {
     ...actual,
     appendAssistantMessageToSessionTranscript: _mocks.appendAssistantMessageToSessionTranscript,

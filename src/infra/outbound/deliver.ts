@@ -15,10 +15,7 @@ import type {
   ChannelOutboundContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  resolveMirroredTranscriptText,
-} from "../../config/sessions.js";
+import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -49,6 +46,14 @@ export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 const log = createSubsystemLogger("outbound/deliver");
+let transcriptRuntimePromise:
+  | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
+  | undefined;
+
+async function loadTranscriptRuntime() {
+  transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
+  return await transcriptRuntimePromise;
+}
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -791,6 +796,7 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {
+      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
       await appendAssistantMessageToSessionTranscript({
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,
