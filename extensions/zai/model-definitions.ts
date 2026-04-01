@@ -24,6 +24,14 @@ export const ZAI_DEFAULT_COST = {
 } satisfies ModelDefinitionConfig["cost"];
 
 const ZAI_MODEL_CATALOG = {
+  "glm-5.1": {
+    name: "GLM-5.1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202800,
+    maxTokens: 131100,
+    cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
+  },
   "glm-5": {
     name: "GLM-5",
     reasoning: true,
@@ -36,6 +44,14 @@ const ZAI_MODEL_CATALOG = {
     name: "GLM-5 Turbo",
     reasoning: true,
     input: ["text"],
+    contextWindow: 202800,
+    maxTokens: 131100,
+    cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
+  },
+  "glm-5v-turbo": {
+    name: "GLM-5V Turbo",
+    reasoning: true,
+    input: ["text", "image"],
     contextWindow: 202800,
     maxTokens: 131100,
     cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
