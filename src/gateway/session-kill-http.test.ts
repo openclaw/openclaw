@@ -5,7 +5,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
 let cfg: Record<string, unknown> = {};
-const authMock = vi.fn(async () => ({ ok: true }) as { ok: boolean; rateLimited?: boolean });
+const authMock = vi.fn(
+  async () =>
+    ({ ok: true, method: "token" }) as { ok: boolean; method?: string; rateLimited?: boolean },
+);
 const isLocalDirectRequestMock = vi.fn(() => true);
 const loadSessionEntryMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
@@ -76,7 +79,7 @@ afterAll(async () => {
 beforeEach(() => {
   cfg = {};
   authMock.mockReset();
-  authMock.mockResolvedValue({ ok: true });
+  authMock.mockResolvedValue({ ok: true, method: "token" });
   isLocalDirectRequestMock.mockReset();
   isLocalDirectRequestMock.mockReturnValue(true);
   loadSessionEntryMock.mockReset();
@@ -169,7 +172,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
 
   it("rejects remote kills without requester ownership or an authorized token", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
-    authMock.mockResolvedValueOnce({ ok: true });
+    authMock.mockResolvedValueOnce({ ok: true, method: "token" });
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
@@ -182,9 +185,33 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
-  it("uses requester ownership checks when a requester session header is provided without admin bypass", async () => {
+  it("rejects identity-bearing requests that only declare operator.read", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
-    authMock.mockResolvedValueOnce({ ok: true });
+    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
+    loadSessionEntryMock.mockReturnValue({
+      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
+      canonicalKey: "agent:main:subagent:worker",
+    });
+
+    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
+      "x-openclaw-requester-session-key": "agent:main:main",
+      "x-openclaw-scopes": "operator.read",
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
+    });
+    expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
+    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+  });
+
+  it("uses requester ownership checks when operator.write is declared without admin bypass", async () => {
+    isLocalDirectRequestMock.mockReturnValue(false);
+    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
@@ -197,6 +224,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
 
     const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
       "x-openclaw-requester-session-key": "agent:main:main",
+      "x-openclaw-scopes": "operator.write",
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
@@ -212,7 +240,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
 
   it("uses the newest child-session row for requester-owned kills when stale rows still exist", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
-    authMock.mockResolvedValueOnce({ ok: true });
+    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
@@ -226,6 +254,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
 
     const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
       "x-openclaw-requester-session-key": "agent:main:main",
+      "x-openclaw-scopes": "operator.write",
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
@@ -239,37 +268,31 @@ describe("POST /sessions/:sessionKey/kill", () => {
     });
   });
 
-  it("keeps bearer-auth requester kills on the requester-owned path", async () => {
+  it("rejects bearer-auth requester kills because shared-secret HTTP scopes are not trusted", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
     });
-    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:worker",
-    });
-    killControlledSubagentRunMock.mockResolvedValue({ status: "ok" });
 
     const response = await post(
       "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
       TEST_GATEWAY_TOKEN,
-      { "x-openclaw-requester-session-key": "agent:other:main" },
+      {
+        "x-openclaw-requester-session-key": "agent:other:main",
+        "x-openclaw-scopes": "operator.write",
+      },
     );
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(resolveSubagentControllerMock).toHaveBeenCalledWith({
-      cfg,
-      agentSessionKey: "agent:other:main",
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
     });
-    expect(killControlledSubagentRunMock).toHaveBeenCalledWith({
-      cfg,
-      controller: { controllerSessionKey: "agent:main:main" },
-      entry: expect.objectContaining({
-        runId: "run-1",
-        childSessionKey: "agent:main:subagent:worker",
-      }),
-    });
+    expect(resolveSubagentControllerMock).not.toHaveBeenCalled();
+    expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 });
