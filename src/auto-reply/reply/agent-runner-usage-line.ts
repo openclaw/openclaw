@@ -2,6 +2,36 @@ import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usag
 import { derivePromptTokens } from "../../agents/usage.js";
 import type { ReplyPayload } from "../types.js";
 
+function resolveDisplayedInputTokens(params: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+}): number | undefined {
+  const promptInput = derivePromptTokens({
+    input: params.input,
+    cacheRead: params.cacheRead,
+    cacheWrite: params.cacheWrite,
+  });
+  if (typeof promptInput !== "number") {
+    return params.input;
+  }
+
+  if (typeof params.total === "number" && typeof params.output === "number") {
+    const promptFromTotal = params.total - params.output;
+    if (
+      Number.isFinite(promptFromTotal) &&
+      promptFromTotal >= 0 &&
+      promptInput > promptFromTotal
+    ) {
+      return typeof params.input === "number" ? params.input : promptFromTotal;
+    }
+  }
+
+  return promptInput;
+}
+
 export const formatResponseUsageLine = (params: {
   usage?: {
     input?: number;
@@ -23,12 +53,13 @@ export const formatResponseUsageLine = (params: {
   }
   const input = usage.input;
   const output = usage.output;
-  const promptInput = derivePromptTokens({
+  const inputDisplay = resolveDisplayedInputTokens({
     input,
+    output,
     cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite,
+    total: usage.total,
   });
-  const inputDisplay = typeof promptInput === "number" ? promptInput : input;
   if (typeof inputDisplay !== "number" && typeof output !== "number") {
     return null;
   }
