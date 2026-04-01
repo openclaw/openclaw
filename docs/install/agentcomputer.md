@@ -24,13 +24,14 @@ Either way, the final hosting step is the same: publish port `18789` so the Cont
 2. Sign in and create a machine from the preselected **OpenClaw** template
 3. Let the template finish installing and onboarding OpenClaw in the browser
 4. On your local machine, run `npm install -g aicomputer`
-5. Run `computer ssh <machine-name>` (the next commands run inside the Agent Computer shell)
-6. Run `openclaw doctor --generate-gateway-token`
-7. Run `openclaw config set gateway.bind lan`
-8. Run `openclaw gateway restart`
-9. Run `exit` (return to your local machine)
-10. Run `computer ports publish <machine-name> 18789 --subdomain openclaw --protocol https`
-11. If OpenClaw prompts for auth, run `computer ssh <machine-name>`, then `openclaw config get gateway.auth.token`
+5. Run `computer login`
+6. Run `computer ssh <machine-name>` (the next commands run inside the Agent Computer shell)
+7. Run `openclaw doctor --generate-gateway-token`
+8. Run `openclaw config set gateway.bind lan`
+9. Run `openclaw gateway restart`
+10. Run `exit` (return to your local machine)
+11. Run `computer ports publish <machine-name> 18789 --subdomain openclaw --protocol https`
+12. If OpenClaw prompts for auth, run `computer ssh <machine-name>`, then `openclaw config get gateway.auth.token`
 
 ## What you need
 
