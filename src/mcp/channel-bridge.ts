@@ -30,13 +30,84 @@ type PendingWaiter = {
   timeout: NodeJS.Timeout | null;
 };
 
+type ReadyWaiter = {
+  resolve: (value: boolean) => void;
+  timeout: NodeJS.Timeout | null;
+};
+
 type ServerNotification = {
   method: string;
   params?: Record<string, unknown>;
 };
 
+export type OpenClawChannelBridgeState = "idle" | "connecting" | "ready" | "degraded" | "closed";
+
+export type OpenClawChannelBridgeDiagnostics = {
+  state: OpenClawChannelBridgeState;
+  lastError: {
+    name: string;
+    message: string;
+  } | null;
+  lastConnectAttemptAt: string | null;
+  lastReadyAt: string | null;
+  nextRetryAt: string | null;
+  connectionSource: {
+    gatewayMode?: "local" | "remote";
+    gatewayUrlSource?: string;
+    gatewayProtocol?: string;
+    gatewayHost?: string;
+    hasExplicitToken?: boolean;
+    hasExplicitPassword?: boolean;
+    hasResolvedToken?: boolean;
+    hasResolvedPassword?: boolean;
+  } | null;
+};
+
+export class GatewayUnavailableError extends Error {
+  constructor(
+    readonly diagnostics: OpenClawChannelBridgeDiagnostics,
+    message = "OpenClaw gateway bridge is unavailable",
+  ) {
+    super(message);
+    this.name = "GatewayUnavailableError";
+  }
+}
+
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
+const RETRY_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function sanitizeGatewayTarget(url: string): Pick<
+  NonNullable<OpenClawChannelBridgeDiagnostics["connectionSource"]>,
+  "gatewayProtocol" | "gatewayHost"
+> {
+  try {
+    const parsed = new URL(url);
+    return {
+      gatewayProtocol: parsed.protocol.replace(/:$/, ""),
+      gatewayHost: parsed.hostname,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function normalizeError(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) {
+    return {
+      name: error.name || "Error",
+      message: error.message || String(error),
+    };
+  }
+  return {
+    name: "Error",
+    message: String(error),
+  };
+}
 
 export class OpenClawChannelBridge {
   private gateway: GatewayClient | null = null;
@@ -44,6 +115,7 @@ export class OpenClawChannelBridge {
   private readonly claudeChannelMode: ClaudeChannelMode;
   private readonly queue: QueueEvent[] = [];
   private readonly pendingWaiters = new Set<PendingWaiter>();
+  private readonly readyWaiters = new Set<ReadyWaiter>();
   private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private server: McpServer | null = null;
@@ -51,13 +123,23 @@ export class OpenClawChannelBridge {
   private closed = false;
   private ready = false;
   private started = false;
-  private readonly readyPromise: Promise<void>;
-  private resolveReady!: () => void;
-  private rejectReady!: (error: Error) => void;
+  private state: OpenClawChannelBridgeState = "idle";
+  private lastError: OpenClawChannelBridgeDiagnostics["lastError"] = null;
+  private lastConnectAttemptAt: string | null = null;
+  private lastReadyAt: string | null = null;
+  private nextRetryAt: string | null = null;
+  private connectionSource: OpenClawChannelBridgeDiagnostics["connectionSource"] = null;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private retryAttempt = 0;
+  private bootstrapPromise: Promise<void> | null = null;
+  private resolveReady: () => void = () => {
+    this.ready = true;
+    this.resolveReadyWaiters(true);
+  };
   private readySettled = false;
 
   constructor(
-    private readonly cfg: OpenClawConfig,
+    private readonly configSource: OpenClawConfig | (() => OpenClawConfig),
     private readonly params: {
       gatewayUrl?: string;
       gatewayToken?: string;
@@ -68,10 +150,13 @@ export class OpenClawChannelBridge {
   ) {
     this.verbose = params.verbose;
     this.claudeChannelMode = params.claudeChannelMode;
-    this.readyPromise = new Promise<void>((resolve, reject) => {
-      this.resolveReady = resolve;
-      this.rejectReady = reject;
-    });
+    this.resolveReady = () => {
+      this.ready = true;
+      if (!this.readySettled) {
+        this.readySettled = true;
+      }
+      this.resolveReadyWaiters(true);
+    };
   }
 
   setServer(server: McpServer): void {
@@ -79,66 +164,56 @@ export class OpenClawChannelBridge {
   }
 
   async start(): Promise<void> {
-    if (this.started) {
-      await this.readyPromise;
+    if (this.started || this.closed) {
       return;
     }
     this.started = true;
-    const connection = buildGatewayConnectionDetails({
-      config: this.cfg,
-      url: this.params.gatewayUrl,
-    });
-    const gatewayUrlOverrideSource =
-      connection.urlSource === "cli --url"
-        ? "cli"
-        : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
-          ? "env"
-          : undefined;
-    const creds = await resolveGatewayConnectionAuth({
-      config: this.cfg,
-      explicitAuth: {
-        token: this.params.gatewayToken,
-        password: this.params.gatewayPassword,
-      },
-      env: process.env,
-      urlOverride: gatewayUrlOverrideSource ? connection.url : undefined,
-      urlOverrideSource: gatewayUrlOverrideSource,
-    });
-    if (this.closed) {
-      this.resolveReadyOnce();
-      return;
-    }
-
-    this.gateway = new GatewayClient({
-      url: connection.url,
-      token: creds.token,
-      password: creds.password,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: "OpenClaw MCP",
-      clientVersion: VERSION,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
-      onEvent: (event) => {
-        void this.handleGatewayEvent(event);
-      },
-      onHelloOk: () => {
-        void this.handleHelloOk();
-      },
-      onConnectError: (error) => {
-        this.rejectReadyOnce(error instanceof Error ? error : new Error(String(error)));
-      },
-      onClose: (code, reason) => {
-        if (!this.ready && !this.closed) {
-          this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
-        }
-      },
-    });
-    this.gateway.start();
-    await this.readyPromise;
+    this.ensureBootstrap();
   }
 
-  async waitUntilReady(): Promise<void> {
-    await this.readyPromise;
+  async waitUntilReady(timeoutMs = 0): Promise<boolean> {
+    if (this.ready) {
+      return true;
+    }
+    if (this.closed) {
+      return false;
+    }
+    if (timeoutMs <= 0) {
+      return false;
+    }
+    return await new Promise<boolean>((resolve) => {
+      const waiter: ReadyWaiter = {
+        resolve: (value) => {
+          this.readyWaiters.delete(waiter);
+          resolve(value);
+        },
+        timeout: null,
+      };
+      waiter.timeout = setTimeout(() => {
+        waiter.resolve(false);
+      }, timeoutMs);
+      waiter.timeout.unref?.();
+      this.readyWaiters.add(waiter);
+    });
+  }
+
+  async requireReady(timeoutMs = 2_000): Promise<void> {
+    const ready = await this.waitUntilReady(timeoutMs);
+    if (ready) {
+      return;
+    }
+    throw new GatewayUnavailableError(this.getDiagnostics());
+  }
+
+  getDiagnostics(): OpenClawChannelBridgeDiagnostics {
+    return {
+      state: this.state,
+      lastError: this.lastError,
+      lastConnectAttemptAt: this.lastConnectAttemptAt,
+      lastReadyAt: this.lastReadyAt,
+      nextRetryAt: this.nextRetryAt,
+      connectionSource: this.connectionSource,
+    };
   }
 
   async close(): Promise<void> {
@@ -146,7 +221,14 @@ export class OpenClawChannelBridge {
       return;
     }
     this.closed = true;
-    this.resolveReadyOnce();
+    this.state = "closed";
+    this.ready = false;
+    this.nextRetryAt = null;
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.resolveReadyWaiters(false);
     for (const waiter of this.pendingWaiters) {
       if (waiter.timeout) {
         clearTimeout(waiter.timeout);
@@ -166,7 +248,7 @@ export class OpenClawChannelBridge {
     includeDerivedTitles?: boolean;
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
-    await this.waitUntilReady();
+    await this.requireReady();
     const response = await this.requestGateway<SessionListResult>("sessions.list", {
       limit: params?.limit ?? 50,
       search: params?.search,
@@ -197,7 +279,7 @@ export class OpenClawChannelBridge {
     sessionKey: string,
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
-    await this.waitUntilReady();
+    await this.requireReady();
     const response = await this.requestGateway<ChatHistoryResult>("chat.history", {
       sessionKey,
       limit,
@@ -209,6 +291,7 @@ export class OpenClawChannelBridge {
     sessionKey: string;
     text: string;
   }): Promise<Record<string, unknown>> {
+    await this.requireReady();
     const conversation = await this.getConversation(params.sessionKey);
     if (!conversation) {
       throw new Error(`Conversation not found for session ${params.sessionKey}`);
@@ -235,6 +318,7 @@ export class OpenClawChannelBridge {
     id: string;
     decision: ApprovalDecision;
   }): Promise<Record<string, unknown>> {
+    await this.requireReady();
     if (params.kind === "exec") {
       return await this.requestGateway("exec.approval.resolve", {
         id: params.id,
@@ -254,6 +338,7 @@ export class OpenClawChannelBridge {
   }
 
   async waitForEvent(filter: WaitFilter, timeoutMs = 30_000): Promise<QueueEvent | null> {
+    await this.requireReady();
     const existing = this.queue.find((event) => matchEventFilter(event, filter));
     if (existing) {
       return existing;
@@ -271,6 +356,7 @@ export class OpenClawChannelBridge {
         waiter.timeout = setTimeout(() => {
           waiter.resolve(null);
         }, timeoutMs);
+        waiter.timeout.unref?.();
       }
       this.pendingWaiters.add(waiter);
     });
@@ -300,12 +386,199 @@ export class OpenClawChannelBridge {
     }
   }
 
+  private ensureBootstrap(): void {
+    if (this.closed || this.bootstrapPromise) {
+      return;
+    }
+    this.bootstrapPromise = this.bootstrap().finally(() => {
+      this.bootstrapPromise = null;
+    });
+  }
+
+  private async bootstrap(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.state = "connecting";
+    this.ready = false;
+    this.lastConnectAttemptAt = nowIso();
+    this.nextRetryAt = null;
+
+    let cfg: OpenClawConfig;
+    try {
+      cfg =
+        typeof this.configSource === "function" ? this.configSource() : (this.configSource ?? {});
+    } catch (error) {
+      this.connectionSource = {
+        hasExplicitToken: Boolean(this.params.gatewayToken),
+        hasExplicitPassword: Boolean(this.params.gatewayPassword),
+      };
+      this.markDegraded(error, { scheduleRetry: true });
+      return;
+    }
+
+    let connection: ReturnType<typeof buildGatewayConnectionDetails>;
+    try {
+      connection = buildGatewayConnectionDetails({
+        config: cfg,
+        url: this.params.gatewayUrl,
+      });
+    } catch (error) {
+      this.connectionSource = {
+        gatewayMode: cfg.gateway?.mode === "remote" ? "remote" : "local",
+        hasExplicitToken: Boolean(this.params.gatewayToken),
+        hasExplicitPassword: Boolean(this.params.gatewayPassword),
+      };
+      this.markDegraded(error, { scheduleRetry: true });
+      return;
+    }
+
+    const gatewayUrlOverrideSource =
+      connection.urlSource === "cli --url"
+        ? "cli"
+        : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
+          ? "env"
+          : undefined;
+
+    this.connectionSource = {
+      gatewayMode: cfg.gateway?.mode === "remote" ? "remote" : "local",
+      gatewayUrlSource: connection.urlSource,
+      hasExplicitToken: Boolean(this.params.gatewayToken),
+      hasExplicitPassword: Boolean(this.params.gatewayPassword),
+      ...sanitizeGatewayTarget(connection.url),
+    };
+
+    let creds: { token?: string; password?: string };
+    try {
+      creds = await resolveGatewayConnectionAuth({
+        config: cfg,
+        explicitAuth: {
+          token: this.params.gatewayToken,
+          password: this.params.gatewayPassword,
+        },
+        env: process.env,
+        urlOverride: gatewayUrlOverrideSource ? connection.url : undefined,
+        urlOverrideSource: gatewayUrlOverrideSource,
+      });
+    } catch (error) {
+      this.connectionSource = {
+        ...this.connectionSource,
+        hasResolvedToken: false,
+        hasResolvedPassword: false,
+      };
+      this.markDegraded(error, { scheduleRetry: true });
+      return;
+    }
+
+    if (this.closed) {
+      return;
+    }
+
+    this.connectionSource = {
+      ...this.connectionSource,
+      hasResolvedToken: Boolean(creds.token),
+      hasResolvedPassword: Boolean(creds.password),
+    };
+
+    const gateway = new GatewayClient({
+      url: connection.url,
+      token: creds.token,
+      password: creds.password,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: "OpenClaw MCP",
+      clientVersion: VERSION,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+      onEvent: (event) => {
+        void this.handleGatewayEvent(event);
+      },
+      onHelloOk: () => {
+        void this.handleHelloOk(gateway);
+      },
+      onConnectError: (error) => {
+        this.handleGatewayConnectError(gateway, error);
+      },
+      onClose: (code, reason) => {
+        void this.handleGatewayClose(gateway, code, reason);
+      },
+    });
+    this.gateway = gateway;
+
+    try {
+      gateway.start();
+    } catch (error) {
+      if (this.gateway === gateway) {
+        this.gateway = null;
+      }
+      await gateway.stopAndWait().catch(() => undefined);
+      this.markDegraded(error, { scheduleRetry: true });
+    }
+  }
+
+  private markDegraded(
+    error: unknown,
+    opts: {
+      scheduleRetry: boolean;
+    },
+  ): void {
+    if (this.closed) {
+      return;
+    }
+    this.ready = false;
+    this.state = "degraded";
+    this.lastError = normalizeError(error);
+    if (this.verbose) {
+      process.stderr.write(`openclaw mcp: bridge degraded: ${this.lastError.message}\n`);
+    }
+    if (opts.scheduleRetry) {
+      this.scheduleRetry();
+    }
+  }
+
+  private scheduleRetry(): void {
+    if (this.closed || this.state === "closed" || this.retryTimer) {
+      return;
+    }
+    const delayMs =
+      RETRY_BACKOFF_MS[Math.min(this.retryAttempt, RETRY_BACKOFF_MS.length - 1)] ??
+      RETRY_BACKOFF_MS.at(-1) ??
+      30_000;
+    this.retryAttempt += 1;
+    this.nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.nextRetryAt = null;
+      void this.recycleAndBootstrap();
+    }, delayMs);
+    this.retryTimer.unref?.();
+  }
+
+  private async recycleAndBootstrap(): Promise<void> {
+    if (this.closed || this.state === "ready") {
+      return;
+    }
+    const gateway = this.gateway;
+    this.gateway = null;
+    await gateway?.stopAndWait().catch(() => undefined);
+    this.ensureBootstrap();
+  }
+
+  private resolveReadyWaiters(value: boolean): void {
+    for (const waiter of this.readyWaiters) {
+      if (waiter.timeout) {
+        clearTimeout(waiter.timeout);
+      }
+      waiter.resolve(value);
+    }
+    this.readyWaiters.clear();
+  }
+
   private async requestGateway<T = Record<string, unknown>>(
     method: string,
     params: Record<string, unknown>,
   ): Promise<T> {
-    if (!this.gateway) {
-      throw new Error("Gateway client is not ready");
+    if (!this.gateway || !this.ready) {
+      throw new GatewayUnavailableError(this.getDiagnostics());
     }
     return await this.gateway.request<T>(method, params);
   }
@@ -325,30 +598,46 @@ export class OpenClawChannelBridge {
     }
   }
 
-  private async handleHelloOk(): Promise<void> {
+  private async handleHelloOk(gateway: GatewayClient): Promise<void> {
+    if (this.gateway !== gateway || this.closed) {
+      return;
+    }
     try {
-      await this.requestGateway("sessions.subscribe", {});
+      await gateway.request("sessions.subscribe", {});
+      this.state = "ready";
       this.ready = true;
-      this.resolveReadyOnce();
+      this.lastError = null;
+      this.lastReadyAt = nowIso();
+      this.nextRetryAt = null;
+      this.retryAttempt = 0;
+      this.resolveReady();
     } catch (error) {
-      this.rejectReadyOnce(error instanceof Error ? error : new Error(String(error)));
+      this.markDegraded(error, { scheduleRetry: true });
     }
   }
 
-  private resolveReadyOnce(): void {
-    if (this.readySettled) {
+  private handleGatewayConnectError(gateway: GatewayClient, error: unknown): void {
+    if (this.gateway !== gateway || this.closed) {
       return;
     }
-    this.readySettled = true;
-    this.resolveReady();
+    this.markDegraded(error, { scheduleRetry: true });
   }
 
-  private rejectReadyOnce(error: Error): void {
-    if (this.readySettled) {
+  private async handleGatewayClose(
+    gateway: GatewayClient,
+    code: number,
+    reason: string,
+  ): Promise<void> {
+    if (this.gateway !== gateway || this.closed) {
       return;
     }
-    this.readySettled = true;
-    this.rejectReady(error);
+    this.ready = false;
+    this.state = "degraded";
+    this.lastError = {
+      name: "GatewayClosedError",
+      message: `gateway closed (${code}): ${reason}`,
+    };
+    this.scheduleRetry();
   }
 
   private nextCursor(): number {

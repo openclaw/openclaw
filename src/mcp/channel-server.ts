@@ -13,6 +13,7 @@ export type OpenClawMcpServeOptions = {
   gatewayToken?: string;
   gatewayPassword?: string;
   config?: OpenClawConfig;
+  configLoader?: () => OpenClawConfig;
   claudeChannelMode?: ClaudeChannelMode;
   verbose?: boolean;
 };
@@ -23,20 +24,22 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
   start: () => Promise<void>;
   close: () => Promise<void>;
 }> {
-  const cfg = opts.config ?? loadConfig();
   const claudeChannelMode = opts.claudeChannelMode ?? "auto";
   const capabilities = getChannelMcpCapabilities(claudeChannelMode);
   const server = new McpServer(
     { name: "openclaw", version: VERSION },
     capabilities ? { capabilities } : undefined,
   );
-  const bridge = new OpenClawChannelBridge(cfg, {
-    gatewayUrl: opts.gatewayUrl,
-    gatewayToken: opts.gatewayToken,
-    gatewayPassword: opts.gatewayPassword,
-    claudeChannelMode,
-    verbose: opts.verbose ?? false,
-  });
+  const bridge = new OpenClawChannelBridge(
+    opts.config ? opts.config : (opts.configLoader ?? loadConfig),
+    {
+      gatewayUrl: opts.gatewayUrl,
+      gatewayToken: opts.gatewayToken,
+      gatewayPassword: opts.gatewayPassword,
+      claudeChannelMode,
+      verbose: opts.verbose ?? false,
+    },
+  );
   bridge.setServer(server);
 
   server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
@@ -93,7 +96,9 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
 
   try {
     await server.connect(transport);
-    await start();
+    void start().catch((error) => {
+      process.stderr.write(`openclaw mcp: background bridge bootstrap failed: ${String(error)}\n`);
+    });
     await closed;
   } finally {
     shutdown();

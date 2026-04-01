@@ -41,6 +41,65 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
 
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
+    test("keeps the MCP server alive when bridge bootstrap degrades", async () => {
+      const serverHarness = await createOpenClawChannelMcpServer({
+        configLoader: () => {
+          throw new Error("missing HOME");
+        },
+        claudeChannelMode: "off",
+        verbose: false,
+      });
+      const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+      try {
+        await serverHarness.server.connect(serverTransport);
+        await client.connect(clientTransport);
+        await expect(serverHarness.start()).resolves.toBeUndefined();
+
+        await vi.waitFor(() => {
+          expect(serverHarness.bridge.getDiagnostics().state).toBe("degraded");
+        });
+
+        const status = (await client.callTool({
+          name: "gateway_status",
+          arguments: {},
+        })) as {
+          structuredContent?: {
+            gateway?: {
+              state?: string;
+              lastError?: { message?: string };
+            };
+          };
+        };
+        expect(status.structuredContent?.gateway).toMatchObject({
+          state: "degraded",
+          lastError: { message: "missing HOME" },
+        });
+
+        const listed = (await client.callTool({
+          name: "conversations_list",
+          arguments: {},
+        })) as {
+          isError?: boolean;
+          structuredContent?: {
+            error?: {
+              code?: string;
+              diagnostics?: { state?: string };
+            };
+          };
+        };
+        expect(listed.isError).toBe(true);
+        expect(listed.structuredContent?.error).toMatchObject({
+          code: "gateway_unavailable",
+          diagnostics: { state: "degraded" },
+        });
+      } finally {
+        await client.close();
+        await serverHarness.close();
+      }
+    });
+
     describe("gateway integration", () => {
       test("lists conversations and reads messages", async () => {
         const sessionKey = "agent:main:main";
