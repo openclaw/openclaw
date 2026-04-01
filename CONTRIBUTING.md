@@ -85,6 +85,48 @@ Welcome to the lobster tank! 🦞
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
+## Development Environment
+
+OpenClaw is built with **TypeScript** on **Node.js 24 LTS** and uses **pnpm** as its package manager for source development.
+
+### Prerequisites
+
+- **Node.js ≥ 22.12.0** (24.x LTS recommended). Install via [NodeSource](https://github.com/nodesource/distributions) or your preferred version manager.
+- **pnpm** — install globally with `sudo npm install -g pnpm`. The project workspace configuration requires pnpm; npm alone is not sufficient for source builds.
+
+### Windows (WSL2)
+
+Windows contributors should develop inside **WSL2 with Ubuntu** rather than native Windows. The gateway daemon, systemd integration, and Unix socket paths all assume a Linux environment.
+
+Key WSL2 setup notes:
+
+1. **Enable systemd** — add `[boot] systemd=true` to `/etc/wsl.conf` inside your Ubuntu instance and restart WSL (`wsl --shutdown` from PowerShell). The gateway daemon service requires systemd.
+2. **Resource limits** — create or edit `%UserProfile%\.wslconfig` on the Windows side to set memory and CPU limits. Without this, WSL2 claims up to 50% of host RAM, which can cause instability on machines with limited memory:
+
+```ini
+   [wsl2]
+   memory=8GB
+   processors=4
+   swap=4GB
+```
+
+3. **Keep the terminal open** — the WSL2 instance (and any running gateway) stops when you close all terminal windows. Minimize rather than close.
+4. **File system** — work inside the Linux file system (`~/openclaw`) for best performance. Accessing `/mnt/c/...` (Windows drives) from WSL2 is significantly slower.
+
+### Getting started from source
+
+```bash
+git clone https://github.com/<your-username>/openclaw.git
+cd openclaw
+git remote add upstream https://github.com/openclaw/openclaw.git
+pnpm install        # install all workspace dependencies
+pnpm ui:build       # build the Control UI (Vite + React)
+pnpm build          # full TypeScript build
+pnpm openclaw --version   # verify: should print version and commit hash
+```
+
+For day-to-day development, use `pnpm gateway:watch` (auto-reload on changes) or `pnpm openclaw <command>` to run TypeScript source directly without a full build.
+
 ## Before You PR
 
 - Test locally with your OpenClaw instance
