@@ -171,7 +171,18 @@ export function validateJsonSchemaValue(params: {
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
+    // Strip $schema if it references a draft the base AJV instance does not
+    // support (e.g. draft-2020-12 emitted by Zod).  AJV validates the
+    // structural schema correctly without the meta-schema URI — keeping it
+    // causes "no schema with key or ref" errors for browser tool schemas.
+    const compileSchema =
+      params.schema.$schema && typeof params.schema.$schema === "string"
+        ? (() => {
+            const { $schema: _, ...rest } = params.schema;
+            return rest;
+          })()
+        : params.schema;
+    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(compileSchema);
     cached = { validate, schema: params.schema };
     schemaCache.set(cacheKey, cached);
   }
