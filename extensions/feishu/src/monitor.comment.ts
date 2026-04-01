@@ -479,6 +479,13 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
     return null;
   }
+  if (!botOpenId) {
+    logger?.(
+      `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
+        `event=${eventId}`,
+    );
+    return null;
+  }
   if (senderId === botOpenId) {
     logger?.(
       `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,

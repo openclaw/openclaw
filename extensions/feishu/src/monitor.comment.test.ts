@@ -308,6 +308,18 @@ describe("resolveDriveCommentEventTurn", () => {
 
     expect(turn).toBeNull();
   });
+
+  it("skips comment notices when bot open_id is unavailable", async () => {
+    const synthetic = await resolveDriveCommentSyntheticEvent({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent(),
+      botOpenId: undefined,
+      createClient: () => makeOpenApiClient({}) as never,
+    });
+
+    expect(synthetic).toBeNull();
+  });
 });
 
 describe("drive.notice.comment_add_v1 monitor handler", () => {
