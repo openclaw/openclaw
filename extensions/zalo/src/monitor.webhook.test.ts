@@ -19,7 +19,6 @@ import {
   registerZaloWebhookTarget,
 } from "./monitor.js";
 import type { ResolvedZaloAccount } from "./types.js";
-
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
   enabled: true,
