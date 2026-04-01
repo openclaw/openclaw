@@ -102,7 +102,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri = runCatching { URI(normalized) }.getOrNull() ?: return null
-  val host = uri.host?.trim().orEmpty()
+  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
   if (host.isEmpty()) return null
 
   val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
@@ -126,11 +126,12 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       else -> 443
     }
   val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
+  val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =
     if (port == displayPort && defaultPort == displayPort) {
-      "${if (tls) "https" else "http"}://$host"
+      "${if (tls) "https" else "http"}://$displayHost"
     } else {
-      "${if (tls) "https" else "http"}://$host:$port"
+      "${if (tls) "https" else "http"}://$displayHost:$port"
     }
 
   return GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl)

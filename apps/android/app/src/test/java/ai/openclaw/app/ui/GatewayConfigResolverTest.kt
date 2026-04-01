@@ -98,6 +98,7 @@ class GatewayConfigResolverTest {
     assertEquals("::1", parsed?.host)
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
+    assertEquals("http://[::1]:18789", parsed?.displayUrl)
   }
 
   @Test
@@ -107,6 +108,7 @@ class GatewayConfigResolverTest {
     assertEquals("::ffff:127.0.0.1", parsed?.host)
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
+    assertEquals("http://[::ffff:127.0.0.1]:18789", parsed?.displayUrl)
   }
 
   @Test
