@@ -53,9 +53,12 @@ export function createSessionsListTool(opts?: {
           sandboxed: opts?.sandboxed,
         });
       const effectiveRequesterKey = requesterInternalKey ?? alias;
+      const requesterAgentId = resolveAgentIdFromSessionKey(opts?.agentSessionKey)
+      const agentEntry = cfg.agents?.list?.find((a) => a.id === requesterAgentId)
       const visibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
+        agentTools: agentEntry?.tools,
       });
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
@@ -94,7 +97,7 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const a2aPolicy = createAgentToAgentPolicy(cfg, agentEntry?.tools);
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,

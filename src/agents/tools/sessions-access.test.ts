@@ -174,3 +174,68 @@ describe("createSessionVisibilityGuard", () => {
     });
   });
 });
+
+describe("per-agent session visibility", () => {
+  it("uses per-agent visibility when set", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+    } as unknown as OpenClawConfig
+    const agentTools = { sessions: { visibility: "self" } }
+    expect(resolveSessionToolsVisibility(cfg, agentTools)).toBe("self")
+  })
+
+  it("falls back to global when per-agent not set", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+    } as unknown as OpenClawConfig
+    expect(resolveSessionToolsVisibility(cfg, undefined)).toBe("all")
+    expect(resolveSessionToolsVisibility(cfg, {})).toBe("all")
+    expect(resolveSessionToolsVisibility(cfg, { sessions: {} })).toBe("all")
+  })
+
+  it("per-agent agentToAgent.allow scopes targets", () => {
+    const cfg = {
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["*"],
+        },
+      },
+    } as unknown as OpenClawConfig
+    const agentTools = { agentToAgent: { allow: ["dev-*"] } }
+    const policy = createAgentToAgentPolicy(cfg, agentTools)
+    expect(policy.enabled).toBe(true)
+    expect(policy.isAllowed("dev-1", "dev-2")).toBe(true)
+    expect(policy.isAllowed("dev-1", "marketing")).toBe(false)
+  })
+
+  it("per-agent agentToAgent.enabled=false overrides global", () => {
+    const cfg = {
+      tools: {
+        agentToAgent: {
+          enabled: true,
+        },
+      },
+    } as unknown as OpenClawConfig
+    const agentTools = { agentToAgent: { enabled: false } }
+    const policy = createAgentToAgentPolicy(cfg, agentTools)
+    expect(policy.enabled).toBe(false)
+    expect(policy.isAllowed("main", "ops")).toBe(false)
+  })
+
+  it("no per-agent config inherits global fully", () => {
+    const cfg = {
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["ops-*", "main"],
+        },
+      },
+    } as unknown as OpenClawConfig
+    const policy = createAgentToAgentPolicy(cfg, undefined)
+    expect(policy.enabled).toBe(true)
+    expect(policy.isAllowed("ops-a", "ops-b")).toBe(true)
+    expect(policy.isAllowed("main", "ops-a")).toBe(true)
+    expect(policy.isAllowed("guest", "ops-a")).toBe(false)
+  })
+})
