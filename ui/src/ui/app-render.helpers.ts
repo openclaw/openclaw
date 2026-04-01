@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -168,7 +169,7 @@ export function renderChatSessionSelect(state: AppViewState) {
                   (entry) => html`<option
                     value=${entry.key}
                     title=${entry.title}
-                    ?selected=${entry.key === state.sessionKey}
+                    .selected=${live(entry.key === state.sessionKey)}
                   >
                     ${entry.label}
                   </option>`,
