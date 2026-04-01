@@ -16,11 +16,12 @@ function resolveSynologyChatInboundRoute(params: {
   account: ResolvedSynologyChatAccount;
   userId: string;
   channelId?: string;
+  channelName?: string;
   chatType: string;
 }) {
   const rt = getSynologyRuntime();
   const isGroup = params.chatType === "group";
-  const peerId = isGroup ? (params.channelId ?? params.userId) : params.userId;
+  const peerId = isGroup ? (params.channelId ?? params.channelName ?? params.userId) : params.userId;
 
   const route = rt.channel.routing.resolveAgentRoute({
     cfg: params.cfg,
@@ -86,6 +87,7 @@ export async function dispatchSynologyChatInboundTurn(params: {
     account: params.account,
     userId: params.msg.from,
     channelId: params.msg.channelId,
+    channelName: params.msg.channelName,
     chatType: params.msg.chatType,
   });
   const msgCtx = buildSynologyChatInboundContext({
