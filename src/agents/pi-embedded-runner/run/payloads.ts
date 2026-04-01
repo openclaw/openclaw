@@ -251,25 +251,27 @@ export function buildEmbeddedRunPayloads(params: {
     return isRawApiErrorPayload(trimmed);
   };
   // When reasoning is on and assistantTexts contains earlier block-reply content,
-  // the final answer may not be represented. Ensure fallbackAnswerText is appended
-  // when it is not already covered by assistantTexts.
-  const rawAnswerSources = params.assistantTexts.length ? params.assistantTexts : [];
+  // the final answer may not be represented. Append fallbackAnswerText when it
+  // is not already covered — either as a single matching entry or as the
+  // concatenation of all chunked entries.
+  const rawAnswerSources = params.assistantTexts;
   const normalizedFallback = fallbackAnswerText
     ? normalizeTextForComparison(fallbackAnswerText)
     : "";
-  const fallbackAlreadyCovered =
+  const fallbackAlreadyCovered = Boolean(
     normalizedFallback &&
     rawAnswerSources.length > 0 &&
     // Check per-element exact match first (single chunk covers the full answer) ...
     (rawAnswerSources.some((t) => normalizeTextForComparison(t) === normalizedFallback) ||
       // ... then check whether concatenating all chunks reproduces the fallback,
       // which handles multi-chunk block replies that split a single answer.
-      normalizeTextForComparison(rawAnswerSources.join("\n")) === normalizedFallback);
+      normalizeTextForComparison(rawAnswerSources.join("\n")) === normalizedFallback),
+  );
   const needsFallbackAppend =
     !suppressAssistantArtifacts &&
     rawAnswerSources.length > 0 &&
     params.reasoningLevel === "on" &&
-    normalizedFallback &&
+    Boolean(normalizedFallback) &&
     !fallbackAlreadyCovered;
   const answerTexts = suppressAssistantArtifacts
     ? []
