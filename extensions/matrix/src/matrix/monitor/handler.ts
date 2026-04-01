@@ -1129,7 +1129,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
-      const draftStreamingEnabled = streaming === "partial" && !blockStreamingEnabled;
+      const draftStreamingEnabled = streaming === "partial";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
       let currentDraftReplyToId = draftReplyToId;
       const draftStream = draftStreamingEnabled

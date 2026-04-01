@@ -18,15 +18,7 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeEvent,
 } from "./pi-embedded-subscribe.handlers.types.js";
-
-function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return Boolean(
-    value &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in value &&
-    typeof (value as { then?: unknown }).then === "function",
-  );
-}
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 
 export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
   let pendingEventChain: Promise<void> | null = null;
@@ -34,6 +26,7 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
   const scheduleEvent = (
     evt: EmbeddedPiSubscribeEvent,
     handler: () => void | Promise<void>,
+    options?: { detach?: boolean },
   ): void => {
     const run = () => {
       try {
@@ -58,7 +51,9 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
             pendingEventChain = null;
           }
         });
-      pendingEventChain = task;
+      if (!options?.detach) {
+        pendingEventChain = task;
+      }
       return;
     }
 
@@ -72,7 +67,9 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
           pendingEventChain = null;
         }
       });
-    pendingEventChain = task;
+    if (!options?.detach) {
+      pendingEventChain = task;
+    }
   };
 
   return (evt: EmbeddedPiSubscribeEvent) => {
@@ -103,9 +100,13 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         });
         return;
       case "tool_execution_end":
-        scheduleEvent(evt, () => {
-          return handleToolExecutionEnd(ctx, evt as never);
-        });
+        scheduleEvent(
+          evt,
+          () => {
+            return handleToolExecutionEnd(ctx, evt as never);
+          },
+          { detach: true },
+        );
         return;
       case "agent_start":
         scheduleEvent(evt, () => {

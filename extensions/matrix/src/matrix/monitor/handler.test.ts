@@ -1894,6 +1894,28 @@ describe("matrix monitor handler block streaming config", () => {
     expect(capturedDisableBlockStreaming).toBe(true);
   });
 
+  it("keeps draft streaming authoritative when partial and block streaming are both enabled", async () => {
+    let capturedDisableBlockStreaming: boolean | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      blockStreamingEnabled: true,
+      dispatchReplyFromConfig: vi.fn(
+        async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
+          capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
+          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+        },
+      ) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(capturedDisableBlockStreaming).toBe(true);
+  });
+
   it("uses shared block streaming when explicitly enabled for Matrix", async () => {
     let capturedDisableBlockStreaming: boolean | undefined;
 

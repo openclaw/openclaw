@@ -19,6 +19,7 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
@@ -27,15 +28,6 @@ import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
-
-function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return Boolean(
-    value &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in value &&
-    typeof (value as { then?: unknown }).then === "function",
-  );
-}
 
 export type {
   BlockReplyChunking,

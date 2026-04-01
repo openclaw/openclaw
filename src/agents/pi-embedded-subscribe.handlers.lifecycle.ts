@@ -11,6 +11,7 @@ import {
   hasAssistantVisibleReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -32,15 +33,6 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
     stream: "lifecycle",
     data: { phase: "start" },
   });
-}
-
-function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return Boolean(
-    value &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in value &&
-    typeof (value as { then?: unknown }).then === "function",
-  );
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {

@@ -12,6 +12,7 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import {
   extractToolResultMediaArtifact,
   extractMessagingToolSend,
@@ -33,15 +34,6 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
-
-function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return Boolean(
-    value &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in value &&
-    typeof (value as { then?: unknown }).then === "function",
-  );
-}
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
@@ -339,6 +331,16 @@ export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
+  const continueAfterBlockReplyFlush = () => {
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.then(() => {
+        continueToolExecutionStart();
+      });
+    }
+    continueToolExecutionStart();
+  };
+
   const continueToolExecutionStart = () => {
     const rawToolName = String(evt.toolName);
     const toolName = normalizeToolName(rawToolName);
@@ -425,29 +427,9 @@ export function handleToolExecutionStart(
   // Flush pending block replies to preserve message boundaries before tool execution.
   const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(() => {
-      if (!ctx.params.onBlockReplyFlush) {
-        continueToolExecutionStart();
-        return;
-      }
-      const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
-      if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-        return onBlockReplyFlushResult.then(() => {
-          continueToolExecutionStart();
-        });
-      }
-      continueToolExecutionStart();
-    });
+    return flushBlockReplyBufferResult.then(() => continueAfterBlockReplyFlush());
   }
-  if (ctx.params.onBlockReplyFlush) {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(() => {
-        continueToolExecutionStart();
-      });
-    }
-  }
-  continueToolExecutionStart();
+  return continueAfterBlockReplyFlush();
 }
 
 export function handleToolExecutionUpdate(

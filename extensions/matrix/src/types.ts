@@ -157,7 +157,7 @@ export type MatrixConfig = {
    * - `"partial"`: edit a single message in place as the model generates text.
    * - `"off"`: deliver the full reply once the model finishes.
    * - Use `blockStreaming: true` when you want separate progress messages
-   *   instead of draft edits.
+   *   while `streaming` remains `"off"`.
    * - `true` maps to `"partial"`, `false` maps to `"off"`.
    * Default: `"off"`.
    */

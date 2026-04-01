@@ -13,6 +13,7 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -78,15 +79,6 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   }
   ctx.state.reasoningStreamOpen = false;
   void ctx.params.onReasoningEnd?.();
-}
-
-function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return Boolean(
-    value &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in value &&
-    typeof (value as { then?: unknown }).then === "function",
-  );
 }
 
 export function resolveSilentReplyFallbackText(params: {
@@ -376,9 +368,11 @@ export function handleMessageUpdate(
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    void Promise.resolve(ctx.flushBlockReplyBuffer()).catch((err) => {
-      ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
-    });
+    void Promise.resolve()
+      .then(() => ctx.flushBlockReplyBuffer())
+      .catch((err) => {
+        ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
+      });
   }
 }
 
