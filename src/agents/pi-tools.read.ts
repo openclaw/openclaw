@@ -577,10 +577,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           containerWorkdir: options?.containerWorkdir,
         });
 
-        // Always run sandbox alias/hardlink escape checks, even when PathGuard policy is enabled.
-        // PathGuard focuses on policy evaluation in canonical path space; assertSandboxPath enforces
-        // additional sandbox-specific escape protections.
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        // Only enforce sandbox/workspace-root escape checks when workspaceOnly is enabled.
+        // When workspaceOnly is false, callers may explicitly allowlist absolute paths outside
+        // the workspace via allowedPaths. In that mode, PathGuard should be the authority.
+        if (options?.policy?.workspaceOnly === true) {
+          await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        }
 
         if (options?.policy) {
           try {
