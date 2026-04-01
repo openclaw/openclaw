@@ -21,6 +21,8 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("di
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
+const discordSenderAgentIdByBotUserId = new Map<string, string>();
+
 export function resolveDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -91,3 +93,35 @@ export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscord
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
 }
+
+export function rememberDiscordSenderAgentIdentity(params: {
+  botUserId?: string | null;
+  senderAgentId?: string | null;
+}): void {
+  const botUserId = params.botUserId?.trim();
+  if (!botUserId) {
+    return;
+  }
+  const senderAgentId = params.senderAgentId?.trim();
+  if (!senderAgentId) {
+    discordSenderAgentIdByBotUserId.delete(botUserId);
+    return;
+  }
+  discordSenderAgentIdByBotUserId.set(botUserId, senderAgentId);
+}
+
+export function resolveDiscordSenderAgentIdByBotUserId(
+  botUserId?: string | null,
+): string | undefined {
+  const normalizedBotUserId = botUserId?.trim();
+  if (!normalizedBotUserId) {
+    return undefined;
+  }
+  return discordSenderAgentIdByBotUserId.get(normalizedBotUserId);
+}
+
+export const __testing = {
+  resetSenderAgentIdentityMap(): void {
+    discordSenderAgentIdByBotUserId.clear();
+  },
+};
