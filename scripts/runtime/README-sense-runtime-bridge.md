@@ -35,7 +35,8 @@ Responsibility split:
 - `sense_runtime_manager_tool.py`
   - manager-facing tool wrapper
   - accepts natural-language intent or explicit action
-  - returns a minimal manager-friendly JSON payload
+  - returns manager-friendly JSON
+  - for `sandbox-status`, extracts a structured `details.sandbox_status` block
 - `sense-runtime-manager-tool.sh`
   - executable shell entrypoint for manager and bot subprocess calls
 
@@ -88,9 +89,25 @@ Manager tool path:
 - -> `nemoclaw_runner.py`
 - -> Sense WSL NemoClaw runtime
 
+Structured sandbox-status fields:
+
+- `sandbox_name`
+- `sandbox_id`
+- `namespace`
+- `phase`
+- `provider`
+- `model`
+- `gpu_enabled`
+- `policy_names`
+- `nim_status`
+- `runtime_name`
+- `openshell_status`
+
+If a field cannot be extracted reliably, the manager tool returns `unknown`, `null`, or `[]` instead of failing.
+
 Operational notes:
 
 - `401 unauthorized` is returned directly when the shared token is wrong
 - `start` may still be functionally limited until provider configuration such as NVIDIA API keys is complete
-- `sandbox-status` is still a text-heavy runtime report; manager currently gets summary/key_points/suggested_next_action plus a raw_output-carrying details block
-- if manager or bot needs richer sandbox fields later, `sandbox-status` should be the next target for structured parsing
+- `sandbox-status` still keeps the original payload in `details.raw_output`
+- if manager or bot needs richer dispatch decisions later, `details.sandbox_status` should be the preferred input instead of parsing text again
