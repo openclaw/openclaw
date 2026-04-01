@@ -8,7 +8,6 @@ import type { DeliverOutboundPayloadsParams, OutboundDeliveryResult } from "./de
 import {
   imessageOutboundForTest,
   signalOutbound,
-  telegramOutbound,
   whatsappOutbound,
 } from "./deliver.test-outbounds.js";
 
@@ -155,14 +154,6 @@ export const defaultRegistry = createTestRegistry([
     plugin: createOutboundTestPlugin({
       id: "signal",
       outbound: signalOutbound,
-    }),
-  },
-  {
-    pluginId: "telegram",
-    source: "test",
-    plugin: createOutboundTestPlugin({
-      id: "telegram",
-      outbound: telegramOutbound,
     }),
   },
   {

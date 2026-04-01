@@ -1,4 +1,3 @@
-import { telegramOutbound } from "../../../extensions/telegram/outbound-test-api.js";
 import { chunkMarkdownTextWithMode, chunkText } from "../../auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -7,8 +6,6 @@ import {
   createScopedChannelMediaMaxBytesResolver,
 } from "../../plugin-sdk/media-runtime.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
-
-export { telegramOutbound };
 
 type SignalSendFn = (
   to: string,
