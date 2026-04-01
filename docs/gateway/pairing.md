@@ -65,9 +65,21 @@ Notes:
 
 - `node.pair.request` is idempotent per node: repeated calls return the same
   pending request.
+- Repeated requests for the same pending node also refresh the stored node
+  metadata and the latest allowlisted declared command snapshot for operator visibility.
 - Approval **always** generates a fresh token; no token is ever returned from
   `node.pair.request`.
 - Requests may include `silent: true` as a hint for auto-approval flows.
+
+Important:
+
+- Node pairing is a trust/identity flow plus token issuance.
+- It does **not** pin the live node command surface per node.
+- Live node commands come from what the node declares on connect after the
+  gateway's global node command policy (`gateway.nodes.allowCommands` /
+  `denyCommands`) is applied.
+- Per-node `system.run` allow/ask policy lives on the node in
+  `exec.approvals.node.*`, not in the pairing record.
 
 ## Auto-approval (macOS app)
 

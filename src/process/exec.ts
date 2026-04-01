@@ -176,6 +176,28 @@ export type CommandOptions = {
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 
+export function resolveProcessExitCode(params: {
+  explicitCode: number | null | undefined;
+  childExitCode: number | null | undefined;
+  resolvedSignal: NodeJS.Signals | null;
+  usesWindowsExitCodeShim: boolean;
+  timedOut: boolean;
+  noOutputTimedOut: boolean;
+  killIssuedByTimeout: boolean;
+}): number | null {
+  return (
+    params.explicitCode ??
+    params.childExitCode ??
+    (params.usesWindowsExitCodeShim &&
+    params.resolvedSignal == null &&
+    !params.timedOut &&
+    !params.noOutputTimedOut &&
+    !params.killIssuedByTimeout
+      ? 0
+      : null)
+  );
+}
+
 export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
@@ -229,6 +251,7 @@ export async function runCommandWithTimeout(
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
   const usesWindowsExitCodeShim =
     process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
+
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
@@ -251,6 +274,7 @@ export async function runCommandWithTimeout(
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
+    let killIssuedByTimeout = false;
     let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
@@ -286,6 +310,7 @@ export async function runCommandWithTimeout(
         }
         noOutputTimedOut = true;
         if (typeof child.kill === "function") {
+          killIssuedByTimeout = true;
           child.kill("SIGKILL");
         }
       }, Math.floor(noOutputTimeoutMs));
@@ -294,6 +319,7 @@ export async function runCommandWithTimeout(
     const timer = setTimeout(() => {
       timedOut = true;
       if (typeof child.kill === "function") {
+        killIssuedByTimeout = true;
         child.kill("SIGKILL");
       }
     }, timeoutMs);
@@ -344,17 +370,15 @@ export async function runCommandWithTimeout(
       clearNoOutputTimer();
       clearCloseFallbackTimer();
       const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
-      const resolvedCode =
-        childExitState?.code ??
-        code ??
-        child.exitCode ??
-        (usesWindowsExitCodeShim &&
-        resolvedSignal == null &&
-        !timedOut &&
-        !noOutputTimedOut &&
-        !child.killed
-          ? 0
-          : null);
+      const resolvedCode = resolveProcessExitCode({
+        explicitCode: childExitState?.code ?? code,
+        childExitCode: child.exitCode,
+        resolvedSignal,
+        usesWindowsExitCodeShim,
+        timedOut,
+        noOutputTimedOut,
+        killIssuedByTimeout,
+      });
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut

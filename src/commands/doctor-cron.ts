@@ -1,10 +1,10 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeStoredCronJobs } from "../cron/store-migration.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 
 type CronDoctorOutcome = {

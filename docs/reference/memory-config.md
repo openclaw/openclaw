@@ -185,7 +185,9 @@ Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 ```
 
 Paths can be absolute or workspace-relative. Directories are scanned
-recursively for `.md` files. Symlinks are ignored.
+recursively for `.md` files. Symlink handling depends on the active backend:
+the builtin engine ignores symlinks, while QMD follows the underlying QMD
+scanner behavior.
 
 For agent-scoped cross-agent transcript search, use
 `agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`.
@@ -195,6 +197,7 @@ points outside the current workspace.
 If the same resolved path appears in both `memory.qmd.paths` and
 `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the
 duplicate.
+
 ---
 
 ## Multimodal memory (Gemini)

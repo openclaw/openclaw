@@ -389,20 +389,24 @@ export function loadGatewayPlugins(params: {
   };
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
   const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
     env: process.env,
   }).config;
-  const pluginRegistry = loadOpenClawPlugins({
-    config: resolvedConfig,
-    workspaceDir: params.workspaceDir,
-    onlyPluginIds: resolveGatewayStartupPluginIds({
+  const pluginIds =
+    params.pluginIds ??
+    resolveGatewayStartupPluginIds({
       config: resolvedConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
-    }),
+    });
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: pluginIds,
     logger: {
       info: (msg) => params.log.info(msg),
       warn: (msg) => params.log.warn(msg),
