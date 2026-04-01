@@ -65,6 +65,10 @@ export type ExecApprovalUnavailableReason =
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported";
 
+function isHeadlessExecTrigger(trigger?: string): boolean {
+  return trigger === "cron";
+}
+
 export type RegisteredExecApprovalRequestContext = {
   approvalId: string;
   approvalSlug: string;
@@ -338,6 +342,38 @@ export function createExecApprovalDecisionState(params: {
     approvedByAsk: baseDecision.approvedByAsk,
     deniedReason: baseDecision.deniedReason,
   };
+}
+
+export function shouldResolveExecApprovalUnavailableInline(params: {
+  trigger?: string;
+  unavailableReason: ExecApprovalUnavailableReason | null;
+  preResolvedDecision: string | null | undefined;
+}): boolean {
+  return (
+    isHeadlessExecTrigger(params.trigger) &&
+    params.unavailableReason === "no-approval-route" &&
+    params.preResolvedDecision === null
+  );
+}
+
+export function buildHeadlessExecApprovalDeniedMessage(params: {
+  trigger?: string;
+  host: "gateway" | "node";
+  security: ExecSecurity;
+  ask: ExecAsk;
+  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+}): string {
+  const runLabel = params.trigger === "cron" ? "Cron runs" : "Headless runs";
+  return [
+    `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
+    `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
+    "Stricter values from tools.exec and ~/.openclaw/exec-approvals.json both apply.",
+    "Fix one of these:",
+    '- align both files to security="full" and ask="off" for trusted local automation',
+    "- keep allowlist mode and add an explicit allowlist entry for this command",
+    "- enable Web UI, terminal UI, or chat exec approvals and rerun interactively",
+    'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
+  ].join("\n");
 }
 
 export async function sendExecApprovalFollowupResult(

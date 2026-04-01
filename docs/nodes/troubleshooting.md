@@ -76,6 +76,11 @@ openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 If pairing is missing, approve the node device first.
 If pairing is fine but `system.run` fails, fix exec approvals/allowlist.
 
+If `nodes describe` shows the node connected but the expected command is missing,
+the approved node-pair record may be stale. In that case, reconnecting the node
+should create a repair pairing request; approve it, then reconnect once more so
+the gateway can expose the refreshed command set.
+
 ## Common node error codes
 
 - `NODE_BACKGROUND_UNAVAILABLE` → app is backgrounded; bring it foreground.

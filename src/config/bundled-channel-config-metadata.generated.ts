@@ -11677,7 +11677,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "execApprovals.approvers": {
         label: "Slack Exec Approval Approvers",
-        help: "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to owner IDs inferred from channels.slack.allowFrom, channels.slack.dm.allowFrom, and defaultTo when possible.",
+        help: "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to commands.ownerAllowFrom when possible.",
       },
       "execApprovals.agentFilter": {
         label: "Slack Exec Approval Agent Filter",

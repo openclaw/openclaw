@@ -90,6 +90,13 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         action: "approve",
       }),
     ).toEqual({ kind: "disabled" });
+    expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "disabled",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "disabled" });
     expect(hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
     expect(nativeCapabilities).toEqual({
       enabled: true,
