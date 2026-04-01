@@ -204,6 +204,24 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("lets structured HTTP 400 payloads reuse provider-specific message classification", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "ThrottlingException: Too many concurrent requests",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("does not misclassify structured HTTP 400 context overflow payloads as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      }),
+    ).toBeNull();
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(
       resolveFailoverReasonFromError({

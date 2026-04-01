@@ -483,6 +483,7 @@ export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
 ): FailoverReason | null {
+  const messageReason = message ? classifyFailoverReasonFromMessage(message) : null;
   if (typeof status !== "number" || !Number.isFinite(status)) {
     return null;
   }
@@ -507,28 +508,24 @@ export function classifyFailoverReasonFromHttpStatus(
     // remote session/conversation is gone. Generic 410/no-body responses from
     // OpenAI-compatible proxies are better treated as retryable transport-path
     // failures so we do not clear session state or poison auth-profile health.
-    if (message && isCliSessionExpiredErrorMessage(message)) {
-      return "session_expired";
-    }
-    if (message && isBillingErrorMessage(message)) {
-      return "billing";
-    }
-    if (message && isAuthPermanentErrorMessage(message)) {
-      return "auth_permanent";
-    }
-    if (message && isAuthErrorMessage(message)) {
-      return "auth";
+    if (
+      messageReason === "session_expired" ||
+      messageReason === "billing" ||
+      messageReason === "auth_permanent" ||
+      messageReason === "auth"
+    ) {
+      return messageReason;
     }
     return "timeout";
   }
   if (status === 503) {
-    if (message && isOverloadedErrorMessage(message)) {
+    if (messageReason === "overloaded") {
       return "overloaded";
     }
     return "timeout";
   }
   if (status === 499) {
-    if (message && isOverloadedErrorMessage(message)) {
+    if (messageReason === "overloaded") {
       return "overloaded";
     }
     return "timeout";
@@ -540,12 +537,83 @@ export function classifyFailoverReasonFromHttpStatus(
     return "overloaded";
   }
   if (status === 400 || status === 422) {
-    // Some providers return quota/balance errors under HTTP 400, so do not
-    // let the generic format fallback mask an explicit billing signal.
-    if (message && isBillingErrorMessage(message)) {
-      return "billing";
+    // 400/422 are ambiguous: inspect the payload first so provider-specific
+    // rate limits, auth failures, model-not-found errors, and billing signals
+    // are not collapsed into generic "format" failures.
+    if (messageReason) {
+      return messageReason;
+    }
+    // Context overflow does not map to a FailoverReason. Keep it out of the
+    // generic format bucket so callers can handle compaction/reset separately.
+    if (message && isContextOverflowError(message)) {
+      return null;
     }
     return "format";
+  }
+  return null;
+}
+
+function classifyFailoverReasonFromMessage(raw: string): FailoverReason | null {
+  if (isImageDimensionErrorMessage(raw)) {
+    return null;
+  }
+  if (isImageSizeError(raw)) {
+    return null;
+  }
+  if (isCliSessionExpiredErrorMessage(raw)) {
+    return "session_expired";
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "model_not_found";
+  }
+  const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
+  if (reasonFrom402Text) {
+    return reasonFrom402Text;
+  }
+  if (isPeriodicUsageLimitErrorMessage(raw)) {
+    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
+  }
+  if (isRateLimitErrorMessage(raw)) {
+    return "rate_limit";
+  }
+  if (isOverloadedErrorMessage(raw)) {
+    return "overloaded";
+  }
+  if (isTransientHttpError(raw)) {
+    const status = extractLeadingHttpStatus(raw.trim());
+    if (status?.code === 529) {
+      return "overloaded";
+    }
+    return "timeout";
+  }
+  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
+  // check so that provider errors like {"type":"api_error","message":"insufficient
+  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
+  if (isBillingErrorMessage(raw)) {
+    return "billing";
+  }
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "auth_permanent";
+  }
+  if (isAuthErrorMessage(raw)) {
+    return "auth";
+  }
+  if (isServerErrorMessage(raw)) {
+    return "timeout";
+  }
+  if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isTimeoutErrorMessage(raw)) {
+    return "timeout";
+  }
+  // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
+  const providerSpecific = classifyProviderSpecificError(raw);
+  if (providerSpecific) {
+    return providerSpecific;
   }
   return null;
 }
@@ -1033,75 +1101,13 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 }
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
-  if (isImageDimensionErrorMessage(raw)) {
-    return null;
-  }
-  if (isImageSizeError(raw)) {
-    return null;
-  }
-  if (isCliSessionExpiredErrorMessage(raw)) {
-    return "session_expired";
-  }
-  if (isModelNotFoundErrorMessage(raw)) {
-    return "model_not_found";
-  }
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
-  if (leadingStatus?.code === 410) {
-    return classifyFailoverReasonFromHttpStatus(leadingStatus.code, leadingStatus.rest);
+  const statusReason = classifyFailoverReasonFromHttpStatus(leadingStatus?.code, raw);
+  if (statusReason) {
+    return statusReason;
   }
-  const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
-  if (reasonFrom402Text) {
-    return reasonFrom402Text;
-  }
-  if (isPeriodicUsageLimitErrorMessage(raw)) {
-    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
-  }
-  if (isRateLimitErrorMessage(raw)) {
-    return "rate_limit";
-  }
-  if (isOverloadedErrorMessage(raw)) {
-    return "overloaded";
-  }
-  if (isTransientHttpError(raw)) {
-    // 529 is always overloaded, even without explicit overload keywords in the body.
-    const status = extractLeadingHttpStatus(trimmed);
-    if (status?.code === 529) {
-      return "overloaded";
-    }
-    // Treat remaining transient 5xx provider failures as retryable transport issues.
-    return "timeout";
-  }
-  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
-  // check so that provider errors like {"type":"api_error","message":"insufficient
-  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
-  if (isBillingErrorMessage(raw)) {
-    return "billing";
-  }
-  if (isAuthPermanentErrorMessage(raw)) {
-    return "auth_permanent";
-  }
-  if (isAuthErrorMessage(raw)) {
-    return "auth";
-  }
-  if (isServerErrorMessage(raw)) {
-    return "timeout";
-  }
-  if (isJsonApiInternalServerError(raw)) {
-    return "timeout";
-  }
-  if (isCloudCodeAssistFormatError(raw)) {
-    return "format";
-  }
-  if (isTimeoutErrorMessage(raw)) {
-    return "timeout";
-  }
-  // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
-  const providerSpecific = classifyProviderSpecificError(raw);
-  if (providerSpecific) {
-    return providerSpecific;
-  }
-  return null;
+  return classifyFailoverReasonFromMessage(raw);
 }
 
 export function isFailoverErrorMessage(raw: string): boolean {
