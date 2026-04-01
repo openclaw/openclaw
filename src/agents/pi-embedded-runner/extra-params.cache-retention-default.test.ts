@@ -144,4 +144,56 @@ describe("cacheRetention default behavior", () => {
       provider: "anthropic",
     });
   });
+
+  it("respects cacheRetention for custom provider with anthropic-messages API", () => {
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "litellm/claude-sonnet-4-6": {
+                params: {
+                  cacheRetention: "long" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+      modelId: "claude-sonnet-4-6",
+      provider: "litellm",
+    });
+  });
+
+  it("does not default to caching for custom provider without explicit config", () => {
+    const agent: { streamFn?: StreamFn } = {};
+    const cfg = undefined;
+    const provider = "litellm";
+    const modelId = "claude-sonnet-4-6";
+
+    applyExtraParamsToAgent(agent, cfg, provider, modelId);
+
+    // Without explicit cacheRetention config, custom providers should NOT
+    // get caching — unlike direct Anthropic which defaults to "short".
+  });
+
+  it("respects cacheRetention 'short' for custom anthropic-messages provider", () => {
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "litellm/claude-opus-4-6": {
+                params: {
+                  cacheRetention: "short" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+      modelId: "claude-opus-4-6",
+      provider: "litellm",
+    });
+  });
 });

@@ -221,13 +221,20 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelApi?: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+  // Custom providers using the anthropic-messages API (e.g. LiteLLM proxy)
+  // should also support cache retention when explicitly configured.
+  const hasExplicitCacheConfig =
+    extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
+  const isCustomAnthropicApi =
+    !isAnthropicDirect && !isAnthropicBedrock && modelApi === "anthropic-messages" && hasExplicitCacheConfig;
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicBedrock && !isCustomAnthropicApi) {
     return undefined;
   }
 
