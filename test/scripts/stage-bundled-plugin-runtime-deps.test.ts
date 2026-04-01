@@ -224,6 +224,86 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'nested';\n");
   });
 
+  it("falls back when a ^0.0.x root dependency exceeds the patch ceiling", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { tiny: "^0.0.3" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootDepDir = path.join(repoRoot, "node_modules", "tiny");
+    fs.mkdirSync(rootDepDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDepDir, "package.json"),
+      '{ "name": "tiny", "version": "0.0.5" }\n',
+      "utf8",
+    );
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules", "tiny");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(nodeModulesDir, "package.json"),
+          '{ "name": "tiny", "version": "0.0.3" }\n',
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+  });
+
+  it("falls back when a stable caret range only matches a prerelease root build", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "^1.2.3" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootDepDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(rootDepDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDepDir, "package.json"),
+      '{ "name": "direct", "version": "1.3.0-beta.1" }\n',
+      "utf8",
+    );
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules", "direct");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(nodeModulesDir, "package.json"),
+          '{ "name": "direct", "version": "1.2.3" }\n',
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+  });
+
   it("retries transient runtime dependency staging failures before surfacing an error", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

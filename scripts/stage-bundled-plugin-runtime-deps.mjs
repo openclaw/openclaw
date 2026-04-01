@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import semverSatisfies from "semver/functions/satisfies.js";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
 function readJson(filePath) {
@@ -57,60 +58,8 @@ function readInstalledDependencyVersion(nodeModulesDir, depName) {
   return typeof version === "string" ? version : null;
 }
 
-function parseSemver(version) {
-  const match =
-    /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
-      version.trim(),
-    );
-  if (!match) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(match[1], 10),
-    minor: Number.parseInt(match[2], 10),
-    patch: Number.parseInt(match[3], 10),
-    prerelease: match[4] ?? null,
-  };
-}
-
 function dependencyVersionSatisfied(spec, installedVersion) {
-  if (spec === installedVersion) {
-    return true;
-  }
-  if (!spec.startsWith("^")) {
-    return false;
-  }
-  const minimum = parseSemver(spec.slice(1));
-  const installed = parseSemver(installedVersion);
-  if (!minimum || !installed) {
-    return false;
-  }
-  if (minimum.major === 0) {
-    return (
-      installed.major === 0 &&
-      installed.minor === minimum.minor &&
-      (installed.patch > minimum.patch ||
-        (installed.patch === minimum.patch &&
-          (installed.prerelease === minimum.prerelease ||
-            (minimum.prerelease === null && installed.prerelease === null))))
-    );
-  }
-  if (installed.major !== minimum.major) {
-    return false;
-  }
-  if (installed.minor < minimum.minor) {
-    return false;
-  }
-  if (installed.minor > minimum.minor) {
-    return true;
-  }
-  if (installed.patch < minimum.patch) {
-    return false;
-  }
-  if (installed.patch > minimum.patch) {
-    return true;
-  }
-  return installed.prerelease === minimum.prerelease;
+  return semverSatisfies(installedVersion, spec, { includePrerelease: false });
 }
 
 function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
