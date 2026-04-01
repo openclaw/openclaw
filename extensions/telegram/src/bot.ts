@@ -281,6 +281,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const recentUpdates = createTelegramUpdateDedupe();
   const replayGuardKey = account.accountId;
+  const onUpdateId = opts.updateOffset?.onUpdateId;
+  const replayGuardEnabled = typeof onUpdateId === "function";
   const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
 
@@ -292,7 +294,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   let highestCompletedUpdateId: number | null = initialUpdateId;
   let highestPersistedUpdateId: number | null = initialUpdateId;
   const maybePersistSafeWatermark = () => {
-    if (typeof opts.updateOffset?.onUpdateId !== "function") {
+    if (!replayGuardEnabled) {
       return;
     }
     if (highestCompletedUpdateId === null) {
@@ -314,7 +316,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       return;
     }
     highestPersistedUpdateId = safe;
-    void opts.updateOffset.onUpdateId(safe);
+    void onUpdateId(safe);
   };
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
@@ -333,13 +335,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   bot.use(async (ctx, next) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId === "number") {
+    if (replayGuardEnabled && typeof updateId === "number") {
       const replayDecision = observeTelegramReplayCandidate({
         accountKey: replayGuardKey,
         updateId,
       });
       if (replayDecision.skip) {
-        // This intentionally sacrifices one repeatedly failing update so polling can recover.
+        // This intentionally sacrifices one repeatedly failing polling update so offset-based
+        // getUpdates sessions can recover. Webhook mode does not use the replay guard.
         const hasPendingReplay = pendingUpdateIds.has(updateId);
         runtime.error?.(
           hasPendingReplay
@@ -359,7 +362,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       await next();
       completedSuccessfully = true;
     } finally {
-      if (typeof updateId === "number") {
+      if (replayGuardEnabled && typeof updateId === "number") {
         pendingUpdateIds.delete(updateId);
         if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = updateId;

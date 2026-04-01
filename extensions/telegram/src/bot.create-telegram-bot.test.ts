@@ -1151,6 +1151,82 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("does not quarantine repeated webhook deliveries when update offsets are disabled", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const errorSpy = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      accountId: "cybera",
+      runtime: {
+        log: vi.fn(),
+        error: errorSpy,
+        exit: ((code: number) => {
+          throw new Error(`exit ${code}`);
+        }) as (code: number) => never,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const poisonHandler = vi.fn(async () => {
+      throw new Error("poison update");
+    });
+
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+
+    expect(poisonHandler).toHaveBeenCalledTimes(4);
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("skipping repeatedly replayed update_id=101"),
+    );
+  });
+
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
       channels: {
