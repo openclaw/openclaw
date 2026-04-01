@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import enable_auto_session_closeout_plugin as plugin_enable
 
@@ -67,6 +68,14 @@ class EnableAutoSessionCloseoutPluginTests(unittest.TestCase):
             updated["plugins"]["entries"][plugin_enable.PLUGIN_ID]["config"]["minItems"],
             2,
         )
+
+    def test_build_parser_defaults_follow_openclaw_home_env(self):
+        with mock.patch.dict("os.environ", {"OPENCLAW_HOME": "/tmp/oc-home"}, clear=False):
+            parser = plugin_enable.build_parser()
+            args = parser.parse_args([])
+
+        self.assertEqual(args.config, Path("/tmp/oc-home/openclaw.json"))
+        self.assertEqual(args.workspace, Path("/tmp/oc-home/workspace"))
 
 
 if __name__ == "__main__":

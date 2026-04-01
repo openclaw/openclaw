@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKSPACE="${1:-/root/.openclaw/workspace}"
+OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
+WORKSPACE="${1:-${OPENCLAW_WORKSPACE:-${OPENCLAW_HOME}/workspace}}"
 shift || true
 
 python3 "${WORKSPACE}/scripts/openclaw_harness.py" nightly-dream-cycle \

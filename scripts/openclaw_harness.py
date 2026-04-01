@@ -297,7 +297,10 @@ def read_env_file(path: Path) -> dict[str, str]:
         key = key.strip()
         if not key:
             continue
-        values[key] = value.strip()
+        cleaned = value.strip()
+        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"'", '"'}:
+            cleaned = cleaned[1:-1]
+        values[key] = cleaned
     return values
 
 
@@ -1060,7 +1063,7 @@ def _allow_dream_promotion(item: str, kind: str) -> bool:
     ephemeral_goal_markers = (
         "当前目标",
         "当前主任务",
-        "参考 Claude 泄露",
+        "参考公开的多 agent 设计",
         "让 OpenClaw 和 Claude 一样好用",
     )
     if kind in {"fact", "preference"} and any(marker in item for marker in ephemeral_goal_markers):

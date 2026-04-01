@@ -18,9 +18,9 @@ This workspace now follows Claude-style agent roles instead of custom court titl
 
 ## Why This Changed
 
-The previous naming (`taizi`, `zhongshu`, `hubu`, `menxia`, `yushi`, `shangshu`) was custom and not aligned with Claude's actual structure.
+The previous naming (`taizi`, `zhongshu`, `hubu`, `menxia`, `yushi`, `shangshu`) was custom and not aligned with commonly documented Claude-style role naming.
 
-Claude's leaked code points much closer to:
+Public Claude documentation and community usage point much closer to:
 
 - built-in agents: `general-purpose`, `Explore`, `Plan`, `Verification`
 - swarm organization: `coordinator`, `leader`, `teammate`, `worker`

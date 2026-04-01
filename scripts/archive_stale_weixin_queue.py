@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -14,8 +15,11 @@ def load_json(path: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Archive stale Weixin delivery queue items without replaying them.")
-    parser.add_argument("--queue-dir", default="/root/.openclaw/delivery-queue")
-    parser.add_argument("--stale-account-id", default="05e7405683c0-im-bot")
+    parser.add_argument(
+        "--queue-dir",
+        default=str(Path(os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw")) / "delivery-queue"),
+    )
+    parser.add_argument("--stale-account-id", required=True)
     parser.add_argument("--channel", default="openclaw-weixin")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()

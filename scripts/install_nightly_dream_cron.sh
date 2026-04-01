@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKSPACE="${1:-/root/.openclaw/workspace}"
+OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
+WORKSPACE="${1:-${OPENCLAW_WORKSPACE:-${OPENCLAW_HOME}/workspace}}"
 CRON_EXPR="${CRON_EXPR:-30 2 * * *}"
 CRON_TZ="${CRON_TZ:-Asia/Shanghai}"
 THINKING="${THINKING:-low}"
 MODEL="${MODEL:-}"
 DISABLED="${DISABLED:-1}"
 JOB_NAME="Nightly Dream Memory"
-SECRETS_FILE="/root/.openclaw/openclaw-secrets.env"
-JOBS_FILE="/root/.openclaw/cron/jobs.json"
+SECRETS_FILE="${OPENCLAW_SECRETS_FILE:-${OPENCLAW_HOME}/openclaw-secrets.env}"
+JOBS_FILE="${OPENCLAW_JOBS_FILE:-${OPENCLAW_HOME}/cron/jobs.json}"
 
 if [[ ! -f "${SECRETS_FILE}" ]]; then
   echo "Missing secrets file: ${SECRETS_FILE}" >&2

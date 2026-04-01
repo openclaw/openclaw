@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -14,7 +15,10 @@ def load_json(path: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Upsert the Nightly Dream Memory cron job into jobs.json.")
-    parser.add_argument("--jobs-file", default="/root/.openclaw/cron/jobs.json")
+    parser.add_argument(
+        "--jobs-file",
+        default=str(Path(os.environ.get("OPENCLAW_JOBS_FILE", Path.home() / ".openclaw" / "cron" / "jobs.json"))),
+    )
     parser.add_argument("--name", default="Nightly Dream Memory")
     parser.add_argument("--description", default="Claude-style nightly memory consolidation and reviewed promotion.")
     parser.add_argument("--cron", default="30 2 * * *")

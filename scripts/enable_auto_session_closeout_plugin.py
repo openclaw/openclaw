@@ -3,13 +3,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 
-DEFAULT_CONFIG = Path("/root/.openclaw/openclaw.json")
-DEFAULT_WORKSPACE = Path("/root/.openclaw/workspace")
 PLUGIN_ID = "auto-session-closeout"
+
+
+def default_openclaw_home() -> Path:
+    return Path(os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw"))
+
+
+def default_config_path() -> Path:
+    return default_openclaw_home() / "openclaw.json"
+
+
+def default_workspace_path() -> Path:
+    return Path(os.environ.get("OPENCLAW_WORKSPACE", default_openclaw_home() / "workspace"))
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -97,8 +108,8 @@ def update_config(data: dict[str, Any], args: argparse.Namespace) -> dict[str, A
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Enable the workspace auto-session-closeout plugin in OpenClaw config.")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
+    parser.add_argument("--config", type=Path, default=default_config_path())
+    parser.add_argument("--workspace", type=Path, default=default_workspace_path())
     parser.add_argument("--agent-id", action="append", default=["main"], help="Agent id to auto-closeout. Repeat for more ids.")
     parser.add_argument("--trigger", action="append", default=["user"], help="Allowed trigger kind. Repeat for more.")
     parser.add_argument("--min-items", type=int, default=2)

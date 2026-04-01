@@ -16,6 +16,26 @@ import openclaw_harness as harness
 
 
 class RouteTests(unittest.TestCase):
+    def test_read_env_file_strips_surrounding_quotes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        'TOKEN="quoted-token"',
+                        "SINGLE='single-quoted'",
+                        "PLAIN=plain-token",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            values = harness.read_env_file(env_path)
+
+        self.assertEqual(values["TOKEN"], "quoted-token")
+        self.assertEqual(values["SINGLE"], "single-quoted")
+        self.assertEqual(values["PLAIN"], "plain-token")
+
     def test_verification_routes_to_verification(self):
         result = harness.classify_route("帮我验证配置修改有没有成功")
         self.assertEqual(result["next_actor"], "verification")
