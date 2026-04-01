@@ -9,9 +9,9 @@ from pathlib import Path
 BACKOFF_SCHEDULE = [2, 4, 8]
 
 PRIORITIZED_REQUIREMENT_STEPS = [
-    ('API key may be required', 'configure_provider'),
-    ('provider configuration missing', 'configure_provider'),
-    ('model configuration missing', 'configure_provider'),
+    ('API key may be required', 'check_api_key_config'),
+    ('provider configuration missing', 'check_provider_config'),
+    ('model configuration missing', 'check_model_config'),
     ('nim is not running', 'start_nim_runtime'),
     ('gpu runtime not enabled', 'enable_gpu_runtime'),
     ('nvidia policy missing', 'review_runtime_capabilities'),
@@ -138,17 +138,11 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
     missing: list[str] = []
     provider = str(provider_status.get('provider') or 'unknown')
     model = str(provider_status.get('model') or 'unknown')
-    nim_status = str(provider_status.get('nim_status') or 'unknown')
-    gpu_enabled = provider_status.get('gpu_enabled')
 
     if provider in {'', 'unknown'}:
         missing.append('provider configuration missing')
     if model in {'', 'unknown'}:
         missing.append('model configuration missing')
-    if nim_status.lower() != 'running':
-        missing.append('nim is not running')
-    if gpu_enabled is False:
-        missing.append('gpu runtime not enabled')
 
     if isinstance(start_result, dict):
         haystacks = []
@@ -172,8 +166,19 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
 def build_provider_status(provider_status: dict, start_result: dict | None) -> dict:
     status = dict(provider_status)
     missing = infer_missing_requirements(status, start_result)
-    provider_ready = len(missing) == 0
-    status['provider_ready'] = provider_ready
+    provider = str(status.get('provider') or 'unknown')
+    model = str(status.get('model') or 'unknown')
+    api_key_required = 'API key may be required' in missing
+    provider_config_present = provider not in {'', 'unknown'}
+    model_config_present = model not in {'', 'unknown'}
+
+    status['api_key_required'] = api_key_required
+    status['api_key_present'] = False if api_key_required else None
+    status['provider_config_present'] = provider_config_present
+    status['model_config_present'] = model_config_present
+    status['provider_source'] = None
+    status['model_source'] = None
+    status['provider_ready'] = len(missing) == 0
     status['missing_requirements'] = missing
     return status
 
@@ -321,6 +326,27 @@ def main() -> int:
             response['next_step'] = resolved_next_step or 'configure_provider'
         else:
             response['next_step'] = followup_status.get('next_step') or response['next_step']
+    elif recommended_action == 'configure_provider':
+        initial_sandbox_payload = get_sandbox_status(script_dir, args)
+        initial_provider_status = build_provider_status(summarize_capabilities(initial_sandbox_payload), None)
+        start_result = run_runtime_start(script_dir, args)
+        runtime_status = get_runtime_status(script_dir, args)
+        followup_sandbox_payload = get_sandbox_status(script_dir, args)
+        followup_provider_status = build_provider_status(summarize_capabilities(followup_sandbox_payload), start_result)
+        resolved_next_step = resolve_missing_requirements_next_step(followup_provider_status.get('missing_requirements'))
+
+        response['remediation_result'] = 'checked provider signals; triggered sense runtime start; re-checked runtime and sandbox status'
+        response['provider_status'] = followup_provider_status
+        response['missing_requirements'] = followup_provider_status.get('missing_requirements') or []
+        response['resolved_next_step'] = resolved_next_step
+        response['initial_provider_status'] = initial_provider_status
+        response['start_result'] = start_result
+        response['runtime_status'] = runtime_status
+        response['followup_status'] = followup_provider_status
+        if followup_provider_status.get('provider_ready') is True:
+            response['next_step'] = 'run_runtime_task'
+        else:
+            response['next_step'] = resolved_next_step or 'configure_provider'
     elif recommended_action == 'check_gpu_runtime':
         sandbox_payload = get_sandbox_status(script_dir, args)
         gpu_status = build_gpu_status(summarize_capabilities(sandbox_payload))

@@ -111,13 +111,38 @@ def main() -> int:
         next_step = str(resolved_next_step or remediation.get('next_step') or decision.get('next_step') or 'manual_review')
 
         provider_status = remediation.get('provider_status') if isinstance(remediation, dict) else None
-        if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False:
+        if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False and str(remediation.get('remediation_action') or '') not in {'configure_provider'}:
             final_state = 'provider_not_ready'
             next_step = resolved_next_step or 'configure_provider'
             break
 
         gpu_status = remediation.get('gpu_status') if isinstance(remediation, dict) else None
         remediation_action = str(remediation.get('remediation_action') or '') if isinstance(remediation, dict) else ''
+        if next_step == 'configure_provider' and remediation_action != 'configure_provider':
+            provider_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'configure_provider']
+            provider_result = run_json(provider_cmd)
+            last_remediation = provider_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'configure_provider', 'result': provider_result})
+            resolved_next_step = str(provider_result.get('resolved_next_step') or '') if isinstance(provider_result, dict) else ''
+            next_step = str(resolved_next_step or provider_result.get('next_step') or next_step)
+            if next_step == 'check_api_key_config':
+                final_state = 'provider_api_key_missing'
+                break
+            if next_step == 'check_provider_config':
+                final_state = 'provider_config_missing'
+                break
+            if next_step == 'check_model_config':
+                final_state = 'provider_model_missing'
+                break
+            provider_status = provider_result.get('provider_status') if isinstance(provider_result, dict) else None
+            if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False:
+                final_state = 'provider_not_ready'
+                next_step = 'configure_provider'
+                break
+            if next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
         if next_step == 'configure_gpu_runtime' and remediation_action != 'configure_gpu_runtime':
             configure_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'configure_gpu_runtime']
             configure_result = run_json(configure_cmd)
@@ -127,9 +152,8 @@ def main() -> int:
             next_step = str(resolved_next_step or configure_result.get('next_step') or next_step)
             configured_gpu_status = configure_result.get('gpu_status') if isinstance(configure_result, dict) else None
             if next_step == 'configure_provider':
-                final_state = 'provider_not_ready'
-                break
-            if next_step == 'start_nim_runtime':
+                pass
+            elif next_step == 'start_nim_runtime':
                 pass
             elif next_step == 'enable_gpu_runtime':
                 final_state = 'gpu_not_ready'
@@ -172,6 +196,15 @@ def main() -> int:
 
         gpu_status = last_remediation.get('gpu_status') if isinstance(last_remediation, dict) else None
         nim_status_info = last_remediation.get('nim_status_info') if isinstance(last_remediation, dict) else None
+        if next_step == 'check_api_key_config':
+            final_state = 'provider_api_key_missing'
+            break
+        if next_step == 'check_provider_config':
+            final_state = 'provider_config_missing'
+            break
+        if next_step == 'check_model_config':
+            final_state = 'provider_model_missing'
+            break
         if next_step == 'configure_provider':
             final_state = 'provider_not_ready'
             break

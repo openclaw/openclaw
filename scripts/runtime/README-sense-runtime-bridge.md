@@ -245,6 +245,41 @@ Routing loop uses `resolved_next_step` before the older generic `next_step`, so 
 
 This is still a transitional routing layer. `configure_provider`, `start_nim_runtime`, and `enable_gpu_runtime` are not yet fully automatic end-to-end remediations; they are structured branch targets for the next layer of automation.
 
+Provider remediation notes:
+
+- `configure_provider` now acts as a minimal provider dispatcher
+- it collects structured provider signals, triggers `sense runtime start`, re-checks runtime status, and re-checks structured sandbox status
+- it returns `provider_status` with:
+  - `provider`
+  - `model`
+  - `api_key_required`
+  - `api_key_present`
+  - `provider_config_present`
+  - `model_config_present`
+  - `provider_source`
+  - `model_source`
+  - `provider_ready`
+  - `missing_requirements[]`
+
+Current provider priority order is:
+
+- `API key may be required` -> `check_api_key_config`
+- `provider configuration missing` -> `check_provider_config`
+- `model configuration missing` -> `check_model_config`
+
+The current signals are inferred conservatively from:
+
+- structured sandbox status (`provider`, `model`)
+- start result summary and key points
+
+Routing loop behavior change:
+
+- if remediation resolves to `check_api_key_config`, loop stops with `final_state = provider_api_key_missing`
+- if remediation resolves to `check_provider_config`, loop stops with `final_state = provider_config_missing`
+- if remediation resolves to `check_model_config`, loop stops with `final_state = provider_model_missing`
+
+This is still a transitional provider remediation layer. It does not yet write provider credentials or model defaults automatically; it only identifies the missing provider sub-step in structured form.
+
 NIM remediation notes:
 
 - `start_nim_runtime` now performs a minimal real remediation attempt
