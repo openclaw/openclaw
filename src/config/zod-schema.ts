@@ -496,6 +496,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         injectBootstrap: z.boolean().optional(),
+        sessionHandback: z.boolean().optional(),
       })
       .strict()
       .optional(),

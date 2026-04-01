@@ -151,8 +151,7 @@ export function createSessionsSpawnTool(
 
       // Auto-detect runtime from agent profile config when not explicitly specified.
       // If the target agent has runtime.type: "acp", use ACP automatically.
-      let runtime: "acp" | "subagent" =
-        params.runtime === "acp" ? "acp" : params.runtime === "subagent" ? "subagent" : "subagent";
+      let runtime: "acp" | "subagent" = params.runtime === "acp" ? "acp" : "subagent";
       if (!params.runtime && requestedAgentId) {
         const cfg = loadConfig();
         const normalizedId = requestedAgentId.toLowerCase().trim();
