@@ -138,6 +138,19 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
+const FeishuExecApprovalTargetSchema = z.enum(["dm", "channel", "both"]);
+
+const FeishuExecApprovalConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    approvers: z.array(z.union([z.string(), z.number()])).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: FeishuExecApprovalTargetSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -182,6 +195,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  execApprovals: FeishuExecApprovalConfigSchema,
 };
 
 /**
