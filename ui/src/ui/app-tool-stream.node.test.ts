@@ -216,4 +216,57 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     vi.useRealTimers();
   });
+
+  it("treats lifecycle error as terminal for retry-pending compaction", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "start" },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end", willRetry: true },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "retrying",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 3,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "error", error: "boom" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "complete",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: expect.any(Number),
+    });
+    expect(host.compactionClearTimer).not.toBeNull();
+
+    vi.advanceTimersByTime(5_000);
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
 });

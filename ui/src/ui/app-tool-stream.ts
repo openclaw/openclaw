@@ -329,10 +329,12 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
 function handleLifecycleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = toTrimmedString(data.phase);
-  if (phase !== "end") {
+  if (phase !== "end" && phase !== "error") {
     return;
   }
 
+  // We scope lifecycle cleanup to the visible chat session first, then
+  // use runId only to match the specific compaction retry we started tracking.
   const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
   if (!accepted.accepted) {
     return;
