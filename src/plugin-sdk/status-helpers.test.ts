@@ -162,27 +162,32 @@ describe("createDefaultChannelRuntimeState", () => {
 });
 
 describe("buildBaseChannelStatusSummary", () => {
-  it("defaults missing values", () => {
-    expect(buildBaseChannelStatusSummary({})).toEqual(defaultChannelSummary);
-  });
-
-  it("keeps explicit values", () => {
-    expect(
-      buildBaseChannelStatusSummary({
+  it.each([
+    {
+      name: "defaults missing values",
+      input: {},
+      expected: defaultChannelSummary,
+    },
+    {
+      name: "keeps explicit values",
+      input: {
         configured: true,
         running: true,
         lastStartAt: 1,
         lastStopAt: 2,
         lastError: "boom",
-      }),
-    ).toEqual({
-      ...defaultChannelSummary,
-      configured: true,
-      running: true,
-      lastStartAt: 1,
-      lastStopAt: 2,
-      lastError: "boom",
-    });
+      },
+      expected: {
+        ...defaultChannelSummary,
+        configured: true,
+        running: true,
+        lastStartAt: 1,
+        lastStopAt: 2,
+        lastError: "boom",
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(buildBaseChannelStatusSummary(input)).toEqual(expected);
   });
 
   it("merges extra fields into the normalized channel summary", () => {
