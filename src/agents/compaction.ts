@@ -7,6 +7,7 @@ import {
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { findCompactionBoundaries, snapToBoundary } from "./compaction-boundary.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
@@ -125,22 +126,41 @@ export function splitMessagesByTokenShare(
     return [messages];
   }
 
+  const boundaries = findCompactionBoundaries(messages);
   const totalTokens = estimateMessagesTokens(messages);
   const targetTokens = totalTokens / normalizedParts;
   const chunks: AgentMessage[][] = [];
   let current: AgentMessage[] = [];
   let currentTokens = 0;
+  // Global index (into `messages`) where `current` chunk starts.
+  let currentStartGlobal = 0;
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
     const messageTokens = estimateCompactionMessageTokens(message);
     if (
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
       currentTokens + messageTokens > targetTokens
     ) {
-      chunks.push(current);
-      current = [];
-      currentTokens = 0;
+      // Snap to the nearest safe boundary to avoid splitting mid tool-call pair.
+      // proposedSplit is the last message index (global) that stays in the current chunk.
+      const proposedSplit = i - 1;
+      const safeSplit = snapToBoundary(
+        proposedSplit,
+        boundaries,
+        currentStartGlobal,
+        proposedSplit,
+      );
+
+      // Split at the boundary. Messages after safeSplit roll into the next chunk.
+      const localSplit = safeSplit - currentStartGlobal + 1;
+      chunks.push(current.slice(0, localSplit));
+      const remainder = current.slice(localSplit);
+      current = [...remainder, message];
+      currentTokens = current.reduce((sum, m) => sum + estimateCompactionMessageTokens(m), 0);
+      currentStartGlobal = i + 1 - current.length;
+      continue;
     }
 
     current.push(message);
