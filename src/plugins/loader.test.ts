@@ -1015,6 +1015,22 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      name: "loads bundled channel plugins when channels.<id>.enabled=true even under restrictive plugins.allow",
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          allow: ["browser"],
+        },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        expectTelegramLoaded(registry);
+      },
+    },
+    {
       name: "still respects explicit disable via plugins.entries for bundled channels",
       config: {
         channels: {
@@ -3633,7 +3649,7 @@ module.exports = {
     useNoBundledPlugins();
     const scenarios = [
       {
-        label: "warns when loaded non-bundled plugin has no install/load-path provenance",
+        label: "does not warn when loaded non-bundled plugin is in plugins.allow",
         loadRegistry: () => {
           return withStateDir((stateDir) => {
             const globalDir = path.join(stateDir, "extensions", "rogue");
@@ -3652,6 +3668,35 @@ module.exports = {
               config: {
                 plugins: {
                   allow: ["rogue"],
+                },
+              },
+            });
+
+            return { registry, warnings, pluginId: "rogue", expectWarning: false };
+          });
+        },
+      },
+      {
+        label: "warns when loaded non-bundled plugin has no provenance and no allowlist is set",
+        loadRegistry: () => {
+          const stateDir = makeTempDir();
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+            const globalDir = path.join(stateDir, "extensions", "rogue");
+            mkdirSafe(globalDir);
+            writePlugin({
+              id: "rogue",
+              body: `module.exports = { id: "rogue", register() {} };`,
+              dir: globalDir,
+              filename: "index.cjs",
+            });
+
+            const warnings: string[] = [];
+            const registry = loadOpenClawPlugins({
+              cache: false,
+              logger: createWarningLogger(warnings),
+              config: {
+                plugins: {
+                  enabled: true,
                 },
               },
             });

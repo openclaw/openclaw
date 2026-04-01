@@ -763,6 +763,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
@@ -886,7 +887,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
+  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
   lines.push("");
 
   lines.push("Skills");

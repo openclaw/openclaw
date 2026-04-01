@@ -136,6 +136,17 @@ final class AppState {
             forKey: voicePushToTalkEnabledKey) } }
     }
 
+    var voiceWakeTriggersTalkMode: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
+                if self.swabbleEnabled {
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+            }
+        }
+    }
+
     var talkEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -283,6 +294,8 @@ final class AppState {
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
+        self.voiceWakeTriggersTalkMode = UserDefaults.standard
+            .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
         var sttRaw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? TalkSttBackend.appleSpeech.rawValue
         // When running as raw executable (e.g. from Xcode), bundle ID is nil; fall back to "OpenClaw" domain.
