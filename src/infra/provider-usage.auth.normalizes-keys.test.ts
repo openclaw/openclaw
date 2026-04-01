@@ -205,6 +205,9 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   afterAll(async () => {
@@ -213,11 +216,7 @@ describe("resolveProviderAuths key normalization", () => {
     suiteCase = 0;
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
-    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+  beforeEach(() => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
