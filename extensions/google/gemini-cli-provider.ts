@@ -6,11 +6,6 @@ import type {
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
-import {
-  buildGoogleReplayPolicy,
-  normalizeGoogleGeminiCliToolSchemas,
-  resolveGoogleReasoningOutputMode,
-} from "./replay-policy.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -128,9 +123,6 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
     },
     resolveDynamicModel: (ctx) =>
       resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
-    buildReplayPolicy: () => buildGoogleReplayPolicy(),
-    normalizeToolSchemas: (ctx) => normalizeGoogleGeminiCliToolSchemas(ctx),
-    resolveReasoningOutputMode: () => resolveGoogleReasoningOutputMode(),
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     resolveUsageAuth: async (ctx) => {

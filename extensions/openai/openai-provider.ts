@@ -14,7 +14,6 @@ import {
   createOpenAIDefaultTransportWrapper,
 } from "openclaw/plugin-sdk/provider-stream";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
-import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
@@ -241,7 +240,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai",
     },
-    buildReplayPolicy: (ctx) => buildOpenAIReplayPolicy(ctx),
     wrapStreamFn: (ctx) =>
       createOpenAIAttributionHeadersWrapper(createOpenAIDefaultTransportWrapper(ctx.streamFn)),
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),

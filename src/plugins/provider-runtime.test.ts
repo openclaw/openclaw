@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
@@ -5,7 +6,14 @@ import {
   expectCodexMissingAuthHint,
   expectedAugmentedOpenaiCodexCatalogEntries,
 } from "./provider-runtime.test-support.js";
-import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
+import type {
+  AnyAgentTool,
+  ProviderNormalizeToolSchemasContext,
+  ProviderPlugin,
+  ProviderRuntimeModel,
+  ProviderSanitizeReplayHistoryContext,
+  ProviderValidateReplayTurnsContext,
+} from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
 type ResolveCatalogHookProviderPluginIds =
@@ -74,6 +82,31 @@ const MODEL: ProviderRuntimeModel = {
 };
 const DEMO_PROVIDER_ID = "demo";
 const EMPTY_MODEL_REGISTRY = { find: () => null } as never;
+const DEMO_REPLAY_MESSAGES: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
+const DEMO_SANITIZED_MESSAGE: AgentMessage = {
+  role: "assistant",
+  content: [{ type: "text", text: "sanitized" }],
+  api: MODEL.api,
+  provider: MODEL.provider,
+  model: MODEL.id,
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  stopReason: "stop",
+  timestamp: 2,
+};
+const DEMO_TOOL = {
+  name: "demo-tool",
+  label: "Demo tool",
+  description: "Demo tool",
+  parameters: { type: "object", properties: {} },
+  execute: vi.fn(async () => ({ content: [], details: undefined })),
+} as unknown as AnyAgentTool;
 
 function createOpenAiCatalogProviderPlugin(
   overrides: Partial<ProviderPlugin> = {},
@@ -443,12 +476,22 @@ describe("provider-runtime", () => {
       toolCallIdMode: "strict9" as const,
       allowSyntheticToolResults: true,
     }));
-    const sanitizeReplayHistory = vi.fn(async ({ messages }: { messages: unknown[] }) => [
-      ...messages,
-      { role: "assistant", content: [{ type: "text", text: "sanitized" }] },
-    ]);
-    const validateReplayTurns = vi.fn(async ({ messages }: { messages: unknown[] }) => messages);
-    const normalizeToolSchemas = vi.fn(({ tools }: { tools: unknown[] }) => tools);
+    const sanitizeReplayHistory = vi.fn(
+      async ({
+        messages,
+      }: Pick<ProviderSanitizeReplayHistoryContext, "messages">): Promise<AgentMessage[]> => [
+        ...messages,
+        DEMO_SANITIZED_MESSAGE,
+      ],
+    );
+    const validateReplayTurns = vi.fn(
+      async ({
+        messages,
+      }: Pick<ProviderValidateReplayTurnsContext, "messages">): Promise<AgentMessage[]> => messages,
+    );
+    const normalizeToolSchemas = vi.fn(
+      ({ tools }: Pick<ProviderNormalizeToolSchemasContext, "tools">): AnyAgentTool[] => tools,
+    );
     const resolveReasoningOutputMode = vi.fn(() => "tagged" as const);
     const resolveSyntheticAuth = vi.fn(() => ({
       apiKey: "demo-local",
@@ -766,11 +809,11 @@ describe("provider-runtime", () => {
             context: createDemoResolvedModelContext({
               modelApi: MODEL.api,
               sessionId: "session-1",
-              messages: [{ role: "user", content: "hello" }],
+              messages: DEMO_REPLAY_MESSAGES,
             }),
           }),
         expected: {
-          1: { role: "assistant", content: [{ type: "text", text: "sanitized" }] },
+          1: DEMO_SANITIZED_MESSAGE,
         },
       },
       {
@@ -780,11 +823,11 @@ describe("provider-runtime", () => {
             context: createDemoResolvedModelContext({
               modelApi: MODEL.api,
               sessionId: "session-1",
-              messages: [{ role: "user", content: "hello" }],
+              messages: DEMO_REPLAY_MESSAGES,
             }),
           }),
         expected: {
-          0: { role: "user", content: "hello" },
+          0: DEMO_REPLAY_MESSAGES[0],
         },
       },
     ]);
@@ -803,10 +846,10 @@ describe("provider-runtime", () => {
         provider: DEMO_PROVIDER_ID,
         context: createDemoResolvedModelContext({
           modelApi: MODEL.api,
-          tools: [{ name: "demo-tool" }],
+          tools: [DEMO_TOOL],
         }),
       }),
-    ).toEqual([{ name: "demo-tool" }]);
+    ).toEqual([DEMO_TOOL]);
 
     expect(
       normalizeProviderResolvedModelWithPlugin({

@@ -157,7 +157,7 @@ export function resolveTranscriptPolicy(params: {
 
   return {
     ...basePolicy,
-    ...(pluginPolicy.sanitizeMode ? { sanitizeMode: pluginPolicy.sanitizeMode } : {}),
+    ...(pluginPolicy.sanitizeMode != null ? { sanitizeMode: pluginPolicy.sanitizeMode } : {}),
     ...(typeof pluginPolicy.sanitizeToolCallIds === "boolean"
       ? { sanitizeToolCallIds: pluginPolicy.sanitizeToolCallIds }
       : {}),

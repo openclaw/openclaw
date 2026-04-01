@@ -1052,7 +1052,8 @@ export type ProviderPlugin = {
    * Provider-owned final replay-turn validation.
    *
    * Use this when provider transports need stricter replay-time validation or
-   * turn reshaping after generic sanitation.
+   * turn reshaping after generic sanitation. Returning a non-null value
+   * replaces the built-in replay validators rather than composing with them.
    */
   validateReplayTurns?: (
     ctx: ProviderValidateReplayTurnsContext,
