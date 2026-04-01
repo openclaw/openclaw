@@ -391,18 +391,14 @@ async function resolveProviderExecutionAuth(params: {
 }
 
 async function resolveProviderExecutionContext(params: {
+  provider: MediaUnderstandingProvider;
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   config?: MediaUnderstandingConfig;
   agentDir?: string;
 }) {
-  const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
-    providerId: params.providerId,
-    cfg: params.cfg,
-    entry: params.entry,
-    agentDir: params.agentDir,
-  });
+  const providerConfig = params.cfg.models?.providers?.[params.providerId];
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
     ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
@@ -410,6 +406,15 @@ async function resolveProviderExecutionContext(params: {
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
+  if (params.provider.requiresApiKey === false) {
+    return { apiKeys: ["local"], baseUrl, headers };
+  }
+  const { apiKeys } = await resolveProviderExecutionAuth({
+    providerId: params.providerId,
+    cfg: params.cfg,
+    entry: params.entry,
+    agentDir: params.agentDir,
+  });
   return { apiKeys, baseUrl, headers };
 }
 
@@ -529,6 +534,7 @@ export async function runProviderEntry(params: {
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+      provider,
       providerId,
       cfg,
       entry,
@@ -587,6 +593,7 @@ export async function runProviderEntry(params: {
     );
   }
   const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+    provider,
     providerId,
     cfg,
     entry,

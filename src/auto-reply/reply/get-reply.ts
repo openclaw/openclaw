@@ -10,6 +10,8 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
+import { getPluginMediaProviders } from "../../plugins/media-providers.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -93,6 +95,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentDir?: string;
+  providers?: Record<string, MediaUnderstandingProvider>;
   activeModel: { provider: string; model: string };
 }): Promise<boolean> {
   if (!hasInboundMedia(params.ctx)) {
@@ -194,6 +197,7 @@ export async function getReplyFromConfig(
       ctx: finalized,
       cfg,
       agentDir,
+      providers: getPluginMediaProviders(),
       activeModel: { provider, model },
     });
     await applyLinkUnderstandingIfNeeded({

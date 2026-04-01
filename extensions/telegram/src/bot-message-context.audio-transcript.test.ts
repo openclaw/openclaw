@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const transcribeFirstAudioMock = vi.fn();
+const { transcribeFirstAudioMock, getPluginMediaProvidersMock } = vi.hoisted(() => ({
+  transcribeFirstAudioMock: vi.fn(),
+  getPluginMediaProvidersMock: vi.fn(),
+}));
 const DEFAULT_MODEL = "anthropic/claude-opus-4-5";
 const DEFAULT_WORKSPACE = "/tmp/openclaw";
 const DEFAULT_MENTION_PATTERN = "\\bbot\\b";
 
 vi.mock("./media-understanding.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginMediaProviders: () => getPluginMediaProvidersMock(),
 }));
 
 const { buildTelegramMessageContextForTest } =
@@ -78,9 +85,14 @@ function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGrou
 describe("buildTelegramMessageContext audio transcript body", () => {
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
+    getPluginMediaProvidersMock.mockReset();
+    getPluginMediaProvidersMock.mockReturnValue(undefined);
   });
 
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
+    getPluginMediaProvidersMock.mockReturnValue({
+      executorch: { id: "executorch" },
+    });
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
     const ctx = await buildGroupVoiceContext({
@@ -95,6 +107,13 @@ describe("buildTelegramMessageContext audio transcript body", () => {
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: {
+          executorch: { id: "executorch" },
+        },
+      }),
+    );
     expectTranscriptRendered(ctx, "hey bot please help");
   });
 

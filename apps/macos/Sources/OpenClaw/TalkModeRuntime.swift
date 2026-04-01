@@ -18,6 +18,9 @@ actor TalkModeRuntime {
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
+    /// Floor for ExecuTorch path: must exceed typical micro-pauses but stay responsive when the user stops talking.
+    private static let execuTorchMinSilenceWindowSeconds: TimeInterval = 1.5
+    private static let execuTorchFinalizeDrainNs: UInt64 = 250_000_000
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -44,6 +47,9 @@ actor TalkModeRuntime {
     private var recognitionGeneration: Int = 0
     private var rmsTask: Task<Void, Never>?
     private let rmsMeter = RMSMeter()
+    private var useExecuTorch = false
+    private var etBridge: ExecuTorchSTTBridge { ExecuTorchSTTBridge.shared }
+    private var etTranscriptTask: Task<Void, Never>?
 
     private var captureTask: Task<Void, Never>?
     private var silenceTask: Task<Void, Never>?
@@ -85,6 +91,7 @@ actor TalkModeRuntime {
 
     func setEnabled(_ enabled: Bool) async {
         guard enabled != self.isEnabled else { return }
+        self.logger.debug("talk: setEnabled(\(enabled)) — \(enabled ? "starting" : "stopping") Talk Mode runtime")
         self.isEnabled = enabled
         self.lifecycleGeneration &+= 1
         if enabled {
@@ -110,7 +117,11 @@ actor TalkModeRuntime {
         }
 
         if self.phase == .idle || self.phase == .listening {
-            await self.startRecognition()
+            let recognitionOk = await self.startRecognition()
+            guard recognitionOk else {
+                await self.resetToIdleAfterFailedRecognition()
+                return
+            }
             self.phase = .listening
             await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
             self.startSilenceMonitor()
@@ -121,15 +132,55 @@ actor TalkModeRuntime {
         generation == self.lifecycleGeneration && self.isEnabled
     }
 
+    /// After `startRecognition()` returns `false`, avoid a dead “listening” UI.
+    private func resetToIdleAfterFailedRecognition() async {
+        self.phase = .idle
+        await MainActor.run {
+            TalkModeController.shared.updateLevel(0)
+            TalkModeController.shared.updatePhase(.idle)
+        }
+    }
+
     private func start() async {
         let gen = self.lifecycleGeneration
-        guard voiceWakeSupported else { return }
-        guard PermissionManager.voiceWakePermissionsGranted() else {
-            self.logger.debug("talk runtime not starting: permissions missing")
+        self.logger.debug("talk: start() entered, voiceWakeSupported=\(voiceWakeSupported)")
+        guard voiceWakeSupported else {
+            self.logger.warning("talk: start() aborted — voice wake not supported")
             return
         }
+        let backendFromApp = await MainActor.run { AppStateStore.shared.talkSttBackend }
+        self.useExecuTorch = (backendFromApp == .executorch)
+        if !PermissionManager.talkModePermissionsGranted(useExecuTorch: self.useExecuTorch) {
+            self.logger.debug("talk: permissions not yet granted — requesting interactively...")
+            let granted = await PermissionManager.ensureTalkModePermissions(
+                useExecuTorch: self.useExecuTorch,
+                interactive: true)
+            guard granted else {
+                self.logger.warning("talk: start() aborted — user denied permissions")
+                return
+            }
+            self.logger.debug("talk: permissions granted after interactive request")
+        }
+        self.logger.debug("talk: reloading config...")
         await self.reloadConfig()
-        guard self.isCurrent(gen) else { return }
+        self.logger.debug("talk: STT backend from app state: \(String(describing: backendFromApp.rawValue), privacy: .public) → useExecuTorch=\(self.useExecuTorch)")
+        if self.useExecuTorch {
+            self.logger.debug("talk: STT backend ExecuTorch Parakeet-TDT — loading model...")
+            await MainActor.run { TalkModeController.shared.updatePhase(.loading) }
+            do {
+                try await self.etBridge.loadModel()
+                self.logger.debug("talk: ExecuTorch model load succeeded")
+            } catch {
+                self.logger.error("talk: ExecuTorch model load failed: \(error.localizedDescription, privacy: .public)")
+                await self.handleExecuTorchLoadFailure()
+            }
+        } else {
+            self.logger.debug("talk: STT backend Apple Speech (no ExecuTorch)")
+        }
+        guard self.isCurrent(gen) else {
+            self.logger.debug("talk: start() generation outdated, exiting")
+            return
+        }
         if self.isPaused {
             self.phase = .idle
             await MainActor.run {
@@ -138,9 +189,15 @@ actor TalkModeRuntime {
             }
             return
         }
-        await self.startRecognition()
+        self.logger.debug("talk: starting recognition (useExecuTorch=\(self.useExecuTorch))...")
+        let recognitionOk = await self.startRecognition()
         guard self.isCurrent(gen) else { return }
+        guard recognitionOk else {
+            await self.resetToIdleAfterFailedRecognition()
+            return
+        }
         self.phase = .listening
+        self.logger.debug("talk: recognition started, phase=listening")
         await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
         self.startSilenceMonitor()
     }
@@ -159,10 +216,24 @@ actor TalkModeRuntime {
         self.lastSpeechEnergyAt = nil
         self.phase = .idle
         await self.stopRecognition()
+        if self.useExecuTorch {
+            await self.etBridge.shutdown()
+        }
         await MainActor.run {
             TalkModeController.shared.updateLevel(0)
             TalkModeController.shared.updatePhase(.idle)
         }
+    }
+
+    private func handleExecuTorchLoadFailure() async {
+        await self.etBridge.shutdown()
+        self.useExecuTorch = false
+        self.logger.debug("talk: STT backend falling back to Apple Speech (Speech Recognition re-checked in startRecognition)")
+    }
+
+    private func handleExecuTorchRecognitionFailure(_ error: Error) async {
+        self.logger.error("talk: ExecuTorch startListening failed: \(error.localizedDescription, privacy: .public)")
+        await self.handleExecuTorchLoadFailure()
     }
 
     // MARK: - Speech recognition
@@ -175,16 +246,41 @@ actor TalkModeRuntime {
         let generation: Int
     }
 
-    private func startRecognition() async {
+    /// Starts STT for the current backend. Returns `false` if recognition did not start (permissions, hardware, etc.).
+    private func startRecognition() async -> Bool {
+        if self.useExecuTorch, await self.etBridge.currentState == .listening {
+            // Bridge already capturing (e.g. after TTS); just re-enable emission.
+            await self.etBridge.setEmissionEnabled(true)
+            self.logger.debug("talk: startRecognition() ExecuTorch already listening — emission re-enabled")
+            return true
+        }
         await self.stopRecognition()
         self.recognitionGeneration &+= 1
         let generation = self.recognitionGeneration
+        self.logger.debug("talk: startRecognition() generation=\(generation) useExecuTorch=\(self.useExecuTorch)")
+
+        if self.useExecuTorch {
+            self.logger.debug("talk: starting ExecuTorch recognition...")
+            return await self.startExecuTorchRecognition(generation: generation)
+        }
+
+        // Mic-only users may start with ExecuTorch; after load/capture failure we fall back to Apple
+        // Speech, which requires Speech Recognition. Re-check here so we prompt instead of a dead listen UI.
+        if !PermissionManager.talkModePermissionsGranted(useExecuTorch: false) {
+            self.logger.debug("talk: Apple Speech path — requesting Speech Recognition (needed after ExecuTorch fallback or if permissions changed)")
+            let granted = await PermissionManager.ensureTalkModePermissions(useExecuTorch: false, interactive: true)
+            if !granted {
+                self.logger.warning("talk: Apple Speech aborted — Speech Recognition not granted")
+                return false
+            }
+        }
 
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        self.logger.debug("talk: Apple Speech path — locale=\(locale, privacy: .public)")
         self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
         guard let recognizer, recognizer.isAvailable else {
-            self.logger.error("talk recognizer unavailable")
-            return
+            self.logger.error("talk: Apple Speech recognizer unavailable (locale=\(locale, privacy: .public))")
+            return false
         }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -194,12 +290,12 @@ actor TalkModeRuntime {
         if self.audioEngine == nil {
             self.audioEngine = AVAudioEngine()
         }
-        guard let audioEngine = self.audioEngine else { return }
+        guard let audioEngine = self.audioEngine else { return false }
 
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.audioEngine = nil
             self.logger.error("talk mode: no usable audio input device")
-            return
+            return false
         }
 
         let input = audioEngine.inputNode
@@ -218,7 +314,7 @@ actor TalkModeRuntime {
             try audioEngine.start()
         } catch {
             self.logger.error("talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
-            return
+            return false
         }
 
         self.startRMSTicker(meter: meter)
@@ -235,6 +331,56 @@ actor TalkModeRuntime {
                 generation: generation)
             Task { await self.handleRecognition(update) }
         }
+        return true
+    }
+
+    // MARK: - ExecuTorch Recognition
+
+    private func startExecuTorchRecognition(generation: Int) async -> Bool {
+        self.logger.debug("talk: startExecuTorchRecognition() calling etBridge.startListening...")
+        do {
+            try await self.etBridge.startListening { [weak self, generation] token, replaceFullHypothesis in
+                guard let self else { return }
+                Task {
+                    await self.handleExecuTorchToken(
+                        token,
+                        replaceFullHypothesis: replaceFullHypothesis,
+                        generation: generation)
+                }
+            }
+            self.logger.debug("talk: ExecuTorch startListening returned (offline poll active)")
+            return true
+        } catch {
+            await self.handleExecuTorchRecognitionFailure(error)
+            guard generation == self.recognitionGeneration else { return false }
+            return await self.startRecognition()
+        }
+    }
+
+    private func handleExecuTorchToken(
+        _ token: String,
+        replaceFullHypothesis: Bool,
+        generation: Int) async
+    {
+        guard generation == self.recognitionGeneration else { return }
+        guard !self.isPaused else { return }
+
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard Self.containsLetterOrDigit(trimmed) else { return }
+
+        // ExecuTorch has no echo cancellation — during TTS playback the mic picks up
+        // the speaker audio and the model transcribes it as garbage, causing an
+        // interrupt → re-send → re-speak infinite loop. Suppress all input during speaking;
+        // once TTS finishes the controller transitions to .listening and normal input resumes.
+        guard self.phase == .listening else { return }
+        if replaceFullHypothesis {
+            // Parakeet revised the whole decode (not incremental); do not merge with prior text.
+            self.lastTranscript = trimmed
+        } else {
+            self.lastTranscript = Self.mergeTranscriptForFinalize(base: self.lastTranscript, tail: trimmed)
+        }
+        self.lastHeard = Date()
     }
 
     private func stopRecognition() async {
@@ -249,6 +395,11 @@ actor TalkModeRuntime {
         self.recognizer = nil
         self.rmsTask?.cancel()
         self.rmsTask = nil
+        self.etTranscriptTask?.cancel()
+        self.etTranscriptTask = nil
+        if self.useExecuTorch {
+            await self.etBridge.stopListening()
+        }
     }
 
     private func startRMSTicker(meter: RMSMeter) {
@@ -316,7 +467,10 @@ actor TalkModeRuntime {
         guard !transcript.isEmpty else { return }
         guard let lastHeard else { return }
         let elapsed = Date().timeIntervalSince(lastHeard)
-        guard elapsed >= self.silenceWindow else { return }
+        let requiredSilenceWindow = Self.effectiveSilenceWindow(
+            configured: self.silenceWindow,
+            useExecuTorch: self.useExecuTorch)
+        guard elapsed >= requiredSilenceWindow else { return }
         await self.finalizeTranscript(transcript)
     }
 
@@ -331,17 +485,42 @@ actor TalkModeRuntime {
     }
 
     private func finalizeTranscript(_ text: String) async {
+        var finalTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if self.useExecuTorch {
+            // Give the converter/tap pipeline a short drain window so the last spoken
+            // word lands in the rolling buffer before the full-buffer decode.
+            try? await Task.sleep(nanoseconds: Self.execuTorchFinalizeDrainNs)
+            // Decode the full rolling buffer as a single utterance for best accuracy.
+            // Fall back to the poll-accumulated transcript if the full decode returns empty.
+            let fullDecode = await self.etBridge.forceFullBufferDecode()
+            if !fullDecode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finalTranscript = fullDecode
+            }
+        }
+
+        guard !finalTranscript.isEmpty else {
+            await self.startListening()
+            let recognitionOk = await self.startRecognition()
+            if !recognitionOk {
+                await self.resetToIdleAfterFailedRecognition()
+            }
+            return
+        }
+
         self.lastTranscript = ""
         self.lastHeard = nil
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        if self.useExecuTorch {
+            await self.etBridge.recordFinalizeLatency()
+        }
         // Play "send" chime when the user's speech is finalized and about to be sent
         let sendChime = await MainActor.run { AppStateStore.shared.voiceWakeSendChime }
         if sendChime != .none {
             await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
         }
         await self.stopRecognition()
-        await self.sendAndSpeak(text)
+        await self.sendAndSpeak(finalTranscript)
     }
 
     // MARK: - Gateway + TTS
@@ -359,7 +538,7 @@ actor TalkModeRuntime {
         }
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
-        self.logger.info(
+        self.logger.debug(
             "talk send start runId=\(runId, privacy: .public) " +
                 "session=\(sessionKey, privacy: .public) " +
                 "chars=\(prompt.count, privacy: .public)")
@@ -372,7 +551,7 @@ actor TalkModeRuntime {
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }
-            self.logger.info(
+            self.logger.debug(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
 
@@ -383,12 +562,15 @@ actor TalkModeRuntime {
             else {
                 self.logger.warning("talk assistant text missing after timeout")
                 await self.startListening()
-                await self.startRecognition()
+                let recognitionOk = await self.startRecognition()
+                if !recognitionOk {
+                    await self.resetToIdleAfterFailedRecognition()
+                }
                 return
             }
             guard self.isCurrent(gen) else { return }
 
-            self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
+            self.logger.debug("talk assistant text len=\(assistantText.count, privacy: .public)")
             await self.playAssistant(text: assistantText)
             guard self.isCurrent(gen) else { return }
             await self.resumeListeningIfNeeded()
@@ -411,13 +593,19 @@ actor TalkModeRuntime {
             return
         }
         await self.startListening()
-        await self.startRecognition()
+        let recognitionOk = await self.startRecognition()
+        if !recognitionOk {
+            await self.resetToIdleAfterFailedRecognition()
+        }
     }
 
     private func buildPrompt(transcript: String) -> String {
         let interrupted = self.lastInterruptedAtSeconds
         self.lastInterruptedAtSeconds = nil
-        return TalkPromptBuilder.build(transcript: transcript, interruptedAtSeconds: interrupted)
+        return TalkPromptBuilder.build(
+            transcript: transcript,
+            interruptedAtSeconds: interrupted
+        )
     }
 
     private func waitForAssistantText(
@@ -530,17 +718,17 @@ actor TalkModeRuntime {
         }
         if let voice = resolvedVoice {
             if directive?.once == true {
-                self.logger.info("talk voice override (once) voiceId=\(voice, privacy: .public)")
+                self.logger.debug("talk voice override (once) voiceId=\(voice, privacy: .public)")
             } else {
                 self.currentVoiceId = voice
                 self.voiceOverrideActive = true
-                self.logger.info("talk voice override voiceId=\(voice, privacy: .public)")
+                self.logger.debug("talk voice override voiceId=\(voice, privacy: .public)")
             }
         }
 
         if let model = directive?.modelId {
             if directive?.once == true {
-                self.logger.info("talk model override (once) modelId=\(model, privacy: .public)")
+                self.logger.debug("talk model override (once) modelId=\(model, privacy: .public)")
             } else {
                 self.currentModelId = model
                 self.modelOverrideActive = true
@@ -562,12 +750,12 @@ actor TalkModeRuntime {
         }
 
         if apiKey?.isEmpty != false {
-            self.ttsLogger.warning("talk missing ELEVENLABS_API_KEY; falling back to system voice")
+            self.ttsLogger.warning("talk TTS: missing ELEVENLABS_API_KEY; falling back to system voice")
         } else if voiceId == nil {
-            self.ttsLogger.warning("talk missing voiceId; falling back to system voice")
+            self.ttsLogger.warning("talk TTS: missing voiceId; falling back to system voice")
         } else if let voiceId {
             self.ttsLogger
-                .info(
+                .debug(
                     "talk TTS request voiceId=\(voiceId, privacy: .public) " +
                         "chars=\(cleaned.count, privacy: .public)")
         }
@@ -619,7 +807,7 @@ actor TalkModeRuntime {
         }
 
         let request = makeRequest(outputFormat: outputFormat)
-        self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
+        self.ttsLogger.debug("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
         let client = ElevenLabsTTSClient(apiKey: apiKey)
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
@@ -638,7 +826,7 @@ actor TalkModeRuntime {
             makeRequest: makeRequest,
             stream: stream)
         self.ttsLogger
-            .info(
+            .debug(
                 "talk audio result finished=\(result.finished, privacy: .public) " +
                     "interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
         if !result.finished, result.interruptedAt == nil {
@@ -680,7 +868,7 @@ actor TalkModeRuntime {
     }
 
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
-        self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
+        self.ttsLogger.debug("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
         if self.interruptOnSpeech {
             guard await self.prepareForPlayback(generation: input.generation) else { return }
         }
@@ -693,11 +881,20 @@ actor TalkModeRuntime {
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
             language: ttsLanguage)
-        self.ttsLogger.info("talk system voice done")
+        self.ttsLogger.debug("talk system voice done")
     }
 
     private func prepareForPlayback(generation: Int) async -> Bool {
-        await self.startRecognition()
+        if self.useExecuTorch {
+            // Keep capture running but suppress transcript emission during TTS (no echo cancellation).
+            self.lastTranscript = ""
+            self.lastHeard = nil
+            self.lastSpeechEnergyAt = nil
+            await self.etBridge.setEmissionEnabled(false)
+        } else {
+            // Barge-in path: best-effort; if recognition cannot start, still allow TTS (prior behavior).
+            _ = await self.startRecognition()
+        }
         return self.isCurrent(generation)
     }
 
@@ -724,7 +921,7 @@ actor TalkModeRuntime {
             }
             let name = first.name ?? "unknown"
             self.ttsLogger
-                .info("talk default voice selected \(name, privacy: .public) (\(first.voiceId, privacy: .public))")
+                .debug("talk default voice selected \(name, privacy: .public) (\(first.voiceId, privacy: .public))")
             return first.voiceId
         } catch {
             self.ttsLogger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
@@ -748,6 +945,103 @@ actor TalkModeRuntime {
         return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
+    private static func containsLetterOrDigit(_ value: String) -> Bool {
+        value.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+    }
+
+    private static func effectiveSilenceWindow(configured: TimeInterval, useExecuTorch: Bool) -> TimeInterval {
+        if useExecuTorch {
+            return max(configured, Self.execuTorchMinSilenceWindowSeconds)
+        }
+        return configured
+    }
+
+    private static func mergeTranscriptForFinalize(base: String, tail: String) -> String {
+        let baseTrimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tailTrimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tailTrimmed.isEmpty else { return baseTrimmed }
+        guard !baseTrimmed.isEmpty else { return tailTrimmed }
+        if baseTrimmed.hasSuffix(tailTrimmed) {
+            return baseTrimmed
+        }
+        if tailTrimmed.hasPrefix(baseTrimmed) {
+            return tailTrimmed
+        }
+        let overlap = Self.suffixPrefixOverlap(previous: baseTrimmed, current: tailTrimmed)
+        if overlap > 0 {
+            return baseTrimmed + String(tailTrimmed.dropFirst(overlap))
+        }
+        if Self.shouldTreatAsCompetingHypothesis(base: baseTrimmed, tail: tailTrimmed) {
+            return Self.preferHypothesis(base: baseTrimmed, tail: tailTrimmed)
+        }
+        return baseTrimmed + " " + tailTrimmed
+    }
+
+    private static func suffixPrefixOverlap(previous: String, current: String) -> Int {
+        let previousChars = Array(previous)
+        let currentChars = Array(current)
+        let maxOverlap = min(previousChars.count, currentChars.count)
+        guard maxOverlap > 0 else { return 0 }
+        for overlap in stride(from: maxOverlap, through: 1, by: -1) {
+            if previousChars.suffix(overlap).elementsEqual(currentChars.prefix(overlap)) {
+                return overlap
+            }
+        }
+        return 0
+    }
+
+    /// Parakeet polling can emit revised full hypotheses, not just append-only tails.
+    /// Treat similar full phrases as competing alternatives and choose one instead of concatenating.
+    private static func shouldTreatAsCompetingHypothesis(base: String, tail: String) -> Bool {
+        let baseTokens = Self.normalizedTokens(base)
+        let tailTokens = Self.normalizedTokens(tail)
+        guard baseTokens.count >= 3, tailTokens.count >= 3 else { return false }
+
+        let similarity = Self.tokenJaccardSimilarity(baseTokens, tailTokens)
+        if similarity >= 0.28 { return true }
+        return Self.looksCompleteUtterance(base) && Self.looksCompleteUtterance(tail)
+    }
+
+    private static func preferHypothesis(base: String, tail: String) -> String {
+        let baseTokens = Self.normalizedTokens(base)
+        let tailTokens = Self.normalizedTokens(tail)
+        let similarity = Self.tokenJaccardSimilarity(baseTokens, tailTokens)
+
+        // Favor richer hypotheses, but avoid replacing a stable long phrase with a shorter regression.
+        if tailTokens.count >= baseTokens.count + 2 {
+            return tail
+        }
+        if baseTokens.count >= tailTokens.count + 2, similarity >= 0.30 {
+            return base
+        }
+        return tail
+    }
+
+    private static func normalizedTokens(_ value: String) -> [String] {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func tokenJaccardSimilarity(_ lhs: [String], _ rhs: [String]) -> Double {
+        let leftSet = Set(lhs)
+        let rightSet = Set(rhs)
+        let union = leftSet.union(rightSet)
+        guard !union.isEmpty else { return 0 }
+        let intersection = leftSet.intersection(rightSet)
+        return Double(intersection.count) / Double(union.count)
+    }
+
+    private static func looksCompleteUtterance(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let last = trimmed.unicodeScalars.last, CharacterSet(charactersIn: ".!?").contains(last) {
+            return true
+        }
+        return Self.normalizedTokens(trimmed).count >= 5
+    }
+
     func stopSpeaking(reason: TalkStopReason) async {
         let usePCM = self.lastPlaybackWasPCM
         let interruptedAt = usePCM ? await self.stopPCM() : await self.stopMP3()
@@ -762,12 +1056,42 @@ actor TalkModeRuntime {
         }
         if reason == .speech || reason == .userTap {
             await self.startListening()
+            let recognitionOk = await self.startRecognition()
+            if !recognitionOk {
+                await self.resetToIdleAfterFailedRecognition()
+            }
             return
         }
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
     }
 }
+
+#if DEBUG
+extension TalkModeRuntime {
+    static func _testMergeTranscriptForFinalize(base: String, tail: String) -> String {
+        mergeTranscriptForFinalize(base: base, tail: tail)
+    }
+
+    static func _testEffectiveSilenceWindow(configured: TimeInterval, useExecuTorch: Bool) -> TimeInterval {
+        effectiveSilenceWindow(configured: configured, useExecuTorch: useExecuTorch)
+    }
+
+    func _testHandleExecuTorchLoadFailure() async -> (useExecuTorch: Bool, bridgeState: ExecuTorchSTTBridge.State) {
+        self.useExecuTorch = true
+        await self.etBridge._testSetState(.error("test"))
+        await self.handleExecuTorchLoadFailure()
+        return (self.useExecuTorch, await self.etBridge.currentState)
+    }
+
+    func _testHandleExecuTorchRecognitionFailure() async -> (useExecuTorch: Bool, bridgeState: ExecuTorchSTTBridge.State) {
+        self.useExecuTorch = true
+        await self.etBridge._testSetState(.ready)
+        await self.handleExecuTorchRecognitionFailure(ExecuTorchError.audioConversionFailed)
+        return (self.useExecuTorch, await self.etBridge.currentState)
+    }
+}
+#endif
 
 extension TalkModeRuntime {
     // MARK: - Audio playback (MainActor helpers)
@@ -816,7 +1140,7 @@ extension TalkModeRuntime {
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
         self.logger
-            .info(
+            .debug(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
@@ -854,16 +1178,16 @@ extension TalkModeRuntime {
                 sagVoice: sagVoice,
                 envApiKey: envApiKey)
             if parsed.missingResolvedPayload {
-                self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
+                self.ttsLogger.debug("talk config ignored: normalized payload missing talk.resolved")
             }
             await MainActor.run {
                 AppStateStore.shared.seamColorHex = parsed.seamColorHex
             }
             if parsed.activeProvider != Self.defaultTalkProvider {
                 self.ttsLogger
-                    .info("talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
+                    .debug("talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
             } else if parsed.normalizedPayload {
-                self.ttsLogger.info("talk config provider from talk.resolved")
+                self.ttsLogger.debug("talk config provider from talk.resolved")
             }
             return parsed
         } catch {

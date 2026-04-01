@@ -156,6 +156,14 @@ final class AppState {
         }
     }
 
+    var talkSttBackend: TalkSttBackend {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.talkSttBackend.rawValue, forKey: talkSttBackendKey)
+            }
+        }
+    }
+
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
@@ -289,6 +297,15 @@ final class AppState {
         self.voiceWakeTriggersTalkMode = UserDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
+        var sttRaw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? TalkSttBackend.appleSpeech.rawValue
+        // When running as raw executable (e.g. from Xcode), bundle ID is nil; fall back to "OpenClaw" domain.
+        if Bundle.main.bundleIdentifier == nil,
+           let domain = UserDefaults.standard.persistentDomain(forName: "OpenClaw"),
+           let raw = domain[talkSttBackendKey] as? String
+        {
+            sttRaw = raw
+        }
+        self.talkSttBackend = TalkSttBackend(rawValue: sttRaw) ?? .appleSpeech
         self.seamColorHex = nil
         if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
@@ -345,7 +362,9 @@ final class AppState {
         if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
             self.swabbleEnabled = false
         }
-        if self.talkEnabled, !PermissionManager.voiceWakePermissionsGranted() {
+        if self.talkEnabled,
+           !PermissionManager.talkModePermissionsGranted(useExecuTorch: self.talkSttBackend == .executorch)
+        {
             self.talkEnabled = false
         }
 
@@ -701,12 +720,15 @@ final class AppState {
             return
         }
 
-        if PermissionManager.voiceWakePermissionsGranted() {
+        let useExecuTorch = self.talkSttBackend == .executorch
+        if PermissionManager.talkModePermissionsGranted(useExecuTorch: useExecuTorch) {
             await GatewayConnection.shared.talkMode(enabled: true, phase: "enabled")
             return
         }
 
-        let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
+        let granted = await PermissionManager.ensureTalkModePermissions(
+            useExecuTorch: useExecuTorch,
+            interactive: true)
         self.talkEnabled = granted
         await GatewayConnection.shared.talkMode(enabled: granted, phase: granted ? "enabled" : "denied")
     }
@@ -768,6 +790,7 @@ extension AppState {
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
+        state.talkSttBackend = .appleSpeech
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local

@@ -1750,7 +1750,15 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot - only one active at a time). */
+  /**
+   * Register a media understanding provider (STT, image description, etc.).
+   *
+   * Optional for backward compatibility with lightweight plugin API mocks.
+   */
+  registerMediaProvider?: (
+    provider: import("../media-understanding/types.js").MediaUnderstandingProvider,
+  ) => void;
+  /** Register a context engine implementation (exclusive slot — only one active at a time). */
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,

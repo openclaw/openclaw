@@ -21,6 +21,7 @@ import { MediaAttachmentCache } from "../../media-understanding/attachments.js";
 import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import { isMediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { resolveMediaAttachmentLocalRoots } from "../../media-understanding/runner.js";
+import { getPluginMediaProviders } from "../../plugins/media-providers.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
@@ -432,6 +433,7 @@ export async function tryDispatchAcpReply(params: {
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          providers: getPluginMediaProviders(),
         });
       } catch (err) {
         logVerbose(

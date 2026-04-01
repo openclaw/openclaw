@@ -32,6 +32,7 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   openai: "gpt-4o-mini-transcribe",
   deepgram: "nova-3",
   mistral: "voxtral-mini-latest",
+  executorch: "parakeet-tdt-0.6b-v3",
 };
 
 export const AUTO_AUDIO_KEY_PROVIDERS = [

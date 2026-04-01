@@ -26,4 +26,36 @@ final class TalkPromptBuilderTests: XCTestCase {
         XCTAssertFalse(prompt.contains("ElevenLabs voice"))
         XCTAssertTrue(prompt.contains("Talk Mode active."))
     }
+
+    func testDisplayTextStripsTalkModePrefix() {
+        let fullPrompt = TalkPromptBuilder.build(
+            transcript: "Hello, can you hear me?",
+            interruptedAtSeconds: nil,
+            includeVoiceDirectiveHint: true)
+        let display = TalkPromptBuilder.displayText(fromPrompt: fullPrompt)
+        XCTAssertEqual(display, "Hello, can you hear me?")
+        XCTAssertFalse(display.contains("Talk Mode active"))
+        XCTAssertFalse(display.contains("ElevenLabs"))
+    }
+
+    func testDisplayTextReturnsOriginalWhenNotTalkModePrompt() {
+        let plain = "Just a normal user message."
+        XCTAssertEqual(TalkPromptBuilder.displayText(fromPrompt: plain), plain)
+    }
+
+    func testDisplayTextStripsSystemEventsBeforeTalkMode() {
+        let prompt = """
+        System: [2026-03-31 13:10:45 PDT] Node: Young의 MacBook Pro (172.30.1.66) · reason launch
+        System: [2026-03-31 13:10:45 PDT] reason connect
+
+        Talk Mode active. Reply in a concise, spoken tone.
+        You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {"voice":"<id>","once":true}.
+
+        Hey what's up?
+        """
+        let display = TalkPromptBuilder.displayText(fromPrompt: prompt)
+        XCTAssertEqual(display, "Hey what's up?")
+        XCTAssertFalse(display.contains("System:"))
+        XCTAssertFalse(display.contains("Talk Mode active"))
+    }
 }

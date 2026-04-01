@@ -14,6 +14,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { getPluginMediaProviders } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
@@ -184,6 +185,7 @@ export async function resolveTelegramInboundBody(params: {
         ctx: tempCtx,
         cfg,
         agentDir: undefined,
+        providers: getPluginMediaProviders(),
       });
     } catch (err) {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);

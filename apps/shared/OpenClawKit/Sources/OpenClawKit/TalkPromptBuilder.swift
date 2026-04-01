@@ -23,4 +23,33 @@ public enum TalkPromptBuilder: Sendable {
         lines.append(transcript)
         return lines.joined(separator: "\n")
     }
+
+    /// Returns only the transcript portion of a Talk Mode prompt for UI display, or the original
+    /// string if it does not look like a Talk Mode prompt. Use when rendering user message bubbles
+    /// so the chat shows only what the user said, not the system instructions.
+    public static func displayText(fromPrompt prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("Talk Mode active.") else { return prompt }
+
+        // Strip leading System: lines (gateway-injected events like node connect/launch).
+        let lines = trimmed.components(separatedBy: "\n")
+        var contentStart = 0
+        for (i, line) in lines.enumerated() {
+            let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if stripped.isEmpty || stripped.hasPrefix("System:") || stripped.hasPrefix("System (untrusted)") {
+                contentStart = i + 1
+            } else {
+                break
+            }
+        }
+        let withoutSystemLines = lines[contentStart...].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard withoutSystemLines.contains("Talk Mode active."),
+              let range = withoutSystemLines.range(of: "\n\n")
+        else { return prompt }
+        let before = String(withoutSystemLines[..<range.lowerBound])
+        guard before.contains("Talk Mode active.") else { return prompt }
+        return String(withoutSystemLines[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

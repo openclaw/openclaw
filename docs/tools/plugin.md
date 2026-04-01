@@ -106,6 +106,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
   <Accordion title="Other">
     - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+    - [`executorch`](/plugins/executorch) — bundled on-device Speech-to-Text plugin for Parakeet-TDT on macOS Apple Silicon (disabled by default)
   </Accordion>
 </AccordionGroup>
 
@@ -217,6 +218,13 @@ openclaw plugins update --all            # update all
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>
+```
+
+Bundled plugin example:
+
+```bash
+openclaw plugins enable executorch
+openclaw executorch status
 ```
 
 `--dangerously-force-unsafe-install` is a break-glass override for false

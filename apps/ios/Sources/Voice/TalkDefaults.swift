@@ -1,3 +1,3 @@
 enum TalkDefaults {
-    static let silenceTimeoutMs = 900
+    static let silenceTimeoutMs = 1400
 }

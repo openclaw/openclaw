@@ -112,7 +112,9 @@ describe("media server", () => {
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
     try {
-      server = await startMediaServer(0, 1_000);
+      // TTL must stay <10s so the "expires old media" case (mtime −10s) still returns 410.
+      // Use several seconds of slack so slow CI (e.g. macOS runners) cannot exceed TTL between write and fetch.
+      server = await startMediaServer(0, 8_000);
     } catch (error) {
       if (
         error instanceof Error &&

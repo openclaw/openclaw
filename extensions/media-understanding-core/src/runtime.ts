@@ -9,6 +9,7 @@ import {
   runCapability,
   type ActiveMediaModel,
 } from "openclaw/plugin-sdk/media-runtime";
+import { getPluginMediaProviders } from "openclaw/plugin-sdk/plugin-runtime";
 
 type MediaUnderstandingCapability = "image" | "audio" | "video";
 type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
@@ -61,7 +62,7 @@ export async function runMediaUnderstandingFile(
     };
   }
 
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const providerRegistry = buildProviderRegistry(getPluginMediaProviders(), params.cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: [path.dirname(params.filePath)],
   });
@@ -115,7 +116,7 @@ export async function describeImageFileWithModel(params: {
   timeoutMs?: number;
 }) {
   const timeoutMs = params.timeoutMs ?? 30_000;
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const providerRegistry = buildProviderRegistry(getPluginMediaProviders(), params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   if (!provider?.describeImage) {
     throw new Error(`Provider does not support image analysis: ${params.provider}`);

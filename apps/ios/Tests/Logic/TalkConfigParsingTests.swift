@@ -2,7 +2,7 @@ import Foundation
 import OpenClawKit
 import Testing
 
-private let iOSSilenceTimeoutMs = 900
+private let iOSSilenceTimeoutMs = 1400
 
 @Suite struct TalkConfigParsingTests {
     @Test func rejectsNormalizedTalkProviderPayloadWithoutResolved() {

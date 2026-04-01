@@ -71,7 +71,7 @@ fun ChatMessageBubble(message: ChatMessage) {
   if (displayableContent.isEmpty()) return
 
   ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
-    ChatMessageBody(content = displayableContent, textColor = mobileText)
+    ChatMessageBody(role = role, content = displayableContent, textColor = mobileText)
   }
 }
 
@@ -110,7 +110,7 @@ private fun ChatBubbleContainer(
 }
 
 @Composable
-private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color) {
+private fun ChatMessageBody(role: String, content: List<ChatMessageContent>, textColor: Color) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {
       when (part.type) {

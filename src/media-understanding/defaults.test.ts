@@ -11,6 +11,10 @@ describe("DEFAULT_AUDIO_MODELS", () => {
   it("includes Mistral Voxtral default", () => {
     expect(DEFAULT_AUDIO_MODELS.mistral).toBe("voxtral-mini-latest");
   });
+
+  it("uses Parakeet as executorch default", () => {
+    expect(DEFAULT_AUDIO_MODELS.executorch).toBe("parakeet-tdt-0.6b-v3");
+  });
 });
 
 describe("AUTO_AUDIO_KEY_PROVIDERS", () => {

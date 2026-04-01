@@ -1,0 +1,43 @@
+{
+  "id": "executorch",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable on-device STT via ExecuTorch model plugins"
+      },
+      "modelPlugin": {
+        "type": "string",
+        "enum": ["parakeet"],
+        "description": "ExecuTorch model plugin id (extensible architecture; currently parakeet)"
+      },
+      "backend": {
+        "type": "string",
+        "enum": ["metal"],
+        "description": "ExecuTorch backend (metal only)"
+      },
+      "runtimeLibraryPath": {
+        "type": "string",
+        "description": "Path to libparakeet_tdt_runtime shared library"
+      },
+      "modelDir": {
+        "type": "string",
+        "description": "Directory containing model artifacts (used when explicit file paths are not set)"
+      },
+      "modelPath": {
+        "type": "string",
+        "description": "Path to model .pte file"
+      },
+      "tokenizerPath": {
+        "type": "string",
+        "description": "Path to tokenizer.model file"
+      },
+      "dataPath": {
+        "type": "string",
+        "description": "Optional path to backend data file"
+      }
+    }
+  }
+}

@@ -35,6 +35,13 @@ openclaw plugins marketplace list <marketplace>
 Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
 activate them.
 
+Example:
+
+```bash
+openclaw plugins enable executorch
+openclaw executorch status
+```
+
 Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON
 Schema (`configSchema`, even if empty). Compatible bundles use their own bundle
 manifests instead.

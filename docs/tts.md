@@ -12,6 +12,8 @@ title: "Text-to-Speech (legacy path)"
 OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, or OpenAI.
 It works anywhere OpenClaw can send audio.
 
+Looking for inbound speech-to-text instead? See [Speech-to-Text](/stt).
+
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)

@@ -9,6 +9,7 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
@@ -180,6 +181,12 @@ export type PluginConversationBindingResolvedHandlerRegistration = {
   rootDir?: string;
 };
 
+export type PluginMediaProviderRegistration = {
+  pluginId: string;
+  provider: MediaUnderstandingProvider;
+  source: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -230,6 +237,7 @@ export type PluginRegistry = {
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  mediaProviders?: PluginMediaProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -799,6 +807,35 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMediaProvider = (record: PluginRecord, provider: MediaUnderstandingProvider) => {
+    const id = typeof provider?.id === "string" ? provider.id.trim() : "";
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "media provider registration missing id",
+      });
+      return;
+    }
+    const mediaProviders = (registry.mediaProviders ??= []);
+    const existing = mediaProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `media provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    mediaProviders.push({
+      pluginId: record.id,
+      provider,
+      source: record.source,
+    });
+  };
+
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
@@ -985,6 +1022,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerHook(record, events, handler, opts, params.config),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerMediaProvider: (provider) => registerMediaProvider(record, provider),
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
@@ -1177,6 +1215,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,
     registerWebSearchProvider,
+    registerMediaProvider,
     registerGatewayMethod,
     registerCli,
     registerService,

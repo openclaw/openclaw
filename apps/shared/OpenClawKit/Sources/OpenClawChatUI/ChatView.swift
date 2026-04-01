@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -434,7 +435,15 @@ public struct OpenClawChatView: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let role = message.role.lowercased()
+        if role == "user" {
+            return TalkPromptBuilder.displayText(fromPrompt: raw)
+        }
+        if role == "assistant" {
+            return raw
+        }
+        return raw
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {

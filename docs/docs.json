@@ -1078,6 +1078,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/executorch",
                   "plugins/voice-call",
                   {
                     "group": "Building Plugins",
@@ -1363,6 +1364,7 @@
                       "nodes/media-understanding",
                       "nodes/images",
                       "nodes/audio",
+                      "stt",
                       "nodes/camera",
                       "tools/tts"
                     ]

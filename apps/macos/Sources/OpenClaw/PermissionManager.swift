@@ -51,7 +51,14 @@ enum PermissionManager {
         }
     }
 
+    /// Returns true if the current process has a valid app bundle for UserNotifications (avoids
+    /// bundleProxyForCurrentProcess crash in tests, extensions, or unbundled runs).
+    private static var canQueryUserNotificationCenter: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
+    }
+
     private static func ensureNotifications(interactive: Bool) async -> Bool {
+        guard Self.canQueryUserNotificationCenter else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
 
@@ -180,9 +187,27 @@ enum PermissionManager {
         return mic && speech
     }
 
+    /// ExecuTorch Talk Mode only captures microphone audio; Apple Speech also needs Speech Recognition.
+    static func talkModePermissionsGranted(useExecuTorch: Bool) -> Bool {
+        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if useExecuTorch {
+            return mic
+        }
+        let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
+        return mic && speech
+    }
+
     static func ensureVoiceWakePermissions(interactive: Bool) async -> Bool {
         let results = await self.ensure([.microphone, .speechRecognition], interactive: interactive)
         return results[.microphone] == true && results[.speechRecognition] == true
+    }
+
+    static func ensureTalkModePermissions(useExecuTorch: Bool, interactive: Bool) async -> Bool {
+        if useExecuTorch {
+            let results = await self.ensure([.microphone], interactive: interactive)
+            return results[.microphone] == true
+        }
+        return await self.ensureVoiceWakePermissions(interactive: interactive)
     }
 
     static func status(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {
@@ -190,10 +215,14 @@ enum PermissionManager {
         for cap in caps {
             switch cap {
             case .notifications:
-                let center = UNUserNotificationCenter.current()
-                let settings = await center.notificationSettings()
-                results[cap] = settings.authorizationStatus == .authorized
-                    || settings.authorizationStatus == .provisional
+                if Self.canQueryUserNotificationCenter {
+                    let center = UNUserNotificationCenter.current()
+                    let settings = await center.notificationSettings()
+                    results[cap] = settings.authorizationStatus == .authorized
+                        || settings.authorizationStatus == .provisional
+                } else {
+                    results[cap] = false
+                }
 
             case .appleScript:
                 results[cap] = await MainActor.run { AppleScriptPermission.isAuthorized() }

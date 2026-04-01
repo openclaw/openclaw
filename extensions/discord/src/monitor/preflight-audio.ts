@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getPluginMediaProviders } from "openclaw/plugin-sdk/plugin-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 
 type DiscordAudioAttachment = {
@@ -70,6 +71,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           },
           cfg: params.cfg,
           agentDir: undefined,
+          providers: getPluginMediaProviders(),
         });
         if (params.abortSignal?.aborted) {
           transcript = undefined;
