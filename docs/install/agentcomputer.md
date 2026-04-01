@@ -17,14 +17,15 @@ This guide uses the Agent Computer CLI to create a managed worker, installs Open
 1. `npm install -g aicomputer`
 2. `computer login`
 3. `computer create my-openclaw`
-4. `computer ssh my-openclaw`
+4. `computer ssh my-openclaw` (the next commands run inside the Agent Computer shell)
 5. `curl -fsSL https://openclaw.ai/install.sh | bash`
 6. `openclaw onboard --install-daemon`
 7. `openclaw doctor --generate-gateway-token`
 8. `openclaw config set gateway.bind lan`
 9. `openclaw gateway restart`
-10. `computer ports publish my-openclaw 18789 --subdomain openclaw`
-11. Open the published URL and paste the token from `openclaw config get gateway.auth.token`
+10. `exit` (return to your local machine)
+11. `computer ports publish my-openclaw 18789 --subdomain openclaw --protocol https`
+12. If OpenClaw prompts for auth, run `computer ssh my-openclaw`, then `openclaw config get gateway.auth.token`
 
 ## What you need
 
@@ -97,7 +98,7 @@ If you are using the `tmux` fallback instead of a service, restart the `tmux` se
 Back on your local machine:
 
 ```bash
-computer ports publish my-openclaw 18789 --subdomain openclaw
+computer ports publish my-openclaw 18789 --subdomain openclaw --protocol https
 ```
 
 Agent Computer will print the published host. If you need to retrieve it again later:
@@ -108,9 +109,10 @@ computer ports ls my-openclaw
 
 ## 7) Access OpenClaw and finish pairing
 
-Open the published host from the previous step. If OpenClaw prompts for auth, retrieve the gateway token from the machine:
+Open the published host from the previous step. If OpenClaw prompts for auth, SSH back in and retrieve the gateway token:
 
 ```bash
+computer ssh my-openclaw
 openclaw config get gateway.auth.token
 ```
 
@@ -132,6 +134,8 @@ npm i -g openclaw@latest
 openclaw doctor
 openclaw gateway restart
 ```
+
+If your npm global prefix requires root, rerun the install command with `sudo`.
 
 If you used the `tmux` fallback, restart the gateway in `tmux` after updating.
 
