@@ -108,13 +108,16 @@ function buildRateLimitCooldownMessage(err: unknown): string {
   return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
 }
 
+function isTransientFallbackRateLimitReason(reason: string | undefined): boolean {
+  return reason === "rate_limit" || reason === "overloaded";
+}
+
 function isPureTransientRateLimitSummary(err: unknown): boolean {
   return (
     isFallbackSummaryError(err) &&
     err.attempts.length > 0 &&
     err.attempts.every((attempt) => {
-      const reason = attempt.reason;
-      return reason === "rate_limit" || reason === "overloaded";
+      return isTransientFallbackRateLimitReason(attempt.reason);
     })
   );
 }
@@ -136,6 +139,40 @@ function isNodeInvokeUnavailableErrorMessage(raw: string): boolean {
     /\bnode(?:\.|\s+)invoke\b.*\b(?:timed out|timeout|not connected|unavailable)\b/i.test(raw) ||
     /\b(?:timed out|timeout)\b.*\bnode(?:\.|\s+)invoke\b/i.test(raw)
   );
+}
+
+function isNodeInvokeUnavailableAttempt(attempt: {
+  error: string;
+  reason?: string;
+  code?: string;
+}): boolean {
+  if (!isNodeInvokeUnavailableErrorMessage(attempt.error)) {
+    return false;
+  }
+  if (attempt.reason && attempt.reason !== "timeout" && attempt.reason !== "unknown") {
+    return false;
+  }
+  if (!attempt.code) {
+    return true;
+  }
+  return /\b(?:UNAVAILABLE|TIMEOUT)\b/i.test(attempt.code);
+}
+
+function isNodeInvokeUnavailableSummary(err: unknown): boolean {
+  if (!isFallbackSummaryError(err) || err.attempts.length === 0) {
+    return false;
+  }
+  let sawNodeAttempt = false;
+  for (const attempt of err.attempts) {
+    if (isNodeInvokeUnavailableAttempt(attempt)) {
+      sawNodeAttempt = true;
+      continue;
+    }
+    if (!isTransientFallbackRateLimitReason(attempt.reason)) {
+      return false;
+    }
+  }
+  return sawNodeAttempt;
 }
 
 function isToolResultTurnMismatchError(message: string): boolean {
@@ -790,11 +827,11 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      // Only classify as rate-limit when we have concrete evidence from the
-      // underlying error. FallbackSummaryError messages embed per-attempt
-      // reason labels like `(rate_limit)`, so string-matching the summary text
-      // would misclassify mixed-cause exhaustion as a pure transient cooldown.
-      const isNodeInvokeUnavailable = isNodeInvokeUnavailableErrorMessage(message);
+      // For FallbackSummaryError, prefer structured attempt metadata over the
+      // rendered summary string to avoid brittle message parsing.
+      const isNodeInvokeUnavailable = isFallbackSummaryError(err)
+        ? isNodeInvokeUnavailableSummary(err)
+        : isNodeInvokeUnavailableErrorMessage(message);
       const isRateLimit = isFallbackSummaryError(err)
         ? isPureTransientRateLimitSummary(err)
         : isRateLimitErrorMessage(message);
