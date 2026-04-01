@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { resolveOAuthPath } from "../../config/paths.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import {
@@ -167,6 +168,27 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   // apiKey → key alias for ApiKeyCredential
   if (!("key" in entry) && typeof entry["apiKey"] === "string") {
     entry["key"] = entry["apiKey"];
+  }
+  // Ensure `key` is a string.  Users sometimes write a SecretRef object into
+  // the `key` field instead of `keyRef`.  When that happens every downstream
+  // consumer that calls `cred.key?.trim()` throws a TypeError because the
+  // value is truthy (an object) but has no `.trim()` method.  Migrate the
+  // misplaced ref to `keyRef` so the secret-resolution pipeline can pick it
+  // up, and clear the invalid `key` so callers never see a non-string value.
+  if ("key" in entry && entry["key"] != null && typeof entry["key"] !== "string") {
+    const ref = coerceSecretRef(entry["key"]);
+    if (ref && !coerceSecretRef(entry["keyRef"])) {
+      entry["keyRef"] = ref;
+    }
+    delete entry["key"];
+  }
+  // Same treatment for `token` on TokenCredential entries.
+  if ("token" in entry && entry["token"] != null && typeof entry["token"] !== "string") {
+    const ref = coerceSecretRef(entry["token"]);
+    if (ref && !coerceSecretRef(entry["tokenRef"])) {
+      entry["tokenRef"] = ref;
+    }
+    delete entry["token"];
   }
   return entry as Partial<AuthProfileCredential>;
 }

@@ -326,7 +326,6 @@ describe("ensureAuthProfileStore", () => {
           `${JSON.stringify(invalidStore, null, 2)}\n`,
           "utf8",
         );
-
         const store = ensureAuthProfileStore(agentDir);
         expect(store.profiles).toEqual({});
         expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -347,5 +346,254 @@ describe("ensureAuthProfileStore", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it("migrates SecretRef object in `key` to `keyRef` and clears `key` (#58861)", () => {
+    withTempAgentDir("openclaw-nonstr-key-ref-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["openai:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("api_key");
+      if (profile.type === "api_key") {
+        // key must not be an object — that would crash `.trim()` downstream
+        expect(profile.key).toBeUndefined();
+        expect(profile.keyRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+      }
+    });
+  });
+
+  it("deletes non-string non-SecretRef `key` without setting keyRef (#58861)", () => {
+    withTempAgentDir("openclaw-nonstr-key-num-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: 12345,
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["openai:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("api_key");
+      if (profile.type === "api_key") {
+        expect(profile.key).toBeUndefined();
+        expect(profile.keyRef).toBeUndefined();
+      }
+    });
+  });
+
+  it("does not overwrite existing `keyRef` when `key` contains a SecretRef (#58861)", () => {
+    withTempAgentDir("openclaw-nonstr-key-dup-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: { source: "env", provider: "default", id: "WRONG_VAR" },
+            keyRef: { source: "env", provider: "default", id: "CORRECT_VAR" },
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["openai:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("api_key");
+      if (profile.type === "api_key") {
+        expect(profile.key).toBeUndefined();
+        expect(profile.keyRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "CORRECT_VAR",
+        });
+      }
+    });
+  });
+
+  it("overwrites malformed `keyRef` with migrated ref from `key` (#58861)", () => {
+    withTempAgentDir("openclaw-nonstr-key-malformed-ref-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            keyRef: null,
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["openai:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("api_key");
+      if (profile.type === "api_key") {
+        expect(profile.key).toBeUndefined();
+        expect(profile.keyRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+      }
+    });
+  });
+
+  it("preserves valid string `key` values unchanged (#58861)", () => {
+    withTempAgentDir("openclaw-str-key-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-valid-plaintext-key",
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["openai:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("api_key");
+      if (profile.type === "api_key") {
+        expect(profile.key).toBe("sk-valid-plaintext-key");
+      }
+    });
+  });
+
+  it("migrates SecretRef object in `token` to `tokenRef` and clears `token` (#58861)", () => {
+    withTempAgentDir("openclaw-nonstr-token-ref-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["anthropic:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("token");
+      if (profile.type === "token") {
+        expect(profile.token).toBeUndefined();
+        expect(profile.tokenRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ANTHROPIC_TOKEN",
+        });
+      }
+    });
+  });
+
+  it("deletes non-string non-SecretRef `token` without setting tokenRef (#58861)", () => {
+    withTempAgentDir("openclaw-nonstr-token-num-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: 99999,
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["anthropic:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("token");
+      if (profile.type === "token") {
+        expect(profile.token).toBeUndefined();
+        expect(profile.tokenRef).toBeUndefined();
+      }
+    });
+  });
+
+  it("preserves valid string `token` values unchanged (#58861)", () => {
+    withTempAgentDir("openclaw-str-token-", (agentDir) => {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const storeData = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: "tok-valid-plaintext",
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeData, null, 2)}\n`,
+        "utf8",
+      );
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["anthropic:default"];
+      expect(profile).toBeDefined();
+      expect(profile.type).toBe("token");
+      if (profile.type === "token") {
+        expect(profile.token).toBe("tok-valid-plaintext");
+      }
+    });
   });
 });
