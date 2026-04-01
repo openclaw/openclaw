@@ -41,6 +41,7 @@ import {
   resolveDiscordSystemLocation,
   resolveTimestampMs,
 } from "./format.js";
+import { resolveDiscordClaimOwnership } from "./instance-claims.js";
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
@@ -50,7 +51,6 @@ import {
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
-import { resolveDiscordClaimOwnership } from "./instance-claims.js";
 import {
   buildDiscordRoutePeer,
   resolveDiscordConversationRoute,
@@ -1014,7 +1014,6 @@ export async function preflightDiscordMessage(
   logDebug(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
   );
-
 
   if (isGuildMessage && shouldRequireMention) {
     if (botId && mentionDecision.shouldSkip) {
