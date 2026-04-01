@@ -58,12 +58,12 @@ export function buildMediaUnderstandingRegistry(
       if (registry.has(normalizedKey)) {
         continue;
       }
-      const api = (providerConfig as Record<string, unknown> | undefined)?.api;
+      const record = providerConfig as Record<string, unknown>;
+      const api = record?.api;
       if (api === "anthropic-messages" || api === "openai-responses" || api === "openai-completions") {
-        const models = Array.isArray(
-          (providerConfig as Record<string, unknown> | undefined)?.models,
-        )
-          ? ((providerConfig as Record<string, unknown>).models as Array<Record<string, unknown>>)
+        const rawModels = record?.models;
+        const models: Array<Record<string, unknown>> = Array.isArray(rawModels)
+          ? (rawModels as Array<Record<string, unknown>>)
           : [];
         const hasImageModel = models.some(
           (m) => Array.isArray(m?.input) && m.input.includes("image"),
