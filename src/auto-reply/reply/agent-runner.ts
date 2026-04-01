@@ -202,7 +202,10 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
-    const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
+    const steered = queueEmbeddedPiMessage(
+      followupRun.run.sessionId,
+      followupRun.execution.agentPrompt,
+    );
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
@@ -258,7 +261,7 @@ export async function runReplyAgent(params: {
   activeSessionEntry = await runPreflightCompactionIfNeeded({
     cfg,
     followupRun,
-    promptForEstimate: followupRun.prompt,
+    promptForEstimate: followupRun.execution.agentPrompt,
     defaultModel,
     agentCfgContextTokens,
     sessionEntry: activeSessionEntry,
@@ -271,7 +274,7 @@ export async function runReplyAgent(params: {
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
-    promptForEstimate: followupRun.prompt,
+    promptForEstimate: followupRun.execution.agentPrompt,
     sessionCtx,
     opts,
     defaultModel,

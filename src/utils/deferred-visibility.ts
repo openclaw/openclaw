@@ -5,11 +5,21 @@ export type DeferredExecutionPayload = {
   agentPrompt: string;
 };
 
-export type DeferredDisplayPayload = {
-  visibility: "summary-only" | "user-visible";
+export type SummaryOnlyDeferredDisplayPayload = {
+  visibility: "summary-only";
   text?: string;
   summaryLine?: string;
 };
+
+export type UserVisibleDeferredDisplayPayload = {
+  visibility: "user-visible";
+  text?: string;
+  summaryLine?: string;
+};
+
+export type DeferredDisplayPayload =
+  | SummaryOnlyDeferredDisplayPayload
+  | UserVisibleDeferredDisplayPayload;
 
 export function hasDeferredDisplayContent(payload: DeferredDisplayPayload): boolean {
   return Boolean(payload.text?.trim() || payload.summaryLine?.trim());
@@ -17,7 +27,7 @@ export function hasDeferredDisplayContent(payload: DeferredDisplayPayload): bool
 
 export function isUserVisibleDeferredDisplayPayload(
   payload: DeferredDisplayPayload | undefined,
-): payload is DeferredDisplayPayload & { visibility: "user-visible" } {
+): payload is UserVisibleDeferredDisplayPayload {
   return payload?.visibility === "user-visible" && hasDeferredDisplayContent(payload);
 }
 
@@ -42,7 +52,7 @@ export function assertDeferredDisplayPayload<T extends DeferredDisplayPayload>(
 export function assertUserVisibleDeferredDisplayPayload(
   payload: DeferredDisplayPayload | undefined,
   context = "user-visible deferred display payload",
-): DeferredDisplayPayload & { visibility: "user-visible" } {
+): UserVisibleDeferredDisplayPayload {
   const resolved = assertDeferredDisplayPayload(payload, context);
   if (resolved.visibility !== "user-visible") {
     throw new Error(

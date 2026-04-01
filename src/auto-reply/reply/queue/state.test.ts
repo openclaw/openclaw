@@ -31,7 +31,8 @@ describe("refreshQueuedFollowupSession", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "queue" });
     const lastRun = makeRun();
     const queuedRun: FollowupRun = {
-      prompt: "queued message",
+      execution: { visibility: "internal", agentPrompt: "queued message" },
+      display: { visibility: "user-visible", text: "queued visible message" },
       enqueuedAt: Date.now(),
       run: makeRun(),
     };

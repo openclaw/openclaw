@@ -3,6 +3,7 @@ import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import type { DeferredDisplayPayload, DeferredExecutionPayload } from "../../../utils/deferred-visibility.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
@@ -20,10 +21,10 @@ export type QueueSettings = {
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
-  prompt: string;
+  execution: DeferredExecutionPayload;
+  display?: DeferredDisplayPayload;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
-  summaryLine?: string;
   enqueuedAt: number;
   /**
    * Originating channel for reply routing.
@@ -84,6 +85,14 @@ export type FollowupRun = {
     silentExpected?: boolean;
   };
 };
+
+export function getFollowupAgentPrompt(run: FollowupRun): string {
+  return run.execution.agentPrompt;
+}
+
+export function getFollowupSummaryLine(run: FollowupRun): string | undefined {
+  return run.display?.summaryLine?.trim() || run.display?.text?.trim() || undefined;
+}
 
 export type ResolveQueueSettingsParams = {
   cfg: OpenClawConfig;

@@ -159,7 +159,7 @@ export function createFollowupRunner(params: {
       activeSessionEntry = await runPreflightCompactionIfNeeded({
         cfg: queued.run.config,
         followupRun: queued,
-        promptForEstimate: queued.prompt,
+        promptForEstimate: queued.execution.agentPrompt,
         defaultModel,
         agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
@@ -216,7 +216,7 @@ export function createFollowupRunner(params: {
                 workspaceDir: queued.run.workspaceDir,
                 config: queued.run.config,
                 skillsSnapshot: queued.run.skillsSnapshot,
-                prompt: queued.prompt,
+                prompt: queued.execution.agentPrompt,
                 extraSystemPrompt: queued.run.extraSystemPrompt,
                 ownerNumbers: queued.run.ownerNumbers,
                 enforceFinalTag: queued.run.enforceFinalTag,

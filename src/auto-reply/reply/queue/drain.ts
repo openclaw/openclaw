@@ -1,5 +1,6 @@
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { renderDeferredBatch } from "../../../utils/deferred-render.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -12,7 +13,7 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+import { getFollowupSummaryLine, type FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -123,14 +124,29 @@ export function scheduleFollowupDrain(
 
           const routing = resolveOriginRoutingMetadata(items);
 
-          const prompt = buildCollectPrompt({
+          const renderableItems = items
+            .map((item) => item.display)
+            .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+          if (renderableItems.length === 0) {
+            for (const item of items) {
+              await effectiveRunFollowup(item);
+            }
+            queue.items.splice(0, items.length);
+            if (summary) {
+              clearQueueSummaryState(queue);
+            }
+            continue;
+          }
+
+          const prompt = renderDeferredBatch({
             title: "[Queued messages while agent was busy]",
-            items,
+            items: renderableItems,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
           await effectiveRunFollowup({
-            prompt,
+            execution: { visibility: "internal", agentPrompt: prompt },
+            display: { visibility: "user-visible", text: prompt },
             run,
             enqueuedAt: Date.now(),
             ...routing,
@@ -151,7 +167,8 @@ export function scheduleFollowupDrain(
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
               await effectiveRunFollowup({
-                prompt: summaryPrompt,
+                execution: { visibility: "internal", agentPrompt: summaryPrompt },
+                display: { visibility: "user-visible", text: summaryPrompt },
                 run,
                 enqueuedAt: Date.now(),
                 originatingChannel: item.originatingChannel,
