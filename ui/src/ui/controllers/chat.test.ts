@@ -99,6 +99,125 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
+  it("preserves streamed reasoning during delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Check the config" },
+          { type: "text", text: "Applied the change." },
+        ],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toContain("<thinking>");
+    expect(state.chatStream).toContain("Check the config");
+    expect(state.chatStream).toContain("Applied the change.");
+  });
+
+  it("merges streamed reasoning and text from separate delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+    });
+
+    const thinkingPayload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Inspect the failing request" }],
+      },
+    };
+    const textPayload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "I found the mismatch." }],
+      },
+    };
+
+    expect(handleChatEvent(state, thinkingPayload)).toBe("delta");
+    expect(handleChatEvent(state, textPayload)).toBe("delta");
+    expect(state.chatStream).toContain("Inspect the failing request");
+    expect(state.chatStream).toContain("I found the mismatch.");
+  });
+
+  it("preserves interleaved reasoning and text blocks in order", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+    });
+
+    const events: ChatEventPayload[] = [
+      {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Inspecting request" }],
+        },
+      },
+      {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "First answer chunk" }],
+        },
+      },
+      {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Re-checking after tool output" }],
+        },
+      },
+      {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Second answer chunk" }],
+        },
+      },
+    ];
+
+    for (const event of events) {
+      expect(handleChatEvent(state, event)).toBe("delta");
+    }
+
+    expect(state.chatStream).toContain("Inspecting request");
+    expect(state.chatStream).toContain("First answer chunk");
+    expect(state.chatStream).toContain("Re-checking after tool output");
+    expect(state.chatStream).toContain("Second answer chunk");
+    expect((state.chatStreamMessage as { content?: Array<{ type?: string }> } | null)?.content).toEqual([
+      expect.objectContaining({ type: "thinking" }),
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({ type: "thinking" }),
+      expect.objectContaining({ type: "text" }),
+    ]);
+  });
+
   it("appends final payload from another run without clearing active stream", () => {
     const state = createState({
       sessionKey: "main",

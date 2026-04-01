@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { onAgentEvent } from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
@@ -234,6 +235,44 @@ describe("subscribeEmbeddedPiSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits thinking agent events even without an onReasoningStream callback", () => {
+    const { session, emit } = createStubSessionHarness();
+    const agentEvents: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    const stop = onAgentEvent((evt) => {
+      agentEvents.push(evt as { stream?: string; data?: Record<string, unknown> });
+    });
+
+    try {
+      subscribeEmbeddedPiSession({
+        session,
+        runId: "run",
+        reasoningMode: "stream",
+      });
+
+      emit({
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Checking files" }],
+        },
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          delta: "Checking files",
+        },
+      });
+
+      const thinkingEvents = agentEvents.filter((evt) => evt?.stream === "thinking");
+
+      expect(thinkingEvents).toHaveLength(1);
+      expect(thinkingEvents[0]?.data).toMatchObject({
+        text: "Reasoning:\n_Checking files_",
+        delta: "Reasoning:\n_Checking files_",
+      });
+    } finally {
+      stop();
+    }
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {

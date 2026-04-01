@@ -235,6 +235,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
+      (host as unknown as { chatStreamMessage?: unknown | null }).chatStreamMessage = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {

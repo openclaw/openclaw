@@ -19,6 +19,7 @@ export type ChatHost = {
   client: GatewayBrowserClient | null;
   chatMessages: unknown[];
   chatStream: string | null;
+  chatStreamMessage?: unknown | null;
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -343,6 +344,7 @@ async function dispatchSlashCommand(
   if (result.trackRunId) {
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
+    host.chatStreamMessage = null;
     host.chatSending = false;
   }
 
@@ -373,6 +375,7 @@ async function clearChatHistory(host: ChatHost) {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
     host.chatStream = null;
+    host.chatStreamMessage = null;
     host.chatRunId = null;
     await loadChatHistory(host as unknown as OpenClawApp);
   } catch (err) {

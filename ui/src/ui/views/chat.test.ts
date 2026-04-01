@@ -433,6 +433,127 @@ describe("chat view", () => {
     expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
   });
 
+  it("shows streamed reasoning when the toggle is enabled", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: {
+              modelProvider: "deepseek",
+              model: "deepseek-reasoner",
+              contextTokens: null,
+            },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                reasoningLevel: "high",
+              },
+            ],
+          },
+          stream: "<thinking>\nCompare the files\n</thinking>\n\nReady to answer.",
+          streamStartedAt: 1,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thinking")?.textContent ?? "").toContain(
+      "Compare the files",
+    );
+    expect(container.textContent).toContain("Ready to answer.");
+  });
+
+  it("renders a streaming bubble for reasoning-only deltas before answer text arrives", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: {
+              modelProvider: "deepseek",
+              model: "deepseek-reasoner",
+              contextTokens: null,
+            },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                reasoningLevel: "stream",
+              },
+            ],
+          },
+          stream: "<thinking>\nInspect the traceback\n</thinking>",
+          streamStartedAt: 1,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-bubble.streaming")).not.toBeNull();
+    expect(container.querySelector(".chat-thinking")?.textContent ?? "").toContain(
+      "Inspect the traceback",
+    );
+  });
+
+  it("keeps reasoning visible when tool output is hidden", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          showToolCalls: false,
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: {
+              modelProvider: "deepseek",
+              model: "deepseek-reasoner",
+              contextTokens: null,
+            },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                reasoningLevel: "stream",
+              },
+            ],
+          },
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Inspect the tool output first" },
+                { type: "toolresult", name: "bash", text: "ls -la" },
+              ],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thinking")?.textContent ?? "").toContain(
+      "Inspect the tool output first",
+    );
+    expect(container.textContent).not.toContain("Tool output");
+    expect(container.textContent).not.toContain("ls -la");
+  });
+
   it("keeps the welcome logo fallback under the mounted base path", () => {
     const container = document.createElement("div");
     render(

@@ -369,6 +369,11 @@ export async function handleToolExecutionStart(
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
+  // Best-effort typing signal; do not block tool summaries on slow emitters.
+  void ctx.params.onAgentEvent?.({
+    stream: "tool",
+    data: { phase: "start", name: toolName, toolCallId },
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -378,11 +383,6 @@ export async function handleToolExecutionStart(
       toolCallId,
       args: args as Record<string, unknown>,
     },
-  });
-  // Best-effort typing signal; do not block tool summaries on slow emitters.
-  void ctx.params.onAgentEvent?.({
-    stream: "tool",
-    data: { phase: "start", name: toolName, toolCallId },
   });
 
   if (
@@ -430,6 +430,14 @@ export function handleToolExecutionUpdate(
   const toolCallId = String(evt.toolCallId);
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
+  void ctx.params.onAgentEvent?.({
+    stream: "tool",
+    data: {
+      phase: "update",
+      name: toolName,
+      toolCallId,
+    },
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -438,14 +446,6 @@ export function handleToolExecutionUpdate(
       name: toolName,
       toolCallId,
       partialResult: sanitized,
-    },
-  });
-  void ctx.params.onAgentEvent?.({
-    stream: "tool",
-    data: {
-      phase: "update",
-      name: toolName,
-      toolCallId,
     },
   });
 }
@@ -549,6 +549,16 @@ export async function handleToolExecutionEnd(
     ctx.state.successfulCronAdds += 1;
   }
 
+  void ctx.params.onAgentEvent?.({
+    stream: "tool",
+    data: {
+      phase: "result",
+      name: toolName,
+      toolCallId,
+      meta,
+      isError: isToolError,
+    },
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -559,16 +569,6 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: sanitizedResult,
-    },
-  });
-  void ctx.params.onAgentEvent?.({
-    stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
     },
   });
 

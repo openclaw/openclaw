@@ -20,6 +20,12 @@ export {
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  // Let local consumers (for example webchat run-id linking) observe the
+  // start before the global agent event fan-out sees the first lifecycle tick.
+  void ctx.params.onAgentEvent?.({
+    stream: "lifecycle",
+    data: { phase: "start" },
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "lifecycle",
@@ -27,10 +33,6 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
       phase: "start",
       startedAt: Date.now(),
     },
-  });
-  void ctx.params.onAgentEvent?.({
-    stream: "lifecycle",
-    data: { phase: "start" },
   });
 }
 
@@ -68,6 +70,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
+    void ctx.params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: safeErrorText,
+      },
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -77,15 +86,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
         endedAt: Date.now(),
       },
     });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: safeErrorText,
-      },
-    });
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+    void ctx.params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -93,10 +99,6 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
         phase: "end",
         endedAt: Date.now(),
       },
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: { phase: "end" },
     });
   }
 

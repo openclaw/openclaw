@@ -1412,6 +1412,7 @@ export function renderApp(state: AppViewState) {
                 state.chatMessage = "";
                 state.chatAttachments = [];
                 state.chatStream = null;
+                state.chatStreamMessage = null;
                 state.chatStreamStartedAt = null;
                 state.chatRunId = null;
                 state.chatQueue = [];
@@ -1438,6 +1439,7 @@ export function renderApp(state: AppViewState) {
               toolMessages: state.chatToolMessages,
               streamSegments: state.chatStreamSegments,
               stream: state.chatStream,
+              streamMessage: state.chatStreamMessage,
               streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
               queue: state.chatQueue,
@@ -1479,6 +1481,7 @@ export function renderApp(state: AppViewState) {
                   await state.client.request("sessions.reset", { key: state.sessionKey });
                   state.chatMessages = [];
                   state.chatStream = null;
+                  state.chatStreamMessage = null;
                   state.chatRunId = null;
                   await loadChatHistory(state);
                 } catch (err) {
@@ -1491,6 +1494,7 @@ export function renderApp(state: AppViewState) {
                 state.sessionKey = buildAgentMainSessionKey({ agentId });
                 state.chatMessages = [];
                 state.chatStream = null;
+                state.chatStreamMessage = null;
                 state.chatRunId = null;
                 state.applySettings({
                   ...state.settings,

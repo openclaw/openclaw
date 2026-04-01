@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
+import {
+  handleAgentEnd,
+  handleAgentStart,
+} from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: vi.fn(),
@@ -178,5 +182,31 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+});
+
+describe("handleAgentStart", () => {
+  it("notifies local listeners before broadcasting the global lifecycle event", () => {
+    const order: string[] = [];
+    const onAgentEvent = vi.fn(() => {
+      order.push("local");
+    });
+    vi.mocked(emitAgentEvent).mockImplementation(() => {
+      order.push("global");
+    });
+    const ctx = createContext(undefined, { onAgentEvent });
+
+    handleAgentStart(ctx);
+
+    expect(order).toEqual(["local", "global"]);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+    expect(emitAgentEvent).toHaveBeenCalledWith({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "start", startedAt: expect.any(Number) }),
+    });
   });
 });

@@ -108,8 +108,37 @@ export function extractRawText(message: unknown): string | null {
   return null;
 }
 
+function normalizeReasoningDisplayText(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const lines = normalized.split("\n");
+  const contentLines =
+    lines[0]?.trim().toLowerCase() === "reasoning:" ? lines.slice(1) : lines;
+
+  return contentLines
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return "";
+      }
+      const singleWrappedUnderscore =
+        trimmed.length >= 2 && trimmed.startsWith("_") && trimmed.endsWith("_");
+      const singleWrappedAsterisk =
+        trimmed.length >= 2 && trimmed.startsWith("*") && trimmed.endsWith("*");
+      if (singleWrappedUnderscore || singleWrappedAsterisk) {
+        return trimmed.slice(1, -1).trim();
+      }
+      return trimmed;
+    })
+    .join("\n")
+    .trim();
+}
+
 export function formatReasoningMarkdown(text: string): string {
-  const trimmed = text.trim();
+  const trimmed = normalizeReasoningDisplayText(text);
   if (!trimmed) {
     return "";
   }

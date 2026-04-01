@@ -76,8 +76,9 @@ export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, baseP
 }
 
 export function renderStreamingGroup(
-  text: string,
+  message: unknown,
   startedAt: number,
+  showReasoning: boolean,
   onOpenSidebar?: (content: string) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
@@ -92,13 +93,13 @@ export function renderStreamingGroup(
     <div class="chat-group assistant">
       ${renderAvatar("assistant", assistant, basePath)}
       <div class="chat-group-messages">
-        ${renderGroupedMessage(
-          {
+      ${renderGroupedMessage(
+          message ?? {
             role: "assistant",
-            content: [{ type: "text", text }],
+            content: [],
             timestamp: startedAt,
           },
-          { isStreaming: true, showReasoning: false },
+          { isStreaming: true, showReasoning },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
@@ -684,14 +685,16 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message) : [];
+  const toolCards = extractToolCards(message);
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
-    opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
+    opts.showReasoning && (role === "assistant" || normalizedRole === "tool")
+      ? extractThinkingCached(message)
+      : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
@@ -705,13 +708,14 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
+
+  if (!markdown && !reasoningMarkdown && !hasImages && visibleToolCards && isToolResult) {
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
-  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages) {
+  if (!markdown && !reasoningMarkdown && !visibleToolCards && !hasImages) {
     return nothing;
   }
 
@@ -736,39 +740,41 @@ function renderGroupedMessage(
         : nothing}
       ${isToolMessage
         ? html`
-            <details class="chat-tool-msg-collapse">
-              <summary class="chat-tool-msg-summary">
-                <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
-                <span class="chat-tool-msg-summary__label">Tool output</span>
-                ${toolSummaryLabel
-                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                  : toolPreview
-                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                    : nothing}
-              </summary>
-              <div class="chat-tool-msg-body">
-                ${renderMessageImages(images)}
-                ${reasoningMarkdown
-                  ? html`<div class="chat-thinking">
-                      ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                    </div>`
-                  : nothing}
-                ${jsonResult
-                  ? html`<details class="chat-json-collapse">
-                      <summary class="chat-json-summary">
-                        <span class="chat-json-badge">JSON</span>
-                        <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                      </summary>
-                      <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                    </details>`
-                  : markdown
-                    ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                        ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                      </div>`
-                    : nothing}
-                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
-              </div>
-            </details>
+            ${renderMessageImages(images)}
+            ${reasoningMarkdown
+              ? html`<div class="chat-thinking">
+                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                </div>`
+              : nothing}
+            ${visibleToolCards
+              ? html`<details class="chat-tool-msg-collapse">
+                  <summary class="chat-tool-msg-summary">
+                    <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+                    <span class="chat-tool-msg-summary__label">Tool output</span>
+                    ${toolSummaryLabel
+                      ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                      : toolPreview
+                        ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                        : nothing}
+                  </summary>
+                  <div class="chat-tool-msg-body">
+                    ${jsonResult
+                      ? html`<details class="chat-json-collapse">
+                          <summary class="chat-json-summary">
+                            <span class="chat-json-badge">JSON</span>
+                            <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                          </summary>
+                          <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                        </details>`
+                      : markdown
+                        ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                            ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                          </div>`
+                        : nothing}
+                    ${renderCollapsedToolCards(toolCards, onOpenSidebar)}
+                  </div>
+                </details>`
+              : nothing}
           `
         : html`
             ${renderMessageImages(images)}
@@ -790,7 +796,7 @@ function renderGroupedMessage(
                     ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
                 : nothing}
-            ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
+            ${visibleToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
           `}
     </div>
   `;

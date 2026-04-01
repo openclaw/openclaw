@@ -2,11 +2,17 @@
  * Chat message types for the UI layer.
  */
 
+export type ChatStreamSegment = {
+  ts: number;
+  text?: string | null;
+  message?: unknown;
+};
+
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown }
   | { kind: "divider"; key: string; label: string; timestamp: number }
-  | { kind: "stream"; key: string; text: string; startedAt: number }
+  | { kind: "stream"; key: string; startedAt: number; text?: string | null; message?: unknown }
   | { kind: "reading-indicator"; key: string };
 
 /** A group of consecutive messages from the same role (Slack-style layout) */

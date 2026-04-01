@@ -14,6 +14,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     sessionKey: "main",
     chatRunId: null,
     chatStream: null,
+    chatStreamMessage: null,
     chatStreamStartedAt: null,
     chatStreamSegments: [],
     toolStreamById: new Map<string, ToolStreamEntry>(),
@@ -138,5 +139,47 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus?.phase).toBe("cleared");
     expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
+  });
+
+  it("commits the current structured stream segment before rendering a tool card", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream:
+        "<thinking>\nInspecting request\n</thinking>\n\nFirst answer chunk",
+      chatStreamMessage: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Inspecting request" },
+          { type: "text", text: "First answer chunk" },
+        ],
+        timestamp: 123,
+      },
+      chatStreamStartedAt: 123,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: 200,
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        toolCallId: "tool-1",
+        name: "search",
+        args: { q: "openclaw" },
+      },
+    });
+
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamMessage).toBeNull();
+    expect(host.chatStreamSegments).toHaveLength(1);
+    expect(host.chatStreamSegments[0]?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Inspecting request" },
+        { type: "text", text: "First answer chunk" },
+      ],
+    });
   });
 });

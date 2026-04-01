@@ -584,6 +584,32 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
+  const emitChatThinkingDelta = (
+    sessionKey: string,
+    clientRunId: string,
+    seq: number,
+    thinking: string,
+  ) => {
+    const cleanedThinking = stripInlineDirectiveTagsForDisplay(thinking).text;
+    if (!cleanedThinking.trim()) {
+      return;
+    }
+    const now = Date.now();
+    const payload = {
+      runId: clientRunId,
+      sessionKey,
+      seq,
+      state: "delta" as const,
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: cleanedThinking }],
+        timestamp: now,
+      },
+    };
+    broadcast("chat", payload, { dropIfSlow: true });
+    nodeSendToSession(sessionKey, "chat", payload);
+  };
+
   const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
@@ -811,6 +837,8 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+      } else if (!isAborted && evt.stream === "thinking" && typeof evt.data?.text === "string") {
+        emitChatThinkingDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;

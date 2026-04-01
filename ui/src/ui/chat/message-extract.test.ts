@@ -4,6 +4,7 @@ import {
   extractTextCached,
   extractThinking,
   extractThinkingCached,
+  formatReasoningMarkdown,
 } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
@@ -60,5 +61,19 @@ describe("extractThinkingCached", () => {
     };
     expect(extractThinkingCached(message)).toBe("Plan A");
     expect(extractThinkingCached(message)).toBe("Plan A");
+  });
+});
+
+describe("formatReasoningMarkdown", () => {
+  it("normalizes streamed reasoning prefix and inline italics before rendering", () => {
+    expect(formatReasoningMarkdown("Reasoning:\n_Check files_\n_Compare output_")).toBe(
+      ["_Reasoning:_", "_Check files_", "_Compare output_"].join("\n"),
+    );
+  });
+
+  it("preserves plain reasoning text while applying the shared display style", () => {
+    expect(formatReasoningMarkdown("Check files\nCompare output")).toBe(
+      ["_Reasoning:_", "_Check files_", "_Compare output_"].join("\n"),
+    );
   });
 });

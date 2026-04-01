@@ -1,5 +1,5 @@
 import { resetToolStream } from "../app-tool-stream.ts";
-import { extractText } from "../chat/message-extract.ts";
+import { extractText, extractThinking } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
@@ -44,6 +44,7 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamMessage?: unknown | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
 };
@@ -89,6 +90,7 @@ export async function loadChatHistory(state: ChatState) {
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
     state.chatStream = null;
+    state.chatStreamMessage = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
@@ -160,6 +162,192 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+type StreamingAssistantBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string };
+
+type StreamingAssistantMessage = {
+  role: "assistant";
+  content: StreamingAssistantBlock[];
+  timestamp: number;
+};
+
+function toStreamingAssistantBlocks(message: unknown): StreamingAssistantBlock[] {
+  if (message && typeof message === "object") {
+    const content = (message as Record<string, unknown>).content;
+    if (Array.isArray(content)) {
+      const blocks = content
+        .map((block) => {
+          const item = block as Record<string, unknown>;
+          if (item.type === "thinking" && typeof item.thinking === "string" && item.thinking.trim()) {
+            return { type: "thinking", thinking: item.thinking } as const;
+          }
+          if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+            return { type: "text", text: item.text } as const;
+          }
+          return null;
+        })
+        .filter((block): block is StreamingAssistantBlock => block !== null);
+      if (blocks.length > 0) {
+        return blocks;
+      }
+    }
+  }
+
+  const thinking = extractThinking(message)?.trim() ?? "";
+  const explicitText =
+    message &&
+    typeof message === "object" &&
+    typeof (message as Record<string, unknown>).text === "string"
+      ? ((message as Record<string, unknown>).text as string).trim()
+      : "";
+  const text = explicitText || extractText(message)?.trim() || "";
+  const blocks: StreamingAssistantBlock[] = [];
+  if (thinking) {
+    blocks.push({ type: "thinking", thinking });
+  }
+  if (text) {
+    blocks.push({ type: "text", text });
+  }
+  return blocks;
+}
+
+function normalizeStreamingAssistantMessage(
+  message: unknown,
+  fallbackSerialized?: string | null,
+): StreamingAssistantMessage | null {
+  const fallbackMessage =
+    !message && fallbackSerialized?.trim()
+      ? ({ role: "assistant", content: fallbackSerialized } as const)
+      : undefined;
+  const source = message ?? fallbackMessage;
+  if (!source) {
+    return null;
+  }
+  const content = toStreamingAssistantBlocks(source);
+  if (content.length === 0) {
+    return null;
+  }
+  const timestamp =
+    source &&
+    typeof source === "object" &&
+    typeof (source as Record<string, unknown>).timestamp === "number"
+      ? ((source as Record<string, unknown>).timestamp as number)
+      : Date.now();
+  return {
+    role: "assistant",
+    content,
+    timestamp,
+  };
+}
+
+function serializeStreamingAssistantMessage(message: unknown): string {
+  const normalized = normalizeStreamingAssistantMessage(message);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.content
+    .map((block) =>
+      block.type === "thinking"
+        ? `<thinking>\n${block.thinking.trim()}\n</thinking>`
+        : block.text.trim(),
+    )
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function mergeStreamingAssistantMessage(
+  currentMessage: unknown,
+  currentSerialized: string | null,
+  message: unknown,
+): StreamingAssistantMessage | null {
+  const previous = normalizeStreamingAssistantMessage(currentMessage, currentSerialized);
+  const incoming = normalizeStreamingAssistantMessage(message);
+  if (!incoming) {
+    return previous;
+  }
+
+  const incomingText = extractText(incoming)?.trim() ?? "";
+  const incomingThinking = extractThinking(incoming)?.trim() ?? "";
+  if (incomingText && isSilentReplyStream(incomingText) && !incomingThinking) {
+    return previous;
+  }
+
+  if (!previous) {
+    return incoming;
+  }
+
+  const mergedContent = previous.content.map((block) => ({ ...block })) as StreamingAssistantBlock[];
+  for (const block of incoming.content) {
+    const last = mergedContent[mergedContent.length - 1];
+    if (last?.type === block.type) {
+      if (block.type === "thinking") {
+        const previousValue = last.thinking.trim();
+        const nextValue = block.thinking.trim();
+        last.thinking = nextValue.length >= previousValue.length ? block.thinking : last.thinking;
+      } else {
+        const previousValue = last.text.trim();
+        const nextValue = block.text.trim();
+        last.text = nextValue.length >= previousValue.length ? block.text : last.text;
+      }
+      continue;
+    }
+    mergedContent.push({ ...block });
+  }
+
+  return {
+    role: "assistant",
+    content: mergedContent,
+    timestamp: previous.timestamp,
+  };
+}
+
+function mergeTerminalAssistantMessage(
+  currentMessage: unknown,
+  currentSerialized: string | null,
+  message: unknown,
+): StreamingAssistantMessage | null {
+  const terminal = normalizeStreamingAssistantMessage(message);
+  if (!terminal) {
+    return normalizeStreamingAssistantMessage(currentMessage, currentSerialized);
+  }
+  const previous = normalizeStreamingAssistantMessage(currentMessage, currentSerialized);
+  if (!previous) {
+    return terminal;
+  }
+  const terminalHasThinking = terminal.content.some((block) => block.type === "thinking");
+  if (terminalHasThinking) {
+    return terminal;
+  }
+  const previousThinking = previous.content
+    .filter((block): block is Extract<StreamingAssistantBlock, { type: "thinking" }> => block.type === "thinking")
+    .map((block) => ({ ...block }));
+  if (previousThinking.length === 0) {
+    return terminal;
+  }
+  return {
+    role: "assistant",
+    content: [...previousThinking, ...terminal.content.map((block) => ({ ...block }))],
+    timestamp: terminal.timestamp,
+  };
+}
+
+function appendStreamMessageToHistory(state: ChatState, fallbackMessage?: unknown) {
+  const mergedMessage = fallbackMessage
+    ? mergeTerminalAssistantMessage(state.chatStreamMessage ?? null, state.chatStream, fallbackMessage)
+    : normalizeStreamingAssistantMessage(state.chatStreamMessage ?? null, state.chatStream);
+  if (mergedMessage && !isAssistantSilentReply(mergedMessage)) {
+    state.chatMessages = [...state.chatMessages, mergedMessage];
+  }
+}
+
+function clearStreamingAssistantState(state: ChatState) {
+  state.chatStream = null;
+  state.chatStreamMessage = null;
+  state.chatRunId = null;
+  state.chatStreamStartedAt = null;
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -205,6 +393,7 @@ export async function sendChatMessage(
   const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
+  state.chatStreamMessage = null;
   state.chatStreamStartedAt = now;
 
   // Convert attachments to API format
@@ -237,6 +426,7 @@ export async function sendChatMessage(
     const error = formatConnectError(err);
     state.chatRunId = null;
     state.chatStream = null;
+    state.chatStreamMessage = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
     state.chatMessages = [
@@ -293,54 +483,40 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   if (payload.state === "delta") {
-    const next = extractText(payload.message);
-    if (typeof next === "string" && !isSilentReplyStream(next)) {
-      const current = state.chatStream ?? "";
-      if (!current || next.length >= current.length) {
-        state.chatStream = next;
+    const nextMessage = mergeStreamingAssistantMessage(
+      state.chatStreamMessage ?? null,
+      state.chatStream,
+      payload.message,
+    );
+    if (nextMessage) {
+      const nextSerialized = serializeStreamingAssistantMessage(nextMessage);
+      const currentSerialized = state.chatStream ?? "";
+      state.chatStreamMessage = nextMessage;
+      if (!currentSerialized || nextSerialized.length >= currentSerialized.length) {
+        state.chatStream = nextSerialized;
       }
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      appendStreamMessageToHistory(state, finalMessage);
+    } else if (state.chatStream?.trim()) {
+      appendStreamMessageToHistory(state);
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    clearStreamingAssistantState(state);
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+      appendStreamMessageToHistory(state, normalizedMessage);
     } else {
-      const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
+      const streamedText = state.chatStream?.trim() ?? "";
+      if (streamedText && !isSilentReplyStream(streamedText)) {
+        appendStreamMessageToHistory(state);
       }
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    clearStreamingAssistantState(state);
   } else if (payload.state === "error") {
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    clearStreamingAssistantState(state);
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;

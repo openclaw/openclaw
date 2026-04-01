@@ -216,6 +216,34 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("emits chat delta for streamed thinking events", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_000,
+    });
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Reasoning:\nCheck files" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: {
+        content?: Array<{ type?: string; text?: string; thinking?: string }>;
+      };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.message?.content).toEqual([{ type: "thinking", thinking: "Reasoning:\nCheck files" }]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("does not emit chat delta for NO_REPLY streaming text", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),

@@ -1723,6 +1723,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
+            context.addChatRun(runId, {
+              sessionKey,
+              clientRunId,
+            });
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,

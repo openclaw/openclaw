@@ -1,4 +1,5 @@
 import { truncateText } from "./format.ts";
+import type { ChatStreamSegment } from "./types/chat-types.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -29,8 +30,9 @@ type ToolStreamHost = {
   sessionKey: string;
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamMessage?: unknown | null;
   chatStreamStartedAt: number | null;
-  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -437,9 +439,18 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
-    if (host.chatStream && host.chatStream.trim().length > 0) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+    const streamText = host.chatStream?.trim() ?? "";
+    if (streamText.length > 0 || host.chatStreamMessage) {
+      host.chatStreamSegments = [
+        ...host.chatStreamSegments,
+        {
+          text: host.chatStream,
+          message: host.chatStreamMessage ?? undefined,
+          ts: now,
+        },
+      ];
       host.chatStream = null;
+      host.chatStreamMessage = null;
       host.chatStreamStartedAt = null;
     }
     entry = {

@@ -13,6 +13,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
+import { extractThinkingCached } from "../chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
@@ -29,7 +30,7 @@ import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatItem, ChatStreamSegment, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -64,8 +65,9 @@ export type ChatProps = {
   fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
   toolMessages: unknown[];
-  streamSegments: Array<{ text: string; ts: number }>;
+  streamSegments: ChatStreamSegment[];
   stream: string | null;
+  streamMessage?: unknown | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -183,6 +185,13 @@ export function resetChatViewState() {
 }
 
 export const cleanupChatModuleState = resetChatViewState;
+
+function shouldKeepToolResultMessageWhenToolsHidden(message: unknown, showThinking: boolean): boolean {
+  if (!showThinking) {
+    return false;
+  }
+  return Boolean(extractThinkingCached(message)?.trim());
+}
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
@@ -1005,8 +1014,16 @@ export function renderChat(props: ChatProps) {
             }
             if (item.kind === "stream") {
               return renderStreamingGroup(
-                item.text,
+                item.message ??
+                  (typeof item.text === "string"
+                    ? {
+                        role: "assistant",
+                        content: [{ type: "text", text: item.text }],
+                        timestamp: item.startedAt,
+                      }
+                    : null),
                 item.startedAt,
+                showReasoning,
                 props.onOpenSidebar,
                 assistantIdentity,
                 props.basePath,
@@ -1487,7 +1504,11 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+    if (
+      !props.showToolCalls &&
+      normalized.role.toLowerCase() === "toolresult" &&
+      !shouldKeepToolResultMessageWhenToolsHidden(msg, props.showThinking)
+    ) {
       continue;
     }
 
@@ -1508,12 +1529,15 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
   for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
+    const segment = segments[i];
+    const segmentText = segment?.text?.trim() ?? "";
+    if (segment && (segment.message || segmentText.length > 0)) {
       items.push({
         kind: "stream" as const,
         key: `stream-seg:${props.sessionKey}:${i}`,
-        text: segments[i].text,
-        startedAt: segments[i].ts,
+        text: segment.text,
+        message: segment.message,
+        startedAt: segment.ts,
       });
     }
     if (i < tools.length && props.showToolCalls) {
@@ -1525,13 +1549,14 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
   }
 
-  if (props.stream !== null) {
+  if (props.stream !== null || props.streamMessage) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    if ((props.stream?.trim().length ?? 0) > 0 || props.streamMessage) {
       items.push({
         kind: "stream",
         key,
         text: props.stream,
+        message: props.streamMessage ?? undefined,
         startedAt: props.streamStartedAt ?? Date.now(),
       });
     } else {
