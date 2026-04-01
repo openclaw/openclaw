@@ -245,7 +245,7 @@ vi.mock("../../security/external-content.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../delivery.js", () => ({
+vi.mock("../delivery-plan.js", () => ({
   resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
 }));
 
