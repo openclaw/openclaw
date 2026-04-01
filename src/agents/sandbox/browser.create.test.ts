@@ -42,7 +42,7 @@ vi.mock("./registry.js", () => ({
   updateBrowserRegistry: registryMocks.updateBrowserRegistry,
 }));
 
-vi.mock("../../browser/bridge-server.js", () => ({
+vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   startBrowserBridgeServer: bridgeMocks.startBrowserBridgeServer,
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
