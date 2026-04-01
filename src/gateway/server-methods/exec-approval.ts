@@ -3,6 +3,7 @@ import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-comma
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  isExecApprovalDecisionAllowed,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
 import {
@@ -327,6 +328,23 @@ export function createExecApprovalHandlers(
       }
       const approvalId = resolvedId.id;
       const snapshot = manager.getSnapshot(approvalId);
+      if (
+        snapshot &&
+        !isExecApprovalDecisionAllowed({
+          decision,
+          ask: snapshot.request.ask,
+        })
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "allow-always is unavailable because host policy requires approval every time",
+          ),
+        );
+        return;
+      }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {

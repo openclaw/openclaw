@@ -24,6 +24,18 @@ openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
 ```
 
+`openclaw approvals get` now shows the effective exec policy for local and gateway targets:
+
+- requested `tools.exec` policy
+- host approvals-file policy
+- effective result after precedence rules are applied
+
+Precedence is intentional:
+
+- the host approvals file is the enforceable source of truth
+- requested `tools.exec` policy can narrow or broaden intent, but the effective result is still derived from the host rules
+- node output stays host-file-only because gateway `tools.exec` policy is applied later at runtime
+
 ## Replace approvals from a file
 
 ```bash

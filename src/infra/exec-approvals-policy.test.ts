@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveExecPolicyScopeSummary } from "./exec-approvals-effective.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -188,5 +189,106 @@ describe("exec approvals policy helpers", () => {
         allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
       }),
     ).toBe(false);
+  });
+
+  it("explains stricter host security and ask precedence", () => {
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "always",
+          askFallback: "deny",
+        },
+      },
+      execConfig: {
+        security: "full",
+        ask: "off",
+      },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    });
+
+    expect(summary.security).toMatchObject({
+      requested: "full",
+      host: "allowlist",
+      effective: "allowlist",
+      hostSource: "~/.openclaw/exec-approvals.json defaults.security",
+      note: "stricter host security wins",
+    });
+    expect(summary.ask).toMatchObject({
+      requested: "off",
+      host: "always",
+      effective: "always",
+      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+      note: "more aggressive ask wins",
+    });
+    expect(summary.askFallback).toEqual({
+      effective: "deny",
+      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
+    });
+  });
+
+  it("explains host ask=off suppression separately from stricter ask", () => {
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        defaults: {
+          ask: "off",
+        },
+      },
+      execConfig: {
+        ask: "always",
+      },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    });
+
+    expect(summary.ask).toMatchObject({
+      requested: "always",
+      host: "off",
+      effective: "off",
+      note: "host ask=off suppresses prompts",
+    });
+  });
+
+  it("attributes host policy to wildcard agent entries before defaults", () => {
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "full",
+        },
+        agents: {
+          "*": {
+            security: "allowlist",
+            ask: "always",
+            askFallback: "deny",
+          },
+        },
+      },
+      execConfig: {
+        security: "full",
+        ask: "off",
+      },
+      configPath: "agents.list.runner.tools.exec",
+      scopeLabel: "agent:runner",
+      agentId: "runner",
+    });
+
+    expect(summary.security).toMatchObject({
+      host: "allowlist",
+      hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
+    });
+    expect(summary.ask).toMatchObject({
+      host: "always",
+      hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
+    });
+    expect(summary.askFallback).toEqual({
+      effective: "deny",
+      source: "~/.openclaw/exec-approvals.json agents.*.askFallback",
+    });
   });
 });

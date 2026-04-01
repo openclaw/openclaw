@@ -2,6 +2,7 @@
 
 export {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalRequestPayload,

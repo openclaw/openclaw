@@ -3,6 +3,7 @@ import {
   addDurableCommandApproval,
   addAllowlistEntry,
   type ExecAsk,
+  resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
@@ -410,6 +411,7 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
       }),
     };
   }
