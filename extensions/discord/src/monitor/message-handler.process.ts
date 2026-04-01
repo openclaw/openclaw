@@ -134,23 +134,22 @@ export async function processDiscordMessage(
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, {
+  const mediaResolveOptions = {
     fetchImpl: discordRestFetch,
     ssrfPolicy,
     readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
     totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
     abortSignal,
-  });
+  };
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, mediaResolveOptions);
   if (isProcessAborted(abortSignal)) {
     return;
   }
-  const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes, {
-    fetchImpl: discordRestFetch,
-    ssrfPolicy,
-    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-    abortSignal,
-  });
+  const forwardedMediaList = await resolveForwardedMediaList(
+    message,
+    mediaMaxBytes,
+    mediaResolveOptions,
+  );
   if (isProcessAborted(abortSignal)) {
     return;
   }
