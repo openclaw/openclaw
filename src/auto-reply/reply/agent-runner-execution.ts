@@ -827,9 +827,12 @@ export async function runAgentTurnWithFallback(params: {
         errorCandidate &&
         (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
       ) {
+        const isOverloaded = isOverloadedErrorMessage(errorCandidate);
         runResult.payloads = [
           {
-            text: "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            text: isOverloaded
+              ? "⚠️ The AI service is temporarily overloaded. Please try again in a moment."
+              : "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
             isError: true,
           },
         ];
