@@ -50,18 +50,28 @@ function buildDuplicateToolResultNotice(count: number): string {
   return `[This tool was called ${count} times with identical results. Showing once.]`;
 }
 
-function stableStringify(value: unknown): string {
+function stableStringify(value: unknown, seen = new Set<object>()): string {
   if (value === null || typeof value !== "object") {
+    // JSON.stringify throws on bigint; convert to string representation instead.
+    if (typeof value === "bigint") {
+      return `"${String(value)}n"`;
+    }
     return JSON.stringify(value);
   }
+  // Guard against circular references — fall back to a stable sentinel.
+  if (seen.has(value)) {
+    return '"[Circular]"';
+  }
+  const next = new Set(seen);
+  next.add(value);
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    return `[${value.map((item) => stableStringify(item, next)).join(",")}]`;
   }
   const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
     a.localeCompare(b),
   );
   return `{${entries
-    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue, next)}`)
     .join(",")}}`;
 }
 
@@ -125,8 +135,14 @@ function resolveToolResultFingerprint(messages: AgentMessage[], index: number): 
   if (stored) {
     return stored;
   }
+  // For legacy role:"tool" messages, the call ID lives in tool_call_id.
+  // Include it so findMatchingAssistantToolCall can pull in arguments and
+  // prevent different invocations that return the same text from being
+  // incorrectly fingerprinted as duplicates.
   const toolCallId =
-    message.role === "toolResult" ? extractToolResultId(message) : null;
+    message.role === "toolResult"
+      ? extractToolResultId(message)
+      : ((message as { tool_call_id?: unknown }).tool_call_id as string | null | undefined) ?? null;
   const linkedToolCall = findMatchingAssistantToolCall({
     messages,
     toolResultIndex: index,
