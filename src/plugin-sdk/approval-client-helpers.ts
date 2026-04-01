@@ -82,6 +82,7 @@ export function createChannelExecApprovalProfile(params: {
   normalizeSenderId?: (value: string) => string | undefined;
   isTargetRecipient?: (params: ApprovalProfileParams & { senderId?: string | null }) => boolean;
   matchesRequestAccount?: (params: ApprovalProfileParams & { request: ApprovalRequest }) => boolean;
+  // Some channels encode the effective agent only in sessionKey for forwarded approvals.
   fallbackAgentIdFromSessionKey?: boolean;
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {

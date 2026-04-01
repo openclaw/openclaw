@@ -80,6 +80,7 @@ const telegramExecApprovalProfile = createChannelExecApprovalProfile({
       normalizeAccountId(boundAccountId) === normalizeAccountId(accountId)
     );
   },
+  // Telegram session keys often carry the only stable agent ID for approval routing.
   fallbackAgentIdFromSessionKey: true,
   requireClientEnabledForLocalPromptSuppression: false,
 });
