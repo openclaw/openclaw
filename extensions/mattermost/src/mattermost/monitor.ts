@@ -1018,6 +1018,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
+    // Check channel type before marking the message as seen, so that a
+    // transient unknown-channel post doesn't poison the dedup tracker.
+    const channelTypeFromEvent = payload.data?.channel_type;
+    if (mapMattermostChannelTypeToChatType(channelTypeFromEvent) === "unknown") {
+      logVerboseMessage(
+        `mattermost: drop post (cannot determine channel type for ${channelId}, post=${post.id ?? "?"})`,
+      );
+      return;
+    }
     const dedupeEntries = allMessageIds.map((id) =>
       recentInboundMessages.check(`${account.accountId}:${id}`),
     );
@@ -1043,7 +1052,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     const channelInfo = await resolveChannelInfo(channelId);
-    const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
+    const channelType = channelTypeFromEvent ?? channelInfo?.type ?? undefined;
     const kind = mapMattermostChannelTypeToChatType(channelType);
     if (kind === "unknown") {
       logVerboseMessage(
