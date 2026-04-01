@@ -703,7 +703,7 @@ describe("monitorDiscordProvider", () => {
       name === "gateway" ? gateway : undefined,
     );
     clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("debug", "WebSocket connection opened");
+      emitter.emit("debug", "Gateway websocket opened");
       return { id: "bot-1", username: "Molty" };
     });
     isVerboseMock.mockReturnValue(true);
@@ -722,7 +722,7 @@ describe("monitorDiscordProvider", () => {
     expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
     expect(
       messages.some(
-        (msg) => msg.includes("gateway-debug") && msg.includes("WebSocket connection opened"),
+        (msg) => msg.includes("gateway-debug") && msg.includes("Gateway websocket opened"),
       ),
     ).toBe(true);
   });
