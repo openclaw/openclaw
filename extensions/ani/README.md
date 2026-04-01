@@ -14,6 +14,7 @@ OpenClaw channel plugin for Agent-Native IM (ANI), a messaging platform built fo
 - **Stream cancel abort** -- `stream.cancel` / `task.cancel` events abort the active agent dispatch via AbortController
 - **Reactions** -- ack-reaction on message receipt (configurable via `messages.ackReaction`)
 - **Interactive cards** -- approval/selection UI via ANI's interaction layer
+- **Slash/control commands** -- `/approve`, `/exec`, and other OpenClaw text commands are routed through native command sessions instead of normal chat prompting
 - **Message chunking** -- long replies split at markdown boundaries (configurable limit)
 - **Auto-reconnecting WebSocket** -- ping/pong keepalive with exponential backoff
 - **Retry with exponential backoff** -- REST calls retry on transient failures (502/503/504) with jitter
@@ -92,6 +93,13 @@ All settings live under `channels.ani` in your OpenClaw config.
 ## How It Works
 
 **Inbound (ANI -> OpenClaw):** WebSocket connection to `/api/v1/ws`. On `message.new`, fetches conversation context (title, participants, memories), formats an agent envelope, dispatches through the reply pipeline. Revoked messages and cancelled streams are detected and aborted in-flight.
+
+Control commands such as `/approve ...` and `/exec ...` are treated specially:
+
+- they bypass ANI's inbound debounce logic
+- they are routed through a synthetic `ani:slash` session instead of the normal conversation transcript session
+- the target conversation session remains attached as the command target so approvals and session-scoped command state apply to the correct ANI conversation
+- execution commands still obey OpenClaw's host approval / allowlist policy; ANI only ensures the slash command reaches the native command session correctly
 
 **Outbound (OpenClaw -> ANI):** REST API `POST /api/v1/messages/send`. Parses `<artifact>` tags into structured content. Plain text chunked at markdown boundaries. Files uploaded via multipart then sent as attachments.
 

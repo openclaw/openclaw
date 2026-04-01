@@ -150,6 +150,20 @@ Expected:
 
 - `stream.cancel` or `task.cancel` aborts the active response cleanly
 
+### Case ANI-PLUGIN-042: Slash control commands route through a native ANI command session
+
+Steps:
+
+1. Send a control command such as `/status`, `/exec ...`, or `/approve ...` from ANI
+2. Inspect the resulting OpenClaw session behavior
+
+Expected:
+
+- the message is not debounced with surrounding chat text
+- the command is routed through an `ani:slash:<sender>` session
+- the command target still points at the underlying ANI conversation session
+- control commands are handled as OpenClaw commands, not as normal model chat text
+
 ## 6. Local Validation Commands
 
 From the OpenClaw repo root:

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseArtifacts, isTextFile } from "./monitor/handler.js";
+import {
+  parseArtifacts,
+  isTextFile,
+  resolveAniInboundCommandContext,
+  shouldDebounceAniInbound,
+} from "./monitor/handler.js";
 import { messageTextOf } from "./utils.js";
 
 describe("parseArtifacts", () => {
@@ -175,5 +180,67 @@ describe("messageTextOf", () => {
 
   it("returns empty string when no text exists", () => {
     expect(messageTextOf({})).toBe("");
+  });
+});
+
+describe("ANI control command routing", () => {
+  const baseRoute = {
+    agentId: "main",
+    sessionKey: "agent:main:ani:channel:8829587447915732",
+    accountId: "default",
+  };
+
+  it("routes ordinary text through the normal conversation session", () => {
+    const result = resolveAniInboundCommandContext({
+      text: "hello there",
+      rawBody: "hello there",
+      cfg: {} as never,
+      route: baseRoute,
+      conversationId: 8829587447915732,
+      senderId: 3,
+    });
+    expect(result.isControlCommand).toBe(false);
+    expect(result.to).toBe("ani:conv:8829587447915732");
+    expect(result.sessionKey).toBe(baseRoute.sessionKey);
+    expect(result.commandSource).toBe("text");
+    expect(result.commandTargetSessionKey).toBeUndefined();
+  });
+
+  it("routes slash control commands through a native slash session", () => {
+    const result = resolveAniInboundCommandContext({
+      text: "/approve 619ba7ad allow-once",
+      rawBody: "/approve 619ba7ad allow-once",
+      cfg: {} as never,
+      route: baseRoute,
+      conversationId: 8829587447915732,
+      senderId: 3,
+    });
+    expect(result.isControlCommand).toBe(true);
+    expect(result.to).toBe("slash:3");
+    expect(result.sessionKey).toBe("agent:main:ani:slash:3");
+    expect(result.commandTargetSessionKey).toBe(baseRoute.sessionKey);
+    expect(result.commandSource).toBe("native");
+    expect(result.commandAuthorized).toBe(true);
+    expect(result.body).toBe("/approve 619ba7ad allow-once");
+  });
+
+  it("does not debounce control commands", () => {
+    expect(
+      shouldDebounceAniInbound({
+        text: "/exec host=gateway security=full ask=off",
+        hasAttachments: false,
+        cfg: {} as never,
+      }),
+    ).toBe(false);
+  });
+
+  it("does debounce ordinary text-only messages", () => {
+    expect(
+      shouldDebounceAniInbound({
+        text: "please review this",
+        hasAttachments: false,
+        cfg: {} as never,
+      }),
+    ).toBe(true);
   });
 });

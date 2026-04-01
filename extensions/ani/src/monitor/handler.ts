@@ -1,4 +1,9 @@
 import { randomBytes } from "node:crypto";
+import {
+  hasControlCommand,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
+import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createReplyPrefixContext,
@@ -76,6 +81,55 @@ export type AniHandlerParams = {
   selfName: string;
   accountId: string;
 };
+
+export function shouldDebounceAniInbound(params: {
+  text: string;
+  hasAttachments: boolean;
+  cfg: OpenClawConfig;
+}): boolean {
+  if (params.hasAttachments) return false;
+  if (!params.text.trim()) return false;
+  return !hasControlCommand(params.text, params.cfg);
+}
+
+export function resolveAniInboundCommandContext(params: {
+  text: string;
+  rawBody: string;
+  cfg: OpenClawConfig;
+  route: { agentId: string; sessionKey: string; accountId: string };
+  conversationId: number;
+  senderId: number;
+}) {
+  const isControlCommand = hasControlCommand(params.text, params.cfg);
+  if (!isControlCommand) {
+    return {
+      isControlCommand: false,
+      body: params.rawBody,
+      to: `ani:conv:${params.conversationId}`,
+      sessionKey: params.route.sessionKey,
+      commandTargetSessionKey: undefined,
+      commandAuthorized: shouldComputeCommandAuthorized(params.text, params.cfg),
+      commandSource: "text" as const,
+    };
+  }
+
+  const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
+    agentId: params.route.agentId,
+    sessionPrefix: "ani:slash",
+    userId: String(params.senderId),
+    targetSessionKey: params.route.sessionKey,
+  });
+
+  return {
+    isControlCommand: true,
+    body: params.text,
+    to: `slash:${params.senderId}`,
+    sessionKey,
+    commandTargetSessionKey,
+    commandAuthorized: true,
+    commandSource: "native" as const,
+  };
+}
 
 function unwrapAniMessageData(
   data: AniWsMessage["data"],
@@ -798,14 +852,24 @@ export function createAniMessageHandler(params: AniHandlerParams) {
             `ani: rawBody for envelope (${rawBody.length} chars): ${rawBody.slice(0, 500)}`,
           );
 
-          const body = core.channel.reply.formatAgentEnvelope({
-            channel: "ANI",
-            from: senderName,
-            timestamp: msg.created_at ? new Date(msg.created_at).getTime() : undefined,
-            previousTimestamp,
-            envelope: envelopeOptions,
-            body: rawBody,
+          const commandContext = resolveAniInboundCommandContext({
+            text,
+            rawBody,
+            cfg: cfg as OpenClawConfig,
+            route,
+            conversationId,
+            senderId,
           });
+          const body = commandContext.isControlCommand
+            ? commandContext.body
+            : core.channel.reply.formatAgentEnvelope({
+                channel: "ANI",
+                from: senderName,
+                timestamp: msg.created_at ? new Date(msg.created_at).getTime() : undefined,
+                previousTimestamp,
+                envelope: envelopeOptions,
+                body: rawBody,
+              });
           logVerbose(`ani: formatted body (${body.length} chars): ${body.slice(0, 500)}`);
 
           const mediaPaths = savedMedia.map((m) => m.path);
@@ -818,8 +882,8 @@ export function createAniMessageHandler(params: AniHandlerParams) {
             RawBody: text,
             CommandBody: text,
             From: isDirect ? `ani:dm:${senderId}` : `ani:channel:${conversationId}`,
-            To: `ani:conv:${conversationId}`,
-            SessionKey: route.sessionKey,
+            To: commandContext.to,
+            SessionKey: commandContext.sessionKey,
             AccountId: route.accountId,
             ChatType: chatType,
             ConversationLabel: senderName,
@@ -844,8 +908,11 @@ export function createAniMessageHandler(params: AniHandlerParams) {
             Surface: "ani" as const,
             MessageSid: messageId,
             Timestamp: msg.created_at ? new Date(msg.created_at).getTime() : undefined,
-            CommandAuthorized: true,
-            CommandSource: "text" as const,
+            CommandAuthorized: commandContext.commandAuthorized,
+            CommandSource: commandContext.commandSource,
+            ...(commandContext.commandTargetSessionKey
+              ? { CommandTargetSessionKey: commandContext.commandTargetSessionKey }
+              : {}),
             OriginatingChannel: "ani" as const,
             OriginatingTo: `ani:conversation:${conversationId}`,
           });
@@ -1208,7 +1275,13 @@ export function createAniMessageHandler(params: AniHandlerParams) {
       // Debounce text-only messages from the same sender in the same conversation.
       // Messages with attachments bypass debouncing since they need immediate processing.
       const hasAttachments = attachments.length > 0;
-      if (!hasAttachments && text.trim()) {
+      if (
+        shouldDebounceAniInbound({
+          text,
+          hasAttachments,
+          cfg: cfg as OpenClawConfig,
+        })
+      ) {
         const debounceKey = `${conversationId}:${senderId}`;
         debouncer.debounce(debounceKey, text, messageId, (combinedText, messageIds) => {
           logVerbose(
