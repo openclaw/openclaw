@@ -4,6 +4,7 @@ import { callGateway } from "../../gateway/call.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../acp-spawn.js";
+import { listAgentEntries } from "../agent-scope.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -146,8 +147,22 @@ export function createSessionsSpawnTool(
       }
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
-      const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
+
+      // Auto-detect runtime from agent profile config when not explicitly specified.
+      // If the target agent has runtime.type: "acp", use ACP automatically.
+      let runtime: "acp" | "subagent" =
+        params.runtime === "acp" ? "acp" : params.runtime === "subagent" ? "subagent" : "subagent";
+      if (!params.runtime && requestedAgentId) {
+        const cfg = loadConfig();
+        const normalizedId = requestedAgentId.toLowerCase().trim();
+        const agentEntry = listAgentEntries(cfg).find(
+          (e) => e.id?.toLowerCase().trim() === normalizedId,
+        );
+        if (agentEntry?.runtime?.type === "acp") {
+          runtime = "acp";
+        }
+      }
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
