@@ -136,6 +136,7 @@ export function runBundledPluginPostinstall(params = {}) {
       });
     const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,
+      encoding: "utf8",
       env: npmRunner.env ?? nestedEnv,
       stdio: "pipe",
       shell: npmRunner.shell,

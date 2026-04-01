@@ -45,6 +45,108 @@ function dependencyNodeModulesPath(nodeModulesDir, depName) {
   return path.join(nodeModulesDir, ...depName.split("/"));
 }
 
+function readInstalledDependencyVersion(nodeModulesDir, depName) {
+  const packageJsonPath = path.join(
+    dependencyNodeModulesPath(nodeModulesDir, depName),
+    "package.json",
+  );
+  if (!fs.existsSync(packageJsonPath)) {
+    return null;
+  }
+  const version = readJson(packageJsonPath).version;
+  return typeof version === "string" ? version : null;
+}
+
+function parseSemver(version) {
+  const match =
+    /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+      version.trim(),
+    );
+  if (!match) {
+    return null;
+  }
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+    prerelease: match[4] ?? null,
+  };
+}
+
+function dependencyVersionSatisfied(spec, installedVersion) {
+  if (spec === installedVersion) {
+    return true;
+  }
+  if (!spec.startsWith("^")) {
+    return false;
+  }
+  const minimum = parseSemver(spec.slice(1));
+  const installed = parseSemver(installedVersion);
+  if (!minimum || !installed) {
+    return false;
+  }
+  if (minimum.major === 0) {
+    return (
+      installed.major === 0 &&
+      installed.minor === minimum.minor &&
+      (installed.patch > minimum.patch ||
+        (installed.patch === minimum.patch &&
+          (installed.prerelease === minimum.prerelease ||
+            (minimum.prerelease === null && installed.prerelease === null))))
+    );
+  }
+  if (installed.major !== minimum.major) {
+    return false;
+  }
+  if (installed.minor < minimum.minor) {
+    return false;
+  }
+  if (installed.minor > minimum.minor) {
+    return true;
+  }
+  if (installed.patch < minimum.patch) {
+    return false;
+  }
+  if (installed.patch > minimum.patch) {
+    return true;
+  }
+  return installed.prerelease === minimum.prerelease;
+}
+
+function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
+  const packageCache = new Map();
+  const closure = new Set();
+  const queue = Object.entries(dependencySpecs);
+
+  while (queue.length > 0) {
+    const [depName, spec] = queue.shift();
+    const installedVersion = readInstalledDependencyVersion(rootNodeModulesDir, depName);
+    if (installedVersion === null || !dependencyVersionSatisfied(spec, installedVersion)) {
+      return null;
+    }
+    if (closure.has(depName)) {
+      continue;
+    }
+
+    const packageJsonPath = path.join(
+      dependencyNodeModulesPath(rootNodeModulesDir, depName),
+      "package.json",
+    );
+    const packageJson = packageCache.get(depName) ?? readJson(packageJsonPath);
+    packageCache.set(depName, packageJson);
+    closure.add(depName);
+
+    for (const [childName, childSpec] of Object.entries(packageJson.dependencies ?? {})) {
+      queue.push([childName, childSpec]);
+    }
+    for (const [childName, childSpec] of Object.entries(packageJson.optionalDependencies ?? {})) {
+      queue.push([childName, childSpec]);
+    }
+  }
+
+  return [...closure];
+}
+
 function listBundledPluginRuntimeDirs(repoRoot) {
   const extensionsRoot = path.join(repoRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsRoot)) {
@@ -135,22 +237,17 @@ function readRuntimeDepsStamp(stampPath) {
 
 function stageInstalledRootRuntimeDeps(params) {
   const { fingerprint, packageJson, pluginDir, repoRoot } = params;
-  const dependencyNames = [
-    ...Object.keys(packageJson.dependencies ?? {}),
-    ...Object.keys(packageJson.optionalDependencies ?? {}),
-  ];
+  const dependencySpecs = {
+    ...packageJson.dependencies,
+    ...packageJson.optionalDependencies,
+  };
   const rootNodeModulesDir = path.join(repoRoot, "node_modules");
-  if (dependencyNames.length === 0 || !fs.existsSync(rootNodeModulesDir)) {
+  if (Object.keys(dependencySpecs).length === 0 || !fs.existsSync(rootNodeModulesDir)) {
     return false;
   }
 
-  const missingRootDeps = dependencyNames.filter(
-    (depName) =>
-      !fs.existsSync(
-        path.join(dependencyNodeModulesPath(rootNodeModulesDir, depName), "package.json"),
-      ),
-  );
-  if (missingRootDeps.length > 0) {
+  const dependencyNames = collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs);
+  if (dependencyNames === null) {
     return false;
   }
 

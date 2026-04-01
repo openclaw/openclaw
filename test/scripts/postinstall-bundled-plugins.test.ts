@@ -38,6 +38,18 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
+  function createBareNpmRunner(args: string[]) {
+    return {
+      command: "npm",
+      args,
+      env: {
+        HOME: "/tmp/home",
+        PATH: "/tmp/node/bin",
+      },
+      shell: false as const,
+    };
+  }
+
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
@@ -86,6 +98,13 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "acpx@0.4.0",
+      ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
@@ -95,9 +114,10 @@ describe("bundled plugin postinstall", () => {
       ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.0"],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
-          PATH: expect.any(String),
+          PATH: "/tmp/node/bin",
         },
         shell: false,
         stdio: "pipe",
@@ -211,6 +231,14 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "@slack/web-api@7.11.0",
+        "grammy@1.38.4",
+      ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
@@ -227,9 +255,10 @@ describe("bundled plugin postinstall", () => {
       ],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
-          PATH: expect.any(String),
+          PATH: "/tmp/node/bin",
         },
         shell: false,
         stdio: "pipe",
@@ -268,6 +297,13 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "grammy@1.38.4",
+      ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
@@ -277,9 +313,10 @@ describe("bundled plugin postinstall", () => {
       ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
-          PATH: expect.any(String),
+          PATH: "/tmp/node/bin",
         },
         shell: false,
         stdio: "pipe",

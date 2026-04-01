@@ -120,7 +120,11 @@ describe("stageBundledPluginRuntimeDeps", () => {
     });
     const rootDepDir = path.join(repoRoot, "node_modules", "left-pad");
     fs.mkdirSync(rootDepDir, { recursive: true });
-    fs.writeFileSync(path.join(rootDepDir, "package.json"), '{ "name": "left-pad" }\n', "utf8");
+    fs.writeFileSync(
+      path.join(rootDepDir, "package.json"),
+      '{ "name": "left-pad", "version": "1.3.0" }\n',
+      "utf8",
+    );
     fs.writeFileSync(path.join(rootDepDir, "index.js"), "module.exports = 1;\n", "utf8");
 
     stageBundledPluginRuntimeDeps({ cwd: repoRoot });
@@ -129,6 +133,95 @@ describe("stageBundledPluginRuntimeDeps", () => {
       fs.readFileSync(path.join(pluginDir, "node_modules", "left-pad", "index.js"), "utf8"),
     ).toBe("module.exports = 1;\n");
     expect(fs.existsSync(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"))).toBe(true);
+  });
+
+  it("stages hoisted transitive runtime deps from the root node_modules", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const transitiveDir = path.join(repoRoot, "node_modules", "transitive");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.mkdirSync(transitiveDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0", "dependencies": { "transitive": "^1.2.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(
+      path.join(transitiveDir, "package.json"),
+      '{ "name": "transitive", "version": "1.2.3" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(transitiveDir, "index.js"),
+      "module.exports = 'transitive';\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'direct';\n");
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "transitive", "index.js"), "utf8"),
+    ).toBe("module.exports = 'transitive';\n");
+  });
+
+  it("falls back to staging installs when the root dependency version is incompatible", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "left-pad": "^1.3.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootDepDir = path.join(repoRoot, "node_modules", "left-pad");
+    fs.mkdirSync(rootDepDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDepDir, "package.json"),
+      '{ "name": "left-pad", "version": "2.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(rootDepDir, "index.js"), "module.exports = 'root';\n", "utf8");
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules", "left-pad");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(nodeModulesDir, "package.json"),
+          '{ "name": "left-pad", "version": "1.3.0" }\n',
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(nodeModulesDir, "index.js"),
+          "module.exports = 'nested';\n",
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "left-pad", "index.js"), "utf8"),
+    ).toBe("module.exports = 'nested';\n");
   });
 
   it("retries transient runtime dependency staging failures before surfacing an error", () => {
