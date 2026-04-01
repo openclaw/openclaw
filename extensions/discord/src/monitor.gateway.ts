@@ -65,7 +65,6 @@ export async function waitForDiscordGatewayStop(
     const onForceStop = (err: unknown) => {
       finishReject(err);
     };
-
     if (abortSignal?.aborted) {
       onAbort();
       return;

@@ -437,6 +437,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
+  "gateway.webchat.chatHistoryMaxChars":
+    "Max characters per text field in chat.history responses before truncation (default: 12000).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
   "nodeHost.browserProxy":
@@ -688,12 +690,31 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.enabled":
+    "Enable managed web_search and optional Codex-native search for eligible models.",
   "tools.web.search.provider":
     "Search provider id. Auto-detected from available API keys if omitted.",
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.openaiCodex.enabled":
+    "Enable native Codex web search for Codex-capable models.",
+  "tools.web.search.openaiCodex.mode":
+    'Native Codex web search mode: "cached" (default) or "live".',
+  "tools.web.search.openaiCodex.allowedDomains":
+    "Optional domain allowlist passed to the native Codex web_search tool.",
+  "tools.web.search.openaiCodex.contextSize":
+    'Native Codex search context size hint: "low", "medium", or "high".',
+  "tools.web.search.openaiCodex.userLocation.country":
+    "Approximate country sent to native Codex web search.",
+  "tools.web.search.openaiCodex.userLocation.region":
+    "Approximate region/state sent to native Codex web search.",
+  "tools.web.search.openaiCodex.userLocation.city":
+    "Approximate city sent to native Codex web search.",
+  "tools.web.search.openaiCodex.userLocation.timezone":
+    "Approximate timezone sent to native Codex web search.",
+  "tools.web.search.brave.mode":
+    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
@@ -782,6 +803,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-provider overrides for billing backoff (hours).",
   "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
+  "auth.cooldowns.overloadedProfileRotations":
+    "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
+  "auth.cooldowns.overloadedBackoffMs":
+    "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
+  "auth.cooldowns.rateLimitedProfileRotations":
+    "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.bootstrapMaxChars":
@@ -806,6 +833,16 @@ export const FIELD_HELP: Record<string, string> = {
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "agents.defaults.memorySearch.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "agents.defaults.memorySearch.qmd":
+    "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
+  "agents.defaults.memorySearch.qmd.extraCollections":
+    "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
+  "agents.defaults.memorySearch.qmd.extraCollections.path":
+    "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the transcript directory or note folder you actually want this agent to search.",
+  "agents.defaults.memorySearch.qmd.extraCollections.name":
+    "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
+  "agents.defaults.memorySearch.qmd.extraCollections.pattern":
+    "Use a glob pattern to restrict which files inside the collection are indexed; keep the default `**/*.md` unless you need a narrower subset.",
   "agents.defaults.memorySearch.multimodal":
     'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memorySearch.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
   "agents.defaults.memorySearch.multimodal.enabled":

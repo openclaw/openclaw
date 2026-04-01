@@ -14,6 +14,13 @@ export type ExecApprovalReplyMetadata = {
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 };
 
+export type ExecApprovalActionDescriptor = {
+  decision: ExecApprovalReplyDecision;
+  label: string;
+  style: NonNullable<InteractiveReplyButton["style"]>;
+  command: string;
+};
+
 export type ExecApprovalPendingReplyParams = {
   warningText?: string;
   approvalId: string;
@@ -36,40 +43,71 @@ export type ExecApprovalUnavailableReplyParams = {
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
-function buildApprovalDecisionCommandValue(params: {
-  approvalId: string;
+export function buildExecApprovalCommandText(params: {
+  approvalCommandId: string;
   decision: ExecApprovalReplyDecision;
 }): string {
-  return `/approve ${params.approvalId} ${params.decision === "allow-always" ? "always" : params.decision}`;
+  return `/approve ${params.approvalCommandId} ${params.decision === "allow-always" ? "always" : params.decision}`;
+}
+
+export function buildExecApprovalActionDescriptors(params: {
+  approvalCommandId: string;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): ExecApprovalActionDescriptor[] {
+  const approvalCommandId = params.approvalCommandId.trim();
+  if (!approvalCommandId) {
+    return [];
+  }
+  const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
+  const descriptors: ExecApprovalActionDescriptor[] = [];
+  if (allowedDecisions.includes("allow-once")) {
+    descriptors.push({
+      decision: "allow-once",
+      label: "Allow Once",
+      style: "success",
+      command: buildExecApprovalCommandText({
+        approvalCommandId,
+        decision: "allow-once",
+      }),
+    });
+  }
+  if (allowedDecisions.includes("allow-always")) {
+    descriptors.push({
+      decision: "allow-always",
+      label: "Allow Always",
+      style: "primary",
+      command: buildExecApprovalCommandText({
+        approvalCommandId,
+        decision: "allow-always",
+      }),
+    });
+  }
+  if (allowedDecisions.includes("deny")) {
+    descriptors.push({
+      decision: "deny",
+      label: "Deny",
+      style: "danger",
+      command: buildExecApprovalCommandText({
+        approvalCommandId,
+        decision: "deny",
+      }),
+    });
+  }
+  return descriptors;
 }
 
 function buildApprovalInteractiveButtons(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
   approvalId: string,
 ): InteractiveReplyButton[] {
-  const buttons: InteractiveReplyButton[] = [];
-  if (allowedDecisions.includes("allow-once")) {
-    buttons.push({
-      label: "Allow Once",
-      value: buildApprovalDecisionCommandValue({ approvalId, decision: "allow-once" }),
-      style: "success",
-    });
-  }
-  if (allowedDecisions.includes("allow-always")) {
-    buttons.push({
-      label: "Allow Always",
-      value: buildApprovalDecisionCommandValue({ approvalId, decision: "allow-always" }),
-      style: "primary",
-    });
-  }
-  if (allowedDecisions.includes("deny")) {
-    buttons.push({
-      label: "Deny",
-      value: buildApprovalDecisionCommandValue({ approvalId, decision: "deny" }),
-      style: "danger",
-    });
-  }
-  return buttons;
+  return buildExecApprovalActionDescriptors({
+    approvalCommandId: approvalId,
+    allowedDecisions,
+  }).map((descriptor) => ({
+    label: descriptor.label,
+    value: descriptor.command,
+    style: descriptor.style,
+  }));
 }
 
 export function buildApprovalInteractiveReply(params: {
@@ -83,8 +121,36 @@ export function buildApprovalInteractiveReply(params: {
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
+export function buildExecApprovalInteractiveReply(params: {
+  approvalCommandId: string;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): InteractiveReply | undefined {
+  return buildApprovalInteractiveReply({
+    approvalId: params.approvalCommandId,
+    allowedDecisions: params.allowedDecisions,
+  });
+}
+
 export function getExecApprovalApproverDmNoticeText(): string {
   return "Approval required. I sent approval DMs to the approvers for this account.";
+}
+
+export function parseExecApprovalCommandText(
+  raw: string,
+): { approvalId: string; decision: ExecApprovalReplyDecision } | null {
+  const trimmed = raw.trim();
+  const match = trimmed.match(
+    /^\/?approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
+  );
+  if (!match) {
+    return null;
+  }
+  const rawDecision = match[2].toLowerCase();
+  return {
+    approvalId: match[1],
+    decision:
+      rawDecision === "always" ? "allow-always" : (rawDecision as ExecApprovalReplyDecision),
+  };
 }
 
 export function formatExecApprovalExpiresIn(expiresAtMs: number, nowMs: number): string {
@@ -219,21 +285,21 @@ export function buildExecApprovalUnavailableReplyPayload(
       `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or enable Discord or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
+      "Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
     );
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or enable Discord or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
+      "Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
     );
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      "Open the Web UI or terminal UI, or enable Discord or Telegram exec approvals, then retry the command. If those accounts already know your owner ID via allowFrom, you can usually leave execApprovals.approvers unset.",
+      "Open the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals, then retry the command. If those accounts already know your owner ID via allowFrom, you can usually leave execApprovals.approvers unset.",
     );
   }
 

@@ -4,6 +4,22 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
+async function listenOnSocket(server: net.Server, socketPath: string): Promise<boolean> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   it("ignores malformed and non-accepted lines until one is accepted", async () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
@@ -15,7 +31,10 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           socket.write('{"type":"done","value":42}\n');
         });
       });
-      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
 
       try {
         await expect(
@@ -41,7 +60,10 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       const server = net.createServer(() => {
         // Intentionally never reply.
       });
-      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
 
       try {
         await expect(

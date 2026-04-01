@@ -91,6 +91,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
@@ -259,6 +260,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun connect(endpoint: GatewayEndpoint) {
     ensureRuntime().connect(endpoint)
+  }
+
+  fun connect(
+    endpoint: GatewayEndpoint,
+    token: String?,
+    bootstrapToken: String?,
+    password: String?,
+  ) {
+    ensureRuntime().connect(
+      endpoint,
+      NodeRuntime.GatewayConnectAuth(
+        token = token,
+        bootstrapToken = bootstrapToken,
+        password = password,
+      ),
+    )
   }
 
   fun connectManual() {

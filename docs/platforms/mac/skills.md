@@ -20,6 +20,7 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 
 - `metadata.openclaw.install` defines install options (brew/node/go/uv).
 - The app calls `skills.install` to run installers on the gateway host.
+- Built-in dangerous-code `critical` findings block `skills.install` by default; suspicious findings still warn only. The dangerous override exists on the gateway request, but the default app flow stays fail-closed.
 - The gateway surfaces only one preferred installer when multiple are provided
   (brew when available, otherwise node manager from `skills.install`, default npm).
 

@@ -979,8 +979,12 @@ describe("slack slash command session metadata", () => {
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
+    const recordStarted = createDeferred<void>();
     const deferred = createDeferred<void>();
-    recordSessionMetaFromInboundMock.mockClear().mockReturnValue(deferred.promise);
+    recordSessionMetaFromInboundMock.mockClear().mockImplementation(() => {
+      recordStarted.resolve();
+      return deferred.promise;
+    });
 
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerCommands(harness.ctx, harness.account);
@@ -993,9 +997,8 @@ describe("slack slash command session metadata", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    });
+    await recordStarted.promise;
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
 
     deferred.resolve();

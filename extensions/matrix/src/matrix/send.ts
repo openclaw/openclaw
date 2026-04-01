@@ -1,10 +1,18 @@
-import type { MarkdownTableMode, PollInput } from "../runtime-api.js";
+import {
+  loadOutboundMediaFromUrl,
+  type MarkdownTableMode,
+  type PollInput,
+} from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
 import type { MatrixClient } from "./sdk.js";
-import { resolveMediaMaxBytes, withResolvedMatrixClient } from "./send/client.js";
+import {
+  resolveMediaMaxBytes,
+  withResolvedMatrixControlClient,
+  withResolvedMatrixSendClient,
+} from "./send/client.js";
 import {
   buildReplyRelation,
   buildTextContent,
@@ -133,7 +141,7 @@ export async function sendMessageMatrix(
   if (!trimmedMessage && !opts.mediaUrl) {
     throw new Error("Matrix send requires text or media");
   }
-  return await withResolvedMatrixClient(
+  return await withResolvedMatrixSendClient(
     {
       client: opts.client,
       cfg: opts.cfg,
@@ -159,9 +167,11 @@ export async function sendMessageMatrix(
       let lastMessageId = "";
       if (opts.mediaUrl) {
         const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
-        const media = await getCore().media.loadWebMedia(opts.mediaUrl, {
+        const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
           maxBytes,
-          localRoots: opts.mediaLocalRoots,
+          mediaAccess: opts.mediaAccess,
+          mediaLocalRoots: opts.mediaLocalRoots,
+          mediaReadFile: opts.mediaReadFile,
         });
         const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
           contentType: media.contentType,
@@ -249,7 +259,7 @@ export async function sendPollMatrix(
   if (!poll.options?.length) {
     throw new Error("Matrix poll requires options");
   }
-  return await withResolvedMatrixClient(
+  return await withResolvedMatrixSendClient(
     {
       client: opts.client,
       cfg: opts.cfg,
@@ -279,7 +289,7 @@ export async function sendTypingMatrix(
   timeoutMs?: number,
   client?: MatrixClient,
 ): Promise<void> {
-  await withResolvedMatrixClient(
+  await withResolvedMatrixControlClient(
     {
       client,
       timeoutMs,
@@ -300,7 +310,7 @@ export async function sendReadReceiptMatrix(
   if (!eventId?.trim()) {
     return;
   }
-  await withResolvedMatrixClient({ client }, async (resolved) => {
+  await withResolvedMatrixControlClient({ client }, async (resolved) => {
     const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);
     await resolved.sendReadReceipt(resolvedRoom, eventId.trim());
   });
@@ -330,7 +340,7 @@ export async function sendSingleTextMessageMatrix(
       `Matrix single-message text exceeds limit (${convertedText.length} > ${singleEventLimit})`,
     );
   }
-  return await withResolvedMatrixClient(
+  return await withResolvedMatrixSendClient(
     {
       client: opts.client,
       cfg: opts.cfg,
@@ -363,7 +373,7 @@ export async function editMessageMatrix(
     accountId?: string;
   } = {},
 ): Promise<string> {
-  return await withResolvedMatrixClient(
+  return await withResolvedMatrixSendClient(
     {
       client: opts.client,
       cfg: opts.cfg,
@@ -416,7 +426,7 @@ export async function reactMatrixMessage(
   opts?: MatrixClient | MatrixClientResolveOpts,
 ): Promise<void> {
   const clientOpts = normalizeMatrixClientResolveOpts(opts);
-  await withResolvedMatrixClient(
+  await withResolvedMatrixSendClient(
     {
       client: clientOpts.client,
       cfg: clientOpts.cfg,
