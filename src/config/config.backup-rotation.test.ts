@@ -226,7 +226,6 @@ describe("config backup rotation", () => {
 
       // Simulate: base timestamp was pruned but -02 and -03 siblings remain
       // (e.g. cleanOrphanBackups removed the oldest unsuffixed entry).
-      const entries = await fs.readdir(dir);
       // We need to rotate once to learn the current timestamp, then set up
       // the scenario manually.
       await rotateConfigBackups(configPath, fs);
