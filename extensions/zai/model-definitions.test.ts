@@ -2,7 +2,29 @@ import { describe, expect, it } from "vitest";
 import { buildZaiModelDefinition, ZAI_DEFAULT_COST } from "./model-definitions.js";
 
 describe("zai model definitions", () => {
-  it("uses current Pi metadata for the default GLM-5 model", () => {
+  it("uses current Pi metadata for the new GLM-5.1 model", () => {
+    expect(buildZaiModelDefinition({ id: "glm-5.1" })).toMatchObject({
+      id: "glm-5.1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 202800,
+      maxTokens: 131100,
+      cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
+    });
+  });
+
+  it("uses current Pi metadata for the new GLM-5V Turbo model", () => {
+    expect(buildZaiModelDefinition({ id: "glm-5v-turbo" })).toMatchObject({
+      id: "glm-5v-turbo",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 202800,
+      maxTokens: 131100,
+      cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
+    });
+  });
+
+  it("uses current Pi metadata for the GLM-5 model", () => {
     expect(buildZaiModelDefinition({ id: "glm-5" })).toMatchObject({
       id: "glm-5",
       reasoning: true,
