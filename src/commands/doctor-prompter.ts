@@ -16,6 +16,10 @@ export type DoctorOptions = {
   repair?: boolean;
   force?: boolean;
   generateGatewayToken?: boolean;
+  /** Enable continuous health monitoring loop */
+  watch?: boolean;
+  /** Interval between watch iterations in milliseconds (default: 60000) */
+  watchIntervalMs?: number;
 };
 
 export type DoctorPrompter = {

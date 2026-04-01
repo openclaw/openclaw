@@ -25,6 +25,12 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--watch", "Enable continuous health monitoring loop", false)
+    .option(
+      "--watch-interval-ms <ms>",
+      "Interval between watch iterations in milliseconds",
+      "60000",
+    )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await doctorCommand(defaultRuntime, {
@@ -35,6 +41,8 @@ export function registerMaintenanceCommands(program: Command) {
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
+          watch: Boolean(opts.watch),
+          watchIntervalMs: opts.watchIntervalMs ? Number(opts.watchIntervalMs) : undefined,
         });
         defaultRuntime.exit(0);
       });

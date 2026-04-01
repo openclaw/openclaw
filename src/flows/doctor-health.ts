@@ -1,4 +1,4 @@
-import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { intro as clackIntro, outro as clackOutro, log as clackLog } from "@clack/prompts";
 import { loadAndMaybeMigrateDoctorConfig } from "../commands/doctor-config-flow.js";
 import { noteSourceInstallIssues } from "../commands/doctor-install.js";
 import { noteStartupOptimizationHints } from "../commands/doctor-platform-notes.js";
@@ -20,9 +20,20 @@ export async function doctorCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DoctorOptions = {},
 ) {
-  const prompter = createDoctorPrompter({ runtime, options });
+  const isWatch = Boolean(options.watch);
+  const intervalMs = options.watchIntervalMs ?? 60_000;
+
+  // Watch mode forces nonInteractive and disables repairs
+  const effectiveOptions: DoctorOptions = isWatch
+    ? { ...options, nonInteractive: true, repair: false, force: false }
+    : options;
+
   printWizardHeader(runtime);
-  intro("OpenClaw doctor");
+  intro(isWatch ? "OpenClaw doctor (watch mode)" : "OpenClaw doctor");
+
+  if (isWatch) {
+    clackLog.step(`Watching every ${(intervalMs / 1000).toFixed(0)}s — press Ctrl+C to stop`);
+  }
 
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
@@ -30,36 +41,83 @@ export async function doctorCommand(
     cwd: process.cwd(),
   });
 
+  // One-time: check for updates, repair UI, print notes
+  const skipPrompter = {
+    confirm: async () => false as boolean,
+    confirmAutoFix: async () => false as boolean,
+    confirmAggressiveAutoFix: async () => false as boolean,
+    confirmRuntimeRepair: async () => false as boolean,
+    select: async <T>(_: unknown, fb: T) => fb,
+    shouldRepair: false,
+    shouldForce: false,
+    repairMode: {
+      canPrompt: false,
+      shouldRepair: false,
+      shouldForce: false,
+      nonInteractive: true,
+    } as import("../commands/doctor-repair-mode.js").DoctorRepairMode,
+  };
   const updateResult = await maybeOfferUpdateBeforeDoctor({
     runtime,
-    options,
+    options: effectiveOptions,
     root,
-    confirm: (p) => prompter.confirm(p),
-    outro,
+    confirm: async () => false,
+    outro: (msg: string) => clackOutro(stylePromptTitle(msg) ?? msg),
   });
-  if (updateResult.handled) {
+  if (updateResult.handled && !isWatch) {
     return;
   }
-
-  await maybeRepairUiProtocolFreshness(runtime, prompter);
+  void maybeRepairUiProtocolFreshness(runtime, skipPrompter);
   noteSourceInstallIssues(root);
   noteStartupOptimizationHints();
 
-  const configResult = await loadAndMaybeMigrateDoctorConfig({
-    options,
-    confirm: (p) => prompter.confirm(p),
-  });
-  const ctx = {
-    runtime,
-    options,
-    prompter,
-    configResult,
-    cfg: configResult.cfg,
-    cfgForPersistence: structuredClone(configResult.cfg),
-    sourceConfigValid: configResult.sourceConfigValid ?? true,
-    configPath: configResult.path ?? CONFIG_PATH,
-  };
-  await runDoctorHealthContributions(ctx);
+  if (isWatch) {
+    // Watch loop: rebuild prompter + ctx on every iteration
+    while (true) {
+      const prompter = createDoctorPrompter({ runtime, options: effectiveOptions });
+      const configResult = await loadAndMaybeMigrateDoctorConfig({
+        options: effectiveOptions,
+        confirm: (p) => prompter.confirm(p),
+      });
+      const ctx = {
+        runtime,
+        options: effectiveOptions,
+        prompter,
+        configResult,
+        cfg: configResult.cfg,
+        cfgForPersistence: structuredClone(configResult.cfg),
+        sourceConfigValid: configResult.sourceConfigValid ?? true,
+        configPath: configResult.path ?? CONFIG_PATH,
+      };
+
+      await runDoctorHealthContributions(ctx);
+
+      clackLog.info(`Next check in ${(intervalMs / 1000).toFixed(0)}s...`);
+      await sleep(intervalMs);
+    }
+  } else {
+    // Single run: interactive
+    const prompter = createDoctorPrompter({ runtime, options: effectiveOptions });
+    const configResult = await loadAndMaybeMigrateDoctorConfig({
+      options: effectiveOptions,
+      confirm: (p) => prompter.confirm(p),
+    });
+    const ctx = {
+      runtime,
+      options: effectiveOptions,
+      prompter,
+      configResult,
+      cfg: configResult.cfg,
+      cfgForPersistence: structuredClone(configResult.cfg),
+      sourceConfigValid: configResult.sourceConfigValid ?? true,
+      configPath: configResult.path ?? CONFIG_PATH,
+    };
+    await runDoctorHealthContributions(ctx);
+  }
 
   outro("Doctor complete.");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
