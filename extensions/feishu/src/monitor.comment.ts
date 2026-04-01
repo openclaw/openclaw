@@ -50,6 +50,7 @@ export type ResolvedDriveCommentEventTurn = {
   fileToken: string;
   fileType: CommentFileType;
   senderId: string;
+  senderUserId?: string;
   timestamp?: string;
   isMentioned?: boolean;
   documentTitle?: string;
@@ -443,6 +444,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
   fileToken: string;
   fileType: CommentFileType;
   senderId: string;
+  senderUserId?: string;
   timestamp?: string;
   isMentioned?: boolean;
   context: {
@@ -469,6 +471,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
   const fileToken = event.notice_meta?.file_token?.trim();
   const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
   const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
+  const senderUserId = event.notice_meta?.from_user_id?.user_id?.trim() || undefined;
   if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
     logger?.(
       `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
@@ -513,6 +516,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     fileToken,
     fileType,
     senderId,
+    senderUserId,
     timestamp: event.timestamp,
     isMentioned: event.is_mentioned,
     context,
@@ -587,6 +591,7 @@ export async function resolveDriveCommentEventTurn(
     fileToken: resolved.fileToken,
     fileType: resolved.fileType,
     senderId: resolved.senderId,
+    senderUserId: resolved.senderUserId,
     timestamp: resolved.timestamp,
     isMentioned: resolved.isMentioned,
     documentTitle: resolved.context.documentTitle,

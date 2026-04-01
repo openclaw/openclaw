@@ -262,6 +262,29 @@ describe("resolveDriveCommentEventTurn", () => {
     expect(turn?.prompt).toContain("The system will automatically reply with your final answer");
   });
 
+  it("preserves sender user_id for downstream allowlist checks", async () => {
+    const client = makeOpenApiClient({ includeTargetReplyInBatch: true });
+
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          from_user_id: {
+            open_id: "ou_509d4d7ace4a9addec2312676ffcba9b",
+            user_id: "on_comment_user_1",
+          },
+        },
+      }),
+      botOpenId: "ou_bot",
+      createClient: () => client as never,
+    });
+
+    expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
+    expect(turn?.senderUserId).toBe("on_comment_user_1");
+  });
+
   it("falls back to the replies API to resolve add_reply text", async () => {
     const client = makeOpenApiClient({
       includeTargetReplyInBatch: false,

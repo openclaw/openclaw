@@ -67,6 +67,7 @@ describe("handleFeishuCommentEvent", () => {
       fileToken: "doc_token_1",
       fileType: "docx",
       senderId: "ou_sender",
+      senderUserId: "on_sender_user",
       timestamp: "1774951528000",
       isMentioned: true,
       documentTitle: "Project review",
@@ -144,6 +145,58 @@ describe("handleFeishuCommentEvent", () => {
     );
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows comment senders matched by user_id allowlist entries", async () => {
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+        },
+        routing: {
+          resolveAgentRoute: vi.fn(() => buildResolvedRoute()),
+        },
+        reply: {
+          dispatchReplyFromConfig: vi.fn(async () => ({
+            queuedFinal: true,
+            counts: { tool: 0, block: 0, final: 1 },
+          })),
+          withReplyDispatcher: vi.fn(async ({ run, onSettled }) => {
+            try {
+              return await run();
+            } finally {
+              await onSettled?.();
+            }
+          }),
+        },
+      },
+    });
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "allowlist",
+            allowFrom: ["on_sender_user"],
+          },
+        },
+      }),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(replyCommentMock).not.toHaveBeenCalled();
   });
 
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {

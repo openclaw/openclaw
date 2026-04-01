@@ -93,6 +93,7 @@ export async function handleFeishuCommentEvent(
   const senderAllowed = resolveFeishuAllowlistMatch({
     allowFrom: effectiveDmAllowFrom,
     senderId: turn.senderId,
+    senderIds: [turn.senderUserId],
   }).allowed;
   if (dmPolicy !== "open" && !senderAllowed) {
     if (dmPolicy === "pairing") {
