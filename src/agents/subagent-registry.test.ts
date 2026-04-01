@@ -508,4 +508,44 @@ describe("subagent registry seam flow", () => {
       });
     });
   });
+
+  it("loads plugin and context-engine runtime before released end hooks", async () => {
+    mod.addSubagentRunForTests({
+      runId: "run-release-context-engine",
+      childSessionKey: "agent:main:session:child",
+      controllerSessionKey: "agent:main:session:parent",
+      requesterSessionKey: "agent:main:session:parent",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "parent",
+      task: "task",
+      cleanup: "keep",
+      expectsCompletionMessage: undefined,
+      spawnMode: "run",
+      workspaceDir: "/tmp/workspace",
+      createdAt: 1,
+      startedAt: 1,
+      sessionStartedAt: 1,
+      accumulatedRuntimeMs: 0,
+      cleanupHandled: false,
+    });
+
+    mod.releaseSubagentRun("run-release-context-engine");
+
+    await vi.waitFor(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:session:child",
+        reason: "released",
+        workspaceDir: "/tmp/workspace",
+      });
+    });
+    expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: {
+        agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+        session: { mainKey: "main", scope: "per-sender" },
+      },
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+    expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
+  });
 });
