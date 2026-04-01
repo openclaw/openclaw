@@ -80,6 +80,7 @@ const telegramExecApprovalProfile = createChannelExecApprovalProfile({
       normalizeAccountId(boundAccountId) === normalizeAccountId(accountId)
     );
   },
+  fallbackAgentIdFromSessionKey: true,
   requireClientEnabledForLocalPromptSuppression: false,
 });
 
