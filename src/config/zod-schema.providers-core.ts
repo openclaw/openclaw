@@ -46,9 +46,22 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
-  .refine((value) => typeof value === "string", {
-    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
-  });
+  .transform((value, ctx) => {
+    if (typeof value === "number") {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
+            `Wrap it in quotes in your config file.`,
+        });
+        return z.NEVER;
+      }
+      return String(value);
+    }
+    return value;
+  })
+  .pipe(z.string());
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
