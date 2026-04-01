@@ -218,6 +218,7 @@ describe("gateway server hooks", () => {
         {
           match: { path: "gmail" },
           action: "agent",
+          systemPrompt: "Summarize: {{messages[0].subject}}",
           messageTemplate: "New email from {{messages[0].from}}",
           sessionKey: "main",
         },
@@ -236,10 +237,11 @@ describe("gateway server hooks", () => {
 
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sessionKey?: string;
-        job?: { payload?: { externalContentSource?: string } };
+        job?: { payload?: { externalContentSource?: string; systemPrompt?: string } };
       };
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
+      expect(call?.job?.payload?.systemPrompt).toBe("Summarize: Hello");
       drainSystemEvents(resolveMainKey());
     });
   });

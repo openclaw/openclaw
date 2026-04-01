@@ -20,6 +20,7 @@ describe("hooks mapping", () => {
   function createGmailAgentMapping(params: {
     id: string;
     messageTemplate: string;
+    systemPrompt?: string;
     model?: string;
     agentId?: string;
   }) {
@@ -28,6 +29,7 @@ describe("hooks mapping", () => {
       match: { path: "gmail" },
       action: "agent" as const,
       messageTemplate: params.messageTemplate,
+      ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.model ? { model: params.model } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
     };
@@ -126,6 +128,22 @@ describe("hooks mapping", () => {
       ],
     });
     expectAgentMessage(result, "Subject: Hello");
+  });
+
+  it("renders system prompt template from payload", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "demo",
+          systemPrompt: "Summarize email: {{messages[0].subject}}",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        }),
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.systemPrompt).toBe("Summarize email: Hello");
+    }
   });
 
   it("passes model override from mapping", async () => {

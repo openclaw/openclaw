@@ -62,6 +62,7 @@ export function createGatewayHooksRequestHandler(params: {
       payload: {
         kind: "agentTurn",
         message: value.message,
+        systemPrompt: value.systemPrompt,
         model: value.model,
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,

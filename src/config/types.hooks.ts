@@ -17,6 +17,7 @@ export type HookMappingConfig = {
   /** Route this hook to a specific agent (unknown ids fall back to the default agent). */
   agentId?: string;
   sessionKey?: string;
+  systemPrompt?: string;
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
