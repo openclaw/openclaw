@@ -200,16 +200,16 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("HGRCPATH")).toBe(true);
     expect(isDangerousHostEnvVarName("hgrcpath")).toBe(true);
-    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(true);
-    expect(isDangerousHostEnvVarName("https_proxy")).toBe(true);
-    expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(true);
-    expect(isDangerousHostEnvVarName("http_proxy")).toBe(true);
+    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("https_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("http_proxy")).toBe(false);
     expect(isDangerousHostEnvVarName("ALL_PROXY")).toBe(false);
     expect(isDangerousHostEnvVarName("no_proxy")).toBe(false);
     expect(isDangerousHostEnvVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(false);
     expect(isDangerousHostEnvVarName("node_extra_ca_certs")).toBe(false);
-    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(true);
-    expect(isDangerousHostEnvVarName("SSL_CERT_DIR")).toBe(true);
+    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_DIR")).toBe(false);
     expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(false);
     expect(isDangerousHostEnvVarName("CURL_CA_BUNDLE")).toBe(false);
     expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(true);
@@ -271,6 +271,10 @@ describe("sanitizeHostExecEnv", () => {
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
       AWS_CONFIG_FILE: "/tmp/aws-config",
+      HTTP_PROXY: "http://proxy.example.test:8080",
+      HTTPS_PROXY: "http://proxy.example.test:8443",
+      SSL_CERT_FILE: "/tmp/evil-cert.pem",
+      SSL_CERT_DIR: "/tmp/evil-cert-dir",
       OK: "1",
     });
   });
@@ -460,7 +464,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
   });
 
-  it("drops inherited proxy, TLS, and Docker env along with blocked overrides", () => {
+  it("keeps trusted inherited proxy and TLS env while blocking overrides", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
         PATH: "/usr/bin:/bin",
@@ -481,7 +485,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env).toEqual({
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
+      HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+      HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
       NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      SSL_CERT_DIR: "/etc/ssl/certs",
       CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
       DOCKER_TLS_VERIFY: "1",
     });
