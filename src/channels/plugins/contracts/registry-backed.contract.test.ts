@@ -1,7 +1,7 @@
 import {
   describeChannelRegistryBackedContracts,
   describeSessionBindingRegistryBackedContract,
-} from "../../../test/helpers/channels/registry-backed-contract.js";
+} from "../../../../test/helpers/channels/registry-backed-contract.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
