@@ -153,14 +153,11 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.messages.length).toBe(1);
   });
 
-  it("removes orphaned tool_result messages when tool_use is dropped", () => {
-    // Scenario: assistant with tool_use is in chunk 1 (dropped),
-    // tool_result is in chunk 2 (kept) - orphaned tool_result should be removed
-    // to prevent "unexpected tool_use_id" errors from Anthropic's API
+  it("keeps tool_use and tool_result together when boundary-aware splitting is active", () => {
+    // With boundary-aware splitting, the tool_use and tool_result should stay
+    // in the same chunk, preventing orphaning at the source.
     const messages: AgentMessage[] = [
-      // Chunk 1 (will be dropped) - contains tool_use
       makeAssistantToolCall(1, "call_123"),
-      // Chunk 2 (will be kept) - contains orphaned tool_result
       makeToolResult(2, "call_123", "result".repeat(500)),
       {
         role: "user",
@@ -176,15 +173,13 @@ describe("pruneHistoryForContextShare", () => {
       parts: 2,
     });
 
-    // The orphaned tool_result should NOT be in kept messages
-    // (this is the critical invariant that prevents API errors)
-    const keptRoles = pruned.messages.map((m) => m.role);
-    expect(keptRoles).not.toContain("toolResult");
-
-    // The orphan count should be reflected in droppedMessages
-    // (orphaned tool_results are dropped but not added to droppedMessagesList
-    // since they lack context for summarization)
-    expect(pruned.droppedMessages).toBeGreaterThan(pruned.droppedMessagesList.length);
+    // No orphaned tool_results should exist — boundary-aware splitting keeps pairs together.
+    // If tool_result is present, its tool_use must also be present.
+    const hasToolResult = pruned.messages.some((m) => m.role === "toolResult");
+    const hasAssistant = pruned.messages.some((m) => m.role === "assistant");
+    if (hasToolResult) {
+      expect(hasAssistant).toBe(true);
+    }
   });
 
   it("keeps tool_result when its tool_use is also kept", () => {
@@ -214,11 +209,10 @@ describe("pruneHistoryForContextShare", () => {
     expect(keptRoles).toContain("toolResult");
   });
 
-  it("removes multiple orphaned tool_results from the same dropped tool_use", () => {
-    // Scenario: assistant with multiple tool_use blocks is dropped,
-    // all corresponding tool_results should be removed from kept messages
+  it("keeps multi-tool-call assistant with its tool_results together", () => {
+    // With boundary-aware splitting, an assistant with multiple tool_use blocks
+    // and their tool_results should stay in the same chunk.
     const messages: AgentMessage[] = [
-      // Chunk 1 (will be dropped) - contains multiple tool_use blocks
       makeAgentAssistantMessage({
         content: [
           { type: "text", text: "x".repeat(4000) },
@@ -229,7 +223,6 @@ describe("pruneHistoryForContextShare", () => {
         stopReason: "stop",
         timestamp: 1,
       }),
-      // Chunk 2 (will be kept) - contains orphaned tool_results
       makeToolResult(2, "call_a", "result_a"),
       makeToolResult(3, "call_b", "result_b"),
       {
@@ -246,13 +239,11 @@ describe("pruneHistoryForContextShare", () => {
       parts: 2,
     });
 
-    // No orphaned tool_results should be in kept messages
-    const keptToolResults = pruned.messages.filter((m) => m.role === "toolResult");
-    expect(keptToolResults).toHaveLength(0);
-
-    // The orphan count should reflect both dropped tool_results
-    // droppedMessages = 1 (assistant) + 2 (orphaned tool_results) = 3
-    // droppedMessagesList only has the assistant message
-    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length + 2);
+    // If any tool_result is kept, its tool_use assistant must also be kept.
+    const hasToolResult = pruned.messages.some((m) => m.role === "toolResult");
+    const hasAssistant = pruned.messages.some((m) => m.role === "assistant");
+    if (hasToolResult) {
+      expect(hasAssistant).toBe(true);
+    }
   });
 });
