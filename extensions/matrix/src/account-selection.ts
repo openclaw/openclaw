@@ -11,6 +11,8 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { listMatrixEnvAccountIds } from "./env-vars.js";
+import { hasExplicitMatrixAccountConfig } from "./matrix/account-config.js";
+import type { CoreConfig } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -42,11 +44,15 @@ export function resolveConfiguredMatrixAccountIds(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const channel = resolveMatrixChannelConfig(cfg);
+  const configuredAccountIds = listConfiguredAccountIds({
+    accounts: channel && isRecord(channel.accounts) ? channel.accounts : undefined,
+    normalizeAccountId,
+  });
+  if (channel && hasExplicitMatrixAccountConfig(cfg as CoreConfig, DEFAULT_ACCOUNT_ID)) {
+    configuredAccountIds.push(DEFAULT_ACCOUNT_ID);
+  }
   return listCombinedAccountIds({
-    configuredAccountIds: listConfiguredAccountIds({
-      accounts: channel && isRecord(channel.accounts) ? channel.accounts : undefined,
-      normalizeAccountId,
-    }),
+    configuredAccountIds,
     additionalAccountIds: listMatrixEnvAccountIds(env),
     fallbackAccountIdWhenEmpty: channel ? DEFAULT_ACCOUNT_ID : undefined,
   });
