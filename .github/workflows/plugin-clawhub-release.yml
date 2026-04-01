@@ -39,8 +39,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.23.0"
-  CLAWHUB_CLI_VERSION: "0.10.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
+  CLAWHUB_REPOSITORY: "openclaw/clawhub"
+  CLAWHUB_REF: "main"
 
 jobs:
   preview_plugins_clawhub:
@@ -172,12 +173,31 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
-          install-bun: "false"
+          install-bun: "true"
           use-sticky-disk: "false"
           install-deps: "false"
 
-      - name: Install ClawHub CLI
-        run: npm install --global --ignore-scripts "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
+      - name: Checkout ClawHub CLI source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CLAWHUB_REPOSITORY }}
+          ref: ${{ env.CLAWHUB_REF }}
+          path: clawhub-source
+          fetch-depth: 1
+
+      - name: Install ClawHub CLI dependencies
+        working-directory: clawhub-source
+        run: bun install --frozen-lockfile
+
+      - name: Bootstrap ClawHub CLI
+        run: |
+          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawdhub/src/cli.ts" "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/clawhub"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Preview publish command
         env:
@@ -213,12 +233,31 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
-          install-bun: "false"
+          install-bun: "true"
           use-sticky-disk: "false"
           install-deps: "false"
 
-      - name: Install ClawHub CLI
-        run: npm install --global --ignore-scripts "clawhub@${{ env.CLAWHUB_CLI_VERSION }}"
+      - name: Checkout ClawHub CLI source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CLAWHUB_REPOSITORY }}
+          ref: ${{ env.CLAWHUB_REF }}
+          path: clawhub-source
+          fetch-depth: 1
+
+      - name: Install ClawHub CLI dependencies
+        working-directory: clawhub-source
+        run: bun install --frozen-lockfile
+
+      - name: Bootstrap ClawHub CLI
+        run: |
+          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawdhub/src/cli.ts" "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/clawhub"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Ensure version is not already published
         env:

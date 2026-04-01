@@ -9,6 +9,7 @@ import {
   collectPluginClawHubReleasePathsFromGitRange,
   collectPluginClawHubReleasePlan,
   resolveChangedClawHubPublishablePluginPackages,
+  resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
 
@@ -185,6 +186,37 @@ describe("collectClawHubVersionGateErrors", () => {
   });
 });
 
+describe("resolveSelectedClawHubPublishablePluginPackages", () => {
+  it("selects all publishable plugins when shared release tooling changes", () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["demo-two"],
+    });
+    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    mkdirSync(join(repoDir, "scripts"), { recursive: true });
+    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "shared tooling",
+    ]);
+    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+    const selected = resolveSelectedClawHubPublishablePluginPackages({
+      rootDir: repoDir,
+      plugins: collectClawHubPublishablePluginPackages(repoDir),
+      gitRange: { baseRef, headRef },
+    });
+
+    expect(selected.map((plugin) => plugin.extensionId)).toEqual(["demo-plugin", "demo-two"]);
+  });
+});
+
 describe("collectPluginClawHubReleasePlan", () => {
   it("skips versions that already exist on ClawHub", async () => {
     const repoDir = createTempPluginRepo();
@@ -225,6 +257,7 @@ describe("collectPluginClawHubReleasePathsFromGitRange", () => {
 function createTempPluginRepo(
   options: {
     extensionId?: string;
+    extraExtensionIds?: string[];
     publishToClawHub?: boolean;
     includeClawHubContract?: boolean;
   } = {},
@@ -232,41 +265,47 @@ function createTempPluginRepo(
   const repoDir = mkdtempSync(join(tmpdir(), "openclaw-clawhub-release-"));
   tempDirs.push(repoDir);
   const extensionId = options.extensionId ?? "demo-plugin";
+  const extensionIds = [extensionId, ...(options.extraExtensionIds ?? [])];
 
-  mkdirSync(join(repoDir, "extensions", extensionId), { recursive: true });
   writeFileSync(
     join(repoDir, "package.json"),
     JSON.stringify({ name: "openclaw-test-root" }, null, 2),
   );
   writeFileSync(join(repoDir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  writeFileSync(
-    join(repoDir, "extensions", extensionId, "package.json"),
-    JSON.stringify(
-      {
-        name: "@openclaw/demo-plugin",
-        version: "2026.4.1",
-        openclaw: {
-          extensions: ["./index.ts"],
-          ...(options.includeClawHubContract === false
-            ? {}
-            : {
-                compat: {
-                  pluginApi: ">=2026.4.1",
-                },
-                build: {
-                  openclawVersion: "2026.4.1",
-                },
-              }),
-          release: {
-            publishToClawHub: options.publishToClawHub ?? true,
+  for (const currentExtensionId of extensionIds) {
+    mkdirSync(join(repoDir, "extensions", currentExtensionId), { recursive: true });
+    writeFileSync(
+      join(repoDir, "extensions", currentExtensionId, "package.json"),
+      JSON.stringify(
+        {
+          name: `@openclaw/${currentExtensionId}`,
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            ...(options.includeClawHubContract === false
+              ? {}
+              : {
+                  compat: {
+                    pluginApi: ">=2026.4.1",
+                  },
+                  build: {
+                    openclawVersion: "2026.4.1",
+                  },
+                }),
+            release: {
+              publishToClawHub: options.publishToClawHub ?? true,
+            },
           },
         },
-      },
-      null,
-      2,
-    ),
-  );
-  writeFileSync(join(repoDir, "extensions", extensionId, "index.ts"), "export const demo = 1;\n");
+        null,
+        2,
+      ),
+    );
+    writeFileSync(
+      join(repoDir, "extensions", currentExtensionId, "index.ts"),
+      `export const ${currentExtensionId.replaceAll(/[-.]/g, "_")} = 1;\n`,
+    );
+  }
 
   git(repoDir, ["init", "-b", "main"]);
   git(repoDir, ["add", "."]);

@@ -73,6 +73,19 @@ export type PluginReleasePlan = {
 
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
+  ".github/workflows/plugin-clawhub-release.yml",
+  "package.json",
+  "pnpm-lock.yaml",
+  "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/plugin-npm-release.ts",
+  "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/openclaw-npm-release-check.ts",
+  "scripts/plugin-clawhub-publish.sh",
+  "scripts/plugin-clawhub-release-check.ts",
+  "scripts/plugin-clawhub-release-plan.ts",
+] as const;
+const CLAWHUB_SHARED_RELEASE_INPUT_PATH_SET = new Set<string>(CLAWHUB_SHARED_RELEASE_INPUT_PATHS);
 
 function readPluginPackageJson(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
@@ -205,6 +218,26 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
 }): string[] {
+  return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, ["extensions"]);
+}
+
+function collectPluginClawHubRelevantPathsFromGitRange(params: {
+  rootDir?: string;
+  gitRange: GitRangeSelection;
+}): string[] {
+  return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, [
+    "extensions",
+    ...CLAWHUB_SHARED_RELEASE_INPUT_PATHS,
+  ]);
+}
+
+function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
+  params: {
+    rootDir?: string;
+    gitRange: GitRangeSelection;
+  },
+  pathspecs: readonly string[],
+): string[] {
   const rootDir = params.rootDir ?? resolve(".");
   const { baseRef, headRef } = params.gitRange;
 
@@ -217,7 +250,7 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
 
   return execFileSync(
     "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", "extensions"],
+    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", ...pathspecs],
     {
       cwd: rootDir,
       encoding: "utf8",
@@ -228,6 +261,10 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((path) => normalizePath(path));
+}
+
+function hasSharedClawHubReleaseInputChanges(changedPaths: readonly string[]) {
+  return changedPaths.some((path) => CLAWHUB_SHARED_RELEASE_INPUT_PATH_SET.has(path));
 }
 
 export function resolveChangedClawHubPublishablePluginPackages(params: {
@@ -257,12 +294,16 @@ export function resolveSelectedClawHubPublishablePluginPackages(params: {
     });
   }
   if (params.gitRange) {
+    const changedPaths = collectPluginClawHubRelevantPathsFromGitRange({
+      rootDir: params.rootDir,
+      gitRange: params.gitRange,
+    });
+    if (hasSharedClawHubReleaseInputChanges(changedPaths)) {
+      return params.plugins;
+    }
     return resolveChangedClawHubPublishablePluginPackages({
       plugins: params.plugins,
-      changedPaths: collectPluginClawHubReleasePathsFromGitRange({
-        rootDir: params.rootDir,
-        gitRange: params.gitRange,
-      }),
+      changedPaths,
     });
   }
   return params.plugins;
