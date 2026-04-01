@@ -209,6 +209,13 @@ export function isInvalidStreamingEventOrderError(raw: string): boolean {
   );
 }
 
+export function isStreamingJsonParseError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return /\b(?:expected|unexpected)\b.+\bin json\b.+\bposition\b/i.test(raw);
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(raw);
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -417,6 +424,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
+    }
+
+    if (isStreamingJsonParseError(trimmed)) {
+      return "LLM streaming response contained a malformed fragment. Please try again.";
     }
 
     if (ERROR_PREFIX_RE.test(trimmed)) {
