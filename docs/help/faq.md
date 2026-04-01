@@ -466,7 +466,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="How do I install OpenClaw on a VPS?">
     Any Linux VPS works. Install on the server, then use SSH/Tailscale to reach the Gateway.
 
-    Guides: [exe.dev](/install/exe-dev), [Agent Computer](/install/agentcomputer), [Hetzner](/install/hetzner), [Fly.io](/install/fly).
+    Guides: [Agent Computer](/install/agentcomputer), [exe.dev](/install/exe-dev), [Hetzner](/install/hetzner), [Fly.io](/install/fly).
     Remote access: [Gateway remote](/gateway/remote).
 
   </Accordion>
@@ -475,10 +475,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     We keep a **hosting hub** with the common providers. Pick one and follow the guide:
 
     - [VPS hosting](/vps) (all providers in one place)
+    - [Agent Computer](/install/agentcomputer)
     - [Fly.io](/install/fly)
     - [Hetzner](/install/hetzner)
     - [exe.dev](/install/exe-dev)
-    - [Agent Computer](/install/agentcomputer)
 
     How it works in the cloud: the **Gateway runs on the server**, and you access it
     from your laptop/phone via the Control UI (or Tailscale/SSH). Your state + workspace

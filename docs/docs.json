@@ -941,11 +941,11 @@
               {
                 "group": "Hosting",
                 "pages": [
+                  "install/agentcomputer",
                   "install/azure",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
-                  "install/agentcomputer",
                   "install/fly",
                   "install/gcp",
                   "install/hetzner",

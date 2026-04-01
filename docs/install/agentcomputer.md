@@ -1,7 +1,8 @@
 ---
-summary: "Run OpenClaw on an Agent Computer managed worker and expose it through a published host"
+summary: "Deploy OpenClaw on Agent Computer with a browser shortcut and published port"
 read_when:
   - You want OpenClaw on Agent Computer
+  - You want a one-click browser setup for OpenClaw on a managed worker
   - You want a cloud Linux machine with SSH, durable home storage, and published web access
 title: "Agent Computer"
 ---
@@ -10,28 +11,44 @@ title: "Agent Computer"
 
 Goal: OpenClaw Gateway running on an Agent Computer managed worker, reachable from your browser through a published host.
 
-This guide uses the Agent Computer CLI to create a managed worker, installs OpenClaw inside it, then publishes port `18789` so the Control UI can be reached remotely.
+This guide supports two paths:
+
+- **Browser shortcut (recommended):** open [https://agentcomputer.ai/openclaw](https://agentcomputer.ai/openclaw) to start from Agent Computer's OpenClaw template
+- **Manual CLI path:** create the managed worker yourself, then install and expose OpenClaw step by step
+
+Either way, the final hosting step is the same: publish port `18789` so the Control UI can be reached remotely.
 
 ## Beginner quick path
 
-1. `npm install -g aicomputer`
-2. `computer login`
-3. `computer create my-openclaw`
-4. `computer ssh my-openclaw` (the next commands run inside the Agent Computer shell)
-5. `curl -fsSL https://openclaw.ai/install.sh | bash`
-6. `openclaw onboard --install-daemon`
-7. `openclaw doctor --generate-gateway-token`
-8. `openclaw config set gateway.bind lan`
-9. `openclaw gateway restart`
-10. `exit` (return to your local machine)
-11. `computer ports publish my-openclaw 18789 --subdomain openclaw --protocol https`
-12. If OpenClaw prompts for auth, run `computer ssh my-openclaw`, then `openclaw config get gateway.auth.token`
+1. Open [https://agentcomputer.ai/openclaw](https://agentcomputer.ai/openclaw)
+2. Sign in and create a machine from the preselected **OpenClaw** template
+3. Let the template finish installing and onboarding OpenClaw in the browser
+4. On your local machine, run `npm install -g aicomputer`
+5. Run `computer ssh <machine-name>` (the next commands run inside the Agent Computer shell)
+6. Run `openclaw doctor --generate-gateway-token`
+7. Run `openclaw config set gateway.bind lan`
+8. Run `openclaw gateway restart`
+9. Run `exit` (return to your local machine)
+10. Run `computer ports publish <machine-name> 18789 --subdomain openclaw --protocol https`
+11. If OpenClaw prompts for auth, run `computer ssh <machine-name>`, then `openclaw config get gateway.auth.token`
 
 ## What you need
 
 - Agent Computer account
 - Node.js on your local machine so you can install `aicomputer`
 - A model provider key or other auth required by your OpenClaw onboarding flow
+
+## Browser shortcut
+
+The shortcut route below opens Agent Computer's **OpenClaw** template directly:
+
+```text
+https://agentcomputer.ai/openclaw
+```
+
+Choose a machine name in the browser, let the template finish the initial install, then continue with the bind/publish steps later in this guide.
+
+## Manual CLI path
 
 ## 1) Install the Agent Computer CLI and sign in
 
