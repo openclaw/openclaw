@@ -16,8 +16,18 @@ export function configureControlPlaneRateLimit(config?: {
   maxRequests?: number;
   windowMs?: number;
 }): void {
-  controlPlaneMaxRequests = config?.maxRequests ?? DEFAULT_CONTROL_PLANE_MAX_REQUESTS;
-  controlPlaneWindowMs = config?.windowMs ?? DEFAULT_CONTROL_PLANE_WINDOW_MS;
+  const maxRequests = config?.maxRequests ?? DEFAULT_CONTROL_PLANE_MAX_REQUESTS;
+  const windowMs = config?.windowMs ?? DEFAULT_CONTROL_PLANE_WINDOW_MS;
+
+  if (maxRequests < 1 || !Number.isFinite(maxRequests)) {
+    throw new Error(`controlPlane.rateLimit.maxRequests must be >= 1, got ${maxRequests}`);
+  }
+  if (windowMs < 1 || !Number.isFinite(windowMs)) {
+    throw new Error(`controlPlane.rateLimit.windowMs must be >= 1, got ${windowMs}`);
+  }
+
+  controlPlaneMaxRequests = maxRequests;
+  controlPlaneWindowMs = windowMs;
   controlPlaneBuckets.clear();
 }
 
