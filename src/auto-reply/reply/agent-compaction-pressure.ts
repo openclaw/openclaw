@@ -9,6 +9,7 @@ import {
   computeContextPressure,
   formatContextPressureMessage,
 } from "../../agents/context-pressure.js";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -20,20 +21,30 @@ function resolveMemoryFlushContextWindowTokens(params: {
   return params.agentCfgContextTokens ?? 128_000;
 }
 
-function resolveFreshSessionTotalTokens(entry: SessionEntry): number | undefined {
-  // Only use totalTokens when freshly reported AND within a sane range.
-  // GH Copilot and some providers report cumulative cache/token counts
-  // that exceed the actual context window — those are noise.
-  if ("totalTokensFresh" in entry && entry.totalTokensFresh) {
-    const tokens = (entry as { totalTokens?: number }).totalTokens;
-    const contextWindow = (entry as Record<string, unknown>).contextTokens as number | undefined;
-    // If reported tokens exceed the context window, the value is cumulative noise
-    if (tokens && contextWindow && tokens > contextWindow) {
-      return undefined;
-    }
-    return tokens;
+/**
+ * Estimate current context tokens from the session transcript.
+ * Uses chars/4 heuristic (same as upstream compaction).
+ * Reads only kept messages (respects compaction markers).
+ */
+function estimateSessionTokensFromTranscript(entry: SessionEntry): number | undefined {
+  const sessionId = (entry as Record<string, unknown>).sessionId as string | undefined;
+  if (!sessionId) return undefined;
+  try {
+    // Dynamic require to avoid circular imports
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { readSessionMessages } = require("../../agents/pi-embedded-runner/session-io.js");
+    const messages = readSessionMessages(
+      sessionId,
+      undefined,
+      (entry as Record<string, unknown>).sessionFile as string | undefined,
+    );
+    if (!Array.isArray(messages) || messages.length === 0) return undefined;
+    let total = 0;
+    for (const msg of messages) total += estimateTokens(msg);
+    return total > 0 ? total : undefined;
+  } catch (_e) {
+    return undefined;
   }
-  return undefined;
 }
 
 export function maybeInjectAgentCompactionPressureSignal(params: {
@@ -55,16 +66,13 @@ export function maybeInjectAgentCompactionPressureSignal(params: {
       agentCfgContextTokens: params.agentCfgContextTokens,
     });
 
-  const totalTokens = resolveFreshSessionTotalTokens(entry);
+  const totalTokens = estimateSessionTokensFromTranscript(entry);
 
-  // FORK DEBUG: log what values we're using
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
     `tokenCount=${totalTokens} contextWindow=${contextWindowTokens} ` +
     `threshold=${contextWindowTokens * 0.85} ` +
-    `isHeartbeat=${false} isCli=${false} ` +
-    `persistedFresh=${(entry as any).totalTokensFresh === true} ` +
-    `transcriptCheck=${(entry as any).totalTokens}`
+    `estimated=true method=transcript`,
   );
 
   const signal = computeContextPressure({
@@ -74,7 +82,6 @@ export function maybeInjectAgentCompactionPressureSignal(params: {
 
   if (signal && params.sessionKey) {
     const message = formatContextPressureMessage(signal);
-    // Use dynamic import to avoid circular dependency through system-events → delivery-context → channels/registry
     void import("../../infra/system-events.js").then(({ enqueueSystemEvent }) => {
       enqueueSystemEvent(message, { sessionKey: params.sessionKey! });
     });
