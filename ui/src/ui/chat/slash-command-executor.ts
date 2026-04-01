@@ -150,7 +150,12 @@ async function executeModel(
         modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
-      const model = session?.model || sessions?.defaults?.model || "default";
+      const model =
+        resolvePreferredServerChatModel(
+          session?.model ?? sessions?.defaults?.model,
+          session?.modelProvider ?? sessions?.defaults?.modelProvider,
+          models,
+        ).value || "default";
       const available = models.map((m: ModelCatalogEntry) => m.id);
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
@@ -339,7 +344,10 @@ async function executeUsage(
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
     }
     if (session.model) {
-      lines.push(`Model: \`${session.model}\``);
+      const fullModel = session.modelProvider
+        ? `${session.modelProvider}/${session.model}`
+        : session.model;
+      lines.push(`Model: \`${fullModel}\``);
     }
     return { content: lines.join("\n") };
   } catch (err) {

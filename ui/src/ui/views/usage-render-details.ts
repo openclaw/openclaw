@@ -72,7 +72,11 @@ function renderSessionSummary(
     badges.push(`provider:${session.modelProvider ?? session.providerOverride}`);
   }
   if (session.model) {
-    badges.push(`model:${session.model}`);
+    const fullModel =
+      session.modelProvider && !session.model.startsWith(`${session.modelProvider}/`)
+        ? `${session.modelProvider}/${session.model}`
+        : session.model;
+    badges.push(`model:${fullModel}`);
   }
 
   // Always use the full tool list for stable layout; update counts when filtering
