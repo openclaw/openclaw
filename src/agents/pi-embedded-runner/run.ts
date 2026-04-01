@@ -36,6 +36,7 @@ import {
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
 } from "../model-auth.js";
+import { parseModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
@@ -140,6 +141,14 @@ export async function runEmbeddedPiAgent(
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+
+      // When modelId contains a provider prefix (e.g. "ollama-beelink2/qwen2.5-coder:7b"),
+      // extract the provider and model name so the API receives just the model name.
+      const parsedRef = parseModelRef(modelId, provider);
+      if (parsedRef && modelId.includes("/")) {
+        provider = parsedRef.provider;
+        modelId = parsedRef.model;
+      }
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured = hasConfiguredModelFallbacks({
         cfg: params.config,
