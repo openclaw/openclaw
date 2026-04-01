@@ -92,12 +92,12 @@ export function maybeInjectAgentCompactionPressureSignal(params: {
     return entry;
   }
 
+  // Prefer explicit agent config contextTokens over catalog-reported value
+  // (GH Copilot reports 1M for Claude Opus but real limit is 200k)
   const contextWindowTokens =
+    params.agentCfgContextTokens ??
     (entry as Record<string, unknown>).contextTokens as number | undefined ??
-    resolveMemoryFlushContextWindowTokens({
-      modelId: params.defaultModel,
-      agentCfgContextTokens: params.agentCfgContextTokens,
-    });
+    128_000;
 
   const totalTokens = estimateSessionTokensFromTranscript(entry);
 
