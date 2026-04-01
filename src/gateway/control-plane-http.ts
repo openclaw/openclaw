@@ -33,6 +33,7 @@ import type {
   ControlPlaneRuntimeAgent,
   ControlPlaneRuntimeRole,
 } from "./control-plane-runtime.js";
+import { installSkillPackageFromRegistryDownload } from "./control-plane-skill-install.js";
 import {
   getGlobalExecApprovalBroadcast,
   getGlobalExecApprovalForwarder,
@@ -110,6 +111,24 @@ function writePortalStreamEvent(res: ServerResponse, type: string, data: unknown
   res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
 }
 
+function asJsonObject(value: unknown): JsonObject | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function extractToolResultDetails(value: unknown): JsonObject | undefined {
+  const record = asJsonObject(value);
+  if (!record) {
+    return undefined;
+  }
+  return asJsonObject(record.details) ?? record;
+}
+
 function buildPortalRuntimeEventFromAgentEvent(
   evt: AgentEventPayload,
 ): PortalRuntimeEventWire | null {
@@ -118,6 +137,87 @@ function buildPortalRuntimeEventFromAgentEvent(
     const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
     const toolName = typeof evt.data?.name === "string" ? evt.data.name : "tool";
     const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId : undefined;
+    const toolArgs = asJsonObject(evt.data?.args);
+    const toolResult = extractToolResultDetails(evt.data?.result);
+    const isSkillSearchTool = toolName === "skill_registry_search";
+    const isSkillInstallTool = toolName === "skill_registry_install";
+    const query =
+      (toolArgs ? readOptionalString(toolArgs, "query", "q", "keyword") : undefined) ??
+      (toolResult ? readOptionalString(toolResult, "query", "q", "keyword") : undefined);
+    const skillKey =
+      (toolArgs ? readOptionalString(toolArgs, "skillKey", "skill_key") : undefined) ??
+      (toolResult ? readOptionalString(toolResult, "skillKey", "skill_key") : undefined);
+    const version =
+      (toolArgs ? readOptionalString(toolArgs, "version") : undefined) ??
+      (toolResult ? readOptionalString(toolResult, "version") : undefined);
+    const resultCount =
+      readFiniteNumber(toolResult?.count) ?? readFiniteNumber(toolResult?.resultCount);
+    const errorMessage =
+      (toolResult ? readOptionalString(toolResult, "error", "message", "reason") : undefined) ??
+      (typeof evt.data?.error === "string" && evt.data.error ? evt.data.error : undefined);
+    const commonPayload = {
+      runId: evt.runId,
+      stream: evt.stream,
+      phase,
+      name: toolName,
+      toolCallId: toolCallId ?? null,
+      seq: evt.seq,
+      ts: evt.ts,
+    };
+    if (isSkillSearchTool || isSkillInstallTool) {
+      if (phase === "start") {
+        return buildPortalRuntimeEvent({
+          eventType: isSkillSearchTool
+            ? "training.skill.search.started"
+            : "training.skill.install.started",
+          level: "info",
+          message: isSkillSearchTool ? "开始搜索技能" : "开始安装技能",
+          payload: {
+            ...commonPayload,
+            ...(query ? { query } : {}),
+            ...(skillKey ? { skillKey, skillName: skillKey } : {}),
+            ...(version ? { version } : {}),
+          },
+          createdAt,
+        });
+      }
+      if (phase === "result") {
+        const isError = Boolean(evt.data?.isError);
+        return buildPortalRuntimeEvent({
+          eventType: isSkillSearchTool
+            ? isError
+              ? "training.skill.search.failed"
+              : "training.skill.search.completed"
+            : isError
+              ? "training.skill.install.failed"
+              : "training.skill.install.completed",
+          level: isError ? "error" : "info",
+          message: isSkillSearchTool
+            ? isError
+              ? "技能搜索失败"
+              : "技能搜索完成"
+            : isError
+              ? "技能安装失败"
+              : "技能安装完成",
+          payload: {
+            ...commonPayload,
+            isError,
+            ...(query ? { query } : {}),
+            ...(skillKey ? { skillKey, skillName: skillKey } : {}),
+            ...(version ? { version } : {}),
+            ...(resultCount !== undefined ? { resultCount } : {}),
+            ...(toolResult?.installedPath &&
+            typeof toolResult.installedPath === "string" &&
+            toolResult.installedPath
+              ? { installedPath: toolResult.installedPath }
+              : {}),
+            ...(errorMessage ? { error: errorMessage } : {}),
+            ...(Array.isArray(toolResult?.items) ? { items: toolResult.items.slice(0, 5) } : {}),
+          },
+          createdAt,
+        });
+      }
+    }
     if (phase === "start") {
       return buildPortalRuntimeEvent({
         eventType: "tool.started",
@@ -152,6 +252,7 @@ function buildPortalRuntimeEventFromAgentEvent(
             evt.data?.meta && typeof evt.data.meta === "object" && !Array.isArray(evt.data.meta)
               ? evt.data.meta
               : undefined,
+          result: toolResult,
           seq: evt.seq,
           ts: evt.ts,
         },
@@ -544,6 +645,8 @@ function buildPortalExtraSystemPrompt(params: {
     lines.push(
       "",
       "Training view is enabled. Candidate changes may be proposed as draft runtime state, but nothing is published until the control-plane explicitly approves and releases it.",
+      "When the user asks for existing capabilities, integrations, or reusable automation, search the skill registry first with skill_registry_search.",
+      "Before calling skill_registry_install, summarize the candidate skill and get explicit user confirmation in chat.",
     );
   } else {
     lines.push(
@@ -1456,6 +1559,75 @@ export async function handleControlPlaneHttpRequest(
       ok: true,
       snapshotId: state.skillSnapshotId,
       packagesApplied: packages.length,
+    });
+    return true;
+  }
+
+  if (url.pathname === `${PREFIX}/skills/registry/install`) {
+    if (!ensureMethod(req, res, "POST")) {
+      return true;
+    }
+    const body = await readBody(req);
+    const agentId = normalizeAgentId(
+      readOptionalString(body, "agentId", "localAgentKey", "localAgentId") ?? "",
+    );
+    if (!agentId) {
+      sendJson(res, 400, { error: "missing or invalid agentId" });
+      return true;
+    }
+    const dataObj = readOptionalObject(body, "data");
+    const downloadUrl =
+      readOptionalString(body, "downloadUrl") ??
+      (dataObj ? readOptionalString(dataObj, "downloadUrl") : undefined);
+    if (!downloadUrl) {
+      sendJson(res, 400, { error: "missing downloadUrl" });
+      return true;
+    }
+    const skillKey =
+      readOptionalString(body, "skillKey") ??
+      (dataObj ? readOptionalString(dataObj, "skillKey") : undefined);
+    if (!skillKey) {
+      sendJson(res, 400, { error: "missing skillKey" });
+      return true;
+    }
+    const cfg = loadConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const artifactObj =
+      readOptionalObject(body, "artifact") ??
+      (dataObj ? readOptionalObject(dataObj, "artifact") : undefined);
+    const artifactFormat =
+      readOptionalString(body, "artifactFormat", "format") ??
+      (artifactObj ? readOptionalString(artifactObj, "format") : undefined);
+    const expectedSha256 =
+      readOptionalString(body, "sha256", "expectedSha256", "artifactSha256") ??
+      (artifactObj ? readOptionalString(artifactObj, "sha256") : undefined);
+    const stripRaw = body.stripComponents;
+    const stripComponents =
+      typeof stripRaw === "number" && Number.isFinite(stripRaw) ? stripRaw : undefined;
+    const timeoutRaw = body.timeoutMs;
+    const timeoutMs =
+      typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) ? timeoutRaw : undefined;
+
+    const result = await installSkillPackageFromRegistryDownload({
+      workspaceDir,
+      downloadUrl,
+      skillKey,
+      artifactFormat,
+      expectedSha256,
+      stripComponents,
+      timeoutMs,
+    });
+    if (!result.ok) {
+      sendJson(res, 400, { error: result.message });
+      return true;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      agentId,
+      skillKey: result.skillKey,
+      installedPath: result.installedPath,
+      bytes: result.bytes,
+      sha256: result.sha256,
     });
     return true;
   }
