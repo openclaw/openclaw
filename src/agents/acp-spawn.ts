@@ -1198,10 +1198,14 @@ export async function spawnAcpDirect(
       `Session key: ${sessionKey}`,
       "",
       "You can hand control back to the main agent by running this shell command:",
-      `  openclaw acp close-self --session-key "${sessionKey}"`,
+      `  openclaw acp close-self --session-key "${sessionKey}" --message "your summary here"`,
       "",
-      "Do this ONLY when the user asks about something clearly unrelated to your assigned task.",
-      "Do NOT hand back for follow-ups, clarifications, or when completing your task (summarize first).",
+      "Use close-self in these situations:",
+      "- The user explicitly asks you to hand back or delegate to the main agent.",
+      "- You have fully completed your assigned task — summarize results in --message, then close.",
+      "- The user asks about something clearly unrelated to your assigned task.",
+      "",
+      "Do NOT close-self for follow-up questions, clarifications, or while still working on the task.",
       "[/ACP SESSION CONTROL]",
     ].join("\n");
     effectiveTask = `${effectiveTask}\n\n${handbackBlock}`;
