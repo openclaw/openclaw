@@ -184,8 +184,10 @@ enabled). Otherwise Anthropic returns:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
-OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
-context1m beta header for OAuth auth and keeps the required OAuth betas.
+subscription setup-tokens (`sk-ant-oat-*`). If you configure `context1m: true`
+with subscription auth, OpenClaw logs a warning and falls back to the standard
+context window by skipping the context1m beta header while keeping the required
+OAuth betas.
 
 ## Option B: Claude CLI as the message provider
 
