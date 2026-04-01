@@ -115,6 +115,19 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
 
 if (command === "sessions" && args[commandIndex + 1] === "new") {
   writeLog({ kind: "new", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME === "1" && args.includes("--resume-session")) {
+    return emitJsonAndExit(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32603,
+          message: "mock stale resume session",
+        },
+      },
+      1,
+    );
+  }
   if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
     emitJson({ action: "session_created", name: ensureName });
   } else {
@@ -426,6 +439,7 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_ENSURE_STDERR;
+  delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_NO_IDS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
