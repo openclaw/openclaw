@@ -1,0 +1,28 @@
+{
+  "id": "nexos",
+  "enabledByDefault": true,
+  "providers": ["nexos"],
+  "providerAuthEnvVars": {
+    "nexos": ["NEXOS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "nexos",
+      "method": "api-key",
+      "choiceId": "nexos-api-key",
+      "choiceLabel": "Nexos AI API key",
+      "groupId": "nexos",
+      "groupLabel": "Nexos AI",
+      "groupHint": "API key",
+      "optionKey": "nexosApiKey",
+      "cliFlag": "--nexos-api-key",
+      "cliOption": "--nexos-api-key <key>",
+      "cliDescription": "Nexos AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

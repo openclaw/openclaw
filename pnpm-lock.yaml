@@ -528,6 +528,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/nexos: {}
+
   extensions/nextcloud-talk:
     devDependencies:
       openclaw:

@@ -23,6 +23,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   mistral: ["MISTRAL_API_KEY"],
   modelstudio: ["MODELSTUDIO_API_KEY"],
   moonshot: ["MOONSHOT_API_KEY"],
+  nexos: ["NEXOS_API_KEY"],
   nvidia: ["NVIDIA_API_KEY"],
   ollama: ["OLLAMA_API_KEY"],
   openai: ["OPENAI_API_KEY"],

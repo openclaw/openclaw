@@ -449,6 +449,15 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
+  nexos: {
+    module: typeof import("@openclaw/nexos/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/nexos/api.js");
+      };
+    };
+    types: {};
+  };
   ollama: {
     module: typeof import("@openclaw/ollama/runtime-api.js");
     sourceModules: {

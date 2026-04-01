@@ -310,6 +310,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"extensions: nexos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nexos/**"
 "extensions: together":
   - changed-files:
       - any-glob-to-any-file:

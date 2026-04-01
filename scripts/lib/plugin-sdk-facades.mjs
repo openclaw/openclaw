@@ -716,6 +716,19 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     exports: ["buildNvidiaProvider"],
   },
   {
+    subpath: "nexos",
+    source: pluginSource("nexos", "api.js"),
+    exports: [
+      "applyNexosConfig",
+      "buildNexosModelDefinition",
+      "buildNexosProvider",
+      "discoverNexosModels",
+      "NEXOS_BASE_URL",
+      "NEXOS_DEFAULT_MODEL_REF",
+      "NEXOS_MODEL_CATALOG",
+    ],
+  },
+  {
     subpath: "ollama",
     source: pluginSource("ollama", "runtime-api.js"),
     exports: [
