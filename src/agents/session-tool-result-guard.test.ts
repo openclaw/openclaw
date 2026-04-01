@@ -464,7 +464,7 @@ describe("installSessionToolResultGuard", () => {
     // branch should never have been called since the hook blocked the synthetic result
     expect(branchSpy).not.toHaveBeenCalled();
     // leaf should still point at the assistant entry, not rewound
-    expect(sm.leafId).toBe(assistantId);
+    expect(sm.getLeafId()).toBe(assistantId);
     branchSpy.mockRestore();
   });
 
