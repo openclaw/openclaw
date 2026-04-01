@@ -8,9 +8,11 @@ import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
+type RegisteredProviderPlugin = ReturnType<typeof registerSingleProviderPlugin>;
+
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
-function registerWithConfig(pluginConfig?: Record<string, unknown>): ProviderPlugin {
-  const providers: ProviderPlugin[] = [];
+function registerWithConfig(pluginConfig?: Record<string, unknown>): RegisteredProviderPlugin {
+  const providers: RegisteredProviderPlugin[] = [];
   const noopLogger = { info() {}, warn() {}, error() {}, debug() {} };
   const api = buildPluginApi({
     id: "amazon-bedrock",
@@ -23,7 +25,7 @@ function registerWithConfig(pluginConfig?: Record<string, unknown>): ProviderPlu
     logger: noopLogger,
     resolvePath: (input) => input,
     handlers: {
-      registerProvider(provider: ProviderPlugin) {
+      registerProvider(provider: RegisteredProviderPlugin) {
         providers.push(provider);
       },
     },
@@ -58,7 +60,7 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
  * the payload via the onPayload hook that streamWithPayloadPatch installs.
  */
 function callWrappedStream(
-  provider: ProviderPlugin,
+  provider: RegisteredProviderPlugin,
   modelId: string,
   modelDescriptor: never,
 ): Record<string, unknown> {
