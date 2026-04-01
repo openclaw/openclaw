@@ -15,14 +15,10 @@ type MatrixRoomEntries = Record<string, NonNullable<MatrixConfig["groups"]>[stri
 function selectInheritedMatrixRoomEntries(params: {
   entries: MatrixRoomEntries | undefined;
   accountId: string;
-  isMultiAccount: boolean;
 }): MatrixRoomEntries | undefined {
   const entries = params.entries;
   if (!entries) {
     return undefined;
-  }
-  if (!params.isMultiAccount) {
-    return entries;
   }
   const selected = Object.fromEntries(
     Object.entries(entries).filter(([, value]) => {
@@ -199,12 +195,10 @@ export function resolveMatrixAccountConfig(params: {
     nestedObjectKeys: ["dm", "actions"],
   });
   const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
-  const isMultiAccount = resolveConfiguredMatrixAccountIds(params.cfg, env).length > 1;
   const groups = mergeMatrixRoomEntries(
     selectInheritedMatrixRoomEntries({
       entries: base.groups,
       accountId,
-      isMultiAccount,
     }),
     accountConfig?.groups,
     Boolean(accountConfig && Object.hasOwn(accountConfig, "groups")),
@@ -213,7 +207,6 @@ export function resolveMatrixAccountConfig(params: {
     selectInheritedMatrixRoomEntries({
       entries: base.rooms,
       accountId,
-      isMultiAccount,
     }),
     accountConfig?.rooms,
     Boolean(accountConfig && Object.hasOwn(accountConfig, "rooms")),

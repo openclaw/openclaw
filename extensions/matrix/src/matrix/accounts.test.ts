@@ -686,6 +686,66 @@ describe("resolveMatrixAccount", () => {
     });
   });
 
+  it("keeps scoped groups bound to their account even when only one account is active", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("keeps scoped legacy rooms bound to their account even when only one account is active", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          rooms: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
   it("lets an account clear inherited groups with an explicit empty map", () => {
     const cfg = {
       channels: {
