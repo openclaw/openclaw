@@ -166,20 +166,18 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(preRunSnapshot.systemSent).toBe(true);
   });
 
-  it("returns error without persisting model when payload model is disallowed", async () => {
-    resolveAllowedModelRefMock.mockReturnValueOnce({
-      error: "Model not allowed: anthropic/claude-sonnet-4-6",
-    });
+  it("payload model override bypasses allowlist and is always applied", async () => {
+    // Even when the allowlist would reject the model, the explicit --model
+    // flag on a cron job should take highest priority per the docs.
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Model not allowed");
-    // Model should remain undefined — the early return happens before the
-    // pre-run persist block, so neither the session entry nor the store
-    // should be touched with a rejected model.
-    expect(cronSession.sessionEntry.model).toBeUndefined();
-    expect(cronSession.sessionEntry.modelProvider).toBeUndefined();
+    expect(result.status).toBe("ok");
+    // The session entry should reflect the payload model override (Sonnet),
+    // not the agent default (Opus).
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
   it("persists session-level /model override on session entry before the run", async () => {

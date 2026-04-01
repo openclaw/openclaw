@@ -186,11 +186,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-5" });
     });
 
-    it("applies payload.model override when model is allowed", async () => {
-      resolveAllowedModelRefMock.mockReturnValueOnce({
-        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
-      });
-
+    it("applies payload.model override bypassing allowlist", async () => {
       const result = await runCronIsolatedAgentTurn(
         makeSkillParams({
           job: makeSkillJob({
@@ -207,11 +203,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(runParams.model).toBe("claude-sonnet-4-6");
     });
 
-    it("falls back to agent defaults when payload.model is not allowed", async () => {
-      resolveAllowedModelRefMock.mockReturnValueOnce({
-        error: "model not allowed: anthropic/claude-sonnet-4-6",
-      });
-
+    it("payload.model override ignores allowlist restrictions", async () => {
+      // Even with an allowlist configured, --model flag takes highest priority
       await runSkillFilterCase({
         cfg: {
           agents: {
@@ -224,20 +217,14 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
         }),
       });
-      expect(logWarnMock).toHaveBeenCalledWith(
-        "cron: payload.model 'anthropic/claude-sonnet-4-6' not allowed, falling back to agent defaults",
-      );
-      expectDefaultModelCall({
-        primary: "openai-codex/gpt-5.4",
-        fallbacks: defaultFallbacks,
-      });
+      expect(logWarnMock).not.toHaveBeenCalled();
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      const runParams = runWithModelFallbackMock.mock.calls[0][0];
+      expect(runParams.provider).toBe("anthropic");
+      expect(runParams.model).toBe("claude-sonnet-4-6");
     });
 
     it("returns an error when payload.model is invalid", async () => {
-      resolveAllowedModelRefMock.mockReturnValueOnce({
-        error: "invalid model: openai/",
-      });
-
       const result = await runCronIsolatedAgentTurn(
         makeSkillParams({
           job: makeSkillJob({
@@ -247,7 +234,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       );
 
       expect(result.status).toBe("error");
-      expect(result.error).toBe("invalid model: openai/");
+      expect(result.error).toContain("invalid cron model override");
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
     });

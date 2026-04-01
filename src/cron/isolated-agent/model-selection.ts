@@ -6,6 +6,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CronJob } from "../types.js";
@@ -103,26 +104,18 @@ export async function resolveCronModelSelection(
   const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
   const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
   if (modelOverride !== undefined && modelOverride.length > 0) {
-    const resolvedOverride = resolveAllowedModelRef({
-      cfg: params.cfgWithAgentDefaults,
-      catalog: await loadCatalogOnce(),
+    // payload.model is set explicitly via --model flag and has highest
+    // priority per the docs. Resolve the ref but skip the allowlist gate
+    // so the user override is always honored.
+    const resolved = resolveModelRefFromString({
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
     });
-    if ("error" in resolvedOverride) {
-      if (resolvedOverride.error.startsWith("model not allowed:")) {
-        return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        };
-      }
-      return { ok: false, error: resolvedOverride.error };
+    if (!resolved) {
+      return { ok: false, error: `invalid cron model override: "${modelOverride}"` };
     }
-    provider = resolvedOverride.ref.provider;
-    model = resolvedOverride.ref.model;
+    provider = resolved.ref.provider;
+    model = resolved.ref.model;
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
