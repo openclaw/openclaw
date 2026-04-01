@@ -303,7 +303,7 @@ export function resolveEffectiveEnableState(params: {
   const base = resolveEnableState(params.id, params.origin, params.config, params.enabledByDefault);
   if (
     !base.enabled &&
-    base.reason === "bundled (disabled by default)" &&
+    (base.reason === "bundled (disabled by default)" || base.reason === "not in allowlist") &&
     isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
   ) {
     return { enabled: true };

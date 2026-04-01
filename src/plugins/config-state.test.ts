@@ -160,6 +160,7 @@ describe("resolveEffectiveEnableState", () => {
 
   it.each([
     [{ enabled: true }, { enabled: true }],
+    [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
     [
       {
         enabled: true,
