@@ -214,25 +214,28 @@ export async function editSlackMessage(
   };
   // Slack models icon_url and icon_emoji as mutually exclusive fields.
   if (opts.identity?.iconUrl) {
-    await client.chat.update({
+    const updatePayload = {
       ...basePayload,
       ...(opts.identity.username ? { username: opts.identity.username } : {}),
       icon_url: opts.identity.iconUrl,
-    });
+    };
+    await client.chat.update(updatePayload);
     return;
   }
   if (opts.identity?.iconEmoji) {
-    await client.chat.update({
+    const updatePayload = {
       ...basePayload,
       ...(opts.identity.username ? { username: opts.identity.username } : {}),
       icon_emoji: opts.identity.iconEmoji,
-    });
+    };
+    await client.chat.update(updatePayload);
     return;
   }
-  await client.chat.update({
+  const updatePayload = {
     ...basePayload,
     ...(opts.identity?.username ? { username: opts.identity.username } : {}),
-  });
+  };
+  await client.chat.update(updatePayload);
 }
 
 export async function deleteSlackMessage(
