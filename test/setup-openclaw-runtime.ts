@@ -270,6 +270,11 @@ function installDefaultPluginRegistry(): void {
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
 }
 
+// Some suites import channel/plugin consumers at module top level, before
+// Vitest runs hooks. Seed the lazy registry during setup module evaluation so
+// import-time lookups still see the default test registry.
+installDefaultPluginRegistry();
+
 beforeAll(() => {
   installDefaultPluginRegistry();
 });
