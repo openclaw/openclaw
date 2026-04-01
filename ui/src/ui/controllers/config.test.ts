@@ -6,6 +6,7 @@ import {
   findAgentConfigEntryIndex,
   runUpdate,
   saveConfig,
+  setDefaultAgentInConfig,
   updateConfigFormValue,
   type ConfigState,
 } from "./config.ts";
@@ -124,6 +125,28 @@ describe("applyConfigSnapshot", () => {
 
     expect(state.configFormMode).toBe("form");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
+
+  it("drops derived agents.defaultId from clean snapshots", () => {
+    const state = createState();
+
+    applyConfigSnapshot(state, {
+      config: {
+        agents: {
+          defaultId: "assistant",
+          list: [{ id: "main" }, { id: "assistant", default: true }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    });
+
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [{ id: "main" }, { id: "assistant", default: true }],
+      },
+    });
   });
 });
 
@@ -244,6 +267,36 @@ describe("agent config helpers", () => {
       },
     });
   });
+
+  it("sets the selected agent as default without persisting agents.defaultId", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          defaultId: "main",
+          list: [
+            { id: "main", default: true, model: "openai/gpt-5" },
+            { id: "assistant", name: "Assistant" },
+          ],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    setDefaultAgentInConfig(state, "assistant");
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [
+          { id: "main", model: "openai/gpt-5" },
+          { id: "assistant", name: "Assistant", default: true },
+        ],
+      },
+    });
+  });
 });
 
 describe("applyConfig", () => {
@@ -347,6 +400,32 @@ describe("saveConfig", () => {
     expect(parsed.gateway.port).toBe(18789);
     expect(parsed.gateway.enabled).toBe(false);
     expect(params.baseHash).toBe("hash-save-1");
+  });
+
+  it("strips derived agents.defaultId before config.set", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configForm = {
+      agents: {
+        defaultId: "assistant",
+        list: [{ id: "main" }, { id: "assistant", default: true }],
+      },
+    };
+    state.configSnapshot = { hash: "hash-save-default" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      agents: { defaultId?: string; list: Array<{ id: string; default?: boolean }> };
+    };
+    expect(parsed.agents.defaultId).toBeUndefined();
+    expect(parsed.agents.list).toEqual([{ id: "main" }, { id: "assistant", default: true }]);
+    expect(params.baseHash).toBe("hash-save-default");
   });
 
   it("skips coercion when schema is not an object", async () => {

@@ -76,8 +76,31 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
+function sanitizeDerivedAgentConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const next = cloneConfigObject(config);
+  const agents = (next as { agents?: unknown }).agents;
+  if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
+    return next;
+  }
+  const agentsRecord = agents as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(agentsRecord, "defaultId")) {
+    delete agentsRecord.defaultId;
+  }
+  return next;
+}
+
+function getEditableConfigBase(state: ConfigState): Record<string, unknown> {
+  return sanitizeDerivedAgentConfig(
+    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {},
+  );
+}
+
 export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
   state.configSnapshot = snapshot;
+  const snapshotConfig =
+    snapshot.config && typeof snapshot.config === "object" && !Array.isArray(snapshot.config)
+      ? sanitizeDerivedAgentConfig(snapshot.config)
+      : {};
   const rawAvailable = typeof snapshot.raw === "string";
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
@@ -86,7 +109,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
     typeof snapshot.raw === "string"
       ? snapshot.raw
       : snapshot.config && typeof snapshot.config === "object"
-        ? serializeConfigForm(snapshot.config)
+        ? serializeConfigForm(snapshotConfig)
         : state.configRaw;
   if (!state.configFormDirty || state.configFormMode === "raw") {
     state.configRaw = rawFromSnapshot;
@@ -99,8 +122,8 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
   if (!state.configFormDirty) {
-    state.configForm = cloneConfigObject(snapshot.config ?? {});
-    state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
+    state.configForm = cloneConfigObject(snapshotConfig);
+    state.configFormOriginal = cloneConfigObject(snapshotConfig);
     state.configRawOriginal = rawFromSnapshot;
   }
 }
@@ -128,9 +151,10 @@ function serializeFormForSubmit(state: ConfigState): string {
     return state.configRaw;
   }
   const schema = asJsonSchema(state.configSchema);
+  const sanitizedForm = sanitizeDerivedAgentConfig(state.configForm);
   const form = schema
-    ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
-    : state.configForm;
+    ? (coerceFormValues(sanitizedForm, schema) as Record<string, unknown>)
+    : sanitizedForm;
   return serializeConfigForm(form);
 }
 
@@ -214,7 +238,7 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+  const base = getEditableConfigBase(state);
   setPathValue(base, path, value);
   state.configForm = base;
   state.configFormDirty = true;
@@ -224,7 +248,7 @@ export function updateConfigFormValue(
 }
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+  const base = getEditableConfigBase(state);
   removePathValue(base, path);
   state.configForm = base;
   state.configFormDirty = true;
@@ -269,6 +293,43 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
   const nextIndex = Array.isArray(list) ? list.length : 0;
   updateConfigFormValue(state, ["agents", "list", nextIndex, "id"], normalizedAgentId);
   return nextIndex;
+}
+
+export function setDefaultAgentInConfig(state: ConfigState, agentId: string) {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return;
+  }
+  const selectedIndex = ensureAgentConfigEntry(state, normalizedAgentId);
+  if (selectedIndex < 0) {
+    return;
+  }
+  const base = getEditableConfigBase(state);
+  const agentsRecord =
+    (base.agents && typeof base.agents === "object" && !Array.isArray(base.agents)
+      ? (base.agents as Record<string, unknown>)
+      : ((base.agents = {}) as Record<string, unknown>));
+  const currentList = Array.isArray(agentsRecord.list) ? agentsRecord.list : [];
+  const nextList = currentList.map((entry, index) => {
+    const nextEntry =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? ({ ...(entry as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    if (index === selectedIndex) {
+      nextEntry.id =
+        typeof nextEntry.id === "string" && nextEntry.id.trim() ? nextEntry.id : normalizedAgentId;
+      nextEntry.default = true;
+      return nextEntry;
+    }
+    delete nextEntry.default;
+    return nextEntry;
+  });
+  agentsRecord.list = nextList;
+  state.configForm = base;
+  state.configFormDirty = true;
+  if (state.configFormMode === "form") {
+    state.configRaw = serializeConfigForm(base);
+  }
 }
 
 export async function openConfigFile(state: ConfigState): Promise<void> {
