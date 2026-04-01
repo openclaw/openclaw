@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
-import { onTimer } from "../../cron/service/timer.js";
+import { formatEpochMs, onTimer } from "../../cron/service/timer.js";
 import type { CronJob } from "../../cron/types.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
@@ -124,5 +124,24 @@ describe("cron service timer seam coverage", () => {
     });
 
     createTaskRecordSpy.mockRestore();
+  });
+});
+
+describe("formatEpochMs", () => {
+  it("formats a valid epoch-ms timestamp to ISO-8601", () => {
+    const ts = Date.parse("2026-04-01T12:30:00.000Z");
+    expect(formatEpochMs(ts)).toBe("2026-04-01T12:30:00.000Z");
+  });
+
+  it("returns undefined for undefined input", () => {
+    expect(formatEpochMs(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for NaN", () => {
+    expect(formatEpochMs(NaN)).toBeUndefined();
+  });
+
+  it("returns undefined for Infinity", () => {
+    expect(formatEpochMs(Infinity)).toBeUndefined();
   });
 });

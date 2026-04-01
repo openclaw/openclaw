@@ -32,6 +32,14 @@ import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-polic
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
+/** Format an epoch-ms timestamp as a human-readable ISO string for log context. */
+export function formatEpochMs(ms: number | undefined): string | undefined {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) {
+    return undefined;
+  }
+  return new Date(ms).toISOString();
+}
+
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
@@ -476,6 +484,7 @@ export function applyJobResult(
               consecutiveErrors: consecutive,
               backoffMs: backoff,
               nextRunAtMs: job.state.nextRunAtMs,
+              nextRunAt: formatEpochMs(job.state.nextRunAtMs),
             },
             "cron: scheduling one-shot retry after transient error",
           );
@@ -523,6 +532,7 @@ export function applyJobResult(
           consecutiveErrors: job.state.consecutiveErrors,
           backoffMs: backoff,
           nextRunAtMs: job.state.nextRunAtMs,
+          nextRunAt: formatEpochMs(job.state.nextRunAtMs),
         },
         "cron: applying error backoff",
       );
@@ -639,7 +649,12 @@ export function armTimer(state: CronServiceState) {
     });
   }, clampedDelay);
   state.deps.log.debug(
-    { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
+    {
+      nextAt,
+      nextAtHuman: formatEpochMs(nextAt),
+      delayMs: clampedDelay,
+      clamped: delay > MAX_TIMER_DELAY_MS,
+    },
     "cron: timer armed",
   );
 }
@@ -1339,6 +1354,7 @@ function emitJobFinished(
     runAtMs,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
+    nextRunAt: formatEpochMs(job.state.nextRunAtMs),
     model: result.model,
     provider: result.provider,
     usage: result.usage,
