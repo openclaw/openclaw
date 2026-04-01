@@ -2262,10 +2262,19 @@ describe("/models command", () => {
 describe("handleCommands plugin commands", () => {
   it("dispatches registered plugin commands", async () => {
     clearPluginCommands();
+    let receivedCtx:
+      | {
+          sessionKey?: string;
+          sessionId?: string;
+        }
+      | undefined;
     const result = registerPluginCommand("test-plugin", {
       name: "card",
       description: "Test card",
-      handler: async () => ({ text: "from plugin" }),
+      handler: async (ctx) => {
+        receivedCtx = ctx;
+        return { text: "from plugin" };
+      },
     });
     expect(result.ok).toBe(true);
 
@@ -2274,10 +2283,19 @@ describe("handleCommands plugin commands", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const params = buildParams("/card", cfg);
+    params.sessionKey = "agent:main:whatsapp:direct:test-user";
+    params.sessionEntry = {
+      sessionId: "session-plugin-command",
+      updatedAt: Date.now(),
+    };
     const commandResult = await handleCommands(params);
 
     expect(commandResult.shouldContinue).toBe(false);
     expect(commandResult.reply?.text).toBe("from plugin");
+    expect(receivedCtx).toMatchObject({
+      sessionKey: "agent:main:whatsapp:direct:test-user",
+      sessionId: "session-plugin-command",
+    });
     clearPluginCommands();
   });
 });
