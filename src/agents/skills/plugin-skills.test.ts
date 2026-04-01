@@ -6,11 +6,17 @@ import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js"
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistry: vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+      recordsByRootDir: {},
+    }),
+  ),
 }));
 
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: hoisted.loadPluginManifestRegistry,
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
@@ -18,36 +24,38 @@ let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSki
 const tempDirs = createTrackedTempDirs();
 
 function buildRegistry(params: { acpxRoot: string; helperRoot: string }): PluginManifestRegistry {
+  const plugins: PluginManifestRegistry["plugins"] = [
+    {
+      id: "acpx",
+      name: "ACPX Runtime",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: ["./skills"],
+      hooks: [],
+      origin: "workspace",
+      rootDir: params.acpxRoot,
+      source: params.acpxRoot,
+      manifestPath: path.join(params.acpxRoot, "openclaw.plugin.json"),
+    },
+    {
+      id: "helper",
+      name: "Helper",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: ["./skills"],
+      hooks: [],
+      origin: "workspace",
+      rootDir: params.helperRoot,
+      source: params.helperRoot,
+      manifestPath: path.join(params.helperRoot, "openclaw.plugin.json"),
+    },
+  ];
   return {
     diagnostics: [],
-    plugins: [
-      {
-        id: "acpx",
-        name: "ACPX Runtime",
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: ["./skills"],
-        hooks: [],
-        origin: "workspace",
-        rootDir: params.acpxRoot,
-        source: params.acpxRoot,
-        manifestPath: path.join(params.acpxRoot, "openclaw.plugin.json"),
-      },
-      {
-        id: "helper",
-        name: "Helper",
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: ["./skills"],
-        hooks: [],
-        origin: "workspace",
-        rootDir: params.helperRoot,
-        source: params.helperRoot,
-        manifestPath: path.join(params.helperRoot, "openclaw.plugin.json"),
-      },
-    ],
+    plugins,
+    recordsByRootDir: Object.fromEntries(plugins.map((p) => [p.rootDir, p])),
   };
 }
 
@@ -56,24 +64,26 @@ function createSinglePluginRegistry(params: {
   skills: string[];
   format?: "openclaw" | "bundle";
 }): PluginManifestRegistry {
+  const plugins: PluginManifestRegistry["plugins"] = [
+    {
+      id: "helper",
+      name: "Helper",
+      format: params.format,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: params.skills,
+      hooks: [],
+      origin: "workspace",
+      rootDir: params.pluginRoot,
+      source: params.pluginRoot,
+      manifestPath: path.join(params.pluginRoot, "openclaw.plugin.json"),
+    },
+  ];
   return {
     diagnostics: [],
-    plugins: [
-      {
-        id: "helper",
-        name: "Helper",
-        format: params.format,
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: params.skills,
-        hooks: [],
-        origin: "workspace",
-        rootDir: params.pluginRoot,
-        source: params.pluginRoot,
-        manifestPath: path.join(params.pluginRoot, "openclaw.plugin.json"),
-      },
-    ],
+    plugins,
+    recordsByRootDir: Object.fromEntries(plugins.map((p) => [p.rootDir, p])),
   };
 }
 
@@ -97,11 +107,20 @@ async function setupPluginOutsideSkills() {
 
 afterEach(async () => {
   hoisted.loadPluginManifestRegistry.mockReset();
+  // Other test files in the same Vitest worker still import `manifest-registry`; restore a safe default.
+  hoisted.loadPluginManifestRegistry.mockImplementation(() => ({
+    diagnostics: [],
+    plugins: [],
+    recordsByRootDir: {},
+  }));
   await tempDirs.cleanup();
 });
 
 describe("resolvePluginSkillDirs", () => {
   beforeAll(async () => {
+    // Non-isolated Vitest workers may have loaded `plugin-skills.js` before this file's
+    // `vi.mock` applied, binding the real `loadPluginManifestRegistry`. Reset and re-import.
+    vi.resetModules();
     ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
   });
 

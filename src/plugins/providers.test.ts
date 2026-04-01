@@ -40,6 +40,7 @@ function setManifestPlugins(plugins: PluginManifestRecord[]) {
   loadPluginManifestRegistryMock.mockReturnValue({
     plugins,
     diagnostics: [],
+    recordsByRootDir: Object.fromEntries(plugins.map((p) => [p.rootDir, p])),
   });
 }
 

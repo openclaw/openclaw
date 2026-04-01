@@ -22,9 +22,11 @@ function manifest(id: string): PluginManifestRecord {
 
 describe("doctor preview warnings", () => {
   beforeEach(() => {
+    const plugins = [manifest("discord")];
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [manifest("discord")],
+      plugins,
       diagnostics: [],
+      recordsByRootDir: Object.fromEntries(plugins.map((p) => [p.rootDir, p])),
     });
   });
 
@@ -101,9 +103,11 @@ describe("doctor preview warnings", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");
     const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    const feishuPlugins = [manifest("feishu")];
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [manifest("feishu")],
+      plugins: feishuPlugins,
       diagnostics: [],
+      recordsByRootDir: Object.fromEntries(feishuPlugins.map((p) => [p.rootDir, p])),
     });
     vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
       new Map([
@@ -141,6 +145,7 @@ describe("doctor preview warnings", () => {
       diagnostics: [
         { level: "error", message: "plugin path not found: /missing", source: "/missing" },
       ],
+      recordsByRootDir: {},
     });
 
     const warnings = collectDoctorPreviewWarnings({

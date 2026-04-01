@@ -20,7 +20,11 @@ const catalogMocks = vi.hoisted(() => ({
 }));
 
 const manifestRegistryMocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  loadPluginManifestRegistry: vi.fn(() => ({
+    plugins: [],
+    diagnostics: [],
+    recordsByRootDir: {},
+  })),
 }));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
@@ -514,6 +518,7 @@ describe("setupChannels", () => {
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [],
       diagnostics: [],
+      recordsByRootDir: {},
     });
     vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
@@ -687,6 +692,7 @@ describe("setupChannels", () => {
         } as never,
       ],
       diagnostics: [],
+      recordsByRootDir: {},
     });
     mockMSTeamsRegistrySnapshot({ includeSetupWizard: true });
 

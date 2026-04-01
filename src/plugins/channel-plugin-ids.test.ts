@@ -16,6 +16,7 @@ import { resolveGatewayStartupPluginIds } from "./channel-plugin-ids.js";
 
 function createManifestRegistryFixture() {
   return {
+    recordsByRootDir: {},
     plugins: [
       {
         id: "demo-channel",

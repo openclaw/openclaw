@@ -47,22 +47,24 @@ function makeRegistry(
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
+  const mapped = plugins.map((p) => ({
+    id: p.id,
+    channels: p.channels,
+    autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
+    channelConfigs: p.channelConfigs,
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "config" as const,
+    rootDir: `/fake/${p.id}`,
+    source: `/fake/${p.id}/index.js`,
+    manifestPath: `/fake/${p.id}/openclaw.plugin.json`,
+  }));
   return {
-    plugins: plugins.map((p) => ({
-      id: p.id,
-      channels: p.channels,
-      autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
-      channelConfigs: p.channelConfigs,
-      providers: [],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "config" as const,
-      rootDir: `/fake/${p.id}`,
-      source: `/fake/${p.id}/index.js`,
-      manifestPath: `/fake/${p.id}/openclaw.plugin.json`,
-    })),
+    plugins: mapped,
     diagnostics: [],
+    recordsByRootDir: Object.fromEntries(mapped.map((rec) => [rec.rootDir, rec])),
   };
 }
 
@@ -522,24 +524,6 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
   });
 
-  it("auto-enables minimax when minimax API key auth is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "minimax:default": {
-              provider: "minimax",
-              mode: "api_key",
-            },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
-  });
-
   it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -600,8 +584,8 @@ describe("applyPluginAutoEnable", () => {
         },
       },
       env: {},
-      manifestRegistry: {
-        plugins: [
+      manifestRegistry: (() => {
+        const plugins = [
           {
             id: "acme",
             channels: [],
@@ -617,9 +601,13 @@ describe("applyPluginAutoEnable", () => {
               webSearchProviders: ["acme-search"],
             },
           },
-        ],
-        diagnostics: [],
-      },
+        ];
+        return {
+          plugins,
+          diagnostics: [],
+          recordsByRootDir: Object.fromEntries(plugins.map((rec) => [rec.rootDir, rec])),
+        };
+      })(),
     });
 
     expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);

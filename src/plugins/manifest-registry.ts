@@ -80,6 +80,8 @@ export type PluginManifestRecord = {
 
 export type PluginManifestRegistry = {
   plugins: PluginManifestRecord[];
+  /** Every successfully loaded manifest keyed by candidate `rootDir` (includes losers after same-id dedupe). */
+  recordsByRootDir: Record<string, PluginManifestRecord>;
   diagnostics: PluginDiagnostic[];
 };
 
@@ -443,6 +445,10 @@ export function loadPluginManifestRegistry(
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
+  const recordsByRootDir = new Map<string, PluginManifestRecord>();
+  const rememberManifestRoot = (rootDir: string, record: PluginManifestRecord) => {
+    recordsByRootDir.set(rootDir, record);
+  };
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
@@ -536,8 +542,9 @@ export function loadPluginManifestRegistry(
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
+        const canonical = records[existing.recordIndex];
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = isBundleRecord
+          const built = isBundleRecord
             ? buildBundleRecord({
                 manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
                 candidate,
@@ -550,7 +557,12 @@ export function loadPluginManifestRegistry(
                 schemaCacheKey,
                 configSchema,
               });
+          records[existing.recordIndex] = built;
+          rememberManifestRoot(candidate.rootDir, built);
+          rememberManifestRoot(existing.candidate.rootDir, built);
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        } else {
+          rememberManifestRoot(candidate.rootDir, canonical);
         }
         continue;
       }
@@ -568,6 +580,21 @@ export function loadPluginManifestRegistry(
         config,
         env,
       });
+
+      const builtForCandidate = isBundleRecord
+        ? buildBundleRecord({
+            manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+          })
+        : buildRecord({
+            manifest: manifest as PluginManifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+      rememberManifestRoot(candidate.rootDir, builtForCandidate);
 
       if (
         !shouldSuppressBenignBundledShadowDuplicate({
@@ -590,19 +617,7 @@ export function loadPluginManifestRegistry(
       }
 
       if (candidateRank < existingRank) {
-        records[existing.recordIndex] = isBundleRecord
-          ? buildBundleRecord({
-              manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
-              candidate,
-              manifestPath: manifestRes.manifestPath,
-            })
-          : buildRecord({
-              manifest: manifest as PluginManifest,
-              candidate,
-              manifestPath: manifestRes.manifestPath,
-              schemaCacheKey,
-              configSchema,
-            });
+        records[existing.recordIndex] = builtForCandidate;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
       }
       continue;
@@ -610,24 +625,28 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
 
-    records.push(
-      isBundleRecord
-        ? buildBundleRecord({
-            manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-          })
-        : buildRecord({
-            manifest: manifest as PluginManifest,
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-            schemaCacheKey,
-            configSchema,
-          }),
-    );
+    const built = isBundleRecord
+      ? buildBundleRecord({
+          manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+        })
+      : buildRecord({
+          manifest: manifest as PluginManifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+    rememberManifestRoot(candidate.rootDir, built);
+    records.push(built);
   }
 
-  const registry = { plugins: records, diagnostics };
+  const registry = {
+    plugins: records,
+    diagnostics,
+    recordsByRootDir: Object.fromEntries(recordsByRootDir),
+  };
   if (cacheEnabled) {
     const ttl = resolveManifestCacheMs(env);
     if (ttl > 0) {

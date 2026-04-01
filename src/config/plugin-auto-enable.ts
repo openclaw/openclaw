@@ -32,6 +32,7 @@ export type PluginAutoEnableResult = {
 const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   plugins: [],
   diagnostics: [],
+  recordsByRootDir: {},
 };
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];

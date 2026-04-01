@@ -40,6 +40,7 @@ describe("listManifestInstalledChannelIds", () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "slack", channels: ["slack"] }],
       diagnostics: [],
+      recordsByRootDir: {},
     });
 
     const installedIds = listManifestInstalledChannelIds({

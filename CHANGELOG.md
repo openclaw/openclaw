@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - MiniMax/plugins: auto-enable the bundled MiniMax plugin for API-key auth/config so MiniMax image generation and other plugin-owned capabilities load without manual plugin allowlisting. (#57127) Thanks @tars90percent.
 - Plugins: suppress benign duplicate-plugin-id **warnings** when **bundled** shadows a redundant non-installed **global** or **workspace** copy, reducing noisy config validation stderr (for example editor ACP sessions).
 - Plugins: keep **one manifest registry row per plugin id** when two candidates disagree on disk by applying `resolveDuplicatePrecedenceRank` in place and skipping a second `plugins[]` append for the losing candidate.
+- Plugins: add `recordsByRootDir` to the manifest registry and resolve loader lookups by candidate `rootDir` so duplicate-id precedence still records **disabled** override rows after `plugins[]` dedupe.
 
 ## 2026.3.31
 

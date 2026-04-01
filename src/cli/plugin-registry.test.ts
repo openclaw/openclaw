@@ -72,6 +72,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "demo-chat", channels: ["demo-chat"] }],
       diagnostics: [],
+      recordsByRootDir: {},
     });
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
@@ -113,6 +114,7 @@ describe("ensurePluginRegistryLoaded", () => {
         { id: "demo-provider", channels: [] },
       ],
       diagnostics: [],
+      recordsByRootDir: {},
     });
     mocks.getActivePluginRegistry
       .mockReturnValueOnce({
@@ -214,6 +216,7 @@ describe("ensurePluginRegistryLoaded", () => {
         { id: "demo-channel-b", channels: ["demo-channel-b"] },
       ],
       diagnostics: [],
+      recordsByRootDir: {},
     });
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [{ id: "demo-channel-b" }],

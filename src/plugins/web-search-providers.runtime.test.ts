@@ -137,34 +137,36 @@ function expectBundledRuntimeProviderKeys(
 }
 
 function createManifestRegistryFixture() {
+  const plugins = [
+    {
+      id: "brave",
+      origin: "bundled" as const,
+      rootDir: "/tmp/brave",
+      source: "/tmp/brave/index.js",
+      manifestPath: "/tmp/brave/openclaw.plugin.json",
+      channels: [],
+      providers: [],
+      skills: [],
+      hooks: [],
+      configUiHints: { "webSearch.apiKey": { label: "key" } },
+    },
+    {
+      id: "noise",
+      origin: "bundled" as const,
+      rootDir: "/tmp/noise",
+      source: "/tmp/noise/index.js",
+      manifestPath: "/tmp/noise/openclaw.plugin.json",
+      channels: [],
+      providers: [],
+      skills: [],
+      hooks: [],
+      configUiHints: { unrelated: { label: "nope" } },
+    },
+  ];
   return {
-    plugins: [
-      {
-        id: "brave",
-        origin: "bundled",
-        rootDir: "/tmp/brave",
-        source: "/tmp/brave/index.js",
-        manifestPath: "/tmp/brave/openclaw.plugin.json",
-        channels: [],
-        providers: [],
-        skills: [],
-        hooks: [],
-        configUiHints: { "webSearch.apiKey": { label: "key" } },
-      },
-      {
-        id: "noise",
-        origin: "bundled",
-        rootDir: "/tmp/noise",
-        source: "/tmp/noise/index.js",
-        manifestPath: "/tmp/noise/openclaw.plugin.json",
-        channels: [],
-        providers: [],
-        skills: [],
-        hooks: [],
-        configUiHints: { unrelated: { label: "nope" } },
-      },
-    ],
+    plugins,
     diagnostics: [],
+    recordsByRootDir: Object.fromEntries(plugins.map((p) => [p.rootDir, p])),
   };
 }
 

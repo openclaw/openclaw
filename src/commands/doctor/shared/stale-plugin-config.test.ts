@@ -25,9 +25,11 @@ function manifest(id: string): PluginManifestRecord {
 
 describe("doctor stale plugin config helpers", () => {
   beforeEach(() => {
+    const plugins = [manifest("discord"), manifest("voice-call"), manifest("openai")];
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [manifest("discord"), manifest("voice-call"), manifest("openai")],
+      plugins,
       diagnostics: [],
+      recordsByRootDir: Object.fromEntries(plugins.map((p) => [p.rootDir, p])),
     });
   });
 
@@ -105,6 +107,7 @@ describe("doctor stale plugin config helpers", () => {
       diagnostics: [
         { level: "error", message: "plugin path not found: /missing", source: "/missing" },
       ],
+      recordsByRootDir: {},
     });
 
     const cfg = {

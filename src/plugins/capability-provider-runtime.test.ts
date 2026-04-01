@@ -5,10 +5,11 @@ import { createEmptyPluginRegistry } from "./registry.js";
 type MockManifestRegistry = {
   plugins: Array<Record<string, unknown>>;
   diagnostics: unknown[];
+  recordsByRootDir: Record<string, unknown>;
 };
 
 function createEmptyMockManifestRegistry(): MockManifestRegistry {
-  return { plugins: [], diagnostics: [] };
+  return { plugins: [], diagnostics: [], recordsByRootDir: {} };
 }
 
 const mocks = vi.hoisted(() => ({
@@ -106,6 +107,7 @@ function setBundledCapabilityFixture(contractKey: string) {
       },
     ] as never,
     diagnostics: [],
+    recordsByRootDir: {},
   });
 }
 

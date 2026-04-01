@@ -27,6 +27,8 @@ function createProviderAuthChoice(overrides: Record<string, unknown>) {
 function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   loadPluginManifestRegistry.mockReturnValue({
     plugins,
+    diagnostics: [],
+    recordsByRootDir: {},
   });
 }
 

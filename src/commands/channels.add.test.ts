@@ -21,7 +21,11 @@ const catalogMocks = vi.hoisted(() => ({
 }));
 
 const manifestRegistryMocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  loadPluginManifestRegistry: vi.fn(() => ({
+    plugins: [],
+    diagnostics: [],
+    recordsByRootDir: {},
+  })),
 }));
 
 vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
@@ -232,6 +236,7 @@ describe("channelsAddCommand", () => {
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [],
       diagnostics: [],
+      recordsByRootDir: {},
     });
     vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
@@ -337,6 +342,7 @@ describe("channelsAddCommand", () => {
         } as never,
       ],
       diagnostics: [],
+      recordsByRootDir: {},
     });
     registerMSTeamsSetupPlugin("msteams");
 
