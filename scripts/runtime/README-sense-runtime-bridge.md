@@ -244,3 +244,38 @@ Routing loop uses `resolved_next_step` before the older generic `next_step`, so 
 - `capability_limited`
 
 This is still a transitional routing layer. `configure_provider`, `start_nim_runtime`, and `enable_gpu_runtime` are not yet fully automatic end-to-end remediations; they are structured branch targets for the next layer of automation.
+
+NIM remediation notes:
+
+- `start_nim_runtime` now performs a minimal real remediation attempt
+- it collects current structured sandbox signals, triggers `sense runtime start`, re-checks runtime status, and re-checks structured sandbox status
+- it returns `nim_status_info` with:
+  - `sandbox_name`
+  - `phase`
+  - `nim_status`
+  - `gpu_enabled`
+  - `runtime_name`
+  - `openshell_status`
+  - `policy_names`
+  - `provider`
+  - `model`
+  - `provider_ready`
+  - `gpu_ready`
+  - `runtime_connected`
+  - `start_attempted`
+  - `nim_ready`
+  - `missing_requirements[]`
+
+Current `nim_ready` rule is intentionally minimal:
+
+- `phase == Ready`
+- `openshell_status == connected`
+- `nim_status == running`
+
+`provider` and `model` may still be `unknown`; they are used to build `missing_requirements`, not to make `nim_ready` fail by themselves.
+
+Routing loop behavior change:
+
+- if `check_gpu_runtime` resolves to `start_nim_runtime`, the loop now runs that remediation once
+- if `nim_status_info.nim_ready == false`, the loop stops with `final_state = nim_not_ready`
+- if the follow-up missing requirements resolve to `configure_provider`, the loop stops with `final_state = provider_not_ready`

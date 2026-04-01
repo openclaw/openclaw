@@ -130,7 +130,31 @@ def main() -> int:
                 final_state = 'provider_not_ready'
                 break
             if next_step == 'start_nim_runtime':
-                final_state = 'nim_not_ready'
+                pass
+            elif next_step == 'enable_gpu_runtime':
+                final_state = 'gpu_not_ready'
+                break
+            elif next_step == 'review_runtime_capabilities':
+                final_state = 'capability_limited'
+                break
+            elif isinstance(configured_gpu_status, dict) and configured_gpu_status.get('gpu_ready') is False:
+                final_state = 'gpu_not_ready'
+                next_step = 'configure_gpu_runtime'
+                break
+            elif next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
+        if next_step == 'start_nim_runtime' and remediation_action != 'start_nim_runtime':
+            nim_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'start_nim_runtime']
+            nim_result = run_json(nim_cmd)
+            last_remediation = nim_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'start_nim_runtime', 'result': nim_result})
+            resolved_next_step = str(nim_result.get('resolved_next_step') or '') if isinstance(nim_result, dict) else ''
+            next_step = str(resolved_next_step or nim_result.get('next_step') or next_step)
+            nim_status_info = nim_result.get('nim_status_info') if isinstance(nim_result, dict) else None
+            if next_step == 'configure_provider':
+                final_state = 'provider_not_ready'
                 break
             if next_step == 'enable_gpu_runtime':
                 final_state = 'gpu_not_ready'
@@ -138,15 +162,16 @@ def main() -> int:
             if next_step == 'review_runtime_capabilities':
                 final_state = 'capability_limited'
                 break
-            if isinstance(configured_gpu_status, dict) and configured_gpu_status.get('gpu_ready') is False:
-                final_state = 'gpu_not_ready'
-                next_step = 'configure_gpu_runtime'
+            if isinstance(nim_status_info, dict) and nim_status_info.get('nim_ready') is False:
+                final_state = 'nim_not_ready'
+                next_step = 'start_nim_runtime'
                 break
             if next_step == 'run_runtime_task':
                 final_state = 'ready_for_runtime_task'
                 break
 
         gpu_status = last_remediation.get('gpu_status') if isinstance(last_remediation, dict) else None
+        nim_status_info = last_remediation.get('nim_status_info') if isinstance(last_remediation, dict) else None
         if next_step == 'configure_provider':
             final_state = 'provider_not_ready'
             break
@@ -162,6 +187,10 @@ def main() -> int:
         if isinstance(gpu_status, dict) and gpu_status.get('gpu_ready') is False and remediation_action == 'configure_gpu_runtime':
             final_state = 'gpu_not_ready'
             next_step = 'configure_gpu_runtime'
+            break
+        if isinstance(nim_status_info, dict) and nim_status_info.get('nim_ready') is False and remediation_action == 'start_nim_runtime':
+            final_state = 'nim_not_ready'
+            next_step = 'start_nim_runtime'
             break
 
         if next_step == 'sense_runtime_start':

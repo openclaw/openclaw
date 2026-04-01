@@ -247,6 +247,47 @@ def resolve_missing_requirements_next_step(missing_requirements: list[str] | Non
     return None
 
 
+def build_nim_status(nim_signals: dict, start_result: dict | None = None, *, start_attempted: bool = False) -> dict:
+    status = dict(nim_signals)
+    provider_status = build_provider_status(status, start_result)
+    gpu_status = build_gpu_status(status)
+
+    missing: list[str] = []
+    phase = str(status.get('phase') or 'unknown')
+    openshell_status = str(status.get('openshell_status') or 'unknown')
+    nim_status = str(status.get('nim_status') or 'unknown')
+
+    if phase != 'Ready':
+        missing.append('sandbox not ready')
+    if openshell_status.lower() != 'connected':
+        missing.append('runtime not connected')
+    if nim_status.lower() != 'running':
+        missing.append('nim is not running')
+    for item in provider_status.get('missing_requirements') or []:
+        if item not in missing:
+            missing.append(item)
+    for item in gpu_status.get('missing_requirements') or []:
+        if item not in missing:
+            missing.append(item)
+
+    deduped: list[str] = []
+    for item in missing:
+        if item not in deduped:
+            deduped.append(item)
+
+    status['missing_requirements'] = deduped
+    status['runtime_connected'] = openshell_status.lower() == 'connected'
+    status['provider_ready'] = provider_status.get('provider_ready')
+    status['gpu_ready'] = gpu_status.get('gpu_ready')
+    status['start_attempted'] = start_attempted
+    status['nim_ready'] = (
+        phase == 'Ready'
+        and openshell_status.lower() == 'connected'
+        and nim_status.lower() == 'running'
+    )
+    return status
+
+
 def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
@@ -319,6 +360,31 @@ def main() -> int:
             response['next_step'] = 'run_runtime_task'
         else:
             response['next_step'] = resolved_next_step or 'configure_gpu_runtime'
+    elif recommended_action == 'start_nim_runtime':
+        initial_sandbox_payload = get_sandbox_status(script_dir, args)
+        initial_nim_status = build_nim_status(summarize_capabilities(initial_sandbox_payload))
+        start_result = run_runtime_start(script_dir, args)
+        runtime_status = get_runtime_status(script_dir, args)
+        followup_sandbox_payload = get_sandbox_status(script_dir, args)
+        followup_nim_status = build_nim_status(
+            summarize_capabilities(followup_sandbox_payload),
+            start_result,
+            start_attempted=True,
+        )
+
+        resolved_next_step = resolve_missing_requirements_next_step(followup_nim_status.get('missing_requirements'))
+        response['remediation_result'] = 'checked nim runtime signals; triggered sense runtime start; re-checked runtime and sandbox status'
+        response['nim_status_info'] = followup_nim_status
+        response['missing_requirements'] = followup_nim_status.get('missing_requirements') or []
+        response['resolved_next_step'] = resolved_next_step
+        response['initial_nim_status'] = initial_nim_status
+        response['start_result'] = start_result
+        response['runtime_status'] = runtime_status
+        response['followup_status'] = followup_nim_status
+        if followup_nim_status.get('nim_ready') is True:
+            response['next_step'] = 'run_runtime_task'
+        else:
+            response['next_step'] = resolved_next_step or 'start_nim_runtime'
     elif recommended_action == 'wait_for_runtime_ready':
         attempts: list[dict] = []
         last_decision = decision
