@@ -37,16 +37,13 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
-import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
-  createDiscordFormModal,
-  formatDiscordComponentEventText,
   parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomIdForCarbon,
-  type DiscordComponentEntry,
-  type DiscordModalEntry,
-} from "../components.js";
+} from "../component-custom-id.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
@@ -93,6 +90,7 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 let conversationRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>
   | undefined;
+let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
 let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
 let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
@@ -104,6 +102,11 @@ let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
 async function loadConversationRuntime() {
   conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-runtime");
   return await conversationRuntimePromise;
+}
+
+async function loadComponentsRuntime() {
+  componentsRuntimePromise ??= import("../components.js");
+  return await componentsRuntimePromise;
 }
 
 async function loadPluginRuntime() {
@@ -739,7 +742,7 @@ async function handleDiscordComponentEvent(params: {
   // fallbacks still need their chosen values in the synthesized event text.
   const eventText =
     (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
-    formatDiscordComponentEventText({
+    (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,
       values,
@@ -898,7 +901,7 @@ async function handleDiscordModalTrigger(params: {
   }
 
   try {
-    await params.interaction.showModal(createDiscordFormModal(modalEntry));
+    await params.interaction.showModal((await loadComponentsRuntime()).createDiscordFormModal(modalEntry));
   } catch (err) {
     logError(`${params.label}: failed to show modal: ${String(err)}`);
   }
