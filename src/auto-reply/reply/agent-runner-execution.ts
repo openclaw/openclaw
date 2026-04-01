@@ -41,9 +41,18 @@ function safeSessionId(id: string): string {
 /** Truncate + sanitize a provider error message for safe logging. */
 function safeErrorSummary(msg: string, maxLen = 200): string {
   const truncated = msg.length > maxLen ? msg.slice(0, maxLen) + "…" : msg;
-  return sanitizeForLog(truncated).replace(
-    /(api[_-]?key|token|secret|authorization|bearer)\s*[=:]\s*\S+/gi,
-    "$1=<redacted>",
+  const sanitized = sanitizeForLog(truncated);
+  return (
+    sanitized
+      // "Authorization: Bearer <token>" or "Authorization=<token>"
+      .replace(/(authorization\s*[:=]\s*)(bearer\s+)?([^\s,;]+)/gi, "$1<redacted>")
+      // Standalone "Bearer <token>"
+      .replace(/\bbearer\s+([^\s,;]+)/gi, "bearer <redacted>")
+      // JSON-ish secret fields: api_key=xxx, token: "xxx", secret='xxx'
+      .replace(
+        /\b(api[_-]?key|token|secret)\b\s*[:=]\s*["']?([^\s"',;]+)/gi,
+        "$1=<redacted>",
+      )
   );
 }
 import {
