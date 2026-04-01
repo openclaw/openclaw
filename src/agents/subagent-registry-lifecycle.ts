@@ -89,7 +89,7 @@ export function createSubagentRegistryLifecycleController(params: {
     outcome: SubagentRunOutcome;
   }) => {
     const endedAt = args.entry.endedAt ?? Date.now();
-    const lastEventAt = args.entry.endedAt ?? Date.now();
+    const lastEventAt = endedAt;
     try {
       if (args.outcome.status === "ok") {
         completeTaskRunByRunId({
