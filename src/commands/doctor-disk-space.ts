@@ -16,6 +16,8 @@ const WARNING_BYTES = 500 * 1024 * 1024;
 
 /**
  * Format a byte count into a human-readable string (B / KB / MB / GB).
+ * Uses Math.floor for MB values to avoid rounding up past a decision
+ * threshold (e.g. 99.6 MB should display as "99 MB", not "100 MB").
  * Exported for testing.
  */
 export function formatBytes(bytes: number): string {
@@ -26,10 +28,10 @@ export function formatBytes(bytes: number): string {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
   if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+    return `${Math.floor(bytes / (1024 * 1024))} MB`;
   }
   if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${Math.floor(bytes / 1024)} KB`;
   }
   return `${bytes} B`;
 }
@@ -47,7 +49,9 @@ export function getAvailableBytes(
   try {
     const stats = statfs(dirPath);
     // `bavail` is the number of free blocks available to unprivileged users.
-    // Multiply by `bsize` (fundamental block size) to get free bytes.
+    // Multiply by `bsize` (optimal transfer / filesystem block size in Node's
+    // StatsFs, equal to `f_bsize` from the underlying statfs syscall) to get
+    // available bytes.
     return Number(stats.bavail) * Number(stats.bsize);
   } catch {
     return null;
@@ -90,7 +94,7 @@ export function buildDiskSpaceWarnings(params: {
  * fails to write config, sessions, or logs because the disk is full.
  */
 export function noteDiskSpace(
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig, // reserved for API consistency with other Doctor contributions
   deps?: {
     env?: NodeJS.ProcessEnv;
     statfsSync?: (p: string) => fs.StatsFs;
