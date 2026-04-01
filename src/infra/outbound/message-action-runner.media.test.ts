@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { runMessageAction } from "./message-action-runner.js";
 
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
@@ -89,11 +91,7 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
-type MessageActionRunnerModule = typeof import("./message-action-runner.js");
-type WebMediaModule = typeof import("../../media/web-media.js");
-
-let runMessageAction: MessageActionRunnerModule["runMessageAction"];
-let loadWebMedia: WebMediaModule["loadWebMedia"];
+let actualLoadWebMedia: typeof loadWebMedia;
 
 const slackPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -128,10 +126,13 @@ const slackPlugin: ChannelPlugin = {
 
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
-    vi.resetModules();
-    ({ runMessageAction } = await import("./message-action-runner.js"));
-    ({ loadWebMedia } = await import("../../media/web-media.js"));
+    actualLoadWebMedia ??= (
+      await vi.importActual<typeof import("../../media/web-media.js")>("../../media/web-media.js")
+    ).loadWebMedia;
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    vi.mocked(loadWebMedia).mockReset();
+    vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
   });
 
   describe("sendAttachment hydration", () => {
