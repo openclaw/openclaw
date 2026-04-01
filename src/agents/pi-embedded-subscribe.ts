@@ -28,6 +28,15 @@ const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+  return Boolean(
+    value &&
+    (typeof value === "object" || typeof value === "function") &&
+    "then" in value &&
+    typeof (value as { then?: unknown }).then === "function",
+  );
+}
+
 export type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -104,6 +113,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
+  const pendingBlockReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
@@ -114,11 +124,21 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
+    try {
+      const maybeTask = params.onBlockReply(payload);
+      if (!isPromiseLike<void>(maybeTask)) {
+        return;
+      }
+      const task = Promise.resolve(maybeTask).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
+      pendingBlockReplyTasks.add(task);
+      void task.finally(() => {
+        pendingBlockReplyTasks.delete(task);
+      });
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
   const emitBlockReply = (payload: BlockReplyPayload) => {
     emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload));
@@ -554,19 +574,25 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const consumePartialReplyDirectives = (text: string, options?: { final?: boolean }) =>
     partialReplyDirectiveAccumulator.consume(text, options);
 
-  const flushBlockReplyBuffer = () => {
+  const flushBlockReplyBuffer = (): void | Promise<void> => {
     if (!params.onBlockReply) {
       return;
     }
     if (blockChunker?.hasBuffered()) {
       blockChunker.drain({ force: true, emit: emitBlockChunk });
       blockChunker.reset();
-      return;
-    }
-    if (state.blockBuffer.length > 0) {
+    } else if (state.blockBuffer.length > 0) {
       emitBlockChunk(state.blockBuffer);
       state.blockBuffer = "";
     }
+    if (pendingBlockReplyTasks.size === 0) {
+      return;
+    }
+    return (async () => {
+      while (pendingBlockReplyTasks.size > 0) {
+        await Promise.allSettled(pendingBlockReplyTasks);
+      }
+    })();
   };
 
   const emitReasoningStream = (text: string) => {

@@ -1350,9 +1350,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               replyOptions: {
                 ...replyOptions,
                 skillFilter: roomConfig?.skills,
-                // When streaming is active, disable block streaming — draft
-                // streaming replaces it with edit-in-place updates.
-                disableBlockStreaming: streamingEnabled ? true : undefined,
+                // Matrix expects explicit assistant progress updates as
+                // separate messages when draft streaming is off.
+                // When partial draft streaming is active, disable the shared
+                // block pipeline because draft edits replace it.
+                disableBlockStreaming: streamingEnabled ? true : false,
                 onPartialReply: draftStream
                   ? (payload) => {
                       const fullText = payload.text ?? "";

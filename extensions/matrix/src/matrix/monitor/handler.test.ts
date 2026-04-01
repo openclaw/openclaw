@@ -1849,3 +1849,47 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 });
+
+describe("matrix monitor handler block streaming config", () => {
+  it("forces block streaming on when draft streaming is off", async () => {
+    let capturedDisableBlockStreaming: boolean | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "off",
+      dispatchReplyFromConfig: vi.fn(
+        async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
+          capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
+          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+        },
+      ) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(capturedDisableBlockStreaming).toBe(false);
+  });
+
+  it("disables shared block streaming when draft streaming is partial", async () => {
+    let capturedDisableBlockStreaming: boolean | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      dispatchReplyFromConfig: vi.fn(
+        async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
+          capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
+          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+        },
+      ) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(capturedDisableBlockStreaming).toBe(true);
+  });
+});
