@@ -48,6 +48,12 @@ export type RunEmbeddedPiAgentParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Optional filesystem policy override for this run (spawned subagents). */
+  toolFsPolicy?: {
+    workspaceOnly: boolean;
+    allowedPaths?: string[];
+    denyPaths?: string[];
+  } | null;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

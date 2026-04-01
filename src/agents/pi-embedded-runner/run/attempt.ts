@@ -420,6 +420,9 @@ export async function runEmbeddedAttempt(
       : (() => {
           const allTools = createOpenClawCodingTools({
           agentId: sessionAgentId,
+          // Spawned subagents can receive an explicit filesystem policy ceiling from the gateway.
+          // This is merged with config defaults inside createOpenClawCodingTools.
+          fsPolicy: params.toolFsPolicy ?? undefined,
           trigger: params.trigger,
           memoryFlushWritePath: params.memoryFlushWritePath,
           exec: {

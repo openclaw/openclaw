@@ -218,6 +218,8 @@ export const __testing = {
 
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
+  /** Optional effective filesystem policy override (used for spawned subagents). */
+  fsPolicy?: ToolFsPolicy;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
@@ -368,11 +370,13 @@ export function createOpenClawCodingTools(options?: {
   ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
-  const fsPolicy = createToolFsPolicy({
-    allowedPaths: fsConfig.allowedPaths,
-    denyPaths: fsConfig.denyPaths,
-    workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
-  });
+  const fsPolicy = options?.fsPolicy
+    ? createToolFsPolicy(options.fsPolicy)
+    : createToolFsPolicy({
+        allowedPaths: fsConfig.allowedPaths,
+        denyPaths: fsConfig.denyPaths,
+        workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+      });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
