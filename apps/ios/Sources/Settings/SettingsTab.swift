@@ -58,6 +58,11 @@ struct SettingsTab: View {
     @State private var suppressCredentialPersist: Bool = false
 
     private let gatewayLogger = Logger(subsystem: "ai.openclaw.ios", category: "GatewaySettings")
+    private let showsCloseButton: Bool
+
+    init(showsCloseButton: Bool = true) {
+        self.showsCloseButton = showsCloseButton
+    }
 
     var body: some View {
         NavigationStack {
@@ -400,13 +405,15 @@ struct SettingsTab: View {
             }
             .navigationTitle("Settings")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
+                if self.showsCloseButton {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            self.dismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .accessibilityLabel("Close")
                     }
-                    .accessibilityLabel("Close")
                 }
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
