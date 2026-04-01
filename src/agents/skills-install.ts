@@ -99,9 +99,6 @@ const SAFE_NODE_PACKAGE = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+(@[a-z0-9^~>=<.*|-]+)?
 const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
 const SAFE_UV_PACKAGE =
   /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
-// `uv tool install` should not inherit interpreter/index overrides from ambient env.
-const UV_INSTALL_BLOCKED_ENV_KEYS = new Set(["VIRTUAL_ENV"]);
-const UV_INSTALL_BLOCKED_ENV_PREFIXES = ["PIP_", "PYTHON", "UV_"] as const;
 
 function assertSafeInstallerValue(value: string, kind: string, pattern: RegExp): string | null {
   const trimmed = value.trim();
@@ -234,20 +231,6 @@ function createInstallSuccess(result: CommandResult): SkillInstallResult {
     stderr: result.stderr.trim(),
     code: result.code,
   };
-}
-
-function buildUvInstallEnvOverrides(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of Object.keys(baseEnv)) {
-    const upper = key.toUpperCase();
-    if (
-      UV_INSTALL_BLOCKED_ENV_KEYS.has(upper) ||
-      UV_INSTALL_BLOCKED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))
-    ) {
-      env[key] = undefined;
-    }
-  }
-  return Object.keys(env).length > 0 ? env : undefined;
 }
 
 async function runCommandSafely(
@@ -530,9 +513,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     if (brewBin) {
       envOverrides.GOBIN = brewBin;
     }
-  }
-  if (spec.kind === "uv") {
-    Object.assign(envOverrides, buildUvInstallEnvOverrides(process.env) ?? {});
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 

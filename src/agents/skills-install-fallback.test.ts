@@ -201,7 +201,7 @@ describe("skills-install fallback edge cases", () => {
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
-  it("strips uv/python installer override env vars before running uv installs", async () => {
+  it("preserves system uv/python env vars when running uv installs", async () => {
     mockAvailableBinaries(["uv"]);
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 0,
@@ -243,20 +243,7 @@ describe("skills-install fallback edge cases", () => {
         | [string[], { timeoutMs?: number; env?: Record<string, string | undefined> }]
         | undefined;
       const envArg = firstCall?.[1]?.env;
-      expect(envArg).toBeDefined();
-      for (const key of [
-        "UV_PYTHON",
-        "UV_INDEX_URL",
-        "PIP_INDEX_URL",
-        "PYTHONPATH",
-        "VIRTUAL_ENV",
-      ]) {
-        expect(
-          Object.keys(envArg ?? {}),
-          `${key} must be explicitly present in env override`,
-        ).toContain(key);
-        expect(envArg?.[key]).toBeUndefined();
-      }
+      expect(envArg).toBeUndefined();
     } finally {
       envSnapshot.restore();
     }
