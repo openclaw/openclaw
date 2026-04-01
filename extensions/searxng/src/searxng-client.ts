@@ -41,6 +41,23 @@ type SearxngResponse = {
   results?: SearxngResult[];
 };
 
+function normalizeSearxngResult(value: unknown): SearxngResult | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as { url?: unknown; title?: unknown; content?: unknown };
+  if (typeof candidate.url !== "string" || typeof candidate.title !== "string") {
+    return null;
+  }
+
+  return {
+    url: candidate.url,
+    title: candidate.title,
+    content: typeof candidate.content === "string" ? candidate.content : undefined,
+  };
+}
+
 function buildSearxngSearchUrl(params: {
   baseUrl: string;
   query: string;
@@ -97,8 +114,20 @@ function parseSearxngResponseText(text: string, count: number): SearxngResult[] 
   }
 
   const response = parsed as SearxngResponse;
-  const results: SearxngResult[] = Array.isArray(response.results) ? response.results : [];
-  return results.slice(0, count);
+  const rawResults = Array.isArray(response.results) ? response.results : [];
+  const results: SearxngResult[] = [];
+
+  for (const rawResult of rawResults) {
+    const result = normalizeSearxngResult(rawResult);
+    if (result) {
+      results.push(result);
+    }
+    if (results.length >= count) {
+      break;
+    }
+  }
+
+  return results;
 }
 
 export async function runSearxngSearch(params: {
@@ -200,6 +229,7 @@ export async function runSearxngSearch(params: {
 
 export const __testing = {
   buildSearxngSearchUrl,
+  normalizeSearxngResult,
   parseSearxngResponseText,
   validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,

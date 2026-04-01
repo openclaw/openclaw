@@ -39,6 +39,25 @@ describe("searxng client", () => {
     ).toEqual([{ title: "One", url: "https://example.com/1", content: "A" }]);
   });
 
+  it("drops malformed result rows instead of failing the whole response", () => {
+    expect(
+      __testing.parseSearxngResponseText(
+        JSON.stringify({
+          results: [
+            { title: "One", url: "https://example.com/1", content: "A" },
+            { title: { text: "bad" }, url: "https://example.com/2" },
+            { title: "Three", url: 3, content: "bad-url" },
+            { title: "Four", url: "https://example.com/4", content: { text: "bad" } },
+          ],
+        }),
+        10,
+      ),
+    ).toEqual([
+      { title: "One", url: "https://example.com/1", content: "A" },
+      { title: "Four", url: "https://example.com/4", content: undefined },
+    ]);
+  });
+
   it("rejects invalid JSON bodies", () => {
     expect(() => __testing.parseSearxngResponseText("{", 5)).toThrow(
       "SearXNG returned invalid JSON.",
