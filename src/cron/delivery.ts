@@ -17,7 +17,7 @@ export type CronDeliveryPlan = {
   threadId?: string | number;
   /** Explicit channel account id from the delivery config, if set. */
   accountId?: string;
-  source: "delivery" | "payload";
+  source: "delivery";
   requested: boolean;
 };
 
@@ -60,7 +60,6 @@ function normalizeThreadId(value: unknown): string | number | undefined {
 }
 
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
-  const payload = job.payload.kind === "agentTurn" ? job.payload : null;
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
@@ -76,8 +75,6 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
             ? "announce"
             : undefined;
 
-  const payloadChannel = normalizeChannel(payload?.channel);
-  const payloadTo = normalizeTo(payload?.to);
   const deliveryChannel = normalizeChannel(
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
@@ -85,8 +82,8 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryThreadId = normalizeThreadId(
     (delivery as { threadId?: unknown } | undefined)?.threadId,
   );
-  const channel = deliveryChannel ?? payloadChannel ?? "last";
-  const to = deliveryTo ?? payloadTo;
+  const channel = deliveryChannel ?? "last";
+  const to = deliveryTo;
   const deliveryAccountId = normalizeAccountId(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
@@ -103,18 +100,20 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     };
   }
 
-  const legacyMode =
-    payload?.deliver === true ? "explicit" : payload?.deliver === false ? "off" : "auto";
-  const hasExplicitTarget = Boolean(to);
-  const requested = legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
+  const isIsolatedAgentTurn =
+    job.payload.kind === "agentTurn" &&
+    (job.sessionTarget === "isolated" ||
+      job.sessionTarget === "current" ||
+      job.sessionTarget.startsWith("session:"));
+  const resolvedMode = isIsolatedAgentTurn ? "announce" : "none";
 
   return {
-    mode: requested ? "announce" : "none",
-    channel,
-    to,
+    mode: resolvedMode,
+    channel: resolvedMode === "announce" ? "last" : undefined,
+    to: undefined,
     threadId: undefined,
-    source: "payload",
-    requested,
+    source: "delivery",
+    requested: resolvedMode === "announce",
   };
 }
 

@@ -1,9 +1,9 @@
-import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
-import { parseAbsoluteTimeMs } from "./parse.js";
-import { migrateLegacyCronPayload } from "./payload-migration.js";
-import { coerceFiniteScheduleNumber } from "./schedule.js";
-import { inferLegacyName, normalizeOptionalText } from "./service/normalize.js";
-import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
+import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
+import { inferLegacyName, normalizeOptionalText } from "../cron/service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
+import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
+import { migrateLegacyCronPayload } from "./doctor-cron-payload-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"

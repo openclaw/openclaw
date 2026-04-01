@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeStoredCronJobs } from "./store-migration.js";
+import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 
 describe("normalizeStoredCronJobs", () => {
   it("normalizes legacy cron fields and reports migration issues", () => {
