@@ -16,6 +16,14 @@ type TelegramErrorConfig =
 const errorCooldownStore = new Map<string, Map<string, number>>();
 const DEFAULT_ERROR_COOLDOWN_MS = 14400000;
 
+function pruneExpiredCooldowns(messageStore: Map<string, number>, now: number) {
+  for (const [message, expiresAt] of messageStore) {
+    if (expiresAt <= now) {
+      messageStore.delete(message);
+    }
+  }
+}
+
 export function resolveTelegramErrorPolicy(params: {
   accountConfig?: TelegramAccountConfig;
   groupConfig?: TelegramDirectConfig | TelegramGroupConfig;
@@ -63,13 +71,16 @@ export function shouldSuppressTelegramError(params: {
   const messageKey = errorMessage ?? "";
   const scopeStore = errorCooldownStore.get(scopeKey);
 
+  if (scopeStore) {
+    pruneExpiredCooldowns(scopeStore, now);
+    if (scopeStore.size === 0) {
+      errorCooldownStore.delete(scopeKey);
+    }
+  }
+
   if (errorCooldownStore.size > 100) {
     for (const [scope, messageStore] of errorCooldownStore) {
-      for (const [message, expiresAt] of messageStore) {
-        if (expiresAt <= now) {
-          messageStore.delete(message);
-        }
-      }
+      pruneExpiredCooldowns(messageStore, now);
       if (messageStore.size === 0) {
         errorCooldownStore.delete(scope);
       }

@@ -90,6 +90,36 @@ describe("telegram error policy", () => {
     ).toBe(true);
   });
 
+  it("prunes expired cooldowns within a single scope", () => {
+    const scopeKey = buildTelegramErrorScopeKey({
+      accountId: "work",
+      chatId: 42,
+    });
+
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "A",
+      }),
+    ).toBe(false);
+    vi.advanceTimersByTime(1001);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "B",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "A",
+      }),
+    ).toBe(false);
+  });
+
   it("does not leak suppression across accounts or threads", () => {
     const workMain = buildTelegramErrorScopeKey({
       accountId: "work",
