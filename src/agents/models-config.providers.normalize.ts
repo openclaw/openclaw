@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   normalizeProviderSpecificConfig,
@@ -15,6 +16,26 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+
+function isGoogleGenerativeAiProvider(provider: ProviderConfig): boolean {
+  return (
+    provider.api === "google-generative-ai" ||
+    (Array.isArray(provider.models) &&
+      provider.models.some((m) => m.api === "google-generative-ai"))
+  );
+}
+
+// Normalize bare Google Generative AI base URLs that omit the /v1beta path.
+// The Google plugin handles this for known provider keys (google, google-vertex,
+// google-antigravity, google-gemini-cli), but custom provider keys with
+// api: "google-generative-ai" fall through plugin resolution and need a safety net.
+function normalizeGoogleGenerativeAiBaseUrl(provider: ProviderConfig): ProviderConfig {
+  if (!provider.baseUrl || !isGoogleGenerativeAiProvider(provider)) {
+    return provider;
+  }
+  const normalized = normalizeGoogleApiBaseUrl(provider.baseUrl);
+  return normalized !== provider.baseUrl ? { ...provider, baseUrl: normalized } : provider;
+}
 
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
@@ -120,6 +141,12 @@ export function normalizeProviders(params: {
     if (providerSpecificNormalized !== normalizedProvider) {
       mutated = true;
       normalizedProvider = providerSpecificNormalized;
+    }
+
+    const googleBaseUrlNormalized = normalizeGoogleGenerativeAiBaseUrl(normalizedProvider);
+    if (googleBaseUrlNormalized !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = googleBaseUrlNormalized;
     }
 
     const existing = next[normalizedKey];
