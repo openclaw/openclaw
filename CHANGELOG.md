@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - `/context detail` now compares the tracked prompt estimate with cached context usage and surfaces untracked provider/runtime overhead when present. (#28391) thanks @ImLukeF.
 - Gateway/session reset: emit the typed `before_reset` hook for gateway `/new` and `/reset`, preserving reset-hook behavior even when the previous transcript has already been archived. (#53872) thanks @VACInc
 - Plugins/commands: pass the active host `sessionKey` into plugin command contexts, and include `sessionId` when it is already available from the active session entry, so bundled and third-party commands can resolve the current conversation reliably. (#59044) Thanks @jalehman.
+- Agents/auth: honor `models.providers.*.authHeader` for pi embedded runner model requests by injecting `Authorization: Bearer <apiKey>` when requested. (#54390) Thanks @lndyzwdxhs.
 
 ## 2026.4.2
 
@@ -590,7 +591,6 @@ Docs: https://docs.openclaw.ai
 - Telegram/outbound errors: preserve actionable 403 membership/block/kick details and treat `bot not a member` as a permanent delivery failure so Telegram sends stop retrying doomed chats. (#53635) Thanks @w-sss.
 - Telegram/photos: preflight Telegram photo dimension and aspect-ratio rules, and fall back to document sends when image metadata is invalid or unavailable so photo uploads stop failing with `PHOTO_INVALID_DIMENSIONS`. (#52545) Thanks @hnshah.
 - Slack/runtime defaults: trim Slack DM reply overhead, restore Codex auto transport, and tighten Slack/web-search runtime defaults around DM preview threading, cache scoping, warning dedupe, and explicit web-search opt-in. (#53957) Thanks @vincentkoc.
-- Agents/auth: honor `models.providers.*.authHeader` for pi embedded runner model requests by injecting `Authorization: Bearer <apiKey>` when requested. (#54390) Thanks @lndyzwdxhs.
 - Security/gateway config: block agent `config.apply` and `config.patch` writes to `tools.exec.ask` and `tools.exec.security` so gateway config tools cannot silently disable exec approvals or broaden exec security.
 - Security/chat provenance: require `operator.admin` for system provenance injection so `chat.send` callers cannot spoof ACP-only provenance through client identity metadata.
 - Security/exec approvals: treat `/usr/bin/script` as a transparent wrapper during trust-plan resolution and allow-always persistence so wrapper registration cannot broaden exec approvals.
