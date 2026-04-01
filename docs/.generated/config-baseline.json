@@ -2201,6 +2201,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.memorySearch.notifyUser",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.memorySearch.outputDimensionality",
       "kind": "core",
       "type": "integer",
