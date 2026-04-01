@@ -52,11 +52,14 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    const onlyHtmlAttachments =
-      attachments.length > 0 &&
-      attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
+    // Fall back to Graph API when direct download produced nothing.
+    // Previously this only triggered when ALL attachments were text/html, but Teams
+    // thread replies often send a mix of text/html (quote blockquote) and
+    // application/vnd.microsoft.teams.file.download.info (without downloadUrl).
+    // The strict check prevented Graph fallback for thread file attachments.
+    const hasAttachments = attachments.length > 0;
 
-    if (onlyHtmlAttachments) {
+    if (hasAttachments) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
