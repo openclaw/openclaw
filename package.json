@@ -32,6 +32,7 @@
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
     "skills/",
+    "scripts/npm-runner.mjs",
     "scripts/postinstall-bundled-plugins.mjs"
   ],
   "type": "module",
@@ -1226,6 +1227,7 @@
     "oxfmt": "0.43.0",
     "oxlint": "^1.58.0",
     "oxlint-tsgolint": "^0.18.1",
+    "semver": "7.7.4",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.7",
     "tsx": "^4.21.0",

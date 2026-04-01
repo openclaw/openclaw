@@ -4,10 +4,11 @@
 // so runtime dependencies declared in dist/extensions/*/package.json must also
 // resolve from the package root node_modules after a global install.
 // This script is a no-op outside of a global npm install context.
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
@@ -107,7 +108,7 @@ export function runBundledPluginPostinstall(params = {}) {
   }
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const exec = params.execSync ?? execSync;
+  const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
   const runtimeDeps =
@@ -122,11 +123,29 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 
   try {
-    exec(`npm install --omit=dev --no-save --package-lock=false ${missingSpecs.join(" ")}`, {
+    const nestedEnv = createNestedNpmInstallEnv(env);
+    const npmRunner =
+      params.npmRunner ??
+      resolveNpmRunner({
+        env: nestedEnv,
+        execPath: params.execPath,
+        existsSync: pathExists,
+        platform: params.platform,
+        comSpec: params.comSpec,
+        npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
+      });
+    const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,
-      env: createNestedNpmInstallEnv(env),
+      encoding: "utf8",
+      env: npmRunner.env ?? nestedEnv,
       stdio: "pipe",
+      shell: npmRunner.shell,
+      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });
+    if (result.status !== 0) {
+      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      throw new Error(output || "npm install failed");
+    }
     log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
   } catch (e) {
     // Non-fatal: gateway will surface the missing dep via doctor.

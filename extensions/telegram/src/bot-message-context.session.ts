@@ -280,7 +280,10 @@ export async function buildTelegramInboundContextPayload(params: {
         ? {
             sessionKey: updateLastRouteSessionKey,
             channel: "telegram",
-            to: `telegram:${chatId}`,
+            to:
+              isGroup && updateLastRouteThreadId != null
+                ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
+                : `telegram:${chatId}`,
             accountId: route.accountId,
             threadId: updateLastRouteThreadId,
             mainDmOwnerPin:
