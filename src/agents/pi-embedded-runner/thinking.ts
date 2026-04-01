@@ -12,28 +12,54 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
   );
 }
 
+function isThinkingBlock(block: AssistantContentBlock): boolean {
+  return (
+    !!block &&
+    typeof block === "object" &&
+    ((block as { type?: unknown }).type === "thinking" ||
+      (block as { type?: unknown }).type === "redacted_thinking")
+  );
+}
+
 /**
- * Strip all `type: "thinking"` content blocks from assistant messages.
+ * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
+ * all assistant messages except the latest one.
  *
- * If an assistant message becomes empty after stripping, it is replaced with
- * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
- * (some providers require strict user/assistant alternation).
+ * Thinking blocks in the latest assistant turn are preserved verbatim so
+ * providers that require replay signatures can continue the conversation.
+ *
+ * If a non-latest assistant message becomes empty after stripping, it is
+ * replaced with a synthetic `{ type: "text", text: "" }` block to preserve
+ * turn structure (some providers require strict user/assistant alternation).
  *
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
  */
 export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+  let latestAssistantIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (isAssistantMessageWithContent(messages[i])) {
+      latestAssistantIndex = i;
+      break;
+    }
+  }
+
   let touched = false;
   const out: AgentMessage[] = [];
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i += 1) {
+    const msg = messages[i];
     if (!isAssistantMessageWithContent(msg)) {
+      out.push(msg);
+      continue;
+    }
+    if (i === latestAssistantIndex) {
       out.push(msg);
       continue;
     }
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+      if (isThinkingBlock(block)) {
         touched = true;
         changed = true;
         continue;
