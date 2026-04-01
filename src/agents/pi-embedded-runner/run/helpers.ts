@@ -1,4 +1,4 @@
-import { type BackoffPolicy } from "../../../infra/backoff.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
@@ -25,22 +25,16 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-// Keep overload pacing noticeable enough to avoid tight retry bursts, but short
-// enough that fallback still feels responsive within a single turn.
-export const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
-  initialMs: 250,
-  maxMs: 1_500,
-  factor: 2,
-  jitter: 0.2,
-};
+export const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
+export const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 
-// Maximum number of auth-profile rotations to attempt for overloaded errors
-// before escalating to cross-provider fallback. Overloaded is a provider-level
-// capacity issue — rotating auth profiles on the same provider is unlikely to
-// help and wastes time with backoff delays. A cap of 1 allows one probe attempt
-// (in case the overload was transient) before giving up on the provider.
-// See: https://github.com/openclaw/openclaw/issues/58348
-export const MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
+export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
+  return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
+}
+
+export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
+  return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
+}
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
