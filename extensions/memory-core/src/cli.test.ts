@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+} from "../../../src/cli/test-runtime-capture.js";
+import type { OpenClawConfig } from "./engine-host-api.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -39,8 +40,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOrigina
   };
 });
 
-vi.mock("./memory/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory/index.js")>();
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
   return {
     ...actual,
     getMemorySearchManager,
@@ -96,6 +97,68 @@ describe("memory cli", () => {
       vector: { enabled: true, available: true },
       ...overrides,
     };
+  }
+
+  async function createResolvedMemoryHubStatus(params?: {
+    readVisibilityEnv?: string;
+    searchVisibilityEnv?: string;
+    config?: OpenClawConfig;
+  }) {
+    const prevRead = process.env.MEMORY_HUB_READ_VISIBILITY;
+    const prevSearch = process.env.MEMORY_HUB_SEARCH_VISIBILITY;
+
+    if (typeof params?.readVisibilityEnv === "string") {
+      process.env.MEMORY_HUB_READ_VISIBILITY = params.readVisibilityEnv;
+    } else {
+      delete process.env.MEMORY_HUB_READ_VISIBILITY;
+    }
+
+    if (typeof params?.searchVisibilityEnv === "string") {
+      process.env.MEMORY_HUB_SEARCH_VISIBILITY = params.searchVisibilityEnv;
+    } else {
+      delete process.env.MEMORY_HUB_SEARCH_VISIBILITY;
+    }
+
+    try {
+      const { MemoryHubSearchManager } = await import("./memory/hub-search-manager.js");
+      const cfg =
+        params?.config ??
+        ({
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "memory-hub",
+                memoryHub: {
+                  baseUrl: "http://localhost:8000/api/v1",
+                  apiKey: "test-key", // pragma: allowlist secret
+                },
+              },
+            },
+            list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+          },
+        } as OpenClawConfig);
+
+      const manager = await MemoryHubSearchManager.create({ cfg, agentId: "main" });
+      return makeMemoryStatus({
+        provider: "memory-hub",
+        requestedProvider: "memory-hub",
+        model: "remote",
+        custom: {
+          remote: manager.status().custom?.remote,
+        },
+      });
+    } finally {
+      if (typeof prevRead === "string") {
+        process.env.MEMORY_HUB_READ_VISIBILITY = prevRead;
+      } else {
+        delete process.env.MEMORY_HUB_READ_VISIBILITY;
+      }
+      if (typeof prevSearch === "string") {
+        process.env.MEMORY_HUB_SEARCH_VISIBILITY = prevSearch;
+      } else {
+        delete process.env.MEMORY_HUB_SEARCH_VISIBILITY;
+      }
+    }
   }
 
   function mockManager(manager: Record<string, unknown>) {
@@ -182,6 +245,535 @@ describe("memory cli", () => {
     );
     expect(process.exitCode).toBeUndefined();
   }
+
+  it("prints memory-hub remote diagnostics in status output", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      status: () =>
+        makeMemoryStatus({
+          provider: "memory-hub",
+          requestedProvider: "memory-hub",
+          model: "remote",
+          custom: {
+            remote: {
+              baseUrl: "http://localhost:8000/api/v1",
+              timeoutMs: 10000,
+              healthEndpoint: "http://localhost:8000/api/v1/health",
+              readVisibility: "auto",
+              searchVisibility: "private",
+            },
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Remote base URL: http://localhost:8000/api/v1"),
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Remote timeout: 10000ms"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Remote health: http://localhost:8000/api/v1/health"),
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: auto"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints visibility defaults when env visibility values are invalid", async () => {
+    const close = vi.fn(async () => {});
+    const resolvedStatus = await createResolvedMemoryHubStatus({
+      readVisibilityEnv: "invalid",
+      searchVisibilityEnv: "invalid",
+    });
+
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      status: () => resolvedStatus,
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: auto"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints visibility from env when config visibility values are invalid", async () => {
+    const close = vi.fn(async () => {});
+    const invalidConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-hub",
+            memoryHub: {
+              baseUrl: "http://localhost:8000/api/v1",
+              apiKey: "test-key", // pragma: allowlist secret
+              readVisibility: "invalid",
+              searchVisibility: "invalid",
+            },
+          },
+        },
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const resolvedStatus = await createResolvedMemoryHubStatus({
+      readVisibilityEnv: "shared",
+      searchVisibilityEnv: "shared",
+      config: invalidConfig,
+    });
+
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      status: () => resolvedStatus,
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: shared"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: shared"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints visibility defaults when config visibility values are invalid and env is unset", async () => {
+    const close = vi.fn(async () => {});
+    const invalidConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-hub",
+            memoryHub: {
+              baseUrl: "http://localhost:8000/api/v1",
+              apiKey: "test-key", // pragma: allowlist secret
+              readVisibility: "invalid",
+              searchVisibility: "invalid",
+            },
+          },
+        },
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const resolvedStatus = await createResolvedMemoryHubStatus({
+      config: invalidConfig,
+    });
+
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      status: () => resolvedStatus,
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: auto"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints visibility from YAML when config visibility values are invalid", async () => {
+    const close = vi.fn(async () => {});
+    const invalidConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-hub",
+            memoryHub: {
+              readVisibility: "invalid",
+              searchVisibility: "invalid",
+            },
+          },
+        },
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-visibility-yaml-"));
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      [
+        "memoryHub:",
+        "  baseUrl: http://localhost:8000/api/v1",
+        "  apiKey: test-key",
+        "  readVisibility: shared",
+        "  searchVisibility: shared",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        readVisibilityEnv: "private",
+        searchVisibilityEnv: "private",
+        config: invalidConfig,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: shared"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: shared"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prints normalized YAML visibility when config visibility values are invalid", async () => {
+    const close = vi.fn(async () => {});
+    const invalidConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-hub",
+            memoryHub: {
+              readVisibility: "invalid",
+              searchVisibility: "invalid",
+            },
+          },
+        },
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "memory-cli-visibility-yaml-normalized-fallback-"),
+    );
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      [
+        "memoryHub:",
+        "  baseUrl: http://localhost:8000/api/v1",
+        "  apiKey: test-key",
+        "  readVisibility: ' Shared '",
+        "  searchVisibility: ' Private '",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        readVisibilityEnv: "private",
+        searchVisibilityEnv: "private",
+        config: invalidConfig,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: shared"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prints visibility from YAML when env visibility values are valid but lower priority", async () => {
+    const close = vi.fn(async () => {});
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "memory-cli-visibility-yaml-env-priority-"),
+    );
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      [
+        "memoryHub:",
+        "  baseUrl: http://localhost:8000/api/v1",
+        "  apiKey: test-key",
+        "  readVisibility: shared",
+        "  searchVisibility: private",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        readVisibilityEnv: " AUTO ",
+        searchVisibilityEnv: " Shared ",
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "memory-hub",
+              },
+            },
+            list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+          },
+        } as OpenClawConfig,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: shared"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prints normalized visibility from YAML when YAML and env both need normalization and conflict", async () => {
+    const close = vi.fn(async () => {});
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "memory-cli-visibility-yaml-env-normalized-priority-"),
+    );
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      [
+        "memoryHub:",
+        "  baseUrl: http://localhost:8000/api/v1",
+        "  apiKey: test-key",
+        "  readVisibility: ' Shared '",
+        "  searchVisibility: ' Private '",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        readVisibilityEnv: " auto ",
+        searchVisibilityEnv: " shared ",
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "memory-hub",
+              },
+            },
+            list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+          },
+        } as OpenClawConfig,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: shared"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prints visibility defaults when YAML visibility values are invalid and env is unset", async () => {
+    const close = vi.fn(async () => {});
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-visibility-yaml-invalid-"));
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      [
+        "memoryHub:",
+        "  baseUrl: http://localhost:8000/api/v1",
+        "  apiKey: test-key",
+        "  readVisibility: invalid",
+        "  searchVisibility: invalid",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "memory-hub",
+              },
+            },
+            list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+          },
+        } as OpenClawConfig,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: auto"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: private"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prints normalized visibility values from YAML", async () => {
+    const close = vi.fn(async () => {});
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "memory-cli-visibility-yaml-normalized-"),
+    );
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      [
+        "memoryHub:",
+        "  baseUrl: http://localhost:8000/api/v1",
+        "  apiKey: test-key",
+        "  readVisibility: ' AUTO '",
+        "  searchVisibility: ' Shared '",
+      ].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "memory-hub",
+              },
+            },
+            list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+          },
+        } as OpenClawConfig,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: auto"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: shared"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prints normalized config visibility over YAML and env", async () => {
+    const close = vi.fn(async () => {});
+    const prevCwd = process.cwd();
+    const tmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "memory-cli-visibility-config-priority-"),
+    );
+    await fs.mkdir(path.join(tmpRoot, "config"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "config", "memory-hub.yml"),
+      ["memoryHub:", "  readVisibility: shared", "  searchVisibility: private"].join("\n"),
+      "utf-8",
+    );
+    process.chdir(tmpRoot);
+
+    try {
+      const configWithMixedCase = {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "memory-hub",
+              memoryHub: {
+                baseUrl: "http://localhost:8000/api/v1",
+                apiKey: "test-key", // pragma: allowlist secret
+                readVisibility: " AUTO ",
+                searchVisibility: " Shared ",
+              },
+            },
+          },
+          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+        },
+      } as unknown as OpenClawConfig;
+
+      const resolvedStatus = await createResolvedMemoryHubStatus({
+        readVisibilityEnv: "private",
+        searchVisibilityEnv: "private",
+        config: configWithMixedCase,
+      });
+
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        status: () => resolvedStatus,
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--deep"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Read visibility: auto"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Search visibility: shared"));
+      expect(close).toHaveBeenCalled();
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
 
   it("prints vector status when available", async () => {
     const close = vi.fn(async () => {});
@@ -519,7 +1111,6 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("hello", {
       maxResults: undefined,
       minScore: undefined,
-      sessionKey: "agent:main:cli:direct:memory-search",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -536,7 +1127,6 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("deployment notes", {
       maxResults: undefined,
       minScore: undefined,
-      sessionKey: "agent:main:cli:direct:memory-search",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -554,7 +1144,6 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("flagged", {
       maxResults: undefined,
       minScore: undefined,
-      sessionKey: "agent:main:cli:direct:memory-search",
     });
     expect(close).toHaveBeenCalled();
   });
