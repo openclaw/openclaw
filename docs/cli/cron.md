@@ -35,7 +35,7 @@ Note: retention/pruning is controlled in config:
 
 Upgrade note: if you have older cron jobs from before the current delivery/store format, run
 `openclaw doctor --fix`. Doctor now normalizes legacy cron fields (`jobId`, `schedule.cron`,
-top-level delivery fields, payload `provider` delivery aliases) and migrates simple
+top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates simple
 `notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is
 configured.
 

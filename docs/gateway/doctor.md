@@ -117,6 +117,7 @@ Doctor will:
 
 The Gateway also auto-runs doctor migrations on startup when it detects a
 legacy config format, so stale configs are repaired without manual intervention.
+Cron job store migrations are handled by `openclaw doctor --fix`.
 
 Current migrations:
 
