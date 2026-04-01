@@ -918,9 +918,6 @@ function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined
     if (!snapshot.ok || snapshot.snapshot) {
       return true;
     }
-    if (resolvesToExistingFileSync(candidateArgv[0] ?? "", cwd)) {
-      return true;
-    }
   }
   return false;
 }

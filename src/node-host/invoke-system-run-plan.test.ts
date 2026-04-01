@@ -768,6 +768,22 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
+  it("allows pnpm dlx package binaries with local file arguments", () => {
+    withFakeRuntimeBins({
+      binNames: ["pnpm", "eslint"],
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-file-"));
+        try {
+          fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
+          fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
+          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "eslint", "src/index.ts"], tmp);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
   it("treats -- as the end of pnpm dlx option parsing", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],
