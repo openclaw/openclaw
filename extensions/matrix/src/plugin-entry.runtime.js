@@ -134,7 +134,9 @@ function resolveMatrixPluginEntryRuntimeModulePath(moduleUrl) {
     }
   }
 
-  throw new Error(`Cannot resolve Matrix plugin entry runtime module from ${modulePath}`);
+  throw new Error(
+    `Cannot resolve Matrix plugin entry runtime module from ${modulePath}`,
+  );
 }
 
 const jiti = createJiti(import.meta.url, {
