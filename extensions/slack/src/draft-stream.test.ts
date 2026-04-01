@@ -98,6 +98,24 @@ describe("createSlackDraftStream", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it("allows a 4205-character preview with the default max chars", async () => {
+    const { stream, send, warn } = createDraftStreamHarness();
+    const text = "a".repeat(4205);
+
+    stream.update(text);
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(
+      "channel:C123",
+      text,
+      expect.objectContaining({
+        token: "xoxb-test",
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("clear removes preview message when one exists", async () => {
     const { stream, remove } = createDraftStreamHarness();
 

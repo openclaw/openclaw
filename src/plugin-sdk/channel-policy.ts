@@ -9,6 +9,7 @@ export type {
   GroupToolPolicyConfig,
 } from "../config/types.tools.js";
 export {
+  composeAccountWarningCollectors,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -25,6 +26,10 @@ export {
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   collectOpenProviderGroupPolicyWarnings,
+  projectAccountConfigWarningCollector,
+  projectAccountWarningCollector,
+  projectConfigAccountIdWarningCollector,
+  projectConfigWarningCollector,
   projectWarningCollector,
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";

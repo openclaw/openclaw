@@ -4,6 +4,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { deliverAgentCommandResult } from "./agent/delivery.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
@@ -29,8 +30,6 @@ vi.mock("../infra/outbound/targets.js", async () => {
     resolveOutboundTarget: mocks.resolveOutboundTarget,
   };
 });
-
-const { deliverAgentCommandResult } = await import("./agent/delivery.js");
 
 describe("deliverAgentCommandResult", () => {
   function createRuntime(): RuntimeEnv {

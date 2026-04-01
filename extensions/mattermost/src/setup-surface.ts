@@ -1,5 +1,8 @@
-import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
+import {
+  createStandardChannelSetupStatus,
+  formatDocsLink,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
 import { listMattermostAccountIds } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
@@ -19,7 +22,8 @@ export { mattermostSetupAdapter } from "./setup-core.js";
 
 export const mattermostSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Mattermost",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + url",
     configuredHint: "configured",
@@ -30,7 +34,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
       listMattermostAccountIds(cfg).some((accountId) =>
         isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId)),
       ),
-  },
+  }),
   introNote: {
     title: "Mattermost bot token",
     lines: [

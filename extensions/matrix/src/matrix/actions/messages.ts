@@ -21,6 +21,7 @@ export async function sendMatrixMessage(
     mediaUrl?: string;
     replyToId?: string;
     threadId?: string;
+    audioAsVoice?: boolean;
   } = {},
 ) {
   return await sendMessageMatrix(to, content, {
@@ -29,6 +30,7 @@ export async function sendMatrixMessage(
     mediaLocalRoots: opts.mediaLocalRoots,
     replyToId: opts.replyToId,
     threadId: opts.threadId,
+    audioAsVoice: opts.audioAsVoice,
     accountId: opts.accountId ?? undefined,
     client: opts.client,
     timeoutMs: opts.timeoutMs,

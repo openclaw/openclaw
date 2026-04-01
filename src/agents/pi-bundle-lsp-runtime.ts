@@ -36,6 +36,12 @@ export type BundleLspToolRuntime = {
   dispose: () => Promise<void>;
 };
 
+type LspPositionParams = {
+  uri: string;
+  line: number;
+  character: number;
+};
+
 function encodeLspMessage(body: unknown): string {
   const json = JSON.stringify(body);
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
@@ -168,59 +174,67 @@ async function disposeSession(session: LspSession) {
   session.process.kill();
 }
 
+function createLspPositionTool(params: {
+  session: LspSession;
+  toolName: string;
+  label: string;
+  description: string;
+  method: string;
+  resultLabel: string;
+}): AnyAgentTool {
+  return {
+    name: params.toolName,
+    label: params.label,
+    description: params.description,
+    parameters: {
+      type: "object",
+      properties: {
+        uri: { type: "string", description: "File URI (file:///path/to/file)" },
+        line: { type: "number", description: "Zero-based line number" },
+        character: { type: "number", description: "Zero-based character offset" },
+      },
+      required: ["uri", "line", "character"],
+    },
+    execute: async (_toolCallId, input) => {
+      const position = input as LspPositionParams;
+      const result = await sendRequest(params.session, params.method, {
+        textDocument: { uri: position.uri },
+        position: { line: position.line, character: position.character },
+      });
+      return formatLspResult(params.session.serverName, params.resultLabel, result);
+    },
+  };
+}
+
 function buildLspTools(session: LspSession): AnyAgentTool[] {
   const tools: AnyAgentTool[] = [];
   const caps = session.capabilities;
   const serverLabel = session.serverName;
 
   if (caps.hoverProvider) {
-    tools.push({
-      name: `lsp_hover_${serverLabel}`,
-      label: `LSP Hover (${serverLabel})`,
-      description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
-      parameters: {
-        type: "object",
-        properties: {
-          uri: { type: "string", description: "File URI (file:///path/to/file)" },
-          line: { type: "number", description: "Zero-based line number" },
-          character: { type: "number", description: "Zero-based character offset" },
-        },
-        required: ["uri", "line", "character"],
-      },
-      execute: async (_toolCallId, input) => {
-        const params = input as { uri: string; line: number; character: number };
-        const result = await sendRequest(session, "textDocument/hover", {
-          textDocument: { uri: params.uri },
-          position: { line: params.line, character: params.character },
-        });
-        return formatLspResult(serverLabel, "hover", result);
-      },
-    });
+    tools.push(
+      createLspPositionTool({
+        session,
+        toolName: `lsp_hover_${serverLabel}`,
+        label: `LSP Hover (${serverLabel})`,
+        description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
+        method: "textDocument/hover",
+        resultLabel: "hover",
+      }),
+    );
   }
 
   if (caps.definitionProvider) {
-    tools.push({
-      name: `lsp_definition_${serverLabel}`,
-      label: `LSP Go to Definition (${serverLabel})`,
-      description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
-      parameters: {
-        type: "object",
-        properties: {
-          uri: { type: "string", description: "File URI (file:///path/to/file)" },
-          line: { type: "number", description: "Zero-based line number" },
-          character: { type: "number", description: "Zero-based character offset" },
-        },
-        required: ["uri", "line", "character"],
-      },
-      execute: async (_toolCallId, input) => {
-        const params = input as { uri: string; line: number; character: number };
-        const result = await sendRequest(session, "textDocument/definition", {
-          textDocument: { uri: params.uri },
-          position: { line: params.line, character: params.character },
-        });
-        return formatLspResult(serverLabel, "definition", result);
-      },
-    });
+    tools.push(
+      createLspPositionTool({
+        session,
+        toolName: `lsp_definition_${serverLabel}`,
+        label: `LSP Go to Definition (${serverLabel})`,
+        description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
+        method: "textDocument/definition",
+        resultLabel: "definition",
+      }),
+    );
   }
 
   if (caps.referencesProvider) {

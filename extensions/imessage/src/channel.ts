@@ -5,7 +5,11 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
-  buildComputedAccountStatusSnapshot,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import {
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
@@ -13,12 +17,17 @@ import {
   type ChannelPlugin,
 } from "../runtime-api.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
+import {
+  matchIMessageAcpConversation,
+  normalizeIMessageAcpConversationId,
+  resolveIMessageConversationIdFromTarget,
+} from "./conversation-id.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
 import type { IMessageProbe } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
   createIMessagePluginBase,
@@ -106,7 +115,7 @@ function resolveIMessageOutboundSessionRoute(params: {
 }
 
 export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe> =
-  createChatChannelPlugin({
+  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe>({
     base: {
       ...createIMessagePluginBase({
         setupWizard: imessageSetupWizard,
@@ -124,6 +133,30 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       groups: {
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
+      },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+        createManager: ({ cfg, accountId }) =>
+          createIMessageConversationBindingManager({
+            cfg,
+            accountId: accountId ?? undefined,
+          }),
+      },
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) =>
+          normalizeIMessageAcpConversationId(conversationId),
+        matchInboundConversation: ({ compiledBinding, conversationId }) =>
+          matchIMessageAcpConversation({
+            bindingConversationId: compiledBinding.conversationId,
+            conversationId,
+          }),
+        resolveCommandConversation: ({ originatingTo, commandTo, fallbackTo }) => {
+          const conversationId =
+            resolveIMessageConversationIdFromTarget(originatingTo ?? "") ??
+            resolveIMessageConversationIdFromTarget(commandTo ?? "") ??
+            resolveIMessageConversationIdFromTarget(fallbackTo ?? "");
+          return conversationId ? { conversationId } : null;
+        },
       },
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
@@ -149,16 +182,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           },
         },
       },
-      status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
+      status: createComputedAccountStatusAdapter<ResolvedIMessageAccount, IMessageProbe>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           cliPath: null,
           dbPath: null,
-        },
+        }),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildPassiveProbedChannelStatusSummary(snapshot, {
@@ -167,38 +195,45 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           }),
         probeAccount: async ({ timeoutMs }) =>
           await (await loadIMessageChannelRuntime()).probeIMessageAccount(timeoutMs),
-        buildAccountSnapshot: ({ account, runtime, probe }) =>
-          buildComputedAccountStatusSnapshot(
-            {
-              accountId: account.accountId,
-              name: account.name,
-              enabled: account.enabled,
-              configured: account.configured,
-              runtime,
-              probe,
-            },
-            {
-              cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
-              dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
-            },
-          ),
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
+            dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
+          },
+        }),
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
-      },
+      }),
       gateway: {
-        startAccount: async (ctx) =>
-          await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx),
+        startAccount: async (ctx) => {
+          const conversationBindings = createIMessageConversationBindingManager({
+            cfg: ctx.cfg,
+            accountId: ctx.accountId,
+          });
+          try {
+            return await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx);
+          } finally {
+            conversationBindings.stop();
+          }
+        },
       },
     },
     pairing: {
-      idLabel: "imessageSenderId",
-      notifyApproval: async ({ id }) =>
-        await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
+      text: {
+        idLabel: "imessageSenderId",
+        message: "OpenClaw: your access has been approved.",
+        notify: async ({ id }) =>
+          await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
+      },
     },
     security: imessageSecurityAdapter,
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
       },

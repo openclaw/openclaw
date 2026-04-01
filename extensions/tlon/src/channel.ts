@@ -2,10 +2,13 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
-import { buildComputedAccountStatusSnapshot } from "../api.js";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {
@@ -55,57 +58,105 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
     allowFrom.map((entry) => normalizeShip(String(entry))).filter(Boolean),
 });
 
-export const tlonPlugin: ChannelPlugin = {
-  id: TLON_CHANNEL_ID,
-  meta: {
+export const tlonPlugin = createChatChannelPlugin({
+  base: {
     id: TLON_CHANNEL_ID,
-    label: "Tlon",
-    selectionLabel: "Tlon (Urbit)",
-    docsPath: "/channels/tlon",
-    docsLabel: "tlon",
-    blurb: "Decentralized messaging on Urbit",
-    aliases: ["urbit"],
-    order: 90,
-  },
-  capabilities: {
-    chatTypes: ["direct", "group", "thread"],
-    media: true,
-    reply: true,
-    threads: true,
-  },
-  setup: tlonSetupAdapter,
-  setupWizard: tlonSetupWizardProxy,
-  reload: { configPrefixes: ["channels.tlon"] },
-  configSchema: tlonChannelConfigSchema,
-  config: {
-    ...tlonConfigAdapter,
-    isConfigured: (account) => account.configured,
-    describeAccount: (account) =>
-      describeAccountSnapshot({
-        account,
+    meta: {
+      id: TLON_CHANNEL_ID,
+      label: "Tlon",
+      selectionLabel: "Tlon (Urbit)",
+      docsPath: "/channels/tlon",
+      docsLabel: "tlon",
+      blurb: "Decentralized messaging on Urbit",
+      aliases: ["urbit"],
+      order: 90,
+    },
+    capabilities: {
+      chatTypes: ["direct", "group", "thread"],
+      media: true,
+      reply: true,
+      threads: true,
+    },
+    setup: tlonSetupAdapter,
+    setupWizard: tlonSetupWizardProxy,
+    reload: { configPrefixes: ["channels.tlon"] },
+    configSchema: tlonChannelConfigSchema,
+    config: {
+      ...tlonConfigAdapter,
+      isConfigured: (account) => account.configured,
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.configured,
+          extra: {
+            ship: account.ship,
+            url: account.url,
+          },
+        }),
+    },
+    messaging: {
+      normalizeTarget: (target) => {
+        const parsed = parseTlonTarget(target);
+        if (!parsed) {
+          return target.trim();
+        }
+        if (parsed.kind === "dm") {
+          return parsed.ship;
+        }
+        return parsed.nest;
+      },
+      targetResolver: {
+        looksLikeId: (target) => Boolean(parseTlonTarget(target)),
+        hint: formatTargetHint(),
+      },
+      resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
+    },
+    status: createComputedAccountStatusAdapter<ReturnType<typeof resolveTlonAccount>>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      collectStatusIssues: (accounts) => {
+        return accounts.flatMap((account) => {
+          if (!account.configured) {
+            return [
+              {
+                channel: TLON_CHANNEL_ID,
+                accountId: account.accountId,
+                kind: "config",
+                message: "Account not configured (missing ship, code, or url)",
+              },
+            ];
+          }
+          return [];
+        });
+      },
+      buildChannelSummary: ({ snapshot }) => {
+        const s = snapshot as { configured?: boolean; ship?: string; url?: string };
+        return {
+          configured: s.configured ?? false,
+          ship: s.ship ?? null,
+          url: s.url ?? null,
+        };
+      },
+      probeAccount: async ({ account }) => {
+        if (!account.configured || !account.ship || !account.url || !account.code) {
+          return { ok: false, error: "Not configured" };
+        }
+        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
+      },
+      resolveAccountSnapshot: ({ account }) => ({
+        accountId: account.accountId,
+        name: account.name ?? undefined,
+        enabled: account.enabled,
         configured: account.configured,
         extra: {
           ship: account.ship,
           url: account.url,
         },
       }),
-  },
-  messaging: {
-    normalizeTarget: (target) => {
-      const parsed = parseTlonTarget(target);
-      if (!parsed) {
-        return target.trim();
-      }
-      if (parsed.kind === "dm") {
-        return parsed.ship;
-      }
-      return parsed.nest;
+    }),
+    gateway: {
+      startAccount: async (ctx) =>
+        await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
     },
-    targetResolver: {
-      looksLikeId: (target) => Boolean(parseTlonTarget(target)),
-      hint: formatTargetHint(),
-    },
-    resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
   },
   outbound: {
     deliveryMode: "direct",
@@ -117,61 +168,4 @@ export const tlonPlugin: ChannelPlugin = {
       sendMedia: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendMedia },
     }),
   },
-  status: {
-    defaultRuntime: {
-      accountId: "default",
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: (accounts) => {
-      return accounts.flatMap((account) => {
-        if (!account.configured) {
-          return [
-            {
-              channel: TLON_CHANNEL_ID,
-              accountId: account.accountId,
-              kind: "config",
-              message: "Account not configured (missing ship, code, or url)",
-            },
-          ];
-        }
-        return [];
-      });
-    },
-    buildChannelSummary: ({ snapshot }) => {
-      const s = snapshot as { configured?: boolean; ship?: string; url?: string };
-      return {
-        configured: s.configured ?? false,
-        ship: s.ship ?? null,
-        url: s.url ?? null,
-      };
-    },
-    probeAccount: async ({ account }) => {
-      if (!account.configured || !account.ship || !account.url || !account.code) {
-        return { ok: false, error: "Not configured" };
-      }
-      return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
-    },
-    buildAccountSnapshot: ({ account, runtime, probe }) =>
-      buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured: account.configured,
-          runtime,
-          probe,
-        },
-        {
-          ship: account.ship,
-          url: account.url,
-        },
-      ),
-  },
-  gateway: {
-    startAccount: async (ctx) =>
-      await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
-  },
-};
+});

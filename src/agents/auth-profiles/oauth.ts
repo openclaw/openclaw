@@ -7,12 +7,17 @@ import {
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import {
+  formatProviderAuthProfileApiKeyWithPlugin,
+  refreshProviderOAuthCredentialWithPlugin,
+} from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
+import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -38,15 +43,6 @@ function listOAuthProviderIds(): string[] {
 }
 
 const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
-
-let providerRuntimePromise:
-  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -86,8 +82,7 @@ function isProfileConfigCompatible(params: {
 }
 
 async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
-  const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntime();
-  const formatted = formatProviderAuthProfileApiKeyWithPlugin({
+  const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     context: credentials,
   });
@@ -185,15 +180,21 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
-    const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
     const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
       provider: cred.provider,
       context: cred,
     });
     if (pluginRefreshed) {
+      const refreshedCredentials: OAuthCredential = {
+        ...cred,
+        ...pluginRefreshed,
+        type: "oauth",
+      };
+      store.profiles[params.profileId] = refreshedCredentials;
+      saveAuthProfileStore(store, params.agentDir);
       return {
-        apiKey: await buildOAuthApiKey(cred.provider, pluginRefreshed),
-        newCredentials: pluginRefreshed,
+        apiKey: await buildOAuthApiKey(cred.provider, refreshedCredentials),
+        newCredentials: refreshedCredentials,
       };
     }
 
@@ -346,6 +347,12 @@ export async function resolveApiKeyForProfile(
   const refResolveCache: SecretRefResolveCache = {};
   const configForRefResolution = cfg ?? loadConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
+  assertNoOAuthSecretRefPolicyViolations({
+    store,
+    cfg: configForRefResolution,
+    profileIds: [profileId],
+    context: `auth profile ${profileId}`,
+  });
 
   if (cred.type === "api_key") {
     const key = await resolveProfileSecretString({

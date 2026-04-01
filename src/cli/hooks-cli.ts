@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/io.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -143,6 +143,14 @@ function exitHooksCliWithError(err: unknown): never {
     `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
+}
+
+function writeHooksOutput(value: string, json: boolean | undefined): void {
+  if (json) {
+    defaultRuntime.writeStdout(value);
+    return;
+  }
+  defaultRuntime.log(value);
 }
 
 async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
@@ -409,7 +417,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
 }
 
 export async function enableHook(hookName: string): Promise<void> {
-  const config = loadConfig();
+  const snapshot = await readConfigFileSnapshot();
+  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
   const nextConfig = buildConfigWithHookEnabled({
     config,
@@ -418,18 +427,25 @@ export async function enableHook(hookName: string): Promise<void> {
     ensureHooksEnabled: true,
   });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  });
   defaultRuntime.log(
     `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
   );
 }
 
 export async function disableHook(hookName: string): Promise<void> {
-  const config = loadConfig();
+  const snapshot = await readConfigFileSnapshot();
+  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName);
   const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  });
   defaultRuntime.log(
     `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
   );
@@ -455,7 +471,7 @@ export function registerHooksCli(program: Command): void {
       runHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
-        defaultRuntime.log(formatHooksList(report, opts));
+        writeHooksOutput(formatHooksList(report, opts), opts.json);
       }),
     );
 
@@ -467,7 +483,7 @@ export function registerHooksCli(program: Command): void {
       runHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
-        defaultRuntime.log(formatHookInfo(report, name, opts));
+        writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
       }),
     );
 
@@ -479,7 +495,7 @@ export function registerHooksCli(program: Command): void {
       runHooksCliAction(async () => {
         const config = loadConfig();
         const report = buildHooksReport(config);
-        defaultRuntime.log(formatHooksCheck(report, opts));
+        writeHooksOutput(formatHooksCheck(report, opts), opts.json);
       }),
     );
 

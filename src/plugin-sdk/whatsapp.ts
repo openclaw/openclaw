@@ -1,8 +1,8 @@
 export type { ChannelMessageActionName } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
-export type { WebChannelStatus, WebMonitorTuning } from "../../extensions/whatsapp/api.js";
-export type { WebInboundMessage, WebListenerCloseReason } from "../../extensions/whatsapp/api.js";
+export type { WebChannelStatus, WebMonitorTuning } from "./whatsapp-surface.js";
+export type { WebInboundMessage, WebListenerCloseReason } from "./whatsapp-surface.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -33,23 +33,28 @@ export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize
 export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-} from "../../extensions/whatsapp/api.js";
+} from "./whatsapp-surface.js";
 export {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
-export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+export { resolveWhatsAppOutboundTarget } from "./whatsapp-surface.js";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./whatsapp-targets.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "../../extensions/whatsapp/api.js";
+} from "./whatsapp-surface.js";
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,
@@ -66,7 +71,7 @@ export {
   hasAnyWhatsAppAuth,
   listEnabledWhatsAppAccounts,
   resolveWhatsAppAccount,
-} from "../../extensions/whatsapp/api.js";
+} from "./whatsapp-surface.js";
 export {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
@@ -96,7 +101,7 @@ export {
   startWebLoginWithQr,
   waitForWebLogin,
 } from "../plugins/runtime/runtime-whatsapp-boundary.js";
-export { DEFAULT_WEB_MEDIA_BYTES } from "../../extensions/whatsapp/api.js";
+export { DEFAULT_WEB_MEDIA_BYTES } from "./whatsapp-surface.js";
 export {
   getDefaultLocalRoots,
   loadWebMedia,

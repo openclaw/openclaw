@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
@@ -15,8 +16,12 @@ import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channe
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { MattermostConfigSchema } from "./config-schema.js";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import { mattermostApprovalAuth } from "./approval-auth.js";
+import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -36,7 +41,7 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import {
-  buildChannelConfigSchema,
+  chunkTextForOutbound,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -47,6 +52,7 @@ import { getMattermostRuntime } from "./runtime.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
+import type { MattermostConfig } from "./types.js";
 
 const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedMattermostAccount>({
   channelKey: "mattermost",
@@ -94,7 +100,7 @@ function describeMattermostMessageTool({
       enabledAccounts.length > 0
         ? {
             properties: {
-              buttons: createMessageToolButtonsSchema(),
+              buttons: Type.Optional(createMessageToolButtonsSchema()),
             },
           }
         : null,
@@ -108,36 +114,16 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {
-      // Check reactions gate: per-account config takes precedence over base config
-      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const acctConfig = accounts?.[resolvedAccountId];
-      const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
-      const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-      const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const reactionsEnabled =
+        account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
         throw new Error("Mattermost reactions are disabled in config");
       }
 
-      const postIdRaw =
-        typeof (params as any)?.messageId === "string"
-          ? (params as any).messageId
-          : typeof (params as any)?.postId === "string"
-            ? (params as any).postId
-            : "";
-      const postId = postIdRaw.trim();
-      if (!postId) {
-        throw new Error("Mattermost react requires messageId (post id)");
-      }
-
-      const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
-      const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
-      if (!emojiName) {
-        throw new Error("Mattermost react requires emoji");
-      }
-
-      const remove = (params as any)?.remove === true;
+      const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
       if (remove) {
         const result = await removeMattermostReaction({
           cfg,
@@ -234,16 +220,38 @@ const meta = {
   quickstartAllowFrom: true,
 } as const;
 
-function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
-  const readNormalizedValue = (value: unknown) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  };
+function readTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
 
-  return readNormalizedValue(params.replyToId) ?? readNormalizedValue(params.replyTo);
+function parseMattermostReactActionParams(params: Record<string, unknown>): {
+  postId: string;
+  emojiName: string;
+  remove: boolean;
+} {
+  const postId = readTrimmedString(params.messageId) ?? readTrimmedString(params.postId);
+  if (!postId) {
+    throw new Error("Mattermost react requires messageId (post id)");
+  }
+
+  const emojiName = readTrimmedString(params.emoji)?.replace(/^:+|:+$/g, "");
+  if (!emojiName) {
+    throw new Error("Mattermost react requires emoji");
+  }
+
+  return {
+    postId,
+    emojiName,
+    remove: params.remove === true,
+  };
+}
+
+function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
+  return readTrimmedString(params.replyToId) ?? readTrimmedString(params.replyTo);
 }
 
 function normalizeAllowEntry(entry: string): string {
@@ -299,7 +307,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.mattermost"] },
-    configSchema: buildChannelConfigSchema(MattermostConfigSchema),
+    configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
       isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
@@ -313,6 +321,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           },
         }),
     },
+    auth: mattermostApprovalAuth,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
@@ -347,16 +356,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       },
     },
     status: createComputedAccountStatusAdapter<ResolvedMattermostAccount>({
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
         connected: false,
         lastConnectedAt: null,
         lastDisconnect: null,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      }),
       buildChannelSummary: ({ snapshot }) =>
         buildPassiveProbedChannelStatusSummary(snapshot, {
           botTokenSource: snapshot.botTokenSource ?? "none",
@@ -410,11 +414,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
   },
   pairing: {
-    idLabel: "mattermostUserId",
-    normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
-    notifyApproval: createLoggedPairingApprovalNotifier(
-      ({ id }) => `[mattermost] User ${id} approved for pairing`,
-    ),
+    text: {
+      idLabel: "mattermostUserId",
+      message: "OpenClaw: your access has been approved.",
+      normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
+      notify: createLoggedPairingApprovalNotifier(
+        ({ id }) => `[mattermost] User ${id} approved for pairing`,
+      ),
+    },
   },
   threading: {
     scopedAccountReplyToMode: {
@@ -433,7 +440,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       resolveTarget: ({ to }) => {

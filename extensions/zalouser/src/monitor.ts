@@ -2,8 +2,8 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/channel-policy";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -311,6 +311,7 @@ async function processMessage(
   });
 
   const groups = account.config.groups ?? {};
+  const routeAllowlistConfigured = Object.keys(groups).length > 0;
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(
@@ -325,7 +326,7 @@ async function processMessage(
     );
     const routeAccess = evaluateGroupRouteAccessForPolicy({
       groupPolicy,
-      routeAllowlistConfigured: Object.keys(groups).length > 0,
+      routeAllowlistConfigured,
       routeMatched: Boolean(groupEntry),
       routeEnabled: isZalouserGroupEntryAllowed(groupEntry),
     });
@@ -350,10 +351,13 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
-  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-    groupPolicy,
-    groupAllowFrom: configGroupAllowFrom,
-  });
+  const senderGroupPolicy =
+    routeAllowlistConfigured && configGroupAllowFrom.length === 0
+      ? groupPolicy
+      : resolveSenderScopedGroupPolicy({
+          groupPolicy,
+          groupAllowFrom: configGroupAllowFrom,
+        });
   const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
     commandBody,
     config,

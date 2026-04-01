@@ -1,8 +1,8 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
 import { createAttachedChannelResultAdapter } from "../../plugin-sdk/channel-send-result.js";
-import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
+import type { PollInput } from "../../polls.js";
 import { escapeRegExp } from "../../utils.js";
-import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import type { ChannelOutboundAdapter } from "./types.js";
 
 export const WHATSAPP_GROUP_INTRO_HINT =
@@ -22,15 +22,35 @@ export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }):
 }
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
-type WhatsAppSendMessage = PluginRuntimeChannel["whatsapp"]["sendMessageWhatsApp"];
-type WhatsAppSendPoll = PluginRuntimeChannel["whatsapp"]["sendPollWhatsApp"];
+type WhatsAppSendMessage = (
+  to: string,
+  body: string,
+  options: {
+    verbose: boolean;
+    cfg?: OpenClawConfig;
+    mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    gifPlayback?: boolean;
+    accountId?: string;
+  },
+) => Promise<{ messageId: string; toJid: string }>;
+type WhatsAppSendPoll = (
+  to: string,
+  poll: PollInput,
+  options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+) => Promise<{ messageId: string; toJid: string }>;
 
 type CreateWhatsAppOutboundBaseParams = {
   chunker: WhatsAppChunker;
   sendMessageWhatsApp: WhatsAppSendMessage;
   sendPollWhatsApp: WhatsAppSendPoll;
   shouldLogVerbose: () => boolean;
-  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+  resolveTarget: ChannelOutboundAdapter["resolveTarget"];
   normalizeText?: (text: string | undefined) => string;
   skipEmptyText?: boolean;
 };
@@ -40,8 +60,7 @@ export function createWhatsAppOutboundBase({
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
-  resolveTarget = ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget,
   normalizeText = (text) => text ?? "",
   skipEmptyText = false,
 }: CreateWhatsAppOutboundBaseParams): Pick<
@@ -84,7 +103,9 @@ export function createWhatsAppOutboundBase({
         to,
         text,
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         deps,
         gifPlayback,
@@ -95,7 +116,9 @@ export function createWhatsAppOutboundBase({
           verbose: false,
           cfg,
           mediaUrl,
+          mediaAccess,
           mediaLocalRoots,
+          mediaReadFile,
           accountId: accountId ?? undefined,
           gifPlayback,
         });
