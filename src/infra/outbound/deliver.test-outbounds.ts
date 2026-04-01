@@ -1,10 +1,6 @@
 import { chunkMarkdownTextWithMode, chunkText } from "../../auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  createDirectTextMediaOutbound,
-  createScopedChannelMediaMaxBytesResolver,
-} from "../../plugin-sdk/media-runtime.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 type SignalSendFn = (
@@ -13,7 +9,19 @@ type SignalSendFn = (
   options?: Record<string, unknown>,
 ) => Promise<{ messageId: string } & Record<string, unknown>>;
 
-const resolveSignalMaxBytes = createScopedChannelMediaMaxBytesResolver("signal");
+const MB = 1024 * 1024;
+
+function resolveSignalMaxBytes(cfg: OpenClawConfig, accountId?: string): number | undefined {
+  const signalCfg = cfg.channels?.signal as
+    | {
+        mediaMaxMb?: number;
+        accounts?: Record<string, { mediaMaxMb?: number }>;
+      }
+    | undefined;
+  const accountMb = accountId ? signalCfg?.accounts?.[accountId]?.mediaMaxMb : undefined;
+  const mediaMaxMb = accountMb ?? signalCfg?.mediaMaxMb;
+  return typeof mediaMaxMb === "number" ? mediaMaxMb * MB : undefined;
+}
 
 function resolveSignalSender(deps: OutboundSendDeps | undefined): SignalSendFn {
   const sender = resolveOutboundSendDep<SignalSendFn>(deps, "signal");
@@ -51,10 +59,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) => {
     const send = resolveSignalSender(deps);
-    const maxBytes = resolveSignalMaxBytes({
-      cfg,
-      accountId: accountId ?? undefined,
-    });
+    const maxBytes = resolveSignalMaxBytes(cfg, accountId ?? undefined);
     const limit = resolveSignalTextChunkLimit(cfg, accountId);
     const chunks = chunkMarkdownTextWithMode(text, limit, "length");
     const outputChunks = chunks.length === 0 && text ? [text] : chunks;
@@ -88,10 +93,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
   }) => {
     abortSignal?.throwIfAborted();
     const send = resolveSignalSender(deps);
-    const maxBytes = resolveSignalMaxBytes({
-      cfg,
-      accountId: accountId ?? undefined,
-    });
+    const maxBytes = resolveSignalMaxBytes(cfg, accountId ?? undefined);
     return withSignalChannel(
       await send(to, text, {
         cfg,
@@ -107,10 +109,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
   },
   sendText: async ({ cfg, to, text, accountId, deps }) => {
     const send = resolveSignalSender(deps);
-    const maxBytes = resolveSignalMaxBytes({
-      cfg,
-      accountId: accountId ?? undefined,
-    });
+    const maxBytes = resolveSignalMaxBytes(cfg, accountId ?? undefined);
     return withSignalChannel(
       await send(to, text, {
         cfg,
@@ -130,10 +129,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     deps,
   }) => {
     const send = resolveSignalSender(deps);
-    const maxBytes = resolveSignalMaxBytes({
-      cfg,
-      accountId: accountId ?? undefined,
-    });
+    const maxBytes = resolveSignalMaxBytes(cfg, accountId ?? undefined);
     return withSignalChannel(
       await send(to, text, {
         cfg,
@@ -224,22 +220,35 @@ function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
   return sender;
 }
 
-export const imessageOutboundForTest = createDirectTextMediaOutbound({
-  channel: "imessage",
-  resolveSender: resolveIMessageSender,
-  resolveMaxBytes: createScopedChannelMediaMaxBytesResolver("imessage"),
-  buildTextOptions: ({ cfg, maxBytes, accountId, replyToId }) => ({
-    config: cfg,
-    maxBytes,
-    accountId: accountId ?? undefined,
-    replyToId: replyToId ?? undefined,
-  }),
-  buildMediaOptions: ({ cfg, mediaUrl, maxBytes, accountId, replyToId, mediaLocalRoots }) => ({
-    config: cfg,
-    mediaUrl,
-    maxBytes,
-    accountId: accountId ?? undefined,
-    replyToId: replyToId ?? undefined,
-    mediaLocalRoots,
-  }),
-});
+function resolveIMessageMaxBytes(cfg: OpenClawConfig): number | undefined {
+  const channelMb = (cfg.channels?.imessage as { mediaMaxMb?: number } | undefined)?.mediaMaxMb;
+  const agentMb = cfg.agents?.defaults?.mediaMaxMb;
+  const mediaMaxMb = channelMb ?? agentMb;
+  return typeof mediaMaxMb === "number" ? mediaMaxMb * MB : undefined;
+}
+
+export const imessageOutboundForTest: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async ({ cfg, to, text, accountId, replyToId, deps }) =>
+    ({
+      channel: "imessage",
+      ...(await resolveIMessageSender(deps)(to, text, {
+        config: cfg,
+        maxBytes: resolveIMessageMaxBytes(cfg),
+        accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
+      })),
+    }) as const,
+  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, replyToId, deps }) =>
+    ({
+      channel: "imessage",
+      ...(await resolveIMessageSender(deps)(to, text, {
+        config: cfg,
+        mediaUrl,
+        mediaLocalRoots,
+        maxBytes: resolveIMessageMaxBytes(cfg),
+        accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
+      })),
+    }) as const,
+};
