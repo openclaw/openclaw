@@ -15,9 +15,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   resolveAgentIdFromSessionKey,
   sanitizeAgentId,
-} from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+} from "../../../src/routing/session-key.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -65,8 +63,10 @@ export function resolveTelegramConversationRoute(params: {
     // Preserve the configured topic agent ID so topic-bound sessions stay stable
     // even when that agent is not present in the current config snapshot.
     const topicAgentId = sanitizeAgentId(rawTopicAgentId);
-    const sessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentSessionKey({
+    route = {
+      ...route,
+      agentId: topicAgentId,
+      sessionKey: buildAgentSessionKey({
         agentId: topicAgentId,
         channel: "telegram",
         accountId: params.accountId,
