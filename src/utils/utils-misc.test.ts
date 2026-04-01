@@ -91,7 +91,7 @@ describe("isReasoningTagProvider", () => {
     value: string | null | undefined;
     expected: boolean;
   }>)("$name", ({ value, expected }) => {
-    expect(isReasoningTagProvider(value)).toBe(expected);
+    expect(isReasoningTagProvider(value, { workspaceDir: process.cwd() })).toBe(expected);
   });
 });
 

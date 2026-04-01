@@ -128,7 +128,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {
-    const run = makeRun();
+    const run = makeRun({ workspaceDir: process.cwd() });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "minimax",
       primaryProvider: "minimax",

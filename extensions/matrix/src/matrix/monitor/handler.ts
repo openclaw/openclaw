@@ -84,6 +84,7 @@ export type MatrixMonitorHandlerParams = {
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
   streaming: "partial" | "off";
+  blockStreamingEnabled: boolean;
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   textLimit: number;
@@ -201,6 +202,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     threadReplies,
     dmThreadReplies,
     streaming,
+    blockStreamingEnabled,
     dmEnabled,
     dmPolicy,
     textLimit,
@@ -1127,10 +1129,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
-      const streamingEnabled = streaming === "partial";
+      const draftStreamingEnabled = streaming === "partial" && !blockStreamingEnabled;
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
       let currentDraftReplyToId = draftReplyToId;
-      const draftStream = streamingEnabled
+      const draftStream = draftStreamingEnabled
         ? createMatrixDraftStream({
             roomId,
             client,
@@ -1351,10 +1353,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ...replyOptions,
                 skillFilter: roomConfig?.skills,
                 // Matrix expects explicit assistant progress updates as
-                // separate messages when draft streaming is off.
-                // When partial draft streaming is active, disable the shared
-                // block pipeline because draft edits replace it.
-                disableBlockStreaming: streamingEnabled ? true : false,
+                // separate messages only when block streaming is explicitly
+                // enabled. Partial draft streaming still disables the shared
+                // block pipeline so draft edits do not double-send.
+                disableBlockStreaming: draftStream ? true : !blockStreamingEnabled,
                 onPartialReply: draftStream
                   ? (payload) => {
                       const fullText = payload.text ?? "";

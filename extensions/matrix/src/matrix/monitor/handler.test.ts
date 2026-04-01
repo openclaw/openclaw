@@ -937,6 +937,7 @@ describe("matrix monitor handler pairing account scope", () => {
       replyToMode: "off",
       threadReplies: "inbound",
       streaming: "off",
+      blockStreamingEnabled: false,
       dmEnabled: true,
       dmPolicy: "open",
       textLimit: 8_000,
@@ -1851,7 +1852,7 @@ describe("matrix monitor handler draft streaming", () => {
 });
 
 describe("matrix monitor handler block streaming config", () => {
-  it("forces block streaming on when draft streaming is off", async () => {
+  it("keeps final-only delivery when draft streaming is off by default", async () => {
     let capturedDisableBlockStreaming: boolean | undefined;
 
     const { handler } = createMatrixHandlerTestHarness({
@@ -1869,7 +1870,7 @@ describe("matrix monitor handler block streaming config", () => {
       createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
     );
 
-    expect(capturedDisableBlockStreaming).toBe(false);
+    expect(capturedDisableBlockStreaming).toBe(true);
   });
 
   it("disables shared block streaming when draft streaming is partial", async () => {
@@ -1891,5 +1892,27 @@ describe("matrix monitor handler block streaming config", () => {
     );
 
     expect(capturedDisableBlockStreaming).toBe(true);
+  });
+
+  it("uses shared block streaming when explicitly enabled for Matrix", async () => {
+    let capturedDisableBlockStreaming: boolean | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "off",
+      blockStreamingEnabled: true,
+      dispatchReplyFromConfig: vi.fn(
+        async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
+          capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
+          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+        },
+      ) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(capturedDisableBlockStreaming).toBe(false);
   });
 });
