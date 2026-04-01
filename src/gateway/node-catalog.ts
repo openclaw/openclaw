@@ -1,10 +1,44 @@
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
+import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
+export type KnownNodeDevicePairingSource = {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  clientId?: string;
+  clientMode?: string;
+  remoteIp?: string;
+  approvedAtMs?: number;
+};
+
+export type KnownNodeApprovedSource = {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  remoteIp?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
+  caps: string[];
+  commands: string[];
+  permissions?: Record<string, boolean>;
+  approvedAtMs?: number;
+};
+
+export type KnownNodeEntry = {
+  nodeId: string;
+  devicePairing?: KnownNodeDevicePairingSource;
+  nodePairing?: KnownNodeApprovedSource;
+  live?: NodeSession;
+  effective: NodeListNode;
+};
+
 export type KnownNodeCatalog = {
-  pairedById: Map<string, NodeListNode>;
-  connectedById: Map<string, NodeSession>;
+  entriesById: Map<string, KnownNodeEntry>;
 };
 
 function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
@@ -23,53 +57,62 @@ function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): st
   return [...values].toSorted((left, right) => left.localeCompare(right));
 }
 
-function buildPairedNodeRecord(entry: PairedDevice): NodeListNode {
+function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
   return {
     nodeId: entry.deviceId,
     displayName: entry.displayName,
     platform: entry.platform,
-    version: undefined,
-    coreVersion: undefined,
-    uiVersion: undefined,
     clientId: entry.clientId,
     clientMode: entry.clientMode,
-    deviceFamily: undefined,
-    modelIdentifier: undefined,
     remoteIp: entry.remoteIp,
-    caps: [],
-    commands: [],
-    permissions: undefined,
     approvedAtMs: entry.approvedAtMs,
-    paired: true,
-    connected: false,
   };
 }
 
-function buildKnownNodeEntry(params: {
+function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprovedSource {
+  return {
+    nodeId: entry.nodeId,
+    displayName: entry.displayName,
+    platform: entry.platform,
+    version: entry.version,
+    coreVersion: entry.coreVersion,
+    uiVersion: entry.uiVersion,
+    remoteIp: entry.remoteIp,
+    deviceFamily: entry.deviceFamily,
+    modelIdentifier: entry.modelIdentifier,
+    caps: entry.caps ?? [],
+    commands: entry.commands ?? [],
+    permissions: entry.permissions,
+    approvedAtMs: entry.approvedAtMs,
+  };
+}
+
+function buildEffectiveKnownNode(entry: {
   nodeId: string;
-  paired?: NodeListNode;
+  devicePairing?: KnownNodeDevicePairingSource;
+  nodePairing?: KnownNodeApprovedSource;
   live?: NodeSession;
 }): NodeListNode {
-  const { nodeId, paired, live } = params;
+  const { nodeId, devicePairing, nodePairing, live } = entry;
   return {
     nodeId,
-    displayName: live?.displayName ?? paired?.displayName,
-    platform: live?.platform ?? paired?.platform,
-    version: live?.version ?? paired?.version,
-    coreVersion: live?.coreVersion ?? paired?.coreVersion,
-    uiVersion: live?.uiVersion ?? paired?.uiVersion,
-    clientId: live?.clientId ?? paired?.clientId,
-    clientMode: live?.clientMode ?? paired?.clientMode,
-    deviceFamily: live?.deviceFamily ?? paired?.deviceFamily,
-    modelIdentifier: live?.modelIdentifier ?? paired?.modelIdentifier,
-    remoteIp: live?.remoteIp ?? paired?.remoteIp,
-    caps: uniqueSortedStrings(live?.caps, paired?.caps),
-    commands: uniqueSortedStrings(live?.commands, paired?.commands),
+    displayName: live?.displayName ?? nodePairing?.displayName ?? devicePairing?.displayName,
+    platform: live?.platform ?? nodePairing?.platform ?? devicePairing?.platform,
+    version: live?.version ?? nodePairing?.version,
+    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion,
+    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion,
+    clientId: live?.clientId ?? devicePairing?.clientId,
+    clientMode: live?.clientMode ?? devicePairing?.clientMode,
+    deviceFamily: live?.deviceFamily ?? nodePairing?.deviceFamily,
+    modelIdentifier: live?.modelIdentifier ?? nodePairing?.modelIdentifier,
+    remoteIp: live?.remoteIp ?? nodePairing?.remoteIp ?? devicePairing?.remoteIp,
+    caps: uniqueSortedStrings(live?.caps, nodePairing?.caps),
+    commands: uniqueSortedStrings(live?.commands, nodePairing?.commands),
     pathEnv: live?.pathEnv,
-    permissions: live?.permissions ?? paired?.permissions,
+    permissions: live?.permissions ?? nodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
-    approvedAtMs: paired?.approvedAtMs,
-    paired: Boolean(paired),
+    approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
+    paired: Boolean(devicePairing ?? nodePairing),
     connected: Boolean(live),
   };
 }
@@ -91,35 +134,57 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
+  pairedNodes?: readonly NodePairingPairedNode[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
-  const pairedById = new Map(
+  const devicePairingById = new Map(
     params.pairedDevices
       .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
-      .map((entry) => [entry.deviceId, buildPairedNodeRecord(entry)]),
+      .map((entry) => [entry.deviceId, buildDevicePairingSource(entry)]),
   );
-  const connectedById = new Map(params.connectedNodes.map((entry) => [entry.nodeId, entry]));
-  return { pairedById, connectedById };
+  const nodePairingById = new Map(
+    (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
+  );
+  const liveById = new Map(params.connectedNodes.map((entry) => [entry.nodeId, entry]));
+  const nodeIds = new Set<string>([
+    ...devicePairingById.keys(),
+    ...nodePairingById.keys(),
+    ...liveById.keys(),
+  ]);
+  const entriesById = new Map<string, KnownNodeEntry>();
+  for (const nodeId of nodeIds) {
+    const devicePairing = devicePairingById.get(nodeId);
+    const nodePairing = nodePairingById.get(nodeId);
+    const live = liveById.get(nodeId);
+    entriesById.set(nodeId, {
+      nodeId,
+      devicePairing,
+      nodePairing,
+      live,
+      effective: buildEffectiveKnownNode({
+        nodeId,
+        devicePairing,
+        nodePairing,
+        live,
+      }),
+    });
+  }
+  return { entriesById };
 }
 
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
-  const nodeIds = new Set<string>([...catalog.pairedById.keys(), ...catalog.connectedById.keys()]);
-  return [...nodeIds]
-    .map((nodeId) =>
-      buildKnownNodeEntry({
-        nodeId,
-        paired: catalog.pairedById.get(nodeId),
-        live: catalog.connectedById.get(nodeId),
-      }),
-    )
+  return [...catalog.entriesById.values()]
+    .map((entry) => entry.effective)
     .toSorted(compareKnownNodes);
 }
 
+export function getKnownNodeEntry(
+  catalog: KnownNodeCatalog,
+  nodeId: string,
+): KnownNodeEntry | null {
+  return catalog.entriesById.get(nodeId) ?? null;
+}
+
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
-  const paired = catalog.pairedById.get(nodeId);
-  const live = catalog.connectedById.get(nodeId);
-  if (!paired && !live) {
-    return null;
-  }
-  return buildKnownNodeEntry({ nodeId, paired, live });
+  return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }

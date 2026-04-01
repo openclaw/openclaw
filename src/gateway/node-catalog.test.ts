@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
+import {
+  createKnownNodeCatalog,
+  getKnownNode,
+  getKnownNodeEntry,
+  listKnownNodes,
+} from "./node-catalog.js";
 
 describe("gateway/node-catalog", () => {
   it("filters paired nodes by active node token instead of sticky historical roles", () => {
@@ -43,6 +48,7 @@ describe("gateway/node-catalog", () => {
           approvedAtMs: 1,
         },
       ],
+      pairedNodes: [],
       connectedNodes: [],
     });
 
@@ -74,6 +80,22 @@ describe("gateway/node-catalog", () => {
           approvedAtMs: 99,
         },
       ],
+      pairedNodes: [
+        {
+          nodeId: "mac-1",
+          token: "node-token",
+          displayName: "Mac",
+          platform: "darwin",
+          version: "1.2.0",
+          coreVersion: "1.2.0",
+          uiVersion: "1.2.0",
+          remoteIp: "100.0.0.9",
+          caps: ["camera"],
+          commands: ["system.run"],
+          createdAtMs: 1,
+          approvedAtMs: 100,
+        },
+      ],
       connectedNodes: [
         {
           nodeId: "mac-1",
@@ -84,8 +106,8 @@ describe("gateway/node-catalog", () => {
           displayName: "Mac",
           platform: "darwin",
           version: "1.2.3",
-          caps: ["screen"],
-          commands: ["screen.snapshot"],
+          caps: ["camera", "screen"],
+          commands: ["screen.snapshot", "system.run"],
           remoteIp: "100.0.0.11",
           pathEnv: "/usr/bin:/bin",
           connectedAtMs,
@@ -93,6 +115,14 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
+    const entry = getKnownNodeEntry(catalog, "mac-1");
+    expect(entry?.nodePairing).toEqual(
+      expect.objectContaining({
+        commands: ["system.run"],
+        caps: ["camera"],
+        approvedAtMs: 100,
+      }),
+    );
     expect(getKnownNode(catalog, "mac-1")).toEqual(
       expect.objectContaining({
         nodeId: "mac-1",
@@ -100,13 +130,71 @@ describe("gateway/node-catalog", () => {
         clientId: "openclaw-macos",
         clientMode: "node",
         remoteIp: "100.0.0.11",
-        caps: ["screen"],
-        commands: ["screen.snapshot"],
+        caps: ["camera", "screen"],
+        commands: ["screen.snapshot", "system.run"],
         pathEnv: "/usr/bin:/bin",
-        approvedAtMs: 99,
+        approvedAtMs: 100,
         connectedAtMs,
         paired: true,
         connected: true,
+      }),
+    );
+  });
+
+  it("surfaces node-pair metadata even when the node is offline", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        {
+          deviceId: "mac-1",
+          publicKey: "public-key",
+          displayName: "Mac",
+          clientId: "openclaw-macos",
+          clientMode: "node",
+          role: "node",
+          roles: ["node"],
+          tokens: {
+            node: {
+              token: "current-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
+          },
+          createdAtMs: 1,
+          approvedAtMs: 99,
+        },
+      ],
+      pairedNodes: [
+        {
+          nodeId: "mac-1",
+          token: "node-token",
+          platform: "darwin",
+          caps: ["system"],
+          commands: ["system.run"],
+          createdAtMs: 1,
+          approvedAtMs: 123,
+        },
+      ],
+      connectedNodes: [],
+    });
+
+    const entry = getKnownNodeEntry(catalog, "mac-1");
+    expect(entry?.live).toBeUndefined();
+    expect(entry?.nodePairing).toEqual(
+      expect.objectContaining({
+        commands: ["system.run"],
+        caps: ["system"],
+        approvedAtMs: 123,
+      }),
+    );
+    expect(getKnownNode(catalog, "mac-1")).toEqual(
+      expect.objectContaining({
+        nodeId: "mac-1",
+        caps: ["system"],
+        commands: ["system.run"],
+        approvedAtMs: 123,
+        paired: true,
+        connected: false,
       }),
     );
   });

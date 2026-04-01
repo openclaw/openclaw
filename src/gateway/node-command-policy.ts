@@ -191,6 +191,69 @@ export function resolveNodeCommandAllowlist(
   return allow;
 }
 
+function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
+  if (!Array.isArray(commands)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of commands) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+export function normalizeDeclaredNodeCommands(params: {
+  declaredCommands?: readonly string[];
+  allowlist: Set<string>;
+}): string[] {
+  return normalizeDeclaredCommands(params.declaredCommands).filter((command) =>
+    params.allowlist.has(command),
+  );
+}
+
+export type NodeApprovedCommandDiff = {
+  declared: string[];
+  approved: string[];
+  missingApproved: string[];
+  extraApproved: string[];
+  effective: string[];
+  needsRepair: boolean;
+};
+
+export function diffApprovedNodeCommands(params: {
+  declaredCommands?: readonly string[];
+  approvedCommands?: readonly string[];
+  allowlist: Set<string>;
+}): NodeApprovedCommandDiff {
+  const declared = normalizeDeclaredNodeCommands({
+    declaredCommands: params.declaredCommands,
+    allowlist: params.allowlist,
+  });
+  const approved = normalizeDeclaredNodeCommands({
+    declaredCommands: params.approvedCommands,
+    allowlist: params.allowlist,
+  });
+  const approvedSet = new Set(approved);
+  const declaredSet = new Set(declared);
+  const missingApproved = declared.filter((command) => !approvedSet.has(command));
+  const extraApproved = approved.filter((command) => !declaredSet.has(command));
+  const effective = declared.filter((command) => approvedSet.has(command));
+  return {
+    declared,
+    approved,
+    missingApproved,
+    extraApproved,
+    effective,
+    needsRepair: missingApproved.length > 0,
+  };
+}
+
 export function isNodeCommandAllowed(params: {
   command: string;
   declaredCommands?: string[];
