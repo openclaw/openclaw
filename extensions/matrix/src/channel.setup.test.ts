@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 
 const verificationMocks = vi.hoisted(() => ({
@@ -123,9 +123,11 @@ describe("matrix setup post-write bootstrap", () => {
     }
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js"));
+  });
+
+  beforeEach(() => {
     verificationMocks.bootstrapMatrixVerification.mockReset();
     log.mockClear();
     error.mockClear();
