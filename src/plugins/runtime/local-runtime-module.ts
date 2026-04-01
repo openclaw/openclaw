@@ -13,10 +13,15 @@ const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
 function resolveSiblingRuntimeModulePath(moduleUrl: string, relativeBase: string): string {
   const baseDir = path.dirname(fileURLToPath(moduleUrl));
-  for (const ext of RUNTIME_MODULE_EXTENSIONS) {
-    const candidate = path.resolve(baseDir, `${relativeBase}${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  const baseName = relativeBase.replace(/^\.\//, "");
+  const candidateDirs = [baseDir, path.resolve(baseDir, "plugins", "runtime")];
+
+  for (const dir of candidateDirs) {
+    for (const ext of RUNTIME_MODULE_EXTENSIONS) {
+      const candidate = path.resolve(dir, `${baseName}${ext}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   throw new Error(`Unable to resolve runtime module ${relativeBase} from ${moduleUrl}`);
