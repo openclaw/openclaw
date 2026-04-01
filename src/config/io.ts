@@ -1803,6 +1803,7 @@ function buildConfigProvenance(params: {
   parsed: unknown;
   sourceConfig: OpenClawConfig;
   failedIncludePaths?: string[];
+  failedIncludeAncestors?: string[];
 }): ConfigProvenanceSnapshot {
   const snapshot = createEmptyConfigProvenance();
   recordConfigEntry(snapshot, {
@@ -1844,6 +1845,11 @@ function buildConfigProvenance(params: {
       path.normalize(includePath),
     ),
   );
+  const failedIncludeAncestors = new Set(
+    (params.failedIncludeAncestors ?? []).map((includePath) =>
+      path.normalize(includePath),
+    ),
+  );
   for (const includePath of [...includePaths].sort()) {
     const normalizedIncludePath = path.normalize(includePath);
     const resolvedIncludePath = path.normalize(
@@ -1851,13 +1857,15 @@ function buildConfigProvenance(params: {
         ? includePath
         : path.resolve(configDir, includePath),
     );
+    const failed =
+      failedIncludePaths.has(normalizedIncludePath) ||
+      failedIncludePaths.has(resolvedIncludePath) ||
+      failedIncludeAncestors.has(normalizedIncludePath) ||
+      failedIncludeAncestors.has(resolvedIncludePath);
     recordConfigEntry(snapshot, {
       path: includePath,
       kind: "include",
-      applied:
-        params.exists &&
-        !failedIncludePaths.has(normalizedIncludePath) &&
-        !failedIncludePaths.has(resolvedIncludePath),
+      applied: params.exists && !failed,
     });
   }
 
@@ -2270,6 +2278,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
                   : err instanceof ConfigIncludeError
                     ? [err.includePath]
                     : undefined,
+              failedIncludeAncestors:
+                err instanceof CircularIncludeError
+                  ? err.chain.slice(0, -1)
+                  : undefined,
             }),
             // Keep the recovered root file payload here when read healing kicked in.
             sourceConfig: coerceConfig(effectiveParsed),
