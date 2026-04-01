@@ -163,6 +163,7 @@ async function expectTransientGetFileRetrySuccess() {
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: true,
         hostnameAllowlist: ["api.telegram.org"],
+        allowedHostnames: ["api.telegram.org"],
       },
     }),
   );
@@ -538,7 +539,7 @@ describe("resolveMedia original filename preservation", () => {
       expect.objectContaining({
         ssrfPolicy: {
           hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
-          allowedHostnames: ["192.168.1.50"],
+          allowedHostnames: ["api.telegram.org", "192.168.1.50"],
           allowRfc2544BenchmarkRange: true,
         },
       }),
