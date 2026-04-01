@@ -404,9 +404,13 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.agent.streamFn = createGoogleSafetySettingsWrapper(
       ctx.agent.streamFn,
 <<<<<<< HEAD
+<<<<<<< HEAD
       ctx.provider,
 =======
 >>>>>>> fix: drop stale xAI wrapper import
+=======
+      ctx.provider,
+>>>>>>> fix: scope Gemini safety injection to the active provider
       googleSafetySettings,
     );
   }
