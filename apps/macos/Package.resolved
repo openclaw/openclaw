@@ -1,5 +1,5 @@
 {
-  "originHash" : "2028796705272a1bbe4aeb770242687f77c1296fdaa969383630f2c3ed828ca8",
+  "originHash" : "f9e924b8f470e089aa7091969bba662a5f626f3481c57d9a808cc8d5f434cd9e",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -24,7 +24,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/ElevenLabsKit",
       "state" : {
-        "revision" : "c8679fbd37416a8780fe43be88a497ff16209e2d",
+        "revision" : "7e3c948d8340abe3977014f3de020edf221e9269",
         "version" : "0.1.0"
       }
     },
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
-        "revision" : "21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2",
-        "version" : "2.9.0"
+        "revision" : "066e75a8b3e99962685d6a90cdd5293ebffd9261",
+        "version" : "2.9.1"
       }
     },
     {
