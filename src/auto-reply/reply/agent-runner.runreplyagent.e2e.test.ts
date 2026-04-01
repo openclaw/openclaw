@@ -458,6 +458,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   }
 
+  async function writeCorruptGeminiSessionFixture(params: {
+    stateDir: string;
+    sessionId: string;
+    persistStore: boolean;
+  }) {
+    const storePath = path.join(params.stateDir, "sessions", "sessions.json");
+    const sessionEntry: SessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
+    const sessionStore = { main: sessionEntry };
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    if (params.persistStore) {
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+    }
+
+    const transcriptPath = sessions.resolveSessionTranscriptPath(params.sessionId);
+    await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+    await fs.writeFile(transcriptPath, "bad", "utf-8");
+
+    return { storePath, sessionEntry, sessionStore, transcriptPath };
+  }
+
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1397,6 +1418,162 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload.text).toContain("/new");
   });
 
+  it("resets the session after role ordering payloads", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "Message ordering conflict - please try again.", isError: true }],
+        meta: {
+          durationMs: 1,
+          error: {
+            kind: "role_ordering",
+            message: 'messages: roles must alternate between "user" and "assistant"',
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Message ordering conflict"),
+      });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
+      expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(sessionStore.main.sessionId).not.toBe(sessionId);
+      await expect(fs.access(transcriptPath)).rejects.toBeDefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
+    });
+  });
+
+  it("resets corrupted Gemini sessions and deletes transcripts", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { storePath, sessionEntry, sessionStore, transcriptPath } =
+        await writeCorruptGeminiSessionFixture({
+          stateDir,
+          sessionId: "session-corrupt",
+          persistStore: true,
+        });
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "function call turn comes immediately after a user turn or after a function response turn",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Session history was corrupted"),
+      });
+      expect(sessionStore.main).toBeUndefined();
+      await expect(fs.access(transcriptPath)).rejects.toThrow();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeUndefined();
+    });
+  });
+
+  it("keeps sessions intact on other errors", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-ok";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry = { sessionId, updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("INVALID_ARGUMENT: some other failure");
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Something went wrong while processing your request"),
+      });
+      expect(sessionStore.main).toBeDefined();
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeDefined();
+    });
+  });
+
+  it("still replies even if session reset fails to persist", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const saveSpy = vi
+        .spyOn(sessions, "saveSessionStore")
+        .mockRejectedValueOnce(new Error("boom"));
+      try {
+        const { storePath, sessionEntry, sessionStore, transcriptPath } =
+          await writeCorruptGeminiSessionFixture({
+            stateDir,
+            sessionId: "session-corrupt",
+            persistStore: false,
+          });
+
+        state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+          throw new Error(
+            "function call turn comes immediately after a user turn or after a function response turn",
+          );
+        });
+
+        const { run } = createMinimalRun({
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+        });
+        const res = await run();
+
+        expect(res).toMatchObject({
+          text: expect.stringContaining("Session history was corrupted"),
+        });
+        expect(sessionStore.main).toBeUndefined();
+        await expect(fs.access(transcriptPath)).rejects.toThrow();
+      } finally {
+        saveSpy.mockRestore();
+      }
+    });
+  });
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
       throw new Error("400 Incorrect role information");
