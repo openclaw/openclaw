@@ -1,7 +1,8 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -14,6 +15,7 @@ DEFAULT_WAIT_TIMEOUT = float(os.environ.get("SENSE_RUNTIME_BRIDGE_WAIT_TIMEOUT",
 DEFAULT_POLL_INTERVAL = float(os.environ.get("SENSE_RUNTIME_BRIDGE_POLL_INTERVAL", "2"))
 DEFAULT_TOKEN_ENV = "SENSE_WORKER_TOKEN"
 DEFAULT_WSL_NODE_BIN = "/home/fukaz/.nvm/versions/node/v22.22.2/bin/node"
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
 def resolve_token(token: str | None, token_env: str | None) -> str | None:
@@ -24,6 +26,11 @@ def resolve_token(token: str | None, token_env: str | None) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
+def strip_ansi(value: str) -> str:
+    cleaned = ANSI_ESCAPE_RE.sub("", value)
+    return " ".join(cleaned.replace("\r", " ").split())
+
+
 def try_parse_json(text: str):
     text = text.strip()
     if not text:
@@ -32,6 +39,45 @@ def try_parse_json(text: str):
         return json.loads(text)
     except json.JSONDecodeError:
         return text
+
+
+def sanitize_runtime_result(task_type: str, completed: dict) -> dict:
+    if not isinstance(completed, dict):
+        return completed
+    result = completed.get("result")
+    if not isinstance(result, dict):
+        return completed
+
+    sanitized = dict(result)
+    summary = sanitized.get("summary")
+    if isinstance(summary, str):
+        sanitized["summary"] = strip_ansi(summary)
+
+    key_points = sanitized.get("key_points")
+    if isinstance(key_points, list):
+        sanitized["key_points"] = [strip_ansi(str(item)) for item in key_points]
+
+    next_action = sanitized.get("suggested_next_action")
+    if isinstance(next_action, str):
+        sanitized["suggested_next_action"] = strip_ansi(next_action)
+
+    raw_output = sanitized.get("raw_output")
+    if isinstance(raw_output, str) and task_type == "sandbox-status":
+        try:
+            raw_payload = json.loads(raw_output)
+            if isinstance(raw_payload, dict):
+                for field in ("stdout", "stderr", "input_excerpt"):
+                    if isinstance(raw_payload.get(field), str):
+                        raw_payload[field] = strip_ansi(raw_payload[field])
+                if isinstance(raw_payload.get("key_points"), list):
+                    raw_payload["key_points"] = [strip_ansi(str(item)) for item in raw_payload["key_points"]]
+                sanitized["raw_output"] = json.dumps(raw_payload, ensure_ascii=False)
+        except json.JSONDecodeError:
+            sanitized["raw_output"] = strip_ansi(raw_output)
+
+    merged = dict(completed)
+    merged["result"] = sanitized
+    return merged
 
 
 def request_json(method: str, url: str, payload: dict | None, timeout: float, token: str | None = None):
@@ -107,6 +153,7 @@ def main() -> int:
     parser.add_argument("--sandbox-name", default="")
     parser.add_argument("--required-vram-mb", type=float)
     parser.add_argument("--timeout-sec", type=float, default=120.0)
+    parser.add_argument("--result-only", action="store_true")
     args = parser.parse_args()
 
     token = resolve_token(args.token, args.token_env)
@@ -132,7 +179,12 @@ def main() -> int:
     job_id = str(submit_result["job_id"])
     print(json.dumps({"submitted": submit_result}, ensure_ascii=False, indent=2), file=sys.stderr)
     completed = poll_until_done(args.base_url.rstrip("/"), token, args.timeout, args.wait_timeout, args.poll_interval, job_id)
-    print(json.dumps(completed, ensure_ascii=False, indent=2))
+    completed = sanitize_runtime_result(args.task_type, completed)
+    if args.result_only:
+        payload = completed.get("result") if isinstance(completed, dict) else completed
+    else:
+        payload = completed
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     result = completed.get("result") if isinstance(completed, dict) else None
     if isinstance(result, dict) and int(result.get("exit_code", 0)) != 0:
         return 1
