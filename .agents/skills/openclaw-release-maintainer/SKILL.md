@@ -120,8 +120,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
-- Both workflows also accept a prior successful preflight run id so a real
-  publish can promote the prepared artifacts without rebuilding them again.
+- Real npm publish requires a prior successful npm preflight run id so the
+  publish job promotes the prepared tarball instead of rebuilding it.
+- Real private mac publish requires a prior successful private mac preflight
+  run id so the publish job promotes the prepared artifacts instead of
+  rebuilding or renotarizing them again.
 - The private mac workflow also accepts `smoke_test_only=true` for branch-safe
   workflow smoke tests that use ad-hoc signing, skip notarization, skip shared
   appcast generation, and do not prove release readiness.
@@ -132,17 +135,23 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   workflow change before merge.
 - `.github/workflows/macos-release.yml` in `openclaw/openclaw` is now a
   public validation-only handoff. It validates the tag/release state and points
-  operators to the private repo; it does not build or publish macOS artifacts.
+  operators to the private repo. It still rebuilds the JS outputs needed for
+  release validation, but it does not sign, notarize, or publish macOS
+  artifacts.
+- `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
+  is the required private mac validation lane for `swift test`; keep it green
+  before any real mac publish run starts.
 - Real mac preflight and real mac publish both use
   `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`.
-- The private mac workflow runs on GitHub's xlarge macOS runner and uses a
-  SwiftPM cache because the Swift build/test/package path is CPU-heavy.
+- The private mac validation lane runs on GitHub's standard macOS runner.
+- The private mac preflight path runs on GitHub's xlarge macOS runner and uses
+  a SwiftPM cache because the build/sign/notarize/package path is CPU-heavy.
 - Private mac preflight uploads notarized build artifacts as workflow artifacts
   instead of uploading public GitHub release assets.
 - Private smoke-test runs upload ad-hoc, non-notarized build artifacts as
   workflow artifacts and intentionally skip stable `appcast.xml` generation.
-- npm preflight, public mac validation, and private mac preflight must all pass
-  before any real publish run starts.
+- npm preflight, public mac validation, private mac validation, and private mac
+  preflight must all pass before any real publish run starts.
 - Real publish runs must be dispatched from `main`; branch-dispatched publish
   attempts should fail before the protected environment is reached.
 - The release workflows stay tag-based; rely on the documented release sequence
@@ -150,8 +159,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Mac publish uses
   `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml` for
-  build, signing, notarization, packaged mac artifact generation, and
-  stable-feed `appcast.xml` artifact generation.
+  private mac preflight artifact preparation and real publish artifact
+  promotion.
 - Real private mac publish uploads the packaged `.zip`, `.dmg`, and
   `.dSYM.zip` assets to the existing GitHub release in `openclaw/openclaw`
   automatically when `OPENCLAW_PUBLIC_REPO_RELEASE_TOKEN` is present in the
@@ -209,29 +218,28 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 7. Create and push the git tag.
 8. Create or refresh the matching GitHub release.
 9. Start `.github/workflows/openclaw-npm-release.yml` with `preflight_only=true`
-   and wait for it to pass. Save that run id if you want the real publish to
-   reuse the prepared npm tarball.
+   and wait for it to pass. Save that run id because the real publish requires
+   it to reuse the prepared npm tarball.
 10. Start `.github/workflows/macos-release.yml` in `openclaw/openclaw` and wait
     for the public validation-only run to pass.
 11. Start
+    `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
+    with the same tag and wait for the private mac validation lane to pass.
+12. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    with `preflight_only=true` and wait for it to pass. Save that run id if you
-    want the real publish to reuse the notarized mac artifacts.
-12. If any preflight or validation run fails, fix the issue on a new commit,
+    with `preflight_only=true` and wait for it to pass. Save that run id because
+    the real publish requires it to reuse the notarized mac artifacts.
+13. If any preflight or validation run fails, fix the issue on a new commit,
     delete the tag and matching GitHub release, recreate them from the fixed
     commit, and rerun all relevant preflights from scratch before continuing.
     Never reuse old preflight results after the commit changes.
-13. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
-    the real publish. When the preflight run id is available, pass it via
-    `preflight_run_id` to skip the second npm rebuild.
-14. Start the real private mac publish with the same tag. When the private
-    preflight run id is available, pass it via `preflight_run_id` to skip the
-    second mac build/sign/notarize cycle and promote those prepared artifacts
-    directly to the public release.
+14. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
+    the real publish and pass the successful npm `preflight_run_id`.
 15. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 16. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    for the real publish and wait for success.
+    for the real publish with the successful private mac `preflight_run_id` and
+    wait for success.
 17. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
