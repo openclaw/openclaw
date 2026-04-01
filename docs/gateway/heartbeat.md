@@ -198,9 +198,9 @@ The first matching window wins; if no window matches, `every` is used as the fal
       heartbeat: {
         every: "30m", // fallback when no schedule window matches
         schedule: [
-          { start: "08:00", end: "18:00", every: "15m" },  // work hours: responsive
-          { start: "18:00", end: "23:00", every: "30m" },  // evening: moderate
-          { start: "23:00", end: "08:00", every: "2h" },   // overnight: economical
+          { start: "08:00", end: "18:00", every: "15m" }, // work hours: responsive
+          { start: "18:00", end: "23:00", every: "30m" }, // evening: moderate
+          { start: "23:00", end: "08:00", every: "2h" }, // overnight: economical
         ],
       },
     },
