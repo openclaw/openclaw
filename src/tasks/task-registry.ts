@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { killSubagentRunAdmin } from "../agents/subagent-control.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -60,6 +58,8 @@ let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
+  null;
+let controlRuntimePromise: Promise<typeof import("./task-registry-control.runtime.js")> | null =
   null;
 
 type TaskDeliveryOwner = {
@@ -363,6 +363,13 @@ function appendTaskEvent(event: {
 function loadTaskRegistryDeliveryRuntime() {
   deliveryRuntimePromise ??= import("./task-registry-delivery-runtime.js");
   return deliveryRuntimePromise;
+}
+
+function loadTaskRegistryControlRuntime() {
+  // Registry reads happen far more often than task cancellation, so keep the ACP/subagent
+  // control graph off the default import path until a cancellation flow actually needs it.
+  controlRuntimePromise ??= import("./task-registry-control.runtime.js");
+  return controlRuntimePromise;
 }
 
 function addRunIdIndex(taskId: string, runId?: string) {
@@ -1708,12 +1715,14 @@ export async function cancelTaskById(params: {
   }
   try {
     if (task.runtime === "acp") {
+      const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
       await getAcpSessionManager().cancelSession({
         cfg: params.cfg,
         sessionKey: childSessionKey,
         reason: "task-cancel",
       });
     } else if (task.runtime === "subagent") {
+      const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
       const result = await killSubagentRunAdmin({
         cfg: params.cfg,
         sessionKey: childSessionKey,
