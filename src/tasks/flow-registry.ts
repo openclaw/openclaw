@@ -358,6 +358,8 @@ export function createManagedFlow(params: {
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
   currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
   stateJson?: JsonValue | null;
   waitJson?: JsonValue | null;
   cancelRequestedAt?: number | null;

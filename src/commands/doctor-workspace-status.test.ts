@@ -33,19 +33,23 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("../tasks/flow-runtime-internal.js", () => ({
-  listFlowRecords: (...args: unknown[]) => mocks.listFlowRecords(...args),
+  // oxlint-disable-next-line typescript/no-explicit-any
+  listFlowRecords: (...args: any[]) => mocks.listFlowRecords(...args),
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => ({
-  listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowId(...args),
+  // oxlint-disable-next-line typescript/no-explicit-any
+  listTasksForFlowId: (...args: any[]) => mocks.listTasksForFlowId(...args),
 }));
 
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
   opts?: {
-    flows?: unknown[];
-    tasksByFlowId?: (flowId: string) => unknown[];
+    // oxlint-disable-next-line typescript/no-explicit-any
+    flows?: any[];
+    // oxlint-disable-next-line typescript/no-explicit-any
+    tasksByFlowId?: (flowId: string) => any[];
   },
 ) {
   mocks.resolveDefaultAgentId.mockReturnValue("default");
