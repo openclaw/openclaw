@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -19,9 +19,31 @@ import {
   createWhatsAppTestPlugin,
 } from "./targets.test-helpers.js";
 
+const mocks = vi.hoisted(() => ({
+  normalizeDeliverableOutboundChannel: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
 runResolveOutboundTargetCoreTests();
 
 beforeEach(() => {
+  mocks.normalizeDeliverableOutboundChannel.mockReset();
+  mocks.normalizeDeliverableOutboundChannel.mockImplementation((value?: string | null) => {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
+    return ["discord", "imessage", "slack", "telegram", "whatsapp"].includes(String(normalized))
+      ? normalized
+      : undefined;
+  });
+  mocks.resolveOutboundChannelPlugin.mockReset();
+  mocks.resolveOutboundChannelPlugin.mockImplementation(
+    ({ channel }: { channel: string }) =>
+      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+  );
   setActivePluginRegistry(
     createTargetsTestRegistry([
       createNoopOutboundChannelPlugin("discord"),
