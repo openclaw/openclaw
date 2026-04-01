@@ -217,43 +217,6 @@ export function normalizeDeclaredNodeCommands(params: {
   );
 }
 
-export type NodeApprovedCommandDiff = {
-  declared: string[];
-  approved: string[];
-  missingApproved: string[];
-  extraApproved: string[];
-  effective: string[];
-  needsRepair: boolean;
-};
-
-export function diffApprovedNodeCommands(params: {
-  declaredCommands?: readonly string[];
-  approvedCommands?: readonly string[];
-  allowlist: Set<string>;
-}): NodeApprovedCommandDiff {
-  const declared = normalizeDeclaredNodeCommands({
-    declaredCommands: params.declaredCommands,
-    allowlist: params.allowlist,
-  });
-  const approved = normalizeDeclaredNodeCommands({
-    declaredCommands: params.approvedCommands,
-    allowlist: params.allowlist,
-  });
-  const approvedSet = new Set(approved);
-  const declaredSet = new Set(declared);
-  const missingApproved = declared.filter((command) => !approvedSet.has(command));
-  const extraApproved = approved.filter((command) => !declaredSet.has(command));
-  const effective = declared.filter((command) => approvedSet.has(command));
-  return {
-    declared,
-    approved,
-    missingApproved,
-    extraApproved,
-    effective,
-    needsRepair: missingApproved.length > 0,
-  };
-}
-
 export function isNodeCommandAllowed(params: {
   command: string;
   declaredCommands?: string[];

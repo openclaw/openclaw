@@ -1296,7 +1296,7 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastError).toContain("timed out");
   });
 
-  it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
+  it("respects abort signals while retrying one-shot main-session wake-now heartbeat runs", async () => {
     const abortController = new AbortController();
     const runHeartbeatOnce = vi.fn(
       async (): Promise<HeartbeatRunResult> => ({
@@ -1312,7 +1312,7 @@ describe("Cron issue regressions", () => {
       enabled: true,
       createdAtMs: Date.now(),
       updatedAtMs: Date.now(),
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
