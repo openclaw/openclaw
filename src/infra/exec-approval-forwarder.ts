@@ -123,7 +123,7 @@ const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
 
 function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
   if (mode != null && !VALID_MODES.has(mode)) {
-    log.warn(`Invalid approvals.exec.mode "${mode}", falling back to "${DEFAULT_MODE}"`);
+    log.warn(`Invalid approval forwarding mode "${mode}", falling back to "${DEFAULT_MODE}"`);
     return DEFAULT_MODE;
   }
   return mode ?? DEFAULT_MODE;
