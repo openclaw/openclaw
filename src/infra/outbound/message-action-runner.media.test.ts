@@ -6,7 +6,7 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -18,6 +18,113 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
   "base64",
 );
+
+const channelResolutionMocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn(),
+  executeSendAction: vi.fn(),
+  executePollAction: vi.fn(),
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: channelResolutionMocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
+
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: channelResolutionMocks.executeSendAction,
+  executePollAction: channelResolutionMocks.executePollAction,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("./message-action-threading.js", () => ({
+  resolveAndApplyOutboundThreadId: vi.fn(
+    (
+      actionParams: Record<string, unknown>,
+      context: {
+        cfg: OpenClawConfig;
+        to: string;
+        accountId?: string | null;
+        toolContext?: Record<string, unknown>;
+        resolveAutoThreadId?: (params: {
+          cfg: OpenClawConfig;
+          accountId?: string | null;
+          to: string;
+          toolContext?: Record<string, unknown>;
+          replyToId?: string;
+        }) => string | undefined;
+      },
+    ) => {
+      const explicit =
+        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
+      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
+      const resolved =
+        explicit ??
+        context.resolveAutoThreadId?.({
+          cfg: context.cfg,
+          accountId: context.accountId,
+          to: context.to,
+          toolContext: context.toolContext,
+          replyToId,
+        });
+      if (resolved && !actionParams.threadId) {
+        actionParams.threadId = resolved;
+      }
+      return resolved ?? undefined;
+    },
+  ),
+  prepareOutboundMirrorRoute: vi.fn(
+    async ({
+      actionParams,
+      cfg,
+      to,
+      accountId,
+      toolContext,
+      agentId,
+      resolveAutoThreadId,
+    }: {
+      actionParams: Record<string, unknown>;
+      cfg: OpenClawConfig;
+      to: string;
+      accountId?: string | null;
+      toolContext?: Record<string, unknown>;
+      agentId?: string;
+      resolveAutoThreadId?: (params: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+        to: string;
+        toolContext?: Record<string, unknown>;
+        replyToId?: string;
+      }) => string | undefined;
+    }) => {
+      const explicit =
+        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
+      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
+      const resolvedThreadId =
+        explicit ??
+        resolveAutoThreadId?.({
+          cfg,
+          accountId,
+          to,
+          toolContext,
+          replyToId,
+        });
+      if (resolvedThreadId && !actionParams.threadId) {
+        actionParams.threadId = resolvedThreadId;
+      }
+      if (agentId) {
+        actionParams.__agentId = agentId;
+      }
+      return {
+        resolvedThreadId,
+        outboundRoute: null,
+      };
+    },
+  ),
+}));
 
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
@@ -131,6 +238,47 @@ describe("runMessageAction media behavior", () => {
     ).loadWebMedia;
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    channelResolutionMocks.resolveOutboundChannelPlugin.mockReset();
+    channelResolutionMocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+    );
+    channelResolutionMocks.executeSendAction.mockReset();
+    channelResolutionMocks.executeSendAction.mockImplementation(
+      async ({
+        ctx,
+        to,
+        message,
+        mediaUrl,
+        mediaUrls,
+      }: {
+        ctx: { channel: string; dryRun: boolean };
+        to: string;
+        message: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+      }) => ({
+        handledBy: "core" as const,
+        payload: {
+          channel: ctx.channel,
+          to,
+          message,
+          mediaUrl,
+          mediaUrls,
+          dryRun: ctx.dryRun,
+        },
+        sendResult: {
+          channel: ctx.channel,
+          messageId: "msg-test",
+          ...(mediaUrl ? { mediaUrl } : {}),
+          ...(mediaUrls ? { mediaUrls } : {}),
+        },
+      }),
+    );
+    channelResolutionMocks.executePollAction.mockReset();
+    channelResolutionMocks.executePollAction.mockImplementation(async () => {
+      throw new Error("executePollAction should not run in media tests");
+    });
     vi.mocked(loadWebMedia).mockReset();
     vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
   });
