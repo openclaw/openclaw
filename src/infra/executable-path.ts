@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "./home-dir.js";
 
+function isDriveLessWindowsRootedPath(value: string): boolean {
+  return process.platform === "win32" && /^:[\\/]/.test(value);
+}
+
 function resolveWindowsExecutableExtensions(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
@@ -86,6 +90,9 @@ export function resolveExecutablePath(
   const expanded = rawExecutable.startsWith("~")
     ? expandHomePrefix(rawExecutable, { env: options?.env })
     : rawExecutable;
+  if (isDriveLessWindowsRootedPath(expanded)) {
+    return undefined;
+  }
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
       return isExecutableFile(expanded) ? expanded : undefined;
