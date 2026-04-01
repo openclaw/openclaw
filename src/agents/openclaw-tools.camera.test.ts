@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
   stubFetchTextResponse,
@@ -166,6 +166,9 @@ async function executePhotosLatest(params: { modelHasVision: boolean }) {
 beforeEach(async () => {
   callGateway.mockClear();
   vi.unstubAllGlobals();
+});
+
+beforeAll(async () => {
   await loadOpenClawToolsForTest();
 });
 
