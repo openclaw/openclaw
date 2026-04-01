@@ -1156,6 +1156,7 @@
                       "tools/grok-search",
                       "tools/kimi-search",
                       "tools/perplexity-search",
+                      "tools/searxng-search",
                       "tools/tavily"
                     ]
                   },
