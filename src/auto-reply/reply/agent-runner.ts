@@ -1396,12 +1396,16 @@ export async function runReplyAgent(params: {
     // Emit model.usage before the replyPayloads early return so streamed runs
     // (where buildReplyPayloads suppresses the final array) still get usage events.
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const input = usage.input;
+      const output = usage.output;
+      const cacheRead = usage.cacheRead;
+      const cacheWrite = usage.cacheWrite;
+      // Only synthesize promptTokens when at least one component is known.
+      const hasSplitComponents = input != null || cacheRead != null || cacheWrite != null;
+      const promptTokens = hasSplitComponents
+        ? (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0)
+        : undefined;
+      const totalTokens = usage.total ?? (promptTokens ?? 0) + (output ?? 0);
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
