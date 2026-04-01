@@ -85,6 +85,27 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+  it("escapes caret semver specs when invoking npm.cmd through cmd.exe", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const runner = resolveNpmRunner({
+      comSpec: "C:\\Windows\\System32\\cmd.exe",
+      execPath,
+      env: {},
+      existsSync: (candidate) => candidate === npmCmdPath,
+      npmArgs: ["install", "@slack/bolt@^4.6.0"],
+      platform: "win32",
+    });
+
+    expect(runner).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", `${npmCmdPath} install @slack/bolt@^^4.6.0`],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("prefixes PATH with the active node dir when falling back to bare npm", () => {
     expect(
       resolveNpmRunner({
