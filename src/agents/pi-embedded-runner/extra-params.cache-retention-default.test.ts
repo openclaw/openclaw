@@ -196,4 +196,22 @@ describe("cacheRetention default behavior", () => {
       provider: "litellm",
     });
   });
+
+  it("resolves 'long' directly for custom anthropic-messages provider", () => {
+    expect(resolveCacheRetention({ cacheRetention: "long" }, "litellm", "anthropic-messages")).toBe(
+      "long",
+    );
+  });
+
+  it("resolves 'short' directly for custom anthropic-messages provider", () => {
+    expect(
+      resolveCacheRetention({ cacheRetention: "short" }, "litellm", "anthropic-messages"),
+    ).toBe("short");
+  });
+
+  it("resolves 'none' directly for custom anthropic-messages provider", () => {
+    expect(resolveCacheRetention({ cacheRetention: "none" }, "litellm", "anthropic-messages")).toBe(
+      "none",
+    );
+  });
 });
