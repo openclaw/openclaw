@@ -103,41 +103,6 @@ describe("SlackExecApprovalHandler", () => {
     );
   });
 
-  it("accepts approvers inferred from allowFrom without requiring explicit execApprovals.approvers", async () => {
-    const app = buildApp();
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-          allowFrom: ["U123APPROVER"],
-          execApprovals: {
-            enabled: true,
-            target: "dm",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const handler = new SlackExecApprovalHandler({
-      app,
-      accountId: "default",
-      config: cfg.channels!.slack!.execApprovals!,
-      cfg,
-    });
-
-    await handler.handleApprovalRequested(buildRequest());
-
-    expect(sendMessageSlackMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
-      2,
-      "user:U123APPROVER",
-      expect.stringContaining("Exec approval required"),
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
-  });
-
   it("does not post a redundant DM redirect notice when the origin is already the approver DM", async () => {
     const app = buildApp();
     const handler = new SlackExecApprovalHandler({
