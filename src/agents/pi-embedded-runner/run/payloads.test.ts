@@ -105,6 +105,34 @@ describe("buildEmbeddedRunPayloads reasoning-on fallback", () => {
     // Chunks are preserved and the different fallback is appended
     expect(answerTexts).toEqual(["Part 1", "Part 2", "Completely different final answer"]);
   });
+
+  it("does not duplicate when assistantTexts contains earlier messages plus current message chunks", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "Part 1\nPart 2" }],
+    });
+
+    // Simulates multi-turn run where assistantTexts accumulated across messages:
+    // - entries 0-1 belong to a previous assistant message (tool call confirmation)
+    // - entries 2-3 belong to the current final answer (baseline = 2)
+    const payloads = buildPayloads({
+      assistantTexts: ["Tool result acknowledged", "Calling next tool...", "Part 1", "Part 2"],
+      assistantTextBaseline: 2,
+      lastAssistant,
+      reasoningLevel: "on",
+    });
+
+    const answerPayloads = payloads.filter((p) => !p.isReasoning);
+    const answerTexts = answerPayloads.map((p) => p.text).filter(Boolean);
+    // All four entries should be present; the combined fallback must NOT be appended
+    expect(answerTexts).toEqual([
+      "Tool result acknowledged",
+      "Calling next tool...",
+      "Part 1",
+      "Part 2",
+    ]);
+  });
 });
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {

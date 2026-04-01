@@ -90,6 +90,7 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantTextBaseline?: number;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -254,18 +255,24 @@ export function buildEmbeddedRunPayloads(params: {
   // the final answer may not be represented. Append fallbackAnswerText when it
   // is not already covered — either as a single matching entry or as the
   // concatenation of all chunked entries.
+  //
+  // Only compare entries from the current assistant message (baseline onward)
+  // to avoid false negatives when assistantTexts accumulates across messages.
   const rawAnswerSources = params.assistantTexts;
+  const currentMessageSources = params.assistantTextBaseline
+    ? rawAnswerSources.slice(params.assistantTextBaseline)
+    : rawAnswerSources;
   const normalizedFallback = fallbackAnswerText
     ? normalizeTextForComparison(fallbackAnswerText)
     : "";
   const fallbackAlreadyCovered = Boolean(
     normalizedFallback &&
-    rawAnswerSources.length > 0 &&
+    currentMessageSources.length > 0 &&
     // Check per-element exact match first (single chunk covers the full answer) ...
-    (rawAnswerSources.some((t) => normalizeTextForComparison(t) === normalizedFallback) ||
+    (currentMessageSources.some((t) => normalizeTextForComparison(t) === normalizedFallback) ||
       // ... then check whether concatenating all chunks reproduces the fallback,
       // which handles multi-chunk block replies that split a single answer.
-      normalizeTextForComparison(rawAnswerSources.join("\n")) === normalizedFallback),
+      normalizeTextForComparison(currentMessageSources.join("\n")) === normalizedFallback),
   );
   const needsFallbackAppend =
     !suppressAssistantArtifacts &&

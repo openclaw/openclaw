@@ -44,6 +44,9 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
+  /** Index in assistantTexts where the current assistant message starts.
+   * Entries before this belong to earlier assistant messages in the same run. */
+  assistantTextBaseline?: number;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: {
