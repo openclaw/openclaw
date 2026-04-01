@@ -59,17 +59,31 @@ public enum ColorHexSupport {
         }
 
         // Calculate relative luminance using WCAG formula with gamma linearization
-        func linearize(_ component: CGFloat) -> CGFloat {
-            component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+        func luminance(for color: NSColor) -> CGFloat {
+            func linearize(_ component: CGFloat) -> CGFloat {
+                component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+            }
+            let rLinear = linearize(color.redComponent)
+            let gLinear = linearize(color.greenComponent)
+            let bLinear = linearize(color.blueComponent)
+            return 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
         }
 
-        let rLinear = linearize(rgbColor.redComponent)
-        let gLinear = linearize(rgbColor.greenComponent)
-        let bLinear = linearize(rgbColor.blueComponent)
+        // Calculate WCAG contrast ratio between two colors
+        func contrastRatio(lum1: CGFloat, lum2: CGFloat) -> CGFloat {
+            let lighter = max(lum1, lum2)
+            let darker = min(lum1, lum2)
+            return (lighter + 0.05) / (darker + 0.05)
+        }
 
-        let luminance = 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
+        let bgLuminance = luminance(for: rgbColor)
+        let whiteLuminance: CGFloat = 1.0
+        let blackLuminance: CGFloat = 0.0
 
-        return luminance > 0.5 ? Color.black : Color.white
+        let whiteContrast = contrastRatio(lum1: bgLuminance, lum2: whiteLuminance)
+        let blackContrast = contrastRatio(lum1: bgLuminance, lum2: blackLuminance)
+
+        return whiteContrast > blackContrast ? Color.white : Color.black
     }
     #endif
 }

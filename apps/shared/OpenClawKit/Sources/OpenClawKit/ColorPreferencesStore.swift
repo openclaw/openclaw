@@ -67,6 +67,12 @@ public enum ColorPalette {
     ]
 }
 
+public enum TextColorPreference: String, Sendable {
+    case automatic
+    case white
+    case black
+}
+
 @Observable
 public final class ColorPreferencesStore {
     nonisolated(unsafe) public static let shared = ColorPreferencesStore()
@@ -74,6 +80,7 @@ public final class ColorPreferencesStore {
     private static let useAccentColorKey = "ColorPreferences.useAccentColor"
     private static let selectedPaletteIndexKey = "ColorPreferences.selectedPaletteIndex"
     private static let customColorHexKey = "ColorPreferences.customColorHex"
+    private static let textColorPreferenceKey = "ColorPreferences.textColorPreference"
 
     public var useAccentColor: Bool {
         didSet {
@@ -101,6 +108,12 @@ public final class ColorPreferencesStore {
         }
     }
 
+    public var textColorPreference: TextColorPreference {
+        didSet {
+            UserDefaults.standard.set(textColorPreference.rawValue, forKey: Self.textColorPreferenceKey)
+        }
+    }
+
     private init() {
         self.useAccentColor = UserDefaults.standard.object(forKey: Self.useAccentColorKey) as? Bool ?? true
 
@@ -111,6 +124,14 @@ public final class ColorPreferencesStore {
         }
 
         self.customColorHex = UserDefaults.standard.string(forKey: Self.customColorHexKey)
+
+        if let savedPreference = UserDefaults.standard.string(forKey: Self.textColorPreferenceKey),
+           let preference = TextColorPreference(rawValue: savedPreference)
+        {
+            self.textColorPreference = preference
+        } else {
+            self.textColorPreference = .automatic
+        }
     }
 
     public var resolvedColor: Color {

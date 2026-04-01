@@ -82,6 +82,25 @@ struct ColorSettings: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Text Color")
+                            .font(.callout.weight(.semibold))
+
+                        Picker("Text Color", selection: self.$store.textColorPreference) {
+                            Text("Automatic").tag(TextColorPreference.automatic)
+                            Text("White").tag(TextColorPreference.white)
+                            Text("Black").tag(TextColorPreference.black)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        Text("Choose how text appears in chat bubbles. Automatic adjusts based on background color.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer(minLength: 12)
@@ -90,17 +109,34 @@ struct ColorSettings: View {
                     Text("Preview")
                         .font(.callout.weight(.semibold))
 
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(self.store.resolvedColor)
-                            .frame(width: 40, height: 40)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(self.store.resolvedColor)
+                                .frame(width: 40, height: 40)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Current Theme Color")
-                                .font(.caption.weight(.semibold))
-                            Text(self.currentColorDescription)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Current Theme Color")
+                                    .font(.caption.weight(.semibold))
+                                Text(self.currentColorDescription)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            Text("Sample message")
+                                .font(.system(size: 14))
+                                .foregroundStyle(self.previewTextColor)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 12)
+                                .background(self.store.resolvedColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Text Color: \(self.textColorDescription)")
+                                    .font(.caption.weight(.semibold))
+                            }
                         }
                     }
                     .padding(12)
@@ -140,6 +176,28 @@ struct ColorSettings: View {
             return "Palette Color \(index + 1)"
         }
         return "System Accent Color"
+    }
+
+    private var textColorDescription: String {
+        switch self.store.textColorPreference {
+        case .automatic:
+            return "Automatic"
+        case .white:
+            return "White"
+        case .black:
+            return "Black"
+        }
+    }
+
+    private var previewTextColor: Color {
+        switch self.store.textColorPreference {
+        case .white:
+            return .white
+        case .black:
+            return .black
+        case .automatic:
+            return OpenClawKit.ColorHexSupport.contrastingTextColor(for: self.store.resolvedColor)
+        }
     }
 
     // MARK: - View Builders

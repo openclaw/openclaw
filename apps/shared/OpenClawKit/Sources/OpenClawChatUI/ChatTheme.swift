@@ -134,12 +134,25 @@ enum OpenClawChatTheme {
     }
 
     static var userText: Color {
-        #if os(macOS)
-        let backgroundColor = ColorPreferencesStore.shared.resolvedColor
-        return ColorHexSupport.contrastingTextColor(for: backgroundColor)
-        #else
-        return .white
-        #endif
+        Self.userText(for: nil)
+    }
+
+    static func userText(for backgroundColor: Color?) -> Color {
+        let preference = ColorPreferencesStore.shared.textColorPreference
+
+        switch preference {
+        case .white:
+            return .white
+        case .black:
+            return .black
+        case .automatic:
+            #if os(macOS)
+            let effectiveBackground = backgroundColor ?? ColorPreferencesStore.shared.resolvedColor
+            return ColorHexSupport.contrastingTextColor(for: effectiveBackground)
+            #else
+            return .white
+            #endif
+        }
     }
 
     static var assistantText: Color {
