@@ -597,10 +597,10 @@ describe("resolveMatrixAuth", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReset();
-    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue(null);
-    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReset();
-    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(false);
+    vi.mocked(credentialsReadModule!.loadMatrixCredentials).mockReset();
+    vi.mocked(credentialsReadModule!.loadMatrixCredentials).mockReturnValue(null);
+    vi.mocked(credentialsReadModule!.credentialsMatchConfig).mockReset();
+    vi.mocked(credentialsReadModule!.credentialsMatchConfig).mockReturnValue(false);
     saveMatrixCredentialsMock.mockReset();
     touchMatrixCredentialsMock.mockReset();
   });

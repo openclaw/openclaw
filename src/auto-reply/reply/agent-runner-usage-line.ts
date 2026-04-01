@@ -38,6 +38,7 @@ export const formatResponseUsageLine = (params: {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    total?: number;
   };
   showCost: boolean;
   costConfig?: {
