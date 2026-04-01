@@ -1,6 +1,6 @@
 // Thin ESM wrapper so native dynamic import() resolves in source-checkout mode
-// where jiti loads index.ts but import("./src/plugin-entry.runtime.js") uses
-// Node's native ESM loader which cannot resolve .ts files directly.
+// while packaged dist builds resolve a distinct runtime entry that cannot loop
+// back into this wrapper through the stable root runtime alias.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -9,9 +9,11 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { createJiti } = require("jiti");
 
+const PLUGIN_ID = "matrix";
 const OPENCLAW_PLUGIN_SDK_PREFIX = ["openclaw", "plugin-sdk"].join("/");
 const PLUGIN_SDK_EXPORT_PREFIX = "./plugin-sdk/";
 const PLUGIN_SDK_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
+const PLUGIN_ENTRY_RUNTIME_BASENAME = "plugin-entry.handlers.runtime";
 const JITI_EXTENSIONS = [
   ".ts",
   ".tsx",
@@ -102,6 +104,42 @@ function buildPluginSdkAliasMap(moduleUrl) {
   return aliasMap;
 }
 
+function resolveBundledPluginRuntimeModulePath(moduleUrl, params) {
+  const modulePath = fileURLToPath(moduleUrl);
+  const moduleDir = path.dirname(modulePath);
+  const localCandidates = [
+    path.join(moduleDir, "..", params.runtimeBasename),
+    path.join(moduleDir, "extensions", params.pluginId, params.runtimeBasename),
+  ];
+
+  for (const candidate of localCandidates) {
+    const resolved = resolveExistingFile(candidate, PLUGIN_SDK_SOURCE_EXTENSIONS);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  const location = findOpenClawPackageRoot(moduleDir);
+  if (location) {
+    const { packageRoot } = location;
+    const packageCandidates = [
+      path.join(packageRoot, "extensions", params.pluginId, params.runtimeBasename),
+      path.join(packageRoot, "dist", "extensions", params.pluginId, params.runtimeBasename),
+    ];
+
+    for (const candidate of packageCandidates) {
+      const resolved = resolveExistingFile(candidate, PLUGIN_SDK_SOURCE_EXTENSIONS);
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+
+  throw new Error(
+    `Cannot resolve ${params.pluginId} plugin runtime module ${params.runtimeBasename} from ${modulePath}`,
+  );
+}
+
 const jiti = createJiti(import.meta.url, {
   alias: buildPluginSdkAliasMap(import.meta.url),
   interopDefault: true,
@@ -109,7 +147,12 @@ const jiti = createJiti(import.meta.url, {
   extensions: JITI_EXTENSIONS,
 });
 
-const mod = jiti("./plugin-entry.runtime.ts");
+const mod = jiti(
+  resolveBundledPluginRuntimeModulePath(import.meta.url, {
+    pluginId: PLUGIN_ID,
+    runtimeBasename: PLUGIN_ENTRY_RUNTIME_BASENAME,
+  }),
+);
 export const ensureMatrixCryptoRuntime = mod.ensureMatrixCryptoRuntime;
 export const handleVerifyRecoveryKey = mod.handleVerifyRecoveryKey;
 export const handleVerificationBootstrap = mod.handleVerificationBootstrap;
