@@ -380,21 +380,26 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const threadBindingsEnabled = cfg.session?.threadBindings?.enabled === true;
     const isThreadReply = Boolean(activity.replyToId && isChannel && threadBindingsEnabled);
     const threadId = isThreadReply ? activity.replyToId : undefined;
+    // Normalize once — resolveThreadSessionKeys lowercases by default, so all key
+    // derivations (session key, history key, store key) must use the same form.
+    const normalizedThreadId = threadId?.toLowerCase();
 
-    const { sessionKey } = resolveThreadSessionKeys({
+    const { sessionKey, parentSessionKey } = resolveThreadSessionKeys({
       baseSessionKey: route.sessionKey,
       threadId,
       parentSessionKey: threadId ? route.sessionKey : undefined,
     });
 
     // Store thread-level reference for proactive outbound targeting.
-    if (isThreadReply && threadId) {
+    if (isThreadReply && normalizedThreadId) {
       const threadRef: StoredConversationReference = { ...conversationRef, replyToId: threadId };
-      conversationStore.upsert(`${conversationId}:thread:${threadId}`, threadRef).catch((err) => {
-        log.debug?.("failed to save thread conversation reference", {
-          error: formatUnknownError(err),
+      conversationStore
+        .upsert(`${conversationId}:thread:${normalizedThreadId}`, threadRef)
+        .catch((err) => {
+          log.debug?.("failed to save thread conversation reference", {
+            error: formatUnknownError(err),
+          });
         });
-      });
     }
 
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
@@ -403,7 +408,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : `Teams message in ${conversationType} from ${senderName}`;
 
     core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: sessionKey,
+      sessionKey,
       contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
     });
 
@@ -436,7 +441,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: conversationHistories,
           historyKey: isThreadReply
-            ? `${conversationId}:thread:${activity.replyToId}`
+            ? `${conversationId}:thread:${normalizedThreadId}`
             : conversationId,
           limit: historyLimit,
           entry: {
@@ -508,7 +513,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg,
       agentId: route.agentId,
-      sessionKey: sessionKey,
+      sessionKey,
     });
     const body = core.channel.reply.formatAgentEnvelope({
       channel: "Teams",
@@ -522,7 +527,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish
       ? isThreadReply
-        ? `${conversationId}:thread:${activity.replyToId}`
+        ? `${conversationId}:thread:${normalizedThreadId}`
         : conversationId
       : undefined;
     if (isRoomish && historyKey) {
@@ -567,7 +572,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       From: teamsFrom,
       To: teamsTo,
       SessionKey: sessionKey,
-      ParentSessionKey: threadId ? route.sessionKey : undefined,
+      ParentSessionKey: parentSessionKey,
       MessageThreadId: threadId,
       AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
