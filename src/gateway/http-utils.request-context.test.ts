@@ -100,6 +100,21 @@ describe("resolveTrustedHttpOperatorScopes", () => {
 
     expect(scopes).toEqual([]);
   });
+
+  it("restores default operator scopes for auth-none without scope header", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(createReq(), {
+      authMethod: "none",
+      trustDeclaredOperatorScopes: true,
+    });
+
+    expect(scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ]);
+  });
 });
 
 describe("resolveHttpSenderIsOwner", () => {
@@ -154,6 +169,36 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
 
     expect(scopes).toEqual(["operator.write"]);
   });
+
+  it("restores default operator scopes for auth-none", () => {
+    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(createReq(), {
+      authMethod: "none",
+      trustDeclaredOperatorScopes: true,
+    });
+
+    expect(scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ]);
+  });
+
+  it("restores default operator scopes for auth-none even without scope header", () => {
+    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(createReq({}), {
+      authMethod: "none",
+      trustDeclaredOperatorScopes: true,
+    });
+
+    expect(scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ]);
+  });
 });
 
 describe("resolveOpenAiCompatibleHttpSenderIsOwner", () => {
@@ -181,6 +226,15 @@ describe("resolveOpenAiCompatibleHttpSenderIsOwner", () => {
         createReq({ "x-openclaw-scopes": "operator.admin" }),
         { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
       ),
+    ).toBe(true);
+  });
+
+  it("treats auth-none as owner on the compat surface", () => {
+    expect(
+      resolveOpenAiCompatibleHttpSenderIsOwner(createReq(), {
+        authMethod: "none",
+        trustDeclaredOperatorScopes: true,
+      }),
     ).toBe(true);
   });
 });

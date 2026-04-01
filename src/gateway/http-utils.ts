@@ -127,8 +127,14 @@ export function resolveTrustedHttpOperatorScopes(
   req: IncomingMessage,
   authOrRequest?:
     | SharedSecretGatewayAuth
-    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
+    | Pick<AuthorizedGatewayHttpRequest, "authMethod" | "trustDeclaredOperatorScopes">,
 ): string[] {
+  // auth-none means no security boundary at all — grant default operator
+  // scopes so unauthenticated HTTP callers are not rejected by scope gates.
+  if (authOrRequest && "authMethod" in authOrRequest && authOrRequest.authMethod === "none") {
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
+
   if (!shouldTrustDeclaredHttpOperatorScopes(req, authOrRequest)) {
     // Gateway bearer auth only proves possession of the shared secret. Do not
     // let HTTP clients self-assert operator scopes through request headers.
@@ -149,11 +155,18 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
 ): string[] {
-  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
+  if (
+    usesSharedSecretGatewayMethod(requestAuth.authMethod) ||
+    requestAuth.authMethod === "none"
+  ) {
     // Shared-secret HTTP bearer auth is a documented trusted-operator surface
     // for the compat APIs and direct /tools/invoke. This is designed-as-is:
     // token/password auth proves possession of the gateway operator secret, not
     // a narrower per-request scope identity, so restore the normal defaults.
+    //
+    // auth-none means no security boundary is configured at all, so HTTP
+    // requests should receive the same default operator scopes that the CLI
+    // and other first-party callers get.
     return [...CLI_DEFAULT_OPERATOR_SCOPES];
   }
   return resolveTrustedHttpOperatorScopes(req, requestAuth);
@@ -163,7 +176,7 @@ export function resolveHttpSenderIsOwner(
   req: IncomingMessage,
   authOrRequest?:
     | SharedSecretGatewayAuth
-    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
+    | Pick<AuthorizedGatewayHttpRequest, "authMethod" | "trustDeclaredOperatorScopes">,
 ): boolean {
   return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
 }
@@ -172,11 +185,16 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
 ): boolean {
-  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
+  if (
+    usesSharedSecretGatewayMethod(requestAuth.authMethod) ||
+    requestAuth.authMethod === "none"
+  ) {
     // Shared-secret HTTP bearer auth also carries owner semantics on the compat
     // APIs and direct /tools/invoke. This is intentional: there is no separate
     // per-request owner primitive on that shared-secret path, so owner-only
     // tool policy follows the documented trusted-operator contract.
+    //
+    // auth-none has no security boundary, so grant owner semantics as well.
     return true;
   }
   return resolveHttpSenderIsOwner(req, requestAuth);
