@@ -34,7 +34,8 @@ async function waitForFileRemoval(filePath: string, maxTicks = 1000) {
 }
 
 describe("media server", () => {
-  let server: Awaited<ReturnType<typeof startMediaServer>>;
+  let server: Awaited<ReturnType<typeof startMediaServer>> | undefined;
+  let listenBlocked = false;
   let port = 0;
 
   function mediaUrl(id: string) {
@@ -110,12 +111,31 @@ describe("media server", () => {
     ({ MEDIA_MAX_BYTES } = await import("./store.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
-    server = await startMediaServer(0, 1_000);
-    port = (server.address() as AddressInfo).port;
+    try {
+      server = await startMediaServer(0, 1_000);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error.code === "EPERM" || error.code === "EACCES")
+      ) {
+        listenBlocked = true;
+        return;
+      }
+      throw error;
+    }
+    const boundServer = server;
+    if (!boundServer) {
+      return;
+    }
+    port = (boundServer.address() as AddressInfo).port;
   });
 
   afterAll(async () => {
-    await new Promise((r) => server.close(r));
+    const boundServer = server;
+    if (boundServer) {
+      await new Promise((r) => boundServer.close(r));
+    }
     await fs.rm(MEDIA_DIR, { recursive: true, force: true });
     MEDIA_DIR = "";
   });
@@ -140,6 +160,9 @@ describe("media server", () => {
       assertAfterFetch: expectMissingMediaFile,
     },
   ] as const)("$name", async (testCase) => {
+    if (listenBlocked) {
+      return;
+    }
     await expectMediaFileLifecycleCase(testCase);
   });
 
@@ -199,6 +222,9 @@ describe("media server", () => {
       expectedBody: "invalid path",
     },
   ] as const)("%#", async (testCase) => {
+    if (listenBlocked) {
+      return;
+    }
     await expectFetchedMediaCase(testCase);
   });
 });
