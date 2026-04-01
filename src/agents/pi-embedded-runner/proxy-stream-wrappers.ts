@@ -36,6 +36,11 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   const payloadObj = payload as Record<string, unknown>;
   delete payloadObj.reasoning_effort;
   if (!thinkingLevel || thinkingLevel === "off") {
+    // When thinking is off, also strip any `reasoning` object injected by
+    // the upstream library (e.g. `{ effort: "none" }`).  Leaving it causes
+    // 400 errors on providers where reasoning is mandatory and cannot be
+    // disabled (OpenRouter, Kilocode).
+    delete payloadObj.reasoning;
     return;
   }
 

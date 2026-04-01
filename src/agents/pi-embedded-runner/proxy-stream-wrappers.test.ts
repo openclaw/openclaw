@@ -2,7 +2,13 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createOpenRouterWrapper } from "./proxy-stream-wrappers.js";
+import { createKilocodeWrapper, createOpenRouterWrapper } from "./proxy-stream-wrappers.js";
+
+const OR_MODEL = {
+  api: "openai-completions",
+  provider: "openrouter",
+  id: "openrouter/auto",
+} as Model<"openai-completions">;
 
 describe("proxy stream wrappers", () => {
   it("adds OpenRouter attribution headers to stream options", () => {
@@ -34,5 +40,85 @@ describe("proxy stream wrappers", () => {
         },
       },
     ]);
+  });
+
+  describe("reasoning payload normalization (thinking=off)", () => {
+    it("strips reasoning object when thinkingLevel is off (OpenRouter)", () => {
+      const payloads: Array<Record<string, unknown>> = [];
+      const base: StreamFn = (_m, _c, opts) => {
+        const p: Record<string, unknown> = {
+          reasoning: { effort: "none" },
+          reasoning_effort: "none",
+          messages: [],
+        };
+        opts?.onPayload?.(p, _m);
+        payloads.push(p);
+        return createAssistantMessageEventStream();
+      };
+
+      const wrapped = createOpenRouterWrapper(base, "off");
+      void wrapped(OR_MODEL, { messages: [] }, undefined);
+
+      expect(payloads[0]).not.toHaveProperty("reasoning");
+      expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+    });
+
+    it("strips reasoning object when thinkingLevel is off (Kilocode)", () => {
+      const payloads: Array<Record<string, unknown>> = [];
+      const base: StreamFn = (_m, _c, opts) => {
+        const p: Record<string, unknown> = {
+          reasoning: { effort: "none" },
+          reasoning_effort: "none",
+          messages: [],
+        };
+        opts?.onPayload?.(p, _m);
+        payloads.push(p);
+        return createAssistantMessageEventStream();
+      };
+
+      const wrapped = createKilocodeWrapper(base, "off");
+      void wrapped(OR_MODEL, { messages: [] }, undefined);
+
+      expect(payloads[0]).not.toHaveProperty("reasoning");
+      expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+    });
+
+    it("strips reasoning object when thinkingLevel is undefined", () => {
+      const payloads: Array<Record<string, unknown>> = [];
+      const base: StreamFn = (_m, _c, opts) => {
+        const p: Record<string, unknown> = {
+          reasoning: { effort: "none" },
+          messages: [],
+        };
+        opts?.onPayload?.(p, _m);
+        payloads.push(p);
+        return createAssistantMessageEventStream();
+      };
+
+      const wrapped = createOpenRouterWrapper(base, undefined);
+      void wrapped(OR_MODEL, { messages: [] }, undefined);
+
+      expect(payloads[0]).not.toHaveProperty("reasoning");
+    });
+
+    it("preserves reasoning object when thinkingLevel is high", () => {
+      const payloads: Array<Record<string, unknown>> = [];
+      const base: StreamFn = (_m, _c, opts) => {
+        const p: Record<string, unknown> = {
+          reasoning: { effort: "none" },
+          messages: [],
+        };
+        opts?.onPayload?.(p, _m);
+        payloads.push(p);
+        return createAssistantMessageEventStream();
+      };
+
+      const wrapped = createOpenRouterWrapper(base, "high");
+      void wrapped(OR_MODEL, { messages: [] }, undefined);
+
+      // Existing reasoning with effort should be preserved (not overwritten
+      // because it already has an effort key).
+      expect(payloads[0]).toHaveProperty("reasoning");
+    });
   });
 });
