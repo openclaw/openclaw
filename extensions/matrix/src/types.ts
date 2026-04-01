@@ -101,6 +101,13 @@ export type MatrixConfig = {
   allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /**
+   * Enable shared block-streaming replies for Matrix.
+   *
+   * Default: false. Matrix keeps `streaming: "off"` as final-only delivery
+   * unless block streaming is explicitly enabled.
+   */
+  blockStreaming?: boolean;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
@@ -149,6 +156,8 @@ export type MatrixConfig = {
    * Streaming mode for Matrix replies.
    * - `"partial"`: edit a single message in place as the model generates text.
    * - `"off"`: deliver the full reply once the model finishes.
+   * - Use `blockStreaming: true` when you want separate progress messages
+   *   while `streaming` remains `"off"`.
    * - `true` maps to `"partial"`, `false` maps to `"off"`.
    * Default: `"off"`.
    */

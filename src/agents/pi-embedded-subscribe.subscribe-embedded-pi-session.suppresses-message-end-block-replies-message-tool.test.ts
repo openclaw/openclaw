@@ -88,9 +88,9 @@ describe("subscribeEmbeddedPiSession", () => {
       result: { details: { status: "error" } },
     });
     emitAssistantMessageEnd(emit, messageText);
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("ignores delivery-mirror assistant messages", async () => {

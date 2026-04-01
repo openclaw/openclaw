@@ -153,6 +153,62 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("does not let tool_execution_end delivery stall later assistant streaming", async () => {
+    let resolveToolResult: (() => void) | undefined;
+    const onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveToolResult = resolve;
+        }),
+    );
+    const onPartialReply = vi.fn();
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onPartialReply,
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      args: { command: "echo hi" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-pending",
+          approvalId: "12345678-1234-1234-1234-123456789012",
+          approvalSlug: "12345678",
+          host: "gateway",
+          command: "echo hi",
+        },
+      },
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "After tool");
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onPartialReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "After tool", delta: "After tool" }),
+      );
+    });
+
+    expect(resolveToolResult).toBeTypeOf("function");
+    resolveToolResult?.();
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
