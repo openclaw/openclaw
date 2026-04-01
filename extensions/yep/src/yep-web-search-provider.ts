@@ -111,10 +111,12 @@ async function runYepSearch(params: {
     body.safe_search = params.safeSearch;
   }
   if (params.includeDomains) {
-    body.include_domains = normalizeYepDomains(params.includeDomains);
+    const normalized = normalizeYepDomains(params.includeDomains);
+    if (normalized) body.include_domains = normalized;
   }
   if (params.excludeDomains) {
-    body.exclude_domains = normalizeYepDomains(params.excludeDomains);
+    const normalized = normalizeYepDomains(params.excludeDomains);
+    if (normalized) body.exclude_domains = normalized;
   }
   if (params.dateAfter) {
     body.start_published_date = params.dateAfter;
