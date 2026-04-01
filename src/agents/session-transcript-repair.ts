@@ -349,9 +349,16 @@ export type ToolUseRepairReport = {
   changed: boolean;
 };
 
+function shouldPreserveErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
+  return (
+    options?.erroredAssistantResultPolicy !== undefined &&
+    options.erroredAssistantResultPolicy !== "drop"
+  );
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
-  _options?: ToolUseResultPairingOptions,
+  options?: ToolUseResultPairingOptions,
 ): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
@@ -402,6 +409,93 @@ export function repairToolUseResultPairing(
     }
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+
+    // Check for error/aborted stop reason early, before extractToolCallsFromAssistant,
+    // because that function skips blocks without a non-empty id. For error/aborted
+    // messages we need to strip ALL tool-like blocks regardless of id presence.
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      // If the caller explicitly set erroredAssistantResultPolicy to "preserve",
+      // fall back to the old behavior: push the message through unchanged and
+      // optionally retain matching tool results for surviving tool calls.
+      if (shouldPreserveErroredAssistantResults(options)) {
+        const toolCalls = extractToolCallsFromAssistant(assistant);
+        out.push(msg);
+        if (toolCalls.length > 0) {
+          const toolCallIds = new Set(toolCalls.map((t) => t.id));
+          const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
+          let j = i + 1;
+          for (; j < messages.length; j += 1) {
+            const next = messages[j];
+            if (!next || typeof next !== "object") {
+              continue;
+            }
+            const nextRole = (next as { role?: unknown }).role;
+            if (nextRole === "assistant") {
+              break;
+            }
+            if (nextRole === "toolResult") {
+              const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;
+              const id = extractToolResultId(toolResult);
+              if (id && toolCallIds.has(id)) {
+                const normalizedToolResult = normalizeToolResultName(
+                  toolResult,
+                  toolCallNamesById.get(id),
+                );
+                pushToolResult(normalizedToolResult);
+              }
+            }
+          }
+          i = j - 1;
+        }
+        continue;
+      }
+
+      // Default behavior: strip orphaned tool_use/toolCall/functionCall blocks from
+      // the assistant message instead of passing them through unchanged.
+      // Previously we skipped synthesis to avoid creating synthetic tool_results for
+      // incomplete tool calls (#4597), but preserving orphaned blocks causes permanent
+      // session corruption — Anthropic rejects every subsequent request with
+      // "tool_use ids were found without tool_result blocks" (#48354).
+      const content = Array.isArray(assistant.content) ? assistant.content : [];
+      const stripped = content.filter(
+        (b: { type?: string }) =>
+          b && b.type !== "toolCall" && b.type !== "toolUse" && b.type !== "functionCall",
+      );
+      if (stripped.length < content.length) {
+        changed = true;
+        out.push({
+          ...assistant,
+          content:
+            stripped.length > 0
+              ? stripped
+              : [{ type: "text" as const, text: "[tool calls from errored turn stripped]" }],
+        } as typeof assistant);
+      } else {
+        out.push(msg);
+      }
+      // Skip past any trailing messages up to the next assistant turn
+      let j = i + 1;
+      for (; j < messages.length; j += 1) {
+        const next = messages[j];
+        if (!next || typeof next !== "object") {
+          out.push(next);
+          continue;
+        }
+        const nextRole = (next as { role?: unknown }).role;
+        if (nextRole === "assistant") {
+          break;
+        }
+        if (nextRole !== "toolResult") {
+          out.push(next);
+        } else {
+          // Drop orphaned tool results for the stripped tool calls
+          changed = true;
+        }
+      }
+      i = j - 1;
+      continue;
+    }
 
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
@@ -458,38 +552,6 @@ export function repairToolUseResultPairing(
         droppedOrphanCount += 1;
         changed = true;
       }
-    }
-
-    // Aborted/errored assistant turns: strip orphaned tool_use/toolCall/functionCall
-    // blocks from the assistant message instead of passing them through unchanged.
-    // Previously we skipped synthesis to avoid creating synthetic tool_results for
-    // incomplete tool calls (#4597), but preserving orphaned blocks causes permanent
-    // session corruption — Anthropic rejects every subsequent request with
-    // "tool_use ids were found without tool_result blocks" (#48354).
-    const stopReason = (assistant as { stopReason?: string }).stopReason;
-    if (stopReason === "error" || stopReason === "aborted") {
-      const content = Array.isArray(assistant.content) ? assistant.content : [];
-      const stripped = content.filter(
-        (b: { type?: string }) =>
-          b && b.type !== "toolCall" && b.type !== "toolUse" && b.type !== "functionCall",
-      );
-      if (stripped.length < content.length) {
-        changed = true;
-        out.push({
-          ...assistant,
-          content:
-            stripped.length > 0
-              ? stripped
-              : [{ type: "text" as const, text: "[tool calls from errored turn stripped]" }],
-        } as typeof assistant);
-      } else {
-        out.push(msg);
-      }
-      for (const rem of remainder) {
-        out.push(rem);
-      }
-      i = j - 1;
-      continue;
     }
 
     out.push(msg);

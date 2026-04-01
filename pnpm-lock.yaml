@@ -142,6 +142,9 @@ importers:
       pdfjs-dist:
         specifier: ^5.6.205
         version: 5.6.205
+      picomatch:
+        specifier: ^4.0.4
+        version: 4.0.4
       playwright-core:
         specifier: 1.58.2
         version: 1.58.2
