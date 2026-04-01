@@ -507,6 +507,21 @@ describe("exec tool backgrounding", () => {
     expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
   });
 
+  it("forces synchronous execution with background=false", async () => {
+    // With a very low backgroundMs, a normal command would be backgrounded.
+    // background=false should override and run synchronously to completion.
+    const tool = createTestExecTool({ backgroundMs: 10 });
+    const result = await executeExecCommand(
+      tool,
+      joinCommands([yieldDelayCmd, shellEcho("sync-done")]),
+      { background: false },
+    );
+
+    // Should complete synchronously, not return status "running"
+    expect(result.details.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(readTextContent(result.content)).toContain("sync-done");
+  });
+
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
     "$label",
     runDisallowedElevationCase,
