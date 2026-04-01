@@ -103,9 +103,33 @@ export function parseMSTeamsActivityTimestamp(value: unknown): Date | undefined 
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+/**
+ * @deprecated Use `stripMSTeamsBotMentionTag` instead — this strips ALL mentions
+ * including non-bot user mentions.
+ */
 export function stripMSTeamsMentionTags(text: string): string {
   // Teams wraps mentions in <at>...</at> tags
   return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
+}
+
+/**
+ * Strip only the bot's own `<at>...</at>` mention tag from the message text.
+ * Other user mentions are converted to plain `@Name` format so the agent sees them.
+ *
+ * @param text - Raw Teams message text containing `<at>` tags
+ * @param botMentionName - The bot's display name from the mention entity
+ *   (use `activity.entities[].mentioned.name` where `mentioned.id === recipient.id`).
+ *   If absent, falls back to stripping all mention tags (legacy behavior).
+ */
+export function stripMSTeamsBotMentionTag(text: string, botMentionName?: string): string {
+  if (!botMentionName) {
+    return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
+  }
+  const escaped = botMentionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text
+    .replace(new RegExp(`<at[^>]*>${escaped}</at>`, "gi"), "")
+    .replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1")
+    .trim();
 }
 
 export function wasMSTeamsBotMentioned(activity: MentionableActivity): boolean {
