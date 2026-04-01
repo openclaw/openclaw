@@ -300,6 +300,84 @@ describe("AcpxRuntime", () => {
     });
   });
 
+  it("surfaces structured control-command errors from sessions ensure", async () => {
+    const previousEnsureExit = process.env.MOCK_ACPX_ENSURE_EXIT_1;
+    const previousStatusSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
+    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
+    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      await expect(
+        runtime.ensureSession({
+          sessionKey: "agent:codex:acp:ensure-structured-error",
+          agent: "codex",
+          mode: "persistent",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: "-32603: mock ensure failure",
+      });
+    } finally {
+      if (previousEnsureExit === undefined) {
+        delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+      } else {
+        process.env.MOCK_ACPX_ENSURE_EXIT_1 = previousEnsureExit;
+      }
+      if (previousStatusSignal === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_STATUS_SIGNAL = previousStatusSignal;
+      }
+    }
+  });
+
+  it("appends stderr details when control-command errors are generic", async () => {
+    const previousEnsureExit = process.env.MOCK_ACPX_ENSURE_EXIT_1;
+    const previousEnsureMessage = process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
+    const previousEnsureStderr = process.env.MOCK_ACPX_ENSURE_STDERR;
+    const previousStatusSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
+    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
+    process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE = "Internal error";
+    process.env.MOCK_ACPX_ENSURE_STDERR = "usage limit exceeded";
+    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      await expect(
+        runtime.ensureSession({
+          sessionKey: "agent:codex:acp:ensure-generic-error",
+          agent: "codex",
+          mode: "persistent",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: "-32603: Internal error | usage limit exceeded",
+      });
+    } finally {
+      if (previousEnsureExit === undefined) {
+        delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+      } else {
+        process.env.MOCK_ACPX_ENSURE_EXIT_1 = previousEnsureExit;
+      }
+      if (previousEnsureMessage === undefined) {
+        delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
+      } else {
+        process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE = previousEnsureMessage;
+      }
+      if (previousEnsureStderr === undefined) {
+        delete process.env.MOCK_ACPX_ENSURE_STDERR;
+      } else {
+        process.env.MOCK_ACPX_ENSURE_STDERR = previousEnsureStderr;
+      }
+      if (previousStatusSignal === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_STATUS_SIGNAL = previousStatusSignal;
+      }
+    }
+  });
+
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
 
