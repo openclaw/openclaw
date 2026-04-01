@@ -1469,10 +1469,15 @@ export function createExecTool(
         });
       }
 
+      // After the node early-return above, workdir is guaranteed to be a string
+      // (it was initialised from rawWorkdir and only set to undefined inside the
+      // node branch which already returned).
+      const resolvedWorkdir: string = workdir ?? rawWorkdir;
+
       if (host === "gateway" && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
-          workdir,
+          workdir: resolvedWorkdir,
           env,
           requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
@@ -1518,12 +1523,12 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      await validateScriptFileForShellBleed({ command: params.command, workdir: resolvedWorkdir });
 
       const run = await runExecProcess({
         command: params.command,
         execCommand: execCommandOverride,
-        workdir,
+        workdir: resolvedWorkdir,
         env,
         sandbox,
         containerWorkdir,
