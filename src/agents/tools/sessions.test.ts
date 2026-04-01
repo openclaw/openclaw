@@ -529,6 +529,50 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
+  it("prefers sessionKey over label+agentId and skips label resolution", async () => {
+    const tool = createMainSessionsSendTool();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-sessionkey-preferred", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-sessionkey-preferred", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      label: "redundant",
+      agentId: "other",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-sessionkey-preferred",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: MAIN_AGENT_SESSION_KEY,
+          message: "ping",
+        }),
+      }),
+    );
+    const methods = callGatewayMock.mock.calls.map(
+      (call) => (call[0] as { method?: string })?.method,
+    );
+    expect(methods).not.toContain("sessions.resolve");
+  });
+
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsSendTool();
 

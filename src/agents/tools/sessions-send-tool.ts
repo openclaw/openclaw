@@ -114,14 +114,11 @@ export function createSessionsSendTool(opts?: {
       });
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
-      const labelParam = readStringParam(params, "label")?.trim() || undefined;
-      const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Provide either sessionKey or label (not both).",
-        });
+      let labelParam = readStringParam(params, "label")?.trim() || undefined;
+      let labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
+      if (sessionKeyParam) {
+        labelParam = undefined;
+        labelAgentIdParam = undefined;
       }
 
       let sessionKey = sessionKeyParam;
