@@ -246,4 +246,47 @@ describe("maybeRepairLegacyCronStore", () => {
       to: "https://example.invalid/cron-finished",
     });
   });
+
+  it("repairs legacy root delivery threadId hints into delivery", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "legacy-thread-hint",
+        name: "Legacy thread hint",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+        schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+        },
+        channel: " telegram ",
+        to: "-1001234567890",
+        threadId: " 99 ",
+        state: {},
+      },
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.channel).toBeUndefined();
+    expect(persisted.jobs[0]?.to).toBeUndefined();
+    expect(persisted.jobs[0]?.threadId).toBeUndefined();
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "99",
+    });
+  });
 });

@@ -12,6 +12,7 @@ describe("normalizeStoredCronJobs", () => {
         deliver: true,
         provider: " TeLeGrAm ",
         to: "12345",
+        threadId: " 77 ",
       },
     ] as Array<Record<string, unknown>>;
 
@@ -39,6 +40,7 @@ describe("normalizeStoredCronJobs", () => {
       mode: "announce",
       channel: "telegram",
       to: "12345",
+      threadId: "77",
     });
     expect(job?.payload).toMatchObject({
       kind: "agentTurn",
