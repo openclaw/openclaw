@@ -1,5 +1,5 @@
 // Private helper surface for the bundled matrix plugin.
-// Keep this list additive and scoped to symbols used under extensions/matrix.
+// Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -88,6 +88,7 @@ export {
 } from "./matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,

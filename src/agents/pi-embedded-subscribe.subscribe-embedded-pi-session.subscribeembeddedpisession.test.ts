@@ -12,6 +12,11 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
+  async function flushBlockReplyCallbacks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
@@ -132,10 +137,9 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
+      await flushBlockReplyCallbacks();
 
-      await vi.waitFor(() => {
-        expect(onBlockReply).toHaveBeenCalledTimes(1);
-      });
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
@@ -176,10 +180,9 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await flushBlockReplyCallbacks();
 
-      await vi.waitFor(() => {
-        expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
-      });
+      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
@@ -313,7 +316,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("skips agent events when cleaned text rewinds mid-stream", () => {
+  it("emits a replacement snapshot when cleaned text rewinds mid-stream", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -321,8 +324,13 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " https://example.com/a.png\nCaption");
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
+    expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("MEDIA:");
+    expect(payloads[0]?.delta).toBe("MEDIA:");
+    expect(payloads[0]?.replace).toBeUndefined();
+    expect(payloads[1]?.text).toBe("Caption");
+    expect(payloads[1]?.delta).toBe("");
+    expect(payloads[1]?.replace).toBe(true);
   });
 
   it("emits agent events when media arrives without text", () => {

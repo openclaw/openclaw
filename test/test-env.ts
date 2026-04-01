@@ -7,6 +7,7 @@ import JSON5 from "json5";
 type RestoreEntry = { key: string; value: string | undefined };
 
 const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -225,21 +226,44 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
   fs.copyFileSync(sourcePath, targetPath);
 }
 
+function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
+  const targetPath = path.join(tempHome, ".claude.json");
+  if (fs.existsSync(targetPath)) {
+    return;
+  }
+  const backupsDir = path.join(tempHome, ".claude", "backups");
+  if (!fs.existsSync(backupsDir)) {
+    return;
+  }
+  const latestBackup = fs
+    .readdirSync(backupsDir)
+    .filter((entry) => entry.startsWith(".claude.json.backup."))
+    .toSorted()
+    .at(-1);
+  if (!latestBackup) {
+    return;
+  }
+  copyFileIfExists(path.join(backupsDir, latestBackup), targetPath);
+}
+
 function sanitizeLiveConfig(raw: string): string {
   try {
-    const parsed = JSON5.parse(raw) as {
+    const parsed: {
       agents?: {
         defaults?: Record<string, unknown>;
         list?: Array<Record<string, unknown>>;
       };
-    };
+    } = JSON5.parse(raw);
+
     if (!parsed || typeof parsed !== "object") {
       return raw;
     }
+
     if (parsed.agents?.defaults && typeof parsed.agents.defaults === "object") {
       delete parsed.agents.defaults.workspace;
       delete parsed.agents.defaults.agentDir;
     }
+
     if (Array.isArray(parsed.agents?.list)) {
       parsed.agents.list = parsed.agents.list.map((entry) => {
         if (!entry || typeof entry !== "object") {
@@ -251,6 +275,7 @@ function sanitizeLiveConfig(raw: string): string {
         return nextEntry;
       });
     }
+
     return `${JSON.stringify(parsed, null, 2)}\n`;
   } catch {
     return raw;
@@ -312,6 +337,10 @@ function stageLiveTestState(params: {
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
   }
+  for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
+    copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
+  }
+  restoreClaudeConfigFromBackupIfNeeded(params.tempHome);
 }
 
 export function installTestEnv(): { cleanup: () => void; tempHome: string } {

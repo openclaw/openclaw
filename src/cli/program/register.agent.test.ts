@@ -1,66 +1,62 @@
 import { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerAgentCommands } from "./register.agent.js";
 
-const agentCliCommandMock = vi.fn();
-const agentsAddCommandMock = vi.fn();
-const agentsBindingsCommandMock = vi.fn();
-const agentsBindCommandMock = vi.fn();
-const agentsDeleteCommandMock = vi.fn();
-const agentsListCommandMock = vi.fn();
-const agentsSetIdentityCommandMock = vi.fn();
-const agentsUnbindCommandMock = vi.fn();
-const setVerboseMock = vi.fn();
-const createDefaultDepsMock = vi.fn(() => ({ deps: true }));
+const mocks = vi.hoisted(() => ({
+  agentCliCommandMock: vi.fn(),
+  agentsAddCommandMock: vi.fn(),
+  agentsBindingsCommandMock: vi.fn(),
+  agentsBindCommandMock: vi.fn(),
+  agentsDeleteCommandMock: vi.fn(),
+  agentsListCommandMock: vi.fn(),
+  agentsSetIdentityCommandMock: vi.fn(),
+  agentsUnbindCommandMock: vi.fn(),
+  setVerboseMock: vi.fn(),
+  createDefaultDepsMock: vi.fn(() => ({ deps: true })),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+const agentCliCommandMock = mocks.agentCliCommandMock;
+const agentsAddCommandMock = mocks.agentsAddCommandMock;
+const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
+const agentsBindCommandMock = mocks.agentsBindCommandMock;
+const agentsDeleteCommandMock = mocks.agentsDeleteCommandMock;
+const agentsListCommandMock = mocks.agentsListCommandMock;
+const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
+const agentsUnbindCommandMock = mocks.agentsUnbindCommandMock;
+const setVerboseMock = mocks.setVerboseMock;
+const createDefaultDepsMock = mocks.createDefaultDepsMock;
+const runtime = mocks.runtime;
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
-  agentCliCommand: agentCliCommandMock,
+  agentCliCommand: mocks.agentCliCommandMock,
 }));
 
 vi.mock("../../commands/agents.js", () => ({
-  agentsAddCommand: agentsAddCommandMock,
-  agentsBindingsCommand: agentsBindingsCommandMock,
-  agentsBindCommand: agentsBindCommandMock,
-  agentsDeleteCommand: agentsDeleteCommandMock,
-  agentsListCommand: agentsListCommandMock,
-  agentsSetIdentityCommand: agentsSetIdentityCommandMock,
-  agentsUnbindCommand: agentsUnbindCommandMock,
+  agentsAddCommand: mocks.agentsAddCommandMock,
+  agentsBindingsCommand: mocks.agentsBindingsCommandMock,
+  agentsBindCommand: mocks.agentsBindCommandMock,
+  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
+  agentsListCommand: mocks.agentsListCommandMock,
+  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
+  agentsUnbindCommand: mocks.agentsUnbindCommandMock,
 }));
 
 vi.mock("../../globals.js", () => ({
-  setVerbose: setVerboseMock,
+  setVerbose: mocks.setVerboseMock,
 }));
 
 vi.mock("../deps.js", () => ({
-  createDefaultDeps: createDefaultDepsMock,
+  createDefaultDeps: mocks.createDefaultDepsMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
-
-const mockedModuleIds = [
-  "../../commands/agent-via-gateway.js",
-  "../../commands/agents.js",
-  "../../globals.js",
-  "../deps.js",
-  "../../runtime.js",
-];
-
-let registerAgentCommands: typeof import("./register.agent.js").registerAgentCommands;
-
-beforeAll(async () => {
-  ({ registerAgentCommands } = await import("./register.agent.js"));
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
-  vi.resetModules();
-});
 
 describe("registerAgentCommands", () => {
   async function runCli(args: string[]) {
@@ -71,7 +67,6 @@ describe("registerAgentCommands", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resetRuntimeCapture();
     runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);

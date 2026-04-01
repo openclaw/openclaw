@@ -46,7 +46,12 @@ function resolveMatrixDirectoryLimit(limit?: number | null): number {
 }
 
 function createMatrixDirectoryClient(auth: MatrixResolvedAuth): MatrixAuthedHttpClient {
-  return new MatrixAuthedHttpClient(auth.homeserver, auth.accessToken, auth.ssrfPolicy);
+  return new MatrixAuthedHttpClient({
+    homeserver: auth.homeserver,
+    accessToken: auth.accessToken,
+    ssrfPolicy: auth.ssrfPolicy,
+    dispatcherPolicy: auth.dispatcherPolicy,
+  });
 }
 
 async function resolveMatrixDirectoryContext(params: MatrixDirectoryLiveParams): Promise<{

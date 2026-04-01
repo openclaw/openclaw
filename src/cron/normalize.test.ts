@@ -248,6 +248,32 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.accountId).toBe("coordinator");
   });
 
+  it("normalizes delivery threadId and preserves numeric values", () => {
+    const stringThread = normalizeIsolatedAgentTurnCreateJob({
+      name: "delivery thread string",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1003816714067",
+        threadId: " 1008013 ",
+      },
+    });
+
+    expect((stringThread.delivery as Record<string, unknown>).threadId).toBe("1008013");
+
+    const numericThread = normalizeIsolatedAgentTurnCreateJob({
+      name: "delivery thread number",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1003816714067",
+        threadId: 1008013,
+      },
+    });
+
+    expect((numericThread.delivery as Record<string, unknown>).threadId).toBe(1008013);
+  });
+
   it("strips empty accountId from delivery", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "empty account",
@@ -308,6 +334,26 @@ describe("normalizeCronJobCreate", () => {
     const delivery = normalized.delivery as Record<string, unknown>;
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
     expect(delivery.bestEffort).toBe(true);
+  });
+
+  it("migrates legacy top-level threadId hints into delivery", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy root thread",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: " 99 ",
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "-1001234567890" });
+    expect(delivery.threadId).toBe("99");
+    expect(normalized.threadId).toBeUndefined();
   });
 
   it("maps legacy deliver=false to delivery none", () => {
@@ -498,5 +544,17 @@ describe("normalizeCronJobPatch", () => {
 
     const schedule = normalized.schedule as Record<string, unknown>;
     expect(schedule.staggerMs).toBe(30_000);
+  });
+
+  it("preserves legacy patch threadId hints for downstream delivery migration", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        threadId: 77,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.delivery).toBeUndefined();
+    expect((normalized.payload as Record<string, unknown>).threadId).toBe(77);
   });
 });

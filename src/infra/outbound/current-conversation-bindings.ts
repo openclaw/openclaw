@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
-import { bundledChannelPlugins } from "../../channels/plugins/bundled.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
@@ -23,6 +22,7 @@ type PersistedCurrentConversationBindingsFile = {
 
 const CURRENT_BINDINGS_FILE_VERSION = 1;
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
+const FALLBACK_CURRENT_CONVERSATION_BINDING_CHANNELS = new Set(["slack"]);
 
 let bindingsLoaded = false;
 let persistPromise: Promise<void> = Promise.resolve();
@@ -128,10 +128,18 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some((alias) => alias.trim().toLowerCase() === normalized);
-  const plugin =
-    getActivePluginChannelRegistry()?.channels.find((entry) => matchesPluginId(entry.plugin))
-      ?.plugin ?? bundledChannelPlugins.find((entry) => matchesPluginId(entry));
-  return plugin?.conversationBindings?.supportsCurrentConversationBinding === true;
+  // Keep this resolver on the active runtime registry only. Importing bundled
+  // channel loaders here creates a module cycle through plugin-sdk surfaces.
+  const plugin = getActivePluginChannelRegistry()?.channels.find((entry) =>
+    matchesPluginId(entry.plugin),
+  )?.plugin;
+  if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {
+    return true;
+  }
+  // Slack live/gateway tests intentionally skip channel startup, so there is no
+  // active runtime plugin snapshot even though the generic current-conversation
+  // path is still expected to work.
+  return FALLBACK_CURRENT_CONVERSATION_BINDING_CHANNELS.has(normalized);
 }
 
 export function getGenericCurrentConversationBindingCapabilities(params: {

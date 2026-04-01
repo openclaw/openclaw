@@ -41,6 +41,7 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/provider-runtime.js")>();
   return {
     ...actual,
+    applyProviderResolvedModelCompatWithPlugins: () => undefined,
     clearProviderRuntimeHookCache: clearProviderRuntimeHookCacheMock,
     normalizeProviderResolvedModelWithPlugin: () => undefined,
     prepareProviderDynamicModel: (params: unknown) => prepareProviderDynamicModelMock(params),

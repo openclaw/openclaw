@@ -244,6 +244,7 @@ export async function buildTelegramInboundContextPayload(params: {
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
+    CommandSource: options?.commandSource,
     MessageThreadId: threadSpec.id,
     IsForum: isForum,
     OriginatingChannel: "telegram" as const,
@@ -279,7 +280,10 @@ export async function buildTelegramInboundContextPayload(params: {
         ? {
             sessionKey: updateLastRouteSessionKey,
             channel: "telegram",
-            to: `telegram:${chatId}`,
+            to:
+              isGroup && updateLastRouteThreadId != null
+                ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
+                : `telegram:${chatId}`,
             accountId: route.accountId,
             threadId: updateLastRouteThreadId,
             mainDmOwnerPin:

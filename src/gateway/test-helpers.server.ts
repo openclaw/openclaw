@@ -4,11 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  parseConfigJson5,
-} from "../config/config.js";
+import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   resolveMainSessionKeyFromConfig,
@@ -172,8 +168,7 @@ async function persistTestSessionConfig(): Promise<void> {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   }
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
   lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
@@ -286,8 +281,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     "utf-8",
   );
   setTestConfigRoot(tempConfigRoot);
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
@@ -690,10 +684,27 @@ export async function readConnectChallengeNonce(
   }
 }
 
+function resolveAuthTokenForSignature(opts?: {
+  token?: string;
+  bootstrapToken?: string;
+  deviceToken?: string;
+}) {
+  return opts?.token ?? opts?.bootstrapToken ?? opts?.deviceToken;
+}
+
+export function testOnlyResolveAuthTokenForSignature(opts?: {
+  token?: string;
+  bootstrapToken?: string;
+  deviceToken?: string;
+}) {
+  return resolveAuthTokenForSignature(opts);
+}
+
 export async function connectReq(
   ws: WebSocket,
   opts?: {
     token?: string;
+    bootstrapToken?: string;
     deviceToken?: string;
     password?: string;
     skipDefaultAuth?: boolean;
@@ -748,9 +759,14 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
+  const bootstrapToken = opts?.bootstrapToken?.trim() || undefined;
   const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
-  const authTokenForSignature = token ?? deviceToken;
+  const authTokenForSignature = resolveAuthTokenForSignature({
+    token,
+    bootstrapToken,
+    deviceToken,
+  });
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
@@ -817,9 +833,10 @@ export async function connectReq(
         role,
         scopes: requestedScopes,
         auth:
-          token || password || deviceToken
+          token || bootstrapToken || password || deviceToken
             ? {
                 token,
+                bootstrapToken,
                 deviceToken,
                 password,
               }
@@ -895,8 +912,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // Gateway suites often mutate testState-backed config/session inputs between
   // RPCs while reusing one server instance; flush caches so the next request
   // observes the updated test fixture state.
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();

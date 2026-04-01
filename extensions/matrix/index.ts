@@ -11,6 +11,23 @@ export default defineChannelPluginEntry({
   description: "Matrix channel plugin (matrix-js-sdk)",
   plugin: matrixPlugin,
   setRuntime: setMatrixRuntime,
+  registerCliMetadata(api) {
+    api.registerCli(
+      async ({ program }) => {
+        const { registerMatrixCli } = await import("./src/cli.js");
+        registerMatrixCli({ program });
+      },
+      {
+        descriptors: [
+          {
+            name: "matrix",
+            description: "Manage Matrix accounts, verification, devices, and profile state",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
+  },
   registerFull(api) {
     void import("./src/plugin-entry.runtime.js")
       .then(({ ensureMatrixCryptoRuntime }) =>
@@ -38,13 +55,5 @@ export default defineChannelPluginEntry({
       const { handleVerificationStatus } = await import("./src/plugin-entry.runtime.js");
       await handleVerificationStatus(ctx);
     });
-
-    api.registerCli(
-      async ({ program }) => {
-        const { registerMatrixCli } = await import("./src/cli.js");
-        registerMatrixCli({ program });
-      },
-      { commands: ["matrix"] },
-    );
   },
 });
