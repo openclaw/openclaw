@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import * as navigationGuardModule from "./navigation-guard.js";
 import {
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
@@ -202,6 +203,56 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).not.toHaveBeenCalled();
+  });
+
+  it("does not quarantine a tab on transient redirect lookup errors", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const assertNavigationAllowedSpy = vi.spyOn(
+      navigationGuardModule,
+      "assertBrowserNavigationAllowed",
+    );
+    assertNavigationAllowedSpy.mockImplementation(async (opts: { url: string }) => {
+      if (opts.url === "http://127.0.0.1:18080/internal-hop") {
+        throw new Error("getaddrinfo EAI_AGAIN internal-hop");
+      }
+    });
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    try {
+      const created = await createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      });
+      const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
+
+      expect(created.targetId).toBe("TARGET_1");
+      expect(pages).toHaveLength(1);
+      expect(pageClose).not.toHaveBeenCalled();
+    } finally {
+      assertNavigationAllowedSpy.mockRestore();
+    }
   });
 
   it("keeps blocked tab manageable if close fails", async () => {

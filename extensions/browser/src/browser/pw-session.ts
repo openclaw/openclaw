@@ -25,6 +25,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
@@ -575,6 +576,10 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
   }
 }
 
+function isPolicyDenyNavigationError(err: unknown): boolean {
+  return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
+}
+
 async function closeBlockedNavigationTarget(opts: {
   cdpUrl: string;
   page: Page;
@@ -643,9 +648,12 @@ export async function gotoPageWithNavigationGuard(opts: {
         ...navigationPolicy,
       });
     } catch (err) {
-      blockedError = err;
-      await route.abort().catch(() => {});
-      return;
+      if (isPolicyDenyNavigationError(err)) {
+        blockedError = err;
+        await route.abort().catch(() => {});
+        return;
+      }
+      throw err;
     }
     await route.continue();
   };
