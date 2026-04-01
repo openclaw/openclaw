@@ -259,6 +259,11 @@ export async function incrementCompactionCount(params: {
       updates.outputTokens = undefined;
       updates.cacheRead = undefined;
       updates.cacheWrite = undefined;
+    } else {
+      // Compaction succeeded but no post-compaction token count is available.
+      // Mark the snapshot stale so the preflight gate does not keep re-triggering
+      // compaction on every turn against the old high-watermark.
+      updates.totalTokensFresh = false;
     }
     const cumulativeUsage = accumulateSessionCumulativeUsage(
       currentEntry,
