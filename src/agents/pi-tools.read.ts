@@ -551,6 +551,65 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
+/**
+ * Guard that prevents non-main sessions (cron, isolated agent turns, subagents)
+ * from writing to MEMORY.md or the memory/ directory. This protects long-term
+ * curated memory from being overwritten by sessions that lack full conversational context.
+ *
+ * Main sessions (trigger: undefined or "human") retain full write access.
+ * Memory flush runs use their own dedicated guard (wrapToolMemoryFlushAppendOnlyWrite).
+ */
+export function wrapToolMemoryWriteGuard(
+  tool: AnyAgentTool,
+  options: {
+    trigger?: string;
+    root: string;
+    containerWorkdir?: string;
+  },
+): AnyAgentTool {
+  // Only guard non-main sessions
+  const isMainSession = !options.trigger || options.trigger === "human";
+  if (isMainSession) {
+    return tool;
+  }
+
+  const MEMORY_FILE_NAMES = new Set(["MEMORY.md", "memory.md"]);
+  const MEMORY_DIR_PREFIX = "memory/";
+
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath =
+        typeof record?.path === "string" && record.path.trim() ? record.path : undefined;
+
+      if (filePath) {
+        const resolvedPath = resolveToolPathAgainstWorkspaceRoot({
+          filePath,
+          root: options.root,
+          containerWorkdir: options.containerWorkdir,
+        });
+        const relativePath = path.relative(options.root, resolvedPath);
+        const fileName = path.basename(resolvedPath);
+        const isInMemoryDir = relativePath.startsWith(MEMORY_DIR_PREFIX);
+        const isMemoryFile = MEMORY_FILE_NAMES.has(fileName);
+
+        if (isMemoryFile || isInMemoryDir) {
+          throw new Error(
+            `Memory write blocked: non-main sessions (trigger: ${options.trigger ?? "unknown"}) ` +
+              `cannot write to ${relativePath}. Use a main session to update memory files.`,
+          );
+        }
+      }
+
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
+}
+
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,

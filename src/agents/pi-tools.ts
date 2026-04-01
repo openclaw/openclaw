@@ -41,6 +41,7 @@ import {
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
+  wrapToolMemoryWriteGuard,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
@@ -427,14 +428,24 @@ export function createOpenClawCodingTools(options?: {
         return [];
       }
       const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const withRootGuard = workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped;
+      const withMemoryGuard = wrapToolMemoryWriteGuard(withRootGuard, {
+        trigger: options?.trigger,
+        root: workspaceRoot,
+      });
+      return [withMemoryGuard];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
       const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const withRootGuard = workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped;
+      const withMemoryGuard = wrapToolMemoryWriteGuard(withRootGuard, {
+        trigger: options?.trigger,
+        root: workspaceRoot,
+      });
+      return [withMemoryGuard];
     }
     return [tool];
   });
