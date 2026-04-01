@@ -1,4 +1,8 @@
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
+import {
+  CLI_FRESH_WATCHDOG_DEFAULTS,
+  CLI_RESUME_WATCHDOG_DEFAULTS,
+} from "openclaw/plugin-sdk/cli-backend";
 
 const OSTK_MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-4-6",
@@ -22,18 +26,14 @@ export function buildOstkCliBackend(): CliBackendPlugin {
       modelArg: "--model",
       modelAliases: OSTK_MODEL_ALIASES,
       serialize: true,
+      // Session resume (resumeArgs, sessionArg, sessionMode) is intentionally
+      // omitted. The ostk kernel manages session continuity internally via
+      // session journals in .ostk/sessions/ — OpenClaw does not need to pass
+      // session IDs or use resume args for this backend.
       reliability: {
         watchdog: {
-          fresh: {
-            noOutputTimeoutMs: 120_000,
-            minMs: 30_000,
-            maxMs: 300_000,
-          },
-          resume: {
-            noOutputTimeoutMs: 60_000,
-            minMs: 15_000,
-            maxMs: 180_000,
-          },
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
         },
       },
     },
