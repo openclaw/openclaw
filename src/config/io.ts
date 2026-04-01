@@ -29,6 +29,7 @@ import {
 } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
 import {
+  CircularIncludeError,
   ConfigIncludeError,
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
@@ -2220,9 +2221,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               parsed: effectiveParsed,
               sourceConfig: coerceConfig(effectiveParsed),
               failedIncludePaths:
-                err instanceof ConfigIncludeError
-                  ? [err.includePath]
-                  : undefined,
+                err instanceof CircularIncludeError
+                  ? err.chain
+                  : err instanceof ConfigIncludeError
+                    ? [err.includePath]
+                    : undefined,
             }),
             // Keep the recovered root file payload here when read healing kicked in.
             sourceConfig: coerceConfig(effectiveParsed),
