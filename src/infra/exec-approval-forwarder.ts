@@ -372,13 +372,18 @@ function buildExecResolvedPayload(params: {
     ? resolveChannelApprovalAdapter(getChannelPlugin(channel))?.render?.exec?.buildResolvedPayload
     : undefined;
   if (pluginBuilder) {
-    // Plugin explicitly handles resolved payloads — respect its decision
-    // (returning null means "suppress this notification").
-    return pluginBuilder({
+    // Plugin explicitly handles resolved payloads — respect its decision:
+    // - ReplyPayload → use this payload
+    // - null → suppress this notification
+    // - undefined → fall through to default text message
+    const result = pluginBuilder({
       cfg: params.cfg,
       resolved: params.resolved,
       target: params.target,
     });
+    if (result !== undefined) {
+      return result;
+    }
   }
   return buildApprovalResolvedReplyPayload({
     approvalId: params.resolved.id,

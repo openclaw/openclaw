@@ -568,11 +568,15 @@ export type ChannelApprovalRenderAdapter = {
       target: ChannelApprovalForwardTarget;
       nowMs: number;
     }) => ReplyPayload | null;
+    /**
+     * Return a payload to send, `null` to suppress the notification,
+     * or `undefined` to fall through to the default text message.
+     */
     buildResolvedPayload?: (params: {
       cfg: OpenClawConfig;
       resolved: ExecApprovalResolved;
       target: ChannelApprovalForwardTarget;
-    }) => ReplyPayload | null;
+    }) => ReplyPayload | null | undefined;
   };
   plugin?: {
     buildPendingPayload?: (params: {
