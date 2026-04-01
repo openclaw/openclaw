@@ -35,7 +35,7 @@ import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
 export type ExecuteNodeHostCommandParams = {
   command: string;
-  workdir: string;
+  workdir: string | undefined;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   requestedNode?: string;
@@ -108,7 +108,7 @@ export async function executeNodeHostCommand(
       params: {
         command: argv,
         rawCommand: params.command,
-        cwd: params.workdir,
+        ...(params.workdir != null ? { cwd: params.workdir } : {}),
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       },
@@ -121,7 +121,7 @@ export async function executeNodeHostCommand(
   }
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;
-  const runCwd = prepared.plan.cwd ?? params.workdir;
+  const runCwd = prepared.plan.cwd ?? params.workdir ?? undefined;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
 
@@ -453,3 +453,4 @@ export async function executeNodeHostCommand(
     } satisfies ExecToolDetails,
   };
 }
+
