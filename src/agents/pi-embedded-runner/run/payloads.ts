@@ -250,10 +250,24 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  // When reasoning is on and assistantTexts contains earlier block-reply content,
+  // the final answer may not be represented. Ensure fallbackAnswerText is appended
+  // when it is not already covered by assistantTexts.
+  const rawAnswerSources = params.assistantTexts.length ? params.assistantTexts : [];
+  const needsFallbackAppend =
+    !suppressAssistantArtifacts &&
+    rawAnswerSources.length > 0 &&
+    params.reasoningLevel === "on" &&
+    fallbackAnswerText &&
+    !rawAnswerSources.some(
+      (t) => normalizeTextForComparison(t) === normalizeTextForComparison(fallbackAnswerText),
+    );
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
+    : (rawAnswerSources.length
+        ? needsFallbackAppend
+          ? [...rawAnswerSources, fallbackAnswerText]
+          : rawAnswerSources
         : fallbackAnswerText
           ? [fallbackAnswerText]
           : []

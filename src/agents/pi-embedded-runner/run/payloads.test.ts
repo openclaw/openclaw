@@ -1,5 +1,71 @@
 import { describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
+
+describe("buildEmbeddedRunPayloads reasoning-on fallback", () => {
+  it("includes fallback answer when reasoning is on and assistantTexts has earlier content", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    });
+
+    // assistantTexts has earlier block-reply text but NOT the final answer
+    const payloads = buildPayloads({
+      assistantTexts: ["Earlier block reply text"],
+      lastAssistant,
+      reasoningLevel: "on",
+    });
+
+    const texts = payloads.map((p) => p.text);
+    // The earlier text should still be present
+    expect(texts).toContain("Earlier block reply text");
+    // The final answer must be appended from fallback
+    expect(texts).toContain("Final answer");
+  });
+
+  it("does not duplicate when assistantTexts already contains the final answer", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "Final answer" }],
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Final answer"],
+      lastAssistant,
+      reasoningLevel: "on",
+    });
+
+    const answerPayloads = payloads.filter((p) => !p.isReasoning);
+    // Should not duplicate the answer
+    const answerTexts = answerPayloads.map((p) => p.text).filter(Boolean);
+    const finalCount = answerTexts.filter((t) => t === "Final answer").length;
+    expect(finalCount).toBe(1);
+  });
+
+  it("does not append fallback when reasoning is off", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "Final answer" }],
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Earlier block reply text"],
+      lastAssistant,
+      reasoningLevel: "off",
+    });
+
+    const texts = payloads.map((p) => p.text);
+    // Should only contain assistantTexts, not the fallback
+    expect(texts).toContain("Earlier block reply text");
+    expect(texts).not.toContain("Final answer");
+  });
+});
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
