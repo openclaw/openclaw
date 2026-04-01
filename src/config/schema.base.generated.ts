@@ -1073,6 +1073,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
               },
+              overloadedProfileRotations: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              overloadedBackoffMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
             },
             additionalProperties: false,
             title: "Auth Cooldowns",
@@ -21920,6 +21930,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
               },
+              searchTool: {
+                type: "string",
+                minLength: 1,
+              },
               includeDefaultMemory: {
                 type: "boolean",
                 title: "QMD Include Default Memory",
@@ -27430,6 +27444,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.media.video.models[].request.tls.passphrase": {
       sensitive: true,
       tags: ["security", "media", "tools"],
+    },
+    "mcp.servers.*.headers.*": {
+      sensitive: true,
+      tags: ["security"],
     },
     "mcp.servers.*.headers.*": {
       sensitive: true,

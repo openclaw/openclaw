@@ -293,7 +293,12 @@ describe("gateway run option collisions", () => {
         },
       },
     };
-    configState.snapshot = { exists: true, parsed: configState.cfg };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: configState.cfg,
+      parsed: configState.cfg,
+    };
 
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
