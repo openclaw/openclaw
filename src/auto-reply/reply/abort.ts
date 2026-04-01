@@ -2,9 +2,11 @@ import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import {
+  getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
 } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -50,6 +52,7 @@ export {
 const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedPiRun,
+  getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
 };
@@ -63,6 +66,9 @@ export const __testing = {
     abortDeps.getAcpSessionManager =
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedPiRun = deps?.abortEmbeddedPiRun ?? defaultAbortDeps.abortEmbeddedPiRun;
+    abortDeps.getLatestSubagentRunByChildSessionKey =
+      deps?.getLatestSubagentRunByChildSessionKey ??
+      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController =
       deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated =
@@ -71,6 +77,8 @@ export const __testing = {
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
+    abortDeps.getLatestSubagentRunByChildSessionKey =
+      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
   },
@@ -136,7 +144,24 @@ export function stopSubagentsForRequester(params: {
   if (!requesterKey) {
     return { stopped: 0 };
   }
-  const runs = abortDeps.listSubagentRunsForController(requesterKey);
+  const dedupedRunsByChildKey = new Map<string, SubagentRunRecord>();
+  for (const run of abortDeps.listSubagentRunsForController(requesterKey)) {
+    const childKey = run.childSessionKey?.trim();
+    if (!childKey) {
+      continue;
+    }
+    const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (!latest || latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
+      continue;
+    }
+    const existing = dedupedRunsByChildKey.get(childKey);
+    if (!existing || run.createdAt >= existing.createdAt) {
+      dedupedRunsByChildKey.set(childKey, run);
+    }
+  }
+  const runs = Array.from(dedupedRunsByChildKey.values());
   if (runs.length === 0) {
     return { stopped: 0 };
   }

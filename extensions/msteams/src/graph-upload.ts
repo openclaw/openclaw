@@ -10,6 +10,7 @@
  */
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -19,53 +20,6 @@ export interface OneDriveUploadResult {
   id: string;
   webUrl: string;
   name: string;
-}
-
-function parseUploadedDriveItem(
-  data: { id?: string; webUrl?: string; name?: string },
-  label: "OneDrive" | "SharePoint",
-): OneDriveUploadResult {
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error(`${label} upload response missing required fields`);
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
-}
-
-async function uploadDriveItem(params: {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  fetchFn?: typeof fetch;
-  url: string;
-  label: "OneDrive" | "SharePoint";
-}): Promise<OneDriveUploadResult> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
-  const res = await fetchFn(params.url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": params.contentType ?? "application/octet-stream",
-    },
-    body: new Uint8Array(params.buffer),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${params.label} upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  return parseUploadedDriveItem(
-    (await res.json()) as { id?: string; webUrl?: string; name?: string },
-    params.label,
-  );
 }
 
 /**
@@ -79,13 +33,42 @@ export async function uploadToOneDrive(params: {
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
+  const fetchFn = params.fetchFn ?? fetch;
+  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-  return await uploadDriveItem({
-    ...params,
-    url: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`,
-    label: "OneDrive",
+
+  const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
+    method: "PUT",
+    headers: {
+      "User-Agent": buildUserAgent(),
+      Authorization: `Bearer ${token}`,
+      "Content-Type": params.contentType ?? "application/octet-stream",
+    },
+    body: new Uint8Array(params.buffer),
   });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    id?: string;
+    webUrl?: string;
+    name?: string;
+  };
+
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error("OneDrive upload response missing required fields");
+  }
+
+  return {
+    id: data.id,
+    webUrl: data.webUrl,
+    name: data.name,
+  };
 }
 
 export interface OneDriveSharingLink {
@@ -109,6 +92,7 @@ export async function createSharingLink(params: {
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/items/${params.itemId}/createLink`, {
     method: "POST",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
@@ -194,13 +178,45 @@ export async function uploadToSharePoint(params: {
   siteId: string;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
+  const fetchFn = params.fetchFn ?? fetch;
+  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-  return await uploadDriveItem({
-    ...params,
-    url: `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    label: "SharePoint",
-  });
+
+  const res = await fetchFn(
+    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
+    {
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        Authorization: `Bearer ${token}`,
+        "Content-Type": params.contentType ?? "application/octet-stream",
+      },
+      body: new Uint8Array(params.buffer),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    id?: string;
+    webUrl?: string;
+    name?: string;
+  };
+
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error("SharePoint upload response missing required fields");
+  }
+
+  return {
+    id: data.id,
+    webUrl: data.webUrl,
+    name: data.name,
+  };
 }
 
 export interface ChatMember {
@@ -239,7 +255,7 @@ export async function getDriveItemProperties(params: {
 
   const res = await fetchFn(
     `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` } },
   );
 
   if (!res.ok) {
@@ -273,8 +289,6 @@ export async function getDriveItemProperties(params: {
  *
  * This function looks up the matching Graph chat by querying the bot's chats filtered
  * by the target user's AAD object ID.
- *
- * Returns the Graph chat ID if found, or null if resolution fails.
  */
 export async function resolveGraphChatId(params: {
   /** Bot Framework conversation ID (may be in non-Graph format for personal DMs) */
@@ -353,7 +367,7 @@ export async function getChatMembers(params: {
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
   const res = await fetchFn(`${GRAPH_ROOT}/chats/${params.chatId}/members`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
   });
 
   if (!res.ok) {
@@ -413,6 +427,7 @@ export async function createSharePointSharingLink(params: {
     {
       method: "POST",
       headers: {
+        "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },

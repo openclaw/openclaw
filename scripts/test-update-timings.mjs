@@ -1,64 +1,84 @@
+import { intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { loadVitestReportFromArgs } from "./lib/vitest-report-cli-utils.mjs";
 import {
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
-  readJsonFile,
-  runVitestJsonReport,
   writeJsonFile,
 } from "./test-report-utils.mjs";
-import { unitTimingManifestPath } from "./test-runner-manifest.mjs";
+import { extensionTimingManifestPath, unitTimingManifestPath } from "./test-runner-manifest.mjs";
+
+const resolveDefaultManifestSettings = (config) => {
+  if (config === "vitest.extensions.config.ts") {
+    return {
+      out: extensionTimingManifestPath,
+      defaultDurationMs: 1000,
+      description: "extension",
+    };
+  }
+  return {
+    out: unitTimingManifestPath,
+    defaultDurationMs: 250,
+    description: "unit",
+  };
+};
+
+if (process.argv.slice(2).includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/test-update-timings.mjs [options]",
+      "",
+      "Generate or refresh a test timing manifest from a Vitest JSON report.",
+      "",
+      "Options:",
+      "  --config <path>                Vitest config to run when no report is supplied",
+      "  --report <path>                Reuse an existing Vitest JSON report",
+      "  --out <path>                   Output manifest path (default follows --config)",
+      "  --limit <count>                Max number of file timings to retain (default: 256)",
+      "  --default-duration-ms <ms>     Fallback duration for unknown files (default follows --config)",
+      "  --help                         Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-update-timings.mjs",
+      "  node scripts/test-update-timings.mjs --config vitest.unit.config.ts --limit 128",
+      "  node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
+      "  node scripts/test-update-timings.mjs --report /tmp/vitest-report.json --out /tmp/timings.json",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
 
 function parseArgs(argv) {
-  const args = {
-    config: "vitest.unit.config.ts",
-    out: unitTimingManifestPath,
-    reportPath: "",
-    limit: 256,
-    defaultDurationMs: 250,
+  const parsed = parseFlagArgs(
+    argv,
+    {
+      config: "vitest.unit.config.ts",
+      limit: 256,
+      reportPath: "",
+      out: "",
+      defaultDurationMs: 0,
+    },
+    [
+      stringFlag("--config", "config"),
+      intFlag("--limit", "limit", { min: 1 }),
+      stringFlag("--report", "reportPath"),
+      stringFlag("--out", "out"),
+      intFlag("--default-duration-ms", "defaultDurationMs", { min: 1 }),
+    ],
+  );
+  const defaults = resolveDefaultManifestSettings(parsed.config);
+  return {
+    ...parsed,
+    out: parsed.out || defaults.out,
+    defaultDurationMs:
+      Number.isFinite(parsed.defaultDurationMs) && parsed.defaultDurationMs > 0
+        ? parsed.defaultDurationMs
+        : defaults.defaultDurationMs,
+    description: defaults.description,
   };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--config") {
-      args.config = argv[i + 1] ?? args.config;
-      i += 1;
-      continue;
-    }
-    if (arg === "--out") {
-      args.out = argv[i + 1] ?? args.out;
-      i += 1;
-      continue;
-    }
-    if (arg === "--report") {
-      args.reportPath = argv[i + 1] ?? "";
-      i += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.limit = parsed;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--default-duration-ms") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.defaultDurationMs = parsed;
-      }
-      i += 1;
-      continue;
-    }
-  }
-  return args;
 }
 
 const opts = parseArgs(process.argv.slice(2));
-const reportPath = runVitestJsonReport({
-  config: opts.config,
-  reportPath: opts.reportPath,
-  prefix: "openclaw-vitest-timings",
-});
-const report = readJsonFile(reportPath);
+const report = loadVitestReportFromArgs(opts, "openclaw-vitest-timings");
 const files = Object.fromEntries(
   collectVitestFileDurations(report, normalizeTrackedRepoPath)
     .toSorted((a, b) => b.durationMs - a.durationMs)
@@ -81,5 +101,5 @@ const output = {
 
 writeJsonFile(opts.out, output);
 console.log(
-  `[test-update-timings] wrote ${String(Object.keys(files).length)} timings to ${opts.out}`,
+  `[test-update-timings] wrote ${String(Object.keys(files).length)} ${opts.description} timings to ${opts.out}`,
 );

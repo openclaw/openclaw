@@ -34,6 +34,7 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "reply",
   "thread-reply",
   "broadcast",
@@ -120,6 +121,12 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
     forceDocument: Type.Optional(
       Type.Boolean({
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+      }),
+    ),
+    asDocument: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
     interactive: Type.Optional(interactiveMessageSchema),
@@ -665,6 +672,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   return {
     label: "Message",
     name: "message",
+    displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
     execute: async (_toolCallId, args, signal) => {

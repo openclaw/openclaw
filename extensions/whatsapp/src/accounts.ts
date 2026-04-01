@@ -8,9 +8,9 @@ import {
   resolveMergedAccountConfig,
   resolveUserPath,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+} from "openclaw/plugin-sdk/account-core";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { hasWebCredsSync } from "./auth-store.js";
+import { hasWebCredsSync } from "./creds-files.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
 
 export type ResolvedWhatsAppAccount = {
@@ -32,6 +32,7 @@ export type ResolvedWhatsAppAccount = {
   mediaMaxMb?: number;
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
+  reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
 };
@@ -154,6 +155,7 @@ export function resolveWhatsAppAccount(params: {
     mediaMaxMb: merged.mediaMaxMb,
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
+    reactionLevel: merged.reactionLevel,
     groups: merged.groups,
     debounceMs: merged.debounceMs,
   };

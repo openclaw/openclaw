@@ -26,6 +26,8 @@ title: "Tests"
 - Gateway integration: opt-in via `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
 - `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `forks` + adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
+- `pnpm test:docker:openwebui`: Starts Dockerized OpenClaw + Open WebUI, signs in through Open WebUI, checks `/api/models`, then runs a real proxied chat through `/api/chat/completions`. Requires a usable live model key (for example OpenAI in `~/.profile`), pulls an external Open WebUI image, and is not expected to be CI-stable like the normal unit/e2e suites.
+- `pnpm test:docker:mcp-channels`: Starts a seeded Gateway container and a second client container that spawns `openclaw mcp serve`, then verifies routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge. The Claude notification assertion reads the raw stdio MCP frames directly so the smoke reflects what the bridge actually emits.
 
 ## Local PR gate
 
@@ -39,7 +41,7 @@ For local PR land/gate checks, run:
 If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm vitest run <path/to/test>`. For memory-constrained hosts, use:
 
 - `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`
-- `OPENCLAW_VITEST_FS_MODULE_CACHE=0 pnpm test:changed`
+- `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`
 
 ## Model latency bench (local keys)
 
@@ -62,19 +64,40 @@ Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/bl
 
 Usage:
 
+- `pnpm test:startup:bench`
+- `pnpm test:startup:bench:smoke`
+- `pnpm test:startup:bench:save`
+- `pnpm test:startup:bench:update`
+- `pnpm test:startup:bench:check`
 - `pnpm tsx scripts/bench-cli-startup.ts`
 - `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
-- `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --case gatewayStatus --runs 3`
+- `pnpm tsx scripts/bench-cli-startup.ts --entry openclaw.mjs --entry-secondary dist/entry.js --preset all`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset all --output .artifacts/cli-startup-bench-all.json`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --output .artifacts/cli-startup-bench-smoke.json`
+- `pnpm tsx scripts/bench-cli-startup.ts --preset real --cpu-prof-dir .artifacts/cli-cpu`
+- `pnpm tsx scripts/bench-cli-startup.ts --json`
 
-This benchmarks these commands:
+Presets:
 
-- `--version`
-- `--help`
-- `health --json`
-- `status --json`
-- `status`
+- `startup`: `--version`, `--help`, `health`, `health --json`, `status --json`, `status`
+- `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
+- `all`: both presets
 
-Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
+Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and max RSS summaries for each command. Optional `--cpu-prof-dir` / `--heap-prof-dir` writes V8 profiles per run so timing and profile capture use the same harness.
+
+Saved output conventions:
+
+- `pnpm test:startup:bench:smoke` writes the targeted smoke artifact at `.artifacts/cli-startup-bench-smoke.json`
+- `pnpm test:startup:bench:save` writes the full-suite artifact at `.artifacts/cli-startup-bench-all.json` using `runs=5` and `warmup=1`
+- `pnpm test:startup:bench:update` refreshes the checked-in baseline fixture at `test/fixtures/cli-startup-bench.json` using `runs=5` and `warmup=1`
+
+Checked-in fixture:
+
+- `test/fixtures/cli-startup-bench.json`
+- Refresh with `pnpm test:startup:bench:update`
+- Compare current results against the fixture with `pnpm test:startup:bench:check`
 
 ## Onboarding E2E (Docker)
 

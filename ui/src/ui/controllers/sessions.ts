@@ -1,6 +1,10 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -62,7 +66,12 @@ export async function loadSessions(
       state.sessionsResult = res;
     }
   } catch (err) {
-    state.sessionsError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.sessionsResult = null;
+      state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
+    } else {
+      state.sessionsError = String(err);
+    }
   } finally {
     state.sessionsLoading = false;
   }

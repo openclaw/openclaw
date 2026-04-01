@@ -1,18 +1,35 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
-import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
+import {
+  getBuiltinMemoryEmbeddingProviderDoctorMetadata,
+  listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
+} from "../plugin-sdk/memory-core-engine-runtime.js";
+import { DEFAULT_LOCAL_MODEL } from "../plugin-sdk/memory-core-host-engine-embeddings.js";
+import { checkQmdBinaryAvailability } from "../plugin-sdk/memory-core-host-engine-qmd.js";
+import { hasConfiguredMemorySecretInput } from "../plugin-sdk/memory-core-host-secret.js";
+import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
+function resolveSuggestedRemoteMemoryProvider(): string | undefined {
+  return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
+    (provider) => provider.transport === "remote",
+  )?.providerId;
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
- * Runs as part of `openclaw doctor` — config-only, no network calls.
+ * Runs as part of `openclaw doctor` — config-only checks where possible;
+ * may spawn a short-lived probe process when `memory.backend=qmd` to verify
+ * the configured `qmd` binary is available.
  */
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
@@ -36,14 +53,42 @@ export async function noteMemorySearchHealth(
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
   // separate embedding provider is needed. Skip the provider check entirely.
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  if (!backendConfig) {
+    note("No active memory plugin is registered for the current config.", "Memory search");
+    return;
+  }
   if (backendConfig.backend === "qmd") {
+    const qmdCheck = await checkQmdBinaryAvailability({
+      command: backendConfig.qmd?.command ?? "qmd",
+      env: process.env,
+      cwd: resolveAgentWorkspaceDir(cfg, agentId),
+    });
+    if (!qmdCheck.available) {
+      note(
+        [
+          `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
+          qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
+          "",
+          "Fix (pick one):",
+          "- Install the supported QMD package: npm install -g @tobilu/qmd",
+          `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+          `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
+      const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
       if (hasLocalEmbeddings(resolved.local, true)) {
         // Model path looks valid (explicit file, hf: URL, or default model).
         // If a gateway probe is available and reports not-ready, warn anyway —
@@ -71,7 +116,9 @@ export async function noteMemorySearchHealth(
           "",
           "Fix (pick one):",
           `- Install node-llama-cpp and set a local model path in config`,
-          `- Switch to a remote provider: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider openai")}`,
+          suggestedRemoteProvider
+            ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
+            : `- Switch to a remote embedding provider in config`,
           "",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ].join("\n"),
@@ -95,7 +142,7 @@ export async function noteMemorySearchHealth(
       return;
     }
     const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
-    const envVar = providerEnvVar(resolved.provider);
+    const envVar = resolvePrimaryMemoryProviderEnvVar(resolved.provider);
     note(
       [
         `Memory search provider is set to "${resolved.provider}" but no API key was found.`,
@@ -118,8 +165,11 @@ export async function noteMemorySearchHealth(
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
-  for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
-    if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
+  const autoSelectProviders = listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().filter(
+    (provider) => provider.transport === "remote",
+  );
+  for (const provider of autoSelectProviders) {
+    if (hasRemoteApiKey || (await hasApiKeyForProvider(provider.authProviderId, cfg, agentDir))) {
       return;
     }
   }
@@ -144,7 +194,7 @@ export async function noteMemorySearchHealth(
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
-      "- Set OPENAI_API_KEY, GEMINI_API_KEY, VOYAGE_API_KEY, or MISTRAL_API_KEY in your environment",
+      `- Set ${formatMemoryProviderEnvVarList(autoSelectProviders)} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
       `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
@@ -187,31 +237,30 @@ function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = 
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
+  provider: string,
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {
-  // Map embedding provider names to model-auth provider names
-  const authProvider = provider === "gemini" ? "google" : provider;
+  const metadata = getBuiltinMemoryEmbeddingProviderDoctorMetadata(provider);
   try {
-    await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
+    await resolveApiKeyForProvider({
+      provider: metadata?.authProviderId ?? provider,
+      cfg,
+      agentDir,
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-function providerEnvVar(provider: string): string {
-  switch (provider) {
-    case "openai":
-      return "OPENAI_API_KEY";
-    case "gemini":
-      return "GEMINI_API_KEY";
-    case "voyage":
-      return "VOYAGE_API_KEY";
-    default:
-      return `${provider.toUpperCase()}_API_KEY`;
-  }
+function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
+  const metadata = getBuiltinMemoryEmbeddingProviderDoctorMetadata(provider);
+  return metadata?.envVars[0] ?? `${provider.toUpperCase()}_API_KEY`;
+}
+
+function formatMemoryProviderEnvVarList(providers: Array<{ envVars: string[] }>): string {
+  return [...new Set(providers.flatMap((provider) => provider.envVars).filter(Boolean))].join(", ");
 }
 
 function buildGatewayProbeWarning(

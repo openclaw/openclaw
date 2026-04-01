@@ -4,6 +4,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   findBundledPluginSourceInMap,
@@ -16,7 +17,7 @@ import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plug
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
@@ -241,11 +242,13 @@ function loadChannelSetupPluginRegistry(params: {
   activate?: boolean;
 }): PluginRegistry {
   clearPluginDiscoveryCache();
+  const resolvedConfig = applyPluginAutoEnable({ config: params.cfg, env: process.env }).config;
   const workspaceDir =
-    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
   const log = createSubsystemLogger("plugins");
   return loadOpenClawPlugins({
-    config: params.cfg,
+    config: resolvedConfig,
     workspaceDir,
     cache: false,
     logger: createPluginLoaderLogger(log),
@@ -262,7 +265,7 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   pluginId?: string;
   workspaceDir?: string;
 }): void {
-  const activeRegistry = getActivePluginRegistry();
+  const activeRegistry = getActivePluginChannelRegistry();
   // On low-memory hosts, the empty-registry fallback should only recover the selected
   // plugin instead of importing every bundled extension during setup.
   const onlyPluginIds = activeRegistry?.plugins.length

@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import { discordPlugin } from "./channel.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { setDiscordRuntime } from "./runtime.js";
+let discordPlugin: typeof import("./channel.js").discordPlugin;
+let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
@@ -73,6 +73,16 @@ afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
+});
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  installDiscordRuntime({});
+});
+
+beforeAll(async () => {
+  ({ discordPlugin } = await import("./channel.js"));
+  ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
 describe("discordPlugin outbound", () => {
@@ -176,6 +186,44 @@ describe("discordPlugin outbound", () => {
     );
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("discordPlugin bindings", () => {
+  it("preserves user-prefixed current conversation ids for DM binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "user:123456789012345678",
+    });
+
+    expect(result).toEqual({
+      conversationId: "user:123456789012345678",
+    });
+  });
+
+  it("preserves channel-prefixed current conversation ids for channel binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "channel:987654321098765432",
+    });
+
+    expect(result).toEqual({
+      conversationId: "channel:987654321098765432",
+    });
+  });
+
+  it("preserves channel-prefixed parent ids for thread binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "channel:thread-42",
+      threadId: "thread-42",
+      threadParentId: "parent-9",
+    });
+
+    expect(result).toEqual({
+      conversationId: "thread-42",
+      parentConversationId: "channel:parent-9",
+    });
   });
 });
 

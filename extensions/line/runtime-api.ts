@@ -23,7 +23,29 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-export * from "openclaw/plugin-sdk/line-runtime";
+// Keep named exports explicit here so the runtime barrel stays self-contained
+// and plugin-sdk can re-export this file directly without reaching into
+// extension internals.
+export {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
+  normalizeDmAllowFromWithStore,
+} from "./src/bot-access.js";
+export { downloadLineMedia } from "./src/download.js";
+export { probeLineBot } from "./src/probe.js";
+export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
+export {
+  createQuickReplyItems,
+  pushFlexMessage,
+  pushLocationMessage,
+  pushMessageLine,
+  pushMessagesLine,
+  pushTemplateMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "./src/send.js";
+export { monitorLineProvider } from "./src/monitor.js";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";

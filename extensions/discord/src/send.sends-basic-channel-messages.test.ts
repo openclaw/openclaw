@@ -1,11 +1,8 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeDiscordRest } from "./send.test-harness.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("openclaw/plugin-sdk/web-media", async () => {
-  const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
-  return discordWebMediaMockFactory();
-});
+vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 
 let deleteMessageDiscord: typeof import("./send.js").deleteMessageDiscord;
 let editMessageDiscord: typeof import("./send.js").editMessageDiscord;
@@ -23,8 +20,7 @@ let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
 let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").__resetDiscordDirectoryCacheForTest;
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({
     deleteMessageDiscord,
     editMessageDiscord,
@@ -42,6 +38,9 @@ beforeEach(async () => {
   ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
   ({ __resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
     await import("./directory-cache.js"));
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
   __resetDiscordDirectoryCacheForTest();
 });

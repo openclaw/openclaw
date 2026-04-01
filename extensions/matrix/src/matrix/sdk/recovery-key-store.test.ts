@@ -4,11 +4,83 @@ import path from "node:path";
 import { encodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
-import type { MatrixCryptoBootstrapApi } from "./types.js";
+import type { MatrixCryptoBootstrapApi, MatrixSecretStorageStatus } from "./types.js";
 
 function createTempRecoveryKeyPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-recovery-key-store-"));
   return path.join(dir, "recovery-key.json");
+}
+
+function createGeneratedRecoveryKey(params: {
+  keyId: string;
+  name: string;
+  bytes: number[];
+  encodedPrivateKey: string;
+}) {
+  return {
+    keyId: params.keyId,
+    keyInfo: { name: params.name },
+    privateKey: new Uint8Array(params.bytes),
+    encodedPrivateKey: params.encodedPrivateKey,
+  };
+}
+
+function createBootstrapSecretStorageMock(errorMessage?: string) {
+  return vi.fn(
+    async (opts?: {
+      setupNewSecretStorage?: boolean;
+      createSecretStorageKey?: () => Promise<unknown>;
+    }) => {
+      if (opts?.setupNewSecretStorage || !errorMessage) {
+        await opts?.createSecretStorageKey?.();
+        return;
+      }
+      throw new Error(errorMessage);
+    },
+  );
+}
+
+function createRecoveryKeyCrypto(params: {
+  bootstrapSecretStorage: ReturnType<typeof vi.fn>;
+  createRecoveryKeyFromPassphrase: ReturnType<typeof vi.fn>;
+  status: MatrixSecretStorageStatus;
+}): MatrixCryptoBootstrapApi {
+  return {
+    on: vi.fn(),
+    bootstrapCrossSigning: vi.fn(async () => {}),
+    bootstrapSecretStorage: params.bootstrapSecretStorage,
+    createRecoveryKeyFromPassphrase: params.createRecoveryKeyFromPassphrase,
+    getSecretStorageStatus: vi.fn(async () => params.status),
+    requestOwnUserVerification: vi.fn(async () => null),
+  } as unknown as MatrixCryptoBootstrapApi;
+}
+
+async function runSecretStorageBootstrapScenario(params: {
+  generated: ReturnType<typeof createGeneratedRecoveryKey>;
+  status: MatrixSecretStorageStatus;
+  allowSecretStorageRecreateWithoutRecoveryKey?: boolean;
+  firstBootstrapError?: string;
+}) {
+  const recoveryKeyPath = createTempRecoveryKeyPath();
+  const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+  const createRecoveryKeyFromPassphrase = vi.fn(async () => params.generated);
+  const bootstrapSecretStorage = createBootstrapSecretStorageMock(params.firstBootstrapError);
+  const crypto = createRecoveryKeyCrypto({
+    bootstrapSecretStorage,
+    createRecoveryKeyFromPassphrase,
+    status: params.status,
+  });
+
+  await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
+    allowSecretStorageRecreateWithoutRecoveryKey:
+      params.allowSecretStorageRecreateWithoutRecoveryKey ?? false,
+  });
+
+  return {
+    store,
+    createRecoveryKeyFromPassphrase,
+    bootstrapSecretStorage,
+  };
 }
 
 describe("MatrixRecoveryKeyStore", () => {
@@ -65,30 +137,16 @@ describe("MatrixRecoveryKeyStore", () => {
   });
 
   it("creates and persists a recovery key when secret storage is missing", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const generated = {
-      keyId: "GENERATED",
-      keyInfo: { name: "generated" },
-      privateKey: new Uint8Array([5, 6, 7, 8]),
-      encodedPrivateKey: "encoded-generated-key", // pragma: allowlist secret
-    };
-    const createRecoveryKeyFromPassphrase = vi.fn(async () => generated);
-    const bootstrapSecretStorage = vi.fn(
-      async (opts?: { createSecretStorageKey?: () => Promise<unknown> }) => {
-        await opts?.createSecretStorageKey?.();
-      },
-    );
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
-      bootstrapSecretStorage,
-      createRecoveryKeyFromPassphrase,
-      getSecretStorageStatus: vi.fn(async () => ({ ready: false, defaultKeyId: null })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
-
-    await store.bootstrapSecretStorageWithRecoveryKey(crypto);
+    const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
+      await runSecretStorageBootstrapScenario({
+        generated: createGeneratedRecoveryKey({
+          keyId: "GENERATED",
+          name: "generated",
+          bytes: [5, 6, 7, 8],
+          encodedPrivateKey: "encoded-generated-key", // pragma: allowlist secret
+        }),
+        status: { ready: false, defaultKeyId: null },
+      });
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledWith(
@@ -138,30 +196,16 @@ describe("MatrixRecoveryKeyStore", () => {
   });
 
   it("recreates secret storage when default key exists but is not usable locally", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const generated = {
-      keyId: "RECOVERED",
-      keyInfo: { name: "recovered" },
-      privateKey: new Uint8Array([1, 1, 2, 3]),
-      encodedPrivateKey: "encoded-recovered-key", // pragma: allowlist secret
-    };
-    const createRecoveryKeyFromPassphrase = vi.fn(async () => generated);
-    const bootstrapSecretStorage = vi.fn(
-      async (opts?: { createSecretStorageKey?: () => Promise<unknown> }) => {
-        await opts?.createSecretStorageKey?.();
-      },
-    );
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
-      bootstrapSecretStorage,
-      createRecoveryKeyFromPassphrase,
-      getSecretStorageStatus: vi.fn(async () => ({ ready: false, defaultKeyId: "LEGACY" })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
-
-    await store.bootstrapSecretStorageWithRecoveryKey(crypto);
+    const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
+      await runSecretStorageBootstrapScenario({
+        generated: createGeneratedRecoveryKey({
+          keyId: "RECOVERED",
+          name: "recovered",
+          bytes: [1, 1, 2, 3],
+          encodedPrivateKey: "encoded-recovered-key", // pragma: allowlist secret
+        }),
+        status: { ready: false, defaultKeyId: "LEGACY" },
+      });
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledWith(
@@ -176,43 +220,22 @@ describe("MatrixRecoveryKeyStore", () => {
   });
 
   it("recreates secret storage during explicit bootstrap when the server key exists but no local recovery key is available", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const generated = {
-      keyId: "REPAIRED",
-      keyInfo: { name: "repaired" },
-      privateKey: new Uint8Array([7, 7, 8, 9]),
-      encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
-    };
-    const createRecoveryKeyFromPassphrase = vi.fn(async () => generated);
-    const bootstrapSecretStorage = vi.fn(
-      async (opts?: {
-        setupNewSecretStorage?: boolean;
-        createSecretStorageKey?: () => Promise<unknown>;
-      }) => {
-        if (opts?.setupNewSecretStorage) {
-          await opts.createSecretStorageKey?.();
-          return;
-        }
-        throw new Error("getSecretStorageKey callback returned falsey");
-      },
-    );
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
-      bootstrapSecretStorage,
-      createRecoveryKeyFromPassphrase,
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "LEGACY",
-        secretStorageKeyValidityMap: { LEGACY: true },
-      })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
-
-    await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
-      allowSecretStorageRecreateWithoutRecoveryKey: true,
-    });
+    const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
+      await runSecretStorageBootstrapScenario({
+        generated: createGeneratedRecoveryKey({
+          keyId: "REPAIRED",
+          name: "repaired",
+          bytes: [7, 7, 8, 9],
+          encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
+        }),
+        status: {
+          ready: true,
+          defaultKeyId: "LEGACY",
+          secretStorageKeyValidityMap: { LEGACY: true },
+        },
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+        firstBootstrapError: "getSecretStorageKey callback returned falsey",
+      });
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledTimes(2);
@@ -228,43 +251,22 @@ describe("MatrixRecoveryKeyStore", () => {
   });
 
   it("recreates secret storage during explicit bootstrap when decrypting a stored secret fails with bad MAC", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const generated = {
-      keyId: "REPAIRED",
-      keyInfo: { name: "repaired" },
-      privateKey: new Uint8Array([7, 7, 8, 9]),
-      encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
-    };
-    const createRecoveryKeyFromPassphrase = vi.fn(async () => generated);
-    const bootstrapSecretStorage = vi.fn(
-      async (opts?: {
-        setupNewSecretStorage?: boolean;
-        createSecretStorageKey?: () => Promise<unknown>;
-      }) => {
-        if (opts?.setupNewSecretStorage) {
-          await opts.createSecretStorageKey?.();
-          return;
-        }
-        throw new Error("Error decrypting secret m.cross_signing.master: bad MAC");
-      },
-    );
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
-      bootstrapSecretStorage,
-      createRecoveryKeyFromPassphrase,
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "LEGACY",
-        secretStorageKeyValidityMap: { LEGACY: true },
-      })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
-
-    await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
-      allowSecretStorageRecreateWithoutRecoveryKey: true,
-    });
+    const { createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
+      await runSecretStorageBootstrapScenario({
+        generated: createGeneratedRecoveryKey({
+          keyId: "REPAIRED",
+          name: "repaired",
+          bytes: [7, 7, 8, 9],
+          encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
+        }),
+        status: {
+          ready: true,
+          defaultKeyId: "LEGACY",
+          secretStorageKeyValidityMap: { LEGACY: true },
+        },
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+        firstBootstrapError: "Error decrypting secret m.cross_signing.master: bad MAC",
+      });
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledTimes(2);

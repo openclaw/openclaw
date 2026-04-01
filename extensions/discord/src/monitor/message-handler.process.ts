@@ -55,6 +55,10 @@ import {
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
@@ -69,7 +73,16 @@ function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
-export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
+type DiscordMessageProcessObserver = {
+  onFinalReplyStart?: () => void;
+  onFinalReplyDelivered?: () => void;
+  onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
+};
+
+export async function processDiscordMessage(
+  ctx: DiscordMessagePreflightContext,
+  observer?: DiscordMessageProcessObserver,
+) {
   const {
     cfg,
     discordConfig,
@@ -121,15 +134,21 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
+  const mediaResolveOptions = {
+    fetchImpl: discordRestFetch,
+    ssrfPolicy,
+    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    abortSignal,
+  };
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, mediaResolveOptions);
   if (isProcessAborted(abortSignal)) {
     return;
   }
   const forwardedMediaList = await resolveForwardedMediaList(
     message,
     mediaMaxBytes,
-    discordRestFetch,
-    ssrfPolicy,
+    mediaResolveOptions,
   );
   if (isProcessAborted(abortSignal)) {
     return;
@@ -321,11 +340,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
+    channelName: channelInfo?.name,
+    channelDescription: channelInfo?.topic,
     baseText: baseText ?? "",
     combinedBody,
     replyToMode,
     agentId: route.agentId,
     channel: route.channel,
+    cfg,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;
@@ -394,6 +416,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  observer?.onReplyPlanResolved?.({
+    createdThreadId: replyPlan.createdThreadId,
+    sessionKey: persistedSessionKey,
+  });
 
   await recordInboundSession({
     storePath,
@@ -594,6 +620,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   // When draft streaming is active, suppress block streaming to avoid double-streaming.
   const disableBlockStreamingForDraft = draftStream ? true : undefined;
+  let finalReplyStartNotified = false;
+  const notifyFinalReplyStart = () => {
+    if (finalReplyStartNotified) {
+      return;
+    }
+    finalReplyStartNotified = true;
+    observer?.onFinalReplyStart?.();
+  };
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
@@ -630,6 +664,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               return;
             }
             try {
+              notifyFinalReplyStart();
               await editMessageDiscord(
                 deliverChannelId,
                 previewMessageId,
@@ -638,6 +673,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
+              observer?.onFinalReplyDelivered?.();
               return;
             } catch (err) {
               logVerbose(
@@ -660,6 +696,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               !payload.isError
             ) {
               try {
+                notifyFinalReplyStart();
                 await editMessageDiscord(
                   deliverChannelId,
                   messageIdAfterStop,
@@ -668,6 +705,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
                 );
                 finalizedViaPreviewMessage = true;
                 replyReference.markSent();
+                observer?.onFinalReplyDelivered?.();
                 return;
               } catch (err) {
                 logVerbose(
@@ -687,6 +725,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }
 
         const replyToId = replyReference.use();
+        if (isFinal) {
+          notifyFinalReplyStart();
+        }
         await deliverDiscordReply({
           cfg,
           replies: [payload],
@@ -706,6 +747,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           mediaLocalRoots,
         });
         replyReference.markSent();
+        if (isFinal) {
+          observer?.onFinalReplyDelivered?.();
+        }
       },
       onError: (err, info) => {
         runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));

@@ -1,5 +1,5 @@
 // Private helper surface for the bundled tlon plugin.
-// Keep this list additive and scoped to symbols used under extensions/tlon.
+// Keep this list additive and scoped to the bundled Tlon surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -12,11 +12,6 @@ const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvid
     resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
     resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
   }));
-
-const mockedModuleIds = [
-  "../plugins/web-search-providers.js",
-  "../plugins/web-search-providers.runtime.js",
-] as const;
 
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
@@ -178,26 +173,14 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }
-  if (entry.id === "tools.web.search.gemini.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
   if (entry.id === "plugins.entries.google.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
-  if (entry.id === "tools.web.search.grok.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
   if (entry.id === "plugins.entries.xai.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
-  if (entry.id === "tools.web.search.kimi.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
   if (entry.id === "plugins.entries.moonshot.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
-  if (entry.id === "tools.web.search.perplexity.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
   }
   if (entry.id === "plugins.entries.perplexity.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
@@ -207,6 +190,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
+  }
+  if (entry.id === "tools.web.x_search.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "x_search", "enabled"], true);
   }
   return config;
 }
@@ -256,13 +242,6 @@ describe("secrets runtime target coverage", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterAll(() => {
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
-    vi.resetModules();
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
