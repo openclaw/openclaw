@@ -186,7 +186,7 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
-  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
+  /** Whether remote Gateway is enabled. Default: true. */
   enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;

@@ -31,6 +31,10 @@ import type {
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "../runtime/types.js";
+import { createNullAuditLogger } from "./audit/audit-logger.null.js";
+import type { IAuditLogger } from "./audit/audit.types.js";
+import { extractAgentId } from "./audit/audit.utils.js";
+import { AUDIT_EVENT_TYPES } from "./audit/index.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,
@@ -163,8 +167,11 @@ export class AcpSessionManager {
   private readonly errorCountsByCode = new Map<string, number>();
   private evictedRuntimeCount = 0;
   private lastEvictedAt: number | undefined;
+  private readonly auditLogger: IAuditLogger;
 
-  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {}
+  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
+    this.auditLogger = deps.auditLogger ?? createNullAuditLogger();
+  }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
     const sessionKey = canonicalizeAcpSessionKey(params);
@@ -303,94 +310,127 @@ export class AcpSessionManager {
     const agent = normalizeAgentId(input.agent);
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
-      const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
-      const runtime = backend.runtime;
-      const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
-      const requestedCwd = initialRuntimeOptions.cwd;
-      this.enforceConcurrentSessionLimit({
-        cfg: input.cfg,
-        sessionKey,
-      });
-      const handle = await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await runtime.ensureSession({
-            sessionKey,
-            agent,
-            mode: input.mode,
-            resumeSessionId: input.resumeSessionId,
-            cwd: requestedCwd,
-          }),
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Could not initialize ACP session runtime.",
-      });
-      const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
-      const effectiveRuntimeOptions = normalizeRuntimeOptions({
-        ...initialRuntimeOptions,
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-      });
+      const startTime = Date.now();
+      let result: "success" | "failure" = "success";
+      let error: { code: string; message: string } | undefined;
+      let runtime: AcpRuntime;
+      let handle: AcpRuntimeHandle;
+      let meta: SessionAcpMeta;
 
-      const identityNow = Date.now();
-      const initializedIdentity =
-        mergeSessionIdentity({
-          current: undefined,
-          incoming: createIdentityFromEnsure({
-            handle,
-            now: identityNow,
-          }),
-          now: identityNow,
-        }) ??
-        ({
-          state: "pending",
-          source: "ensure",
-          lastUpdatedAt: identityNow,
-        } as const);
-      const meta: SessionAcpMeta = {
-        backend: handle.backend || backend.id,
-        agent,
-        runtimeSessionName: handle.runtimeSessionName,
-        identity: initializedIdentity,
-        mode: input.mode,
-        ...(Object.keys(effectiveRuntimeOptions).length > 0
-          ? { runtimeOptions: effectiveRuntimeOptions }
-          : {}),
-        cwd: effectiveCwd,
-        state: "idle",
-        lastActivityAt: Date.now(),
-      };
       try {
-        const persisted = await this.writeSessionMeta({
+        const backendObj = this.deps.requireRuntimeBackend(
+          input.backendId || input.cfg.acp?.backend,
+        );
+        runtime = backendObj.runtime;
+        const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
+        const requestedCwd = initialRuntimeOptions.cwd;
+        this.enforceConcurrentSessionLimit({
           cfg: input.cfg,
           sessionKey,
-          mutate: () => meta,
-          failOnError: true,
         });
-        if (!persisted?.acp) {
-          throw new AcpRuntimeError(
-            "ACP_SESSION_INIT_FAILED",
-            `Could not persist ACP metadata for ${sessionKey}.`,
-          );
-        }
-      } catch (error) {
-        await runtime
-          .close({
-            handle,
-            reason: "init-meta-failed",
-          })
-          .catch((closeError) => {
-            logVerbose(
-              `acp-manager: cleanup close failed after metadata write error for ${sessionKey}: ${String(closeError)}`,
-            );
+        handle = await withAcpRuntimeErrorBoundary({
+          run: async () =>
+            await runtime.ensureSession({
+              sessionKey,
+              agent,
+              mode: input.mode,
+              resumeSessionId: input.resumeSessionId,
+              cwd: requestedCwd,
+            }),
+          fallbackCode: "ACP_SESSION_INIT_FAILED",
+          fallbackMessage: "Could not initialize ACP session runtime.",
+        });
+        const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
+        const effectiveRuntimeOptions = normalizeRuntimeOptions({
+          ...initialRuntimeOptions,
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        });
+
+        const identityNow = Date.now();
+        const initializedIdentity =
+          mergeSessionIdentity({
+            current: undefined,
+            incoming: createIdentityFromEnsure({
+              handle,
+              now: identityNow,
+            }),
+            now: identityNow,
+          }) ??
+          ({
+            state: "pending",
+            source: "ensure",
+            lastUpdatedAt: identityNow,
+          } as const);
+        meta = {
+          backend: handle.backend || backendObj.id,
+          agent,
+          runtimeSessionName: handle.runtimeSessionName,
+          identity: initializedIdentity,
+          mode: input.mode,
+          ...(Object.keys(effectiveRuntimeOptions).length > 0
+            ? { runtimeOptions: effectiveRuntimeOptions }
+            : {}),
+          cwd: effectiveCwd,
+          state: "idle",
+          lastActivityAt: Date.now(),
+        };
+        try {
+          const persisted = await this.writeSessionMeta({
+            cfg: input.cfg,
+            sessionKey,
+            mutate: () => meta,
+            failOnError: true,
           });
-        throw error;
+          if (!persisted?.acp) {
+            throw new AcpRuntimeError(
+              "ACP_SESSION_INIT_FAILED",
+              `Could not persist ACP metadata for ${sessionKey}.`,
+            );
+          }
+        } catch (metaError) {
+          await runtime
+            .close({
+              handle,
+              reason: "init-meta-failed",
+            })
+            .catch((closeError) => {
+              logVerbose(
+                `acp-manager: cleanup close failed after metadata write error for ${sessionKey}: ${String(closeError)}`,
+              );
+            });
+          throw metaError;
+        }
+        this.setCachedRuntimeState(sessionKey, {
+          runtime,
+          handle,
+          backend: handle.backend || backendObj.id,
+          agent,
+          mode: input.mode,
+          cwd: effectiveCwd,
+        });
+      } catch (err) {
+        result = "failure";
+        error = {
+          code: (err as AcpRuntimeError).code ?? "UNKNOWN",
+          message: (err as Error).message ?? "Unknown error",
+        };
+        throw err;
+      } finally {
+        // Audit log (both success and failure)
+        await this.auditLogger.log({
+          actor: {}, // TODO: Extract from input
+          action: AUDIT_EVENT_TYPES.SESSION_INIT,
+          sessionKey,
+          agentId: agent,
+          details: {
+            mode: input.mode,
+          },
+          result,
+          error,
+          duration: Date.now() - startTime,
+        });
       }
-      this.setCachedRuntimeState(sessionKey, {
-        runtime,
-        handle,
-        backend: handle.backend || backend.id,
-        agent,
-        mode: input.mode,
-        cwd: effectiveCwd,
-      });
+
       return {
         runtime,
         handle,
@@ -1214,76 +1254,106 @@ export class AcpSessionManager {
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
-        cfg: input.cfg,
-        sessionKey,
-      });
-      const resolutionError = resolveAcpSessionResolutionError(resolution);
-      if (resolutionError) {
-        if (input.requireAcpSession ?? true) {
-          throw resolutionError;
-        }
-        return {
-          runtimeClosed: false,
-          metaCleared: false,
-        };
-      }
-      const meta = requireReadySessionMeta(resolution);
-
+      const startTime = Date.now();
+      let result: "success" | "failure" = "success";
+      let error: { code: string; message: string } | undefined;
       let runtimeClosed = false;
       let runtimeNotice: string | undefined;
-      try {
-        const { runtime, handle } = await this.ensureRuntimeHandle({
-          cfg: input.cfg,
-          sessionKey,
-          meta,
-        });
-        await withAcpRuntimeErrorBoundary({
-          run: async () =>
-            await runtime.close({
-              handle,
-              reason: input.reason,
-            }),
-          fallbackCode: "ACP_TURN_FAILED",
-          fallbackMessage: "ACP close failed before completion.",
-        });
-        runtimeClosed = true;
-        this.clearCachedRuntimeState(sessionKey);
-      } catch (error) {
-        const acpError = toAcpRuntimeError({
-          error,
-          fallbackCode: "ACP_TURN_FAILED",
-          fallbackMessage: "ACP close failed before completion.",
-        });
-        if (
-          input.allowBackendUnavailable &&
-          (acpError.code === "ACP_BACKEND_MISSING" ||
-            acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
-            this.isRecoverableAcpxExitError(acpError.message))
-        ) {
-          // Treat unavailable backends as terminal for this cached handle so it
-          // cannot continue counting against maxConcurrentSessions.
-          this.clearCachedRuntimeState(sessionKey);
-          runtimeNotice = acpError.message;
-        } else {
-          throw acpError;
-        }
-      }
-
       let metaCleared = false;
-      if (input.clearMeta) {
-        await this.writeSessionMeta({
+
+      try {
+        const resolution = this.resolveSession({
           cfg: input.cfg,
           sessionKey,
-          mutate: (_current, entry) => {
-            if (!entry) {
-              return null;
-            }
-            return null;
-          },
-          failOnError: true,
         });
-        metaCleared = true;
+        const resolutionError = resolveAcpSessionResolutionError(resolution);
+        if (resolutionError) {
+          if (input.requireAcpSession ?? true) {
+            throw resolutionError;
+          }
+          return {
+            runtimeClosed: false,
+            metaCleared: false,
+          };
+        }
+        const meta = requireReadySessionMeta(resolution);
+
+        try {
+          const { runtime, handle } = await this.ensureRuntimeHandle({
+            cfg: input.cfg,
+            sessionKey,
+            meta,
+          });
+          await withAcpRuntimeErrorBoundary({
+            run: async () =>
+              await runtime.close({
+                handle,
+                reason: input.reason,
+              }),
+            fallbackCode: "ACP_TURN_FAILED",
+            fallbackMessage: "ACP close failed before completion.",
+          });
+          runtimeClosed = true;
+          this.clearCachedRuntimeState(sessionKey);
+        } catch (closeError) {
+          const acpError = toAcpRuntimeError({
+            error: closeError,
+            fallbackCode: "ACP_TURN_FAILED",
+            fallbackMessage: "ACP close failed before completion.",
+          });
+          if (
+            input.allowBackendUnavailable &&
+            (acpError.code === "ACP_BACKEND_MISSING" ||
+              acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
+              this.isRecoverableAcpxExitError(acpError.message))
+          ) {
+            // Treat unavailable backends as terminal for this cached handle so it
+            // cannot continue counting against maxConcurrentSessions.
+            this.clearCachedRuntimeState(sessionKey);
+            runtimeNotice = acpError.message;
+          } else {
+            throw acpError;
+          }
+        }
+
+        if (input.clearMeta) {
+          await this.writeSessionMeta({
+            cfg: input.cfg,
+            sessionKey,
+            mutate: (_current, entry) => {
+              if (!entry) {
+                return null;
+              }
+              return null;
+            },
+            failOnError: true,
+          });
+          metaCleared = true;
+        }
+      } catch (err) {
+        result = "failure";
+        error = {
+          code: (err as AcpRuntimeError).code ?? "UNKNOWN",
+          message: (err as Error).message ?? "Unknown error",
+        };
+        throw err;
+      } finally {
+        // Audit log (both success and failure)
+        await this.auditLogger.log({
+          actor: {}, // TODO: Extract from input
+          action: AUDIT_EVENT_TYPES.SESSION_CLOSE,
+          sessionKey,
+          agentId: extractAgentId(sessionKey),
+          details: {
+            reason: input.reason,
+            clearMeta: input.clearMeta,
+            runtimeClosed,
+            metaCleared,
+          },
+          result,
+          error,
+          duration: Date.now() - startTime,
+        });
       }
 
       return {
