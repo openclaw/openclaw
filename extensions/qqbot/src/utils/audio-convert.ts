@@ -6,17 +6,17 @@ import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
 type SilkWasm = typeof import("silk-wasm");
-let _silkWasm: SilkWasm | null | undefined;
+let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
 
-async function loadSilkWasm(): Promise<SilkWasm | null> {
-  if (_silkWasm !== undefined) return _silkWasm;
-  try {
-    _silkWasm = await import("silk-wasm");
-  } catch {
-    _silkWasm = null;
-    debugWarn("[audio-convert] silk-wasm not available; SILK encode/decode disabled");
-  }
-  return _silkWasm;
+function loadSilkWasm(): Promise<SilkWasm | null> {
+  if (_silkWasmPromise) return _silkWasmPromise;
+  _silkWasmPromise = import("silk-wasm").catch((err) => {
+    debugWarn(
+      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${err instanceof Error ? err.message : String(err)})`,
+    );
+    return null;
+  });
+  return _silkWasmPromise;
 }
 
 /** Wrap PCM s16le bytes in a WAV container. */
