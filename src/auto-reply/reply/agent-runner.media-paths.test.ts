@@ -104,7 +104,7 @@ describe("runReplyAgent media path normalization", () => {
     const result = await runReplyAgent({
       commandBody: "generate",
       followupRun: createMockFollowupRun({
-        prompt: "generate",
+        execution: { visibility: "internal", agentPrompt: "generate" },
         run: {
           agentId: "main",
           agentDir: "/tmp/agent",

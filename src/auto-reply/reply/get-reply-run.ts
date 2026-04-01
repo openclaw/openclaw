@@ -518,7 +518,7 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
+  const followupRun: FollowupRun = {
     execution: { visibility: "internal", agentPrompt: queuedBody },
     display: baseBodyTrimmedRaw
       ? { visibility: "user-visible", summaryLine: baseBodyTrimmedRaw }

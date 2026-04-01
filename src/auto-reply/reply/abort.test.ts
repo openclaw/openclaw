@@ -140,7 +140,7 @@ describe("abort detection", () => {
     sessionKey: string;
   }) {
     const followupRun: FollowupRun = {
-      prompt: "queued",
+      execution: { visibility: "internal", agentPrompt: "queued" },
       enqueuedAt: Date.now(),
       run: {
         agentId: "main",

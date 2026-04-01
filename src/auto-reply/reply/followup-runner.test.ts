@@ -480,7 +480,7 @@ describe("createFollowupRunner compaction", () => {
     });
 
     const queuedNext = createQueuedRun({
-      prompt: "next",
+      execution: { visibility: "internal", agentPrompt: "next" },
       run: {
         sessionId: "session",
         sessionFile: path.join(path.dirname(storePath), "session.jsonl"),

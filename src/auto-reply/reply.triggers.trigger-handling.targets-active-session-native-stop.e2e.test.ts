@@ -411,7 +411,7 @@ describe("trigger handling", () => {
         }),
       );
       const followupRun: FollowupRun = {
-        prompt: "queued",
+        execution: { visibility: "internal", agentPrompt: "queued" },
         enqueuedAt: Date.now(),
         run: {
           agentId: "main",

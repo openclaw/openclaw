@@ -212,9 +212,9 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
-    expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+    expect(call?.followupRun.execution.agentPrompt).toContain("[Thread history - for context]");
+    expect(call?.followupRun.execution.agentPrompt).toContain("Earlier message in this thread");
+    expect(call?.followupRun.execution.agentPrompt).toContain("[User sent media without caption]");
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -227,8 +227,8 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+    expect(call?.followupRun.execution.agentPrompt).toContain("[Thread history - for context]");
+    expect(call?.followupRun.execution.agentPrompt).toContain("Earlier message in this thread");
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {
@@ -485,7 +485,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("System: [t] Node connected.");
+    expect(call?.followupRun.execution.agentPrompt).toContain("System: [t] Node connected.");
   });
 
   it("does not strip think-hint token from deferred queue body", async () => {
@@ -507,6 +507,6 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call).toBeTruthy();
     // Queue body (used by steer mode) must keep the full original text.
-    expect(call?.followupRun.prompt).toContain("low steer this conversation");
+    expect(call?.followupRun.execution.agentPrompt).toContain("low steer this conversation");
   });
 });
