@@ -5,9 +5,8 @@ import type {
   NodePairingRequestInput,
 } from "../infra/node-pairing.js";
 import {
-  diffApprovedNodeCommands,
+  normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
-  type NodeApprovedCommandDiff,
 } from "./node-command-policy.js";
 import type { ConnectParams } from "./protocol/index.js";
 
@@ -19,7 +18,6 @@ type PendingNodePairingResult = {
 
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
-  commandDiff: NodeApprovedCommandDiff;
   effectiveCommands: string[];
   pendingPairing?: PendingNodePairingResult;
 };
@@ -29,7 +27,6 @@ function buildNodePairingRequestInput(params: {
   connectParams: ConnectParams;
   commands: string[];
   remoteIp?: string;
-  repairReason?: NodePairingRequestInput["repairReason"];
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
@@ -41,7 +38,6 @@ function buildNodePairingRequestInput(params: {
     caps: params.connectParams.caps,
     commands: params.commands,
     remoteIp: params.remoteIp,
-    repairReason: params.repairReason,
   };
 }
 
@@ -57,11 +53,10 @@ export async function reconcileNodePairingOnConnect(params: {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
   });
-  const commandDiff = diffApprovedNodeCommands({
+  const declared = normalizeDeclaredNodeCommands({
     declaredCommands: Array.isArray(params.connectParams.commands)
       ? params.connectParams.commands
       : [],
-    approvedCommands: params.pairedNode?.commands,
     allowlist,
   });
 
@@ -70,39 +65,19 @@ export async function reconcileNodePairingOnConnect(params: {
       buildNodePairingRequestInput({
         nodeId,
         connectParams: params.connectParams,
-        commands: commandDiff.declared,
+        commands: declared,
         remoteIp: params.reportedClientIp,
       }),
     );
     return {
       nodeId,
-      commandDiff,
-      effectiveCommands: [],
-      pendingPairing,
-    };
-  }
-
-  if (commandDiff.needsRepair) {
-    const pendingPairing = await params.requestPairing(
-      buildNodePairingRequestInput({
-        nodeId,
-        connectParams: params.connectParams,
-        commands: commandDiff.declared,
-        remoteIp: params.reportedClientIp,
-        repairReason: "approved-command-drift",
-      }),
-    );
-    return {
-      nodeId,
-      commandDiff,
-      effectiveCommands: commandDiff.effective,
+      effectiveCommands: declared,
       pendingPairing,
     };
   }
 
   return {
     nodeId,
-    commandDiff,
-    effectiveCommands: commandDiff.effective,
+    effectiveCommands: declared,
   };
 }

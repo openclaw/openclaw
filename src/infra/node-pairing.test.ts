@@ -50,7 +50,7 @@ describe("node pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
-  test("refreshes pending requests with newer commands and repair metadata", async () => {
+  test("refreshes pending requests with newer commands", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
     const first = await requestNodePairing(
       {
@@ -60,7 +60,6 @@ describe("node pairing tokens", () => {
       },
       baseDir,
     );
-    await approveNodePairing(first.request.requestId, baseDir);
 
     const second = await requestNodePairing(
       {
@@ -81,14 +80,12 @@ describe("node pairing tokens", () => {
       baseDir,
     );
 
-    expect(second.created).toBe(true);
-    expect(second.request.isRepair).toBe(true);
-    expect(second.request.repairReason).toBe("paired-node-refresh");
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
     expect(third.created).toBe(false);
     expect(third.request.requestId).toBe(second.request.requestId);
     expect(third.request.displayName).toBe("Updated Node");
     expect(third.request.commands).toEqual(["canvas.snapshot", "system.run", "system.which"]);
-    expect(third.request.repairReason).toBe("paired-node-refresh");
   });
 
   test("generates base64url node tokens with 256-bit entropy output length", async () => {
