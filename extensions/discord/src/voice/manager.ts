@@ -671,15 +671,16 @@ export class DiscordVoiceManager {
     }
 
     // --- FORK: streaming TTS for local Kyutai provider ---
-    logger.warn(`discord voice: tts provider check: provider="${ttsConfig.provider}" source=${ttsConfig.providerSource}`);
     if (ttsConfig.provider === "kyutai") {
       try {
-        const { streamKyutaiTtsToFile } = await import("./kyutai-streaming.js");
-        const { filePath } = await streamKyutaiTtsToFile(speakText);
-        logger.warn(`discord voice: kyutai stream→file ok: ${filePath}`);
+        const { streamKyutaiTtsRaw48k } = await import("./kyutai-streaming.js");
+        const pcmStream = await streamKyutaiTtsRaw48k(speakText);
+        logVoiceVerbose(`discord voice: kyutai streaming started`);
         this.enqueuePlayback(entry, async () => {
           const voiceSdk = loadDiscordVoiceSdk();
-          const resource = voiceSdk.createAudioResource(filePath);
+          const resource = voiceSdk.createAudioResource(pcmStream, {
+            inputType: voiceSdk.StreamType.Raw,
+          });
           entry.player.play(resource);
           await voiceSdk
             .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
@@ -687,7 +688,7 @@ export class DiscordVoiceManager {
           await voiceSdk
             .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
             .catch(() => undefined);
-          logger.warn(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+          logVoiceVerbose(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
         });
         return;
       } catch (err) {
