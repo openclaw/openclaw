@@ -15,7 +15,10 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
-class SecurePrefs(context: Context) {
+class SecurePrefs(
+  context: Context,
+  private val securePrefsOverride: SharedPreferences? = null,
+) {
   companion object {
     val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
@@ -23,6 +26,17 @@ class SecurePrefs(context: Context) {
     private const val voiceWakeModeKey = "voiceWake.mode"
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
+    private const val notificationsForwardingEnabledKey = "notifications.forwarding.enabled"
+    private const val defaultNotificationForwardingEnabled = false
+    private const val notificationsForwardingModeKey = "notifications.forwarding.mode"
+    private const val notificationsForwardingPackagesKey = "notifications.forwarding.packages"
+    private const val notificationsForwardingQuietHoursEnabledKey =
+      "notifications.forwarding.quietHoursEnabled"
+    private const val notificationsForwardingQuietStartKey = "notifications.forwarding.quietStart"
+    private const val notificationsForwardingQuietEndKey = "notifications.forwarding.quietEnd"
+    private const val notificationsForwardingMaxEventsPerMinuteKey =
+      "notifications.forwarding.maxEventsPerMinute"
+    private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
   }
 
   private val appContext = context.applicationContext
@@ -35,7 +49,7 @@ class SecurePrefs(context: Context) {
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
   }
-  private val securePrefs: SharedPreferences by lazy { createSecurePrefs(appContext, securePrefsName) }
+  private val securePrefs: SharedPreferences by lazy { securePrefsOverride ?: createSecurePrefs(appContext, securePrefsName) }
 
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
@@ -76,6 +90,9 @@ class SecurePrefs(context: Context) {
   private val _gatewayToken = MutableStateFlow("")
   val gatewayToken: StateFlow<String> = _gatewayToken
 
+  private val _gatewayBootstrapToken = MutableStateFlow("")
+  val gatewayBootstrapToken: StateFlow<String> = _gatewayBootstrapToken
+
   private val _onboardingCompleted =
     MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
   val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
@@ -89,6 +106,55 @@ class SecurePrefs(context: Context) {
   private val _canvasDebugStatusEnabled =
     MutableStateFlow(plainPrefs.getBoolean("canvas.debugStatusEnabled", false))
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
+
+  private val _notificationForwardingEnabled =
+    MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
+  val notificationForwardingEnabled: StateFlow<Boolean> = _notificationForwardingEnabled
+
+  private val _notificationForwardingMode =
+    MutableStateFlow(
+      NotificationPackageFilterMode.fromRawValue(
+        plainPrefs.getString(notificationsForwardingModeKey, null),
+      ),
+    )
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> = _notificationForwardingMode
+
+  private val _notificationForwardingPackages = MutableStateFlow(loadNotificationForwardingPackages())
+  val notificationForwardingPackages: StateFlow<Set<String>> = _notificationForwardingPackages
+
+  private val storedQuietStart =
+    normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty())
+      ?: "22:00"
+  private val storedQuietEnd =
+    normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
+      ?: "07:00"
+  private val storedQuietHoursEnabled =
+    plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
+
+  private val _notificationForwardingQuietHoursEnabled =
+    MutableStateFlow(storedQuietHoursEnabled)
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> = _notificationForwardingQuietHoursEnabled
+
+  private val _notificationForwardingQuietStart = MutableStateFlow(storedQuietStart)
+  val notificationForwardingQuietStart: StateFlow<String> = _notificationForwardingQuietStart
+
+  private val _notificationForwardingQuietEnd = MutableStateFlow(storedQuietEnd)
+  val notificationForwardingQuietEnd: StateFlow<String> = _notificationForwardingQuietEnd
+
+  private val _notificationForwardingMaxEventsPerMinute =
+    MutableStateFlow(plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20).coerceAtLeast(1))
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> = _notificationForwardingMaxEventsPerMinute
+
+  private val _notificationForwardingSessionKey =
+    MutableStateFlow(
+      plainPrefs
+        .getString(notificationsForwardingSessionKeyKey, "")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() },
+    )
+  val notificationForwardingSessionKey: StateFlow<String?> = _notificationForwardingSessionKey
 
   private val _wakeWords = MutableStateFlow(loadWakeWords())
   val wakeWords: StateFlow<List<String>> = _wakeWords
@@ -165,6 +231,10 @@ class SecurePrefs(context: Context) {
     saveGatewayPassword(value)
   }
 
+  fun setGatewayBootstrapToken(value: String) {
+    saveGatewayBootstrapToken(value)
+  }
+
   fun setOnboardingCompleted(value: Boolean) {
     plainPrefs.edit { putBoolean("onboarding.completed", value) }
     _onboardingCompleted.value = value
@@ -173,6 +243,114 @@ class SecurePrefs(context: Context) {
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("canvas.debugStatusEnabled", value) }
     _canvasDebugStatusEnabled.value = value
+  }
+
+  internal fun getNotificationForwardingPolicy(appPackageName: String): NotificationForwardingPolicy {
+    val modeRaw = plainPrefs.getString(notificationsForwardingModeKey, null)
+    val mode = NotificationPackageFilterMode.fromRawValue(modeRaw)
+
+    val configuredPackages = loadNotificationForwardingPackages()
+    val normalizedAppPackage = appPackageName.trim()
+    val defaultBlockedPackages =
+      if (normalizedAppPackage.isNotEmpty()) setOf(normalizedAppPackage) else emptySet()
+
+    val packages =
+      when (mode) {
+        NotificationPackageFilterMode.Allowlist -> configuredPackages
+        NotificationPackageFilterMode.Blocklist -> configuredPackages + defaultBlockedPackages
+      }
+
+    val maxEvents = plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20)
+    val quietStart =
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty())
+        ?: "22:00"
+    val quietEnd =
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
+        ?: "07:00"
+    val sessionKey =
+      plainPrefs
+        .getString(notificationsForwardingSessionKeyKey, "")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+    val quietHoursEnabled =
+      plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
+        normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
+        normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
+
+    return NotificationForwardingPolicy(
+      enabled = plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled),
+      mode = mode,
+      packages = packages,
+      quietHoursEnabled = quietHoursEnabled,
+      quietStart = quietStart,
+      quietEnd = quietEnd,
+      maxEventsPerMinute = maxEvents.coerceAtLeast(1),
+      sessionKey = sessionKey,
+    )
+  }
+
+  internal fun setNotificationForwardingEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(notificationsForwardingEnabledKey, value) }
+    _notificationForwardingEnabled.value = value
+  }
+
+  internal fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    plainPrefs.edit { putString(notificationsForwardingModeKey, mode.rawValue) }
+    _notificationForwardingMode.value = mode
+  }
+
+  internal fun setNotificationForwardingPackages(packages: List<String>) {
+    val sanitized =
+      packages
+        .asSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toSet()
+        .toList()
+        .sorted()
+    val encoded = JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
+    plainPrefs.edit { putString(notificationsForwardingPackagesKey, encoded) }
+    _notificationForwardingPackages.value = sanitized.toSet()
+  }
+
+  internal fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    if (!enabled) {
+      plainPrefs.edit { putBoolean(notificationsForwardingQuietHoursEnabledKey, false) }
+      _notificationForwardingQuietHoursEnabled.value = false
+      return true
+    }
+    val normalizedStart = normalizeLocalHourMinute(start) ?: return false
+    val normalizedEnd = normalizeLocalHourMinute(end) ?: return false
+    plainPrefs.edit {
+      putBoolean(notificationsForwardingQuietHoursEnabledKey, enabled)
+      putString(notificationsForwardingQuietStartKey, normalizedStart)
+      putString(notificationsForwardingQuietEndKey, normalizedEnd)
+    }
+    _notificationForwardingQuietHoursEnabled.value = enabled
+    _notificationForwardingQuietStart.value = normalizedStart
+    _notificationForwardingQuietEnd.value = normalizedEnd
+    return true
+  }
+
+  internal fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    val normalized = value.coerceAtLeast(1)
+    plainPrefs.edit {
+      putInt(notificationsForwardingMaxEventsPerMinuteKey, normalized)
+    }
+    _notificationForwardingMaxEventsPerMinute.value = normalized
+  }
+
+  internal fun setNotificationForwardingSessionKey(value: String?) {
+    val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
+    plainPrefs.edit {
+      putString(notificationsForwardingSessionKeyKey, normalized.orEmpty())
+    }
+    _notificationForwardingSessionKey.value = normalized
   }
 
   fun loadGatewayToken(): String? {
@@ -191,6 +369,26 @@ class SecurePrefs(context: Context) {
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
     securePrefs.edit { putString(key, token.trim()) }
+  }
+
+  fun loadGatewayBootstrapToken(): String? {
+    val key = "gateway.bootstrapToken.${_instanceId.value}"
+    val stored =
+      _gatewayBootstrapToken.value.trim().ifEmpty {
+        val persisted = securePrefs.getString(key, null)?.trim().orEmpty()
+        if (persisted.isNotEmpty()) {
+          _gatewayBootstrapToken.value = persisted
+        }
+        persisted
+      }
+    return stored.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayBootstrapToken(token: String) {
+    val key = "gateway.bootstrapToken.${_instanceId.value}"
+    val trimmed = token.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBootstrapToken.value = trimmed
   }
 
   fun loadGatewayPassword(): String? {
@@ -276,6 +474,28 @@ class SecurePrefs(context: Context) {
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  private fun loadNotificationForwardingPackages(): Set<String> {
+    val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
+    if (raw.isNullOrEmpty()) {
+      return emptySet()
+    }
+    return try {
+      val element = json.parseToJsonElement(raw)
+      val array = element as? JsonArray ?: return emptySet()
+      array
+        .mapNotNull { item ->
+          when (item) {
+            is JsonNull -> null
+            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
+            else -> null
+          }
+        }
+        .toSet()
+    } catch (_: Throwable) {
+      emptySet()
+    }
   }
 
   private fun loadVoiceWakeMode(): VoiceWakeMode {

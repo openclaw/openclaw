@@ -1,12 +1,18 @@
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
-import { createDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
+import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
 const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
 
-const inboundDedupeCache = createDedupeCache({
+/**
+ * Keep inbound dedupe shared across bundled chunks so the same provider
+ * message cannot bypass dedupe by entering through a different chunk copy.
+ */
+const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
+
+const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });

@@ -8,7 +8,7 @@ title: "acp"
 
 # acp
 
-Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to a OpenClaw Gateway.
+Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to an OpenClaw Gateway.
 
 This command speaks ACP over stdio for IDEs and forwards prompts to the Gateway
 over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
@@ -16,6 +16,10 @@ over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
 `openclaw acp` is a Gateway-backed ACP bridge, not a full ACP-native editor
 runtime. It focuses on session routing, prompt delivery, and basic streaming
 updates.
+
+If you want an external MCP client to talk directly to OpenClaw channel
+conversations instead of hosting an ACP harness session, use
+[`openclaw mcp serve`](/cli/mcp) instead.
 
 ## Compatibility Matrix
 
@@ -96,13 +100,14 @@ Permission model (client debug mode):
 
 - Auto-approval is allowlist-based and only applies to trusted core tool IDs.
 - `read` auto-approval is scoped to the current working directory (`--cwd` when set).
-- Unknown/non-core tool names, out-of-scope reads, and dangerous tools always require explicit prompt approval.
+- ACP only auto-approves narrow readonly classes: scoped `read` calls under the active cwd plus readonly search tools (`search`, `web_search`, `memory_search`). Unknown/non-core tools, out-of-scope reads, exec-capable tools, control-plane tools, mutating tools, and interactive flows always require explicit prompt approval.
 - Server-provided `toolCall.kind` is treated as untrusted metadata (not an authorization source).
+- This ACP bridge policy is separate from ACPX harness permissions. If you run OpenClaw through the `acpx` backend, `plugins.entries.acpx.config.permissionMode=approve-all` is the break-glass “yolo” switch for that harness session.
 
 ## How to use this
 
 Use ACP when an IDE (or other client) speaks Agent Client Protocol and you want
-it to drive a OpenClaw Gateway session.
+it to drive an OpenClaw Gateway session.
 
 1. Ensure the Gateway is running (local or remote).
 2. Configure the Gateway target (config or flags).
@@ -142,6 +147,10 @@ the key or label.
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
+
+If you want ACPX-backed sessions to see OpenClaw plugin tools, enable the
+gateway-side ACPX plugin bridge instead of trying to pass per-session
+`mcpServers`. See [ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge).
 
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 

@@ -1,5 +1,5 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { normalizeExplicitDiscordSessionKey } from "../../discord/session-key-normalization.js";
+import { normalizeExplicitDiscordSessionKey } from "../../plugin-sdk/discord.js";
 
 type ExplicitSessionKeyNormalizer = (sessionKey: string, ctx: MsgContext) => string;
 type ExplicitSessionKeyNormalizerEntry = {

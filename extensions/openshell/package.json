@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/openshell-sandbox",
+  "version": "2026.4.1",
+  "private": true,
+  "description": "OpenClaw OpenShell sandbox backend",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 ---
-summary: "Directive syntax for /think + /verbose and how they affect model reasoning"
+summary: "Directive syntax for /think, /fast, /verbose, and reasoning visibility"
 read_when:
-  - Adjusting thinking or verbose directive parsing or defaults
+  - Adjusting thinking, fast-mode, or verbose directive parsing or defaults
 title: "Thinking Levels"
 ---
 
@@ -28,8 +28,9 @@ title: "Thinking Levels"
 
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.thinkingDefault` in config).
-4. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
+3. Per-agent default (`agents.list[].thinkingDefault` in config).
+4. Global default (`agents.defaults.thinkingDefault` in config).
+5. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
 
 ## Setting a session default
 
@@ -41,6 +42,22 @@ title: "Thinking Levels"
 ## Application by agent
 
 - **Embedded Pi**: the resolved level is passed to the in-process Pi agent runtime.
+
+## Fast mode (/fast)
+
+- Levels: `on|off`.
+- Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`.
+- Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
+- OpenClaw resolves fast mode in this order:
+  1. Inline/directive-only `/fast on|off`
+  2. Session override
+  3. Per-agent default (`agents.list[].fastModeDefault`)
+  4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+  5. Fallback: `off`
+- For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
+- For `openai-codex/*`, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
 
 ## Verbose directives (/verbose or /v)
 
@@ -61,6 +78,7 @@ title: "Thinking Levels"
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
+- Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then fallback (`off`).
 
 ## Related
 

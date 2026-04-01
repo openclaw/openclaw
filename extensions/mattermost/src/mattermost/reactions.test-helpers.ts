@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
+import type { MattermostFetch } from "./client.js";
 
 export function createMattermostTestConfig(): OpenClawConfig {
   return {
@@ -29,7 +30,7 @@ export function createMattermostReactionFetchMock(params: {
   const removeStatus = params.status ?? 204;
   const removePath = `/api/v4/users/${userId}/posts/${params.postId}/reactions/${encodeURIComponent(params.emojiName)}`;
 
-  return vi.fn(async (url: any, init?: any) => {
+  return vi.fn<typeof fetch>(async (url, init) => {
     if (String(url).endsWith("/api/v4/users/me")) {
       return new Response(JSON.stringify({ id: userId }), {
         status: 200,
@@ -39,7 +40,11 @@ export function createMattermostReactionFetchMock(params: {
 
     if (allowAdd && String(url).endsWith("/api/v4/reactions")) {
       expect(init?.method).toBe("POST");
-      expect(JSON.parse(init?.body)).toEqual({
+      const requestBody = init?.body;
+      if (typeof requestBody !== "string") {
+        throw new Error("expected string POST body");
+      }
+      expect(JSON.parse(requestBody)).toEqual({
         user_id: userId,
         post_id: params.postId,
         emoji_name: params.emojiName,
@@ -70,14 +75,14 @@ export function createMattermostReactionFetchMock(params: {
 }
 
 export async function withMockedGlobalFetch<T>(
-  fetchImpl: typeof fetch,
+  fetchImpl: MattermostFetch,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;
-  (globalThis as any).fetch = fetchImpl;
+  globalThis.fetch = fetchImpl;
   try {
     return await run();
   } finally {
-    (globalThis as any).fetch = prevFetch;
+    globalThis.fetch = prevFetch;
   }
 }

@@ -13,6 +13,7 @@ enum class OpenClawCapability(val rawValue: String) {
   Contacts("contacts"),
   Calendar("calendar"),
   Motion("motion"),
+  CallLog("callLog"),
 }
 
 enum class OpenClawCanvasCommand(val rawValue: String) {
@@ -52,6 +53,7 @@ enum class OpenClawCameraCommand(val rawValue: String) {
 
 enum class OpenClawSmsCommand(val rawValue: String) {
   Send("sms.send"),
+  Search("sms.search"),
   ;
 
   companion object {
@@ -135,5 +137,14 @@ enum class OpenClawMotionCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "motion."
+  }
+}
+
+enum class OpenClawCallLogCommand(val rawValue: String) {
+  Search("callLog.search"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "callLog."
   }
 }

@@ -1,22 +1,29 @@
 ---
-summary: "飞书机器人支持状态、功能和配置"
 read_when:
-  - 您想要连接飞书机器人
-  - 您正在配置飞书渠道
+  - 你想连接一个飞书/Lark 机器人
+  - 你正在配置飞书渠道
+summary: 飞书机器人概览、功能和配置
 title: 飞书
+x-i18n:
+  generated_at: "2026-03-16T06:21:11Z"
+  model: gpt-5.4
+  provider: openai
+  source_hash: 951e78c5c7264471382f863fa896a15ddeaf0717ef782da20d0f1b3eb23396ba
+  source_path: channels/feishu.md
+  workflow: 15
 ---
 
 # 飞书机器人
 
-状态：生产就绪，支持机器人私聊和群组。使用 WebSocket 长连接模式接收消息。
+飞书（Lark）是企业用于消息沟通与协作的团队聊天平台。此插件通过平台的 WebSocket 事件订阅将 OpenClaw 连接到飞书/Lark 机器人，因此无需暴露公共 webhook URL 即可接收消息。
 
 ---
 
-## 内置插件
+## 捆绑插件
 
-当前版本的 OpenClaw 已内置 Feishu 插件，因此通常不需要单独安装。
+飞书随当前的 OpenClaw 版本一同捆绑提供，因此无需单独安装插件。
 
-如果你使用的是较旧版本，或是没有内置 Feishu 的自定义安装，可手动安装：
+如果你使用的是较旧版本，或使用了不包含捆绑飞书的自定义安装，请手动安装：
 
 ```bash
 openclaw plugins install @openclaw/feishu
@@ -26,75 +33,75 @@ openclaw plugins install @openclaw/feishu
 
 ## 快速开始
 
-添加飞书渠道有两种方式：
+有两种方式可添加飞书渠道：
 
-### 方式一：通过安装向导添加（推荐）
+### 方法 1：设置向导（推荐）
 
-如果您刚安装完 OpenClaw，可以直接运行向导，根据提示添加飞书：
+如果你刚安装 OpenClaw，请运行设置向导：
 
 ```bash
 openclaw onboard
 ```
 
-向导会引导您完成：
+向导会引导你完成以下步骤：
 
-1. 创建飞书应用并获取凭证
-2. 配置应用凭证
-3. 启动网关
+1. 创建飞书应用并收集凭证
+2. 在 OpenClaw 中配置应用凭证
+3. 启动 Gateway 网关
 
-✅ **完成配置后**，您可以使用以下命令检查网关状态：
+✅ **配置完成后**，检查 Gateway 网关状态：
 
-- `openclaw gateway status` - 查看网关运行状态
-- `openclaw logs --follow` - 查看实时日志
+- `openclaw gateway status`
+- `openclaw logs --follow`
 
-### 方式二：通过命令行添加
+### 方法 2：CLI 设置
 
-如果您已经完成了初始安装，可以用以下命令添加飞书渠道：
+如果你已经完成初始安装，可通过 CLI 添加该渠道：
 
 ```bash
 openclaw channels add
 ```
 
-然后根据交互式提示选择 Feishu，输入 App ID 和 App Secret 即可。
+选择 **Feishu**，然后输入 App ID 和 App Secret。
 
-✅ **完成配置后**，您可以使用以下命令管理网关：
+✅ **配置完成后**，管理 Gateway 网关：
 
-- `openclaw gateway status` - 查看网关运行状态
-- `openclaw gateway restart` - 重启网关以应用新配置
-- `openclaw logs --follow` - 查看实时日志
+- `openclaw gateway status`
+- `openclaw gateway restart`
+- `openclaw logs --follow`
 
 ---
 
-## 第一步：创建飞书应用
+## 第 1 步：创建飞书应用
 
 ### 1. 打开飞书开放平台
 
-访问 [飞书开放平台](https://open.feishu.cn/app)，使用飞书账号登录。
+访问 [Feishu Open Platform](https://open.feishu.cn/app) 并登录。
 
-Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设置 `domain: "lark"`。
+Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open.larksuite.com/app)，并在飞书配置中设置 `domain: "lark"`。
 
 ### 2. 创建应用
 
-1. 点击 **创建企业自建应用**
+1. 点击 **Create enterprise app**
 2. 填写应用名称和描述
 3. 选择应用图标
 
-![创建企业自建应用](/images/feishu-step2-create-app.png)
+![Create enterprise app](../images/feishu-step2-create-app.png)
 
-### 3. 获取应用凭证
+### 3. 复制凭证
 
-在应用的 **凭证与基础信息** 页面，复制：
+在 **Credentials & Basic Info** 中，复制：
 
-- **App ID**（格式如 `cli_xxx`）
+- **App ID**（格式：`cli_xxx`）
 - **App Secret**
 
-❗ **重要**：请妥善保管 App Secret，不要分享给他人。
+❗ **重要：**请将 App Secret 妥善保密。
 
-![获取应用凭证](/images/feishu-step3-credentials.png)
+![Get credentials](../images/feishu-step3-credentials.png)
 
-### 4. 配置应用权限
+### 4. 配置权限
 
-在 **权限管理** 页面，点击 **批量导入** 按钮，粘贴以下 JSON 配置一键导入所需权限：
+在 **Permissions** 中，点击 **Batch import** 并粘贴：
 
 ```json
 {
@@ -105,77 +112,71 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
       "application:application.app_message_stats.overview:readonly",
       "application:application:self_manage",
       "application:bot.menu:write",
+      "cardkit:card:read",
       "cardkit:card:write",
       "contact:user.employee_id:readonly",
       "corehr:file:download",
-      "docs:document.content:read",
       "event:ip_list",
-      "im:chat",
       "im:chat.access_event.bot_p2p_chat:read",
       "im:chat.members:bot_access",
       "im:message",
       "im:message.group_at_msg:readonly",
-      "im:message.group_msg",
       "im:message.p2p_msg:readonly",
       "im:message:readonly",
       "im:message:send_as_bot",
-      "im:resource",
-      "sheets:spreadsheet",
-      "wiki:wiki:readonly"
+      "im:resource"
     ],
     "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
   }
 }
 ```
 
-![配置应用权限](/images/feishu-step4-permissions.png)
+![Configure permissions](../images/feishu-step4-permissions.png)
 
 ### 5. 启用机器人能力
 
-在 **应用能力** > **机器人** 页面：
+在 **App Capability** > **Bot** 中：
 
-1. 开启机器人能力
-2. 配置机器人名称
+1. 启用机器人能力
+2. 设置机器人名称
 
-![启用机器人能力](/images/feishu-step5-bot-capability.png)
+![Enable bot capability](../images/feishu-step5-bot-capability.png)
 
 ### 6. 配置事件订阅
 
-⚠️ **重要提醒**：在配置事件订阅前，请务必确保已完成以下步骤：
+⚠️ **重要：**在设置事件订阅前，请确保：
 
-1. 运行 `openclaw channels add` 添加了 Feishu 渠道
-2. 网关处于启动状态（可通过 `openclaw gateway status` 检查状态）
+1. 你已经为飞书运行过 `openclaw channels add`
+2. Gateway 网关正在运行（`openclaw gateway status`）
 
-在 **事件订阅** 页面：
+在 **Event Subscription** 中：
 
-1. 选择 **使用长连接接收事件**（WebSocket 模式）
-2. 添加事件：`im.message.receive_v1`（接收消息）
+1. 选择 **Use long connection to receive events**（WebSocket）
+2. 添加事件：`im.message.receive_v1`
 
-⚠️ **注意**：如果网关未启动或渠道未添加，长连接设置将保存失败。
+⚠️ 如果 Gateway 网关未运行，长连接设置可能无法保存。
 
-![配置事件订阅](/images/feishu-step6-event-subscription.png)
+![Configure event subscription](../images/feishu-step6-event-subscription.png)
 
 ### 7. 发布应用
 
-1. 在 **版本管理与发布** 页面创建版本
+1. 在 **Version Management & Release** 中创建版本
 2. 提交审核并发布
-3. 等待管理员审批（企业自建应用通常自动通过）
+3. 等待管理员批准（企业应用通常会自动批准）
 
 ---
 
-## 第二步：配置 OpenClaw
+## 第 2 步：配置 OpenClaw
 
-### 通过向导配置（推荐）
-
-运行以下命令，根据提示粘贴 App ID 和 App Secret：
+### 使用向导配置（推荐）
 
 ```bash
 openclaw channels add
 ```
 
-选择 **Feishu**，然后输入您在第一步获取的凭证即可。
+选择 **Feishu**，然后粘贴你的 App ID 和 App Secret。
 
-### 通过配置文件配置
+### 通过配置文件进行配置
 
 编辑 `~/.openclaw/openclaw.json`：
 
@@ -189,7 +190,7 @@ openclaw channels add
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-          botName: "我的AI助手",
+          name: "My AI assistant",
         },
       },
     },
@@ -197,18 +198,20 @@ openclaw channels add
 }
 ```
 
-若使用 `connectionMode: "webhook"`，需设置 `verificationToken`。飞书 Webhook 服务默认绑定 `127.0.0.1`；仅在需要不同监听地址时设置 `webhookHost`。
+如果你使用 `connectionMode: "webhook"`，请同时设置 `verificationToken` 和 `encryptKey`。飞书 webhook 服务器默认绑定到 `127.0.0.1`；只有在你明确需要不同绑定地址时，才设置 `webhookHost`。
 
-#### 获取 Verification Token（仅 Webhook 模式）
+#### Verification Token 和 Encrypt Key（webhook 模式）
 
-使用 Webhook 模式时，需在配置中设置 `channels.feishu.verificationToken`。获取方式：
+使用 webhook 模式时，请在配置中同时设置 `channels.feishu.verificationToken` 和 `channels.feishu.encryptKey`。获取这些值的方法如下：
 
-1. 在飞书开放平台打开您的应用
-2. 进入 **开发配置** → **事件与回调**
-3. 打开 **加密策略** 选项卡
-4. 复制 **Verification Token**（校验令牌）
+1. 在飞书开放平台中，打开你的应用
+2. 前往 **Development** → **Events & Callbacks**（开发配置 → 事件与回调）
+3. 打开 **Encryption** 标签页（加密策略）
+4. 复制 **Verification Token** 和 **Encrypt Key**
 
-![Verification Token 位置](/images/feishu-verification-token.png)
+下图展示了 **Verification Token** 的位置。**Encrypt Key** 位于同一个 **Encryption** 区域中。
+
+![Verification Token location](../images/feishu-verification-token.png)
 
 ### 通过环境变量配置
 
@@ -219,7 +222,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark（国际版）域名
 
-如果您的租户在 Lark（国际版），请设置域名为 `lark`（或完整域名），可配置 `channels.feishu.domain` 或 `channels.feishu.accounts.<id>.domain`：
+如果你的租户位于 Lark（国际版），请将域名设置为 `lark`（或完整域名字串）。你可以在 `channels.feishu.domain` 设置，也可以按账户设置（`channels.feishu.accounts.<id>.domain`）。
 
 ```json5
 {
@@ -237,14 +240,14 @@ export FEISHU_APP_SECRET="xxx"
 }
 ```
 
-### 配额优化
+### 配额优化标志
 
-可通过以下可选配置减少飞书 API 调用：
+你可以使用两个可选标志来减少飞书 API 使用量：
 
-- `typingIndicator`（默认 `true`）：设为 `false` 时不发送“正在输入”状态。
-- `resolveSenderNames`（默认 `true`）：设为 `false` 时不拉取发送者资料。
+- `typingIndicator`（默认 `true`）：设为 `false` 时，跳过“正在输入”反应调用。
+- `resolveSenderNames`（默认 `true`）：设为 `false` 时，跳过发送者资料查询调用。
 
-可在渠道级或账号级配置：
+你可以在顶层或按账户进行设置：
 
 ```json5
 {
@@ -267,9 +270,9 @@ export FEISHU_APP_SECRET="xxx"
 
 ---
 
-## 第三步：启动并测试
+## 第 3 步：启动并测试
 
-### 1. 启动网关
+### 1. 启动 Gateway 网关
 
 ```bash
 openclaw gateway
@@ -277,74 +280,74 @@ openclaw gateway
 
 ### 2. 发送测试消息
 
-在飞书中找到您创建的机器人，发送一条消息。
+在飞书中找到你的机器人并发送一条消息。
 
-### 3. 配对授权
+### 3. 批准配对
 
-默认情况下，机器人会回复一个 **配对码**。您需要批准此代码：
+默认情况下，机器人会回复一个配对码。批准它：
 
 ```bash
-openclaw pairing approve feishu <配对码>
+openclaw pairing approve feishu <CODE>
 ```
 
-批准后即可正常对话。
+批准后，你就可以正常聊天了。
 
 ---
 
-## 介绍
+## 概览
 
-- **飞书机器人渠道**：由网关管理的飞书机器人
-- **确定性路由**：回复始终返回飞书，模型不会选择渠道
-- **会话隔离**：私聊共享主会话；群组独立隔离
-- **WebSocket 连接**：使用飞书 SDK 的长连接模式，无需公网 URL
+- **飞书机器人渠道**：由 Gateway 网关管理的飞书机器人
+- **确定性路由**：回复始终返回到飞书
+- **会话隔离**：私信共享主会话；群组彼此隔离
+- **WebSocket 连接**：通过飞书 SDK 建立长连接，无需公共 URL
 
 ---
 
 ## 访问控制
 
-### 私聊访问
+### 私信
 
-- **默认**：`dmPolicy: "pairing"`，陌生用户会收到配对码
+- **默认**：`dmPolicy: "pairing"`（未知用户会收到配对码）
 - **批准配对**：
-  ```bash
-  openclaw pairing list feishu      # 查看待审批列表
-  openclaw pairing approve feishu <CODE>  # 批准
-  ```
-- **白名单模式**：通过 `channels.feishu.allowFrom` 配置允许的用户 Open ID
 
-### 群组访问
+  ```bash
+  openclaw pairing list feishu
+  openclaw pairing approve feishu <CODE>
+  ```
+
+- **Allowlist 模式**：设置 `channels.feishu.allowFrom`，填入允许的 Open ID
+
+### 群聊
 
 **1. 群组策略**（`channels.feishu.groupPolicy`）：
 
-- `"open"` = 允许群组中所有人（默认）
-- `"allowlist"` = 仅允许 `groupAllowFrom` 中的群组
-- `"disabled"` = 禁用群组消息
+- `"open"` = 允许群组中的所有人（默认）
+- `"allowlist"` = 仅允许 `groupAllowFrom`
+- `"disabled"` = 禁用群消息
 
-**2. @提及要求**（`channels.feishu.groups.<chat_id>.requireMention`）：
+**2. 提及要求**（`channels.feishu.groups.<chat_id>.requireMention`）：
 
-- `true` = 需要 @机器人才响应（默认）
-- `false` = 无需 @也响应
+- `true` = 需要 @ 提及（默认）
+- `false` = 无需提及也会回复
 
 ---
 
 ## 群组配置示例
 
-### 允许所有群组，需要 @提及（默认行为）
+### 允许所有群组，要求 @ 提及（默认）
 
 ```json5
 {
   channels: {
     feishu: {
       groupPolicy: "open",
-      // 默认 requireMention: true
+      // Default requireMention: true
     },
   },
 }
 ```
 
-### 允许所有群组，无需 @提及
-
-需要为特定群组配置：
+### 允许所有群组，无需 @ 提及
 
 ```json5
 {
@@ -365,16 +368,16 @@ openclaw pairing approve feishu <配对码>
   channels: {
     feishu: {
       groupPolicy: "allowlist",
-      // 群组 ID 格式为 oc_xxx
+      // Feishu group IDs (chat_id) look like: oc_xxx
       groupAllowFrom: ["oc_xxx", "oc_yyy"],
     },
   },
 }
 ```
 
-### 仅允许特定成员在群组中发信（发送者白名单）
+### 限制哪些发送者可以在群组中发消息（发送者 allowlist）
 
-除群组白名单外，该群组内**所有消息**均按发送者 open_id 校验：仅 `groups.<chat_id>.allowFrom` 中列出的用户消息会被处理，其他成员的消息会被忽略（此为发送者级白名单，不仅针对 /reset、/new 等控制命令）。
+除了允许群组本身外，该群组中的**所有消息**还会按发送者 `open_id` 进行限制：只有列在 `groups.<chat_id>.allowFrom` 中的用户，其消息才会被处理；其他成员发送的消息会被忽略（这是完整的发送者级限制，而不只是对 `/reset` 或 `/new` 等控制命令生效）。
 
 ```json5
 {
@@ -384,7 +387,7 @@ openclaw pairing approve feishu <配对码>
       groupAllowFrom: ["oc_xxx"],
       groups: {
         oc_xxx: {
-          // 用户 open_id 格式为 ou_xxx
+          // Feishu user IDs (open_id) look like: ou_xxx
           allowFrom: ["ou_user1", "ou_user2"],
         },
       },
@@ -397,29 +400,31 @@ openclaw pairing approve feishu <配对码>
 
 ## 获取群组/用户 ID
 
-### 获取群组 ID（chat_id）
+### 群组 ID（`chat_id`）
 
-群组 ID 格式为 `oc_xxx`，可以通过以下方式获取：
+群组 ID 看起来像 `oc_xxx`。
 
-**方法一**（推荐）：
+**方法 1（推荐）**
 
-1. 启动网关并在群组中 @机器人发消息
-2. 运行 `openclaw logs --follow` 查看日志中的 `chat_id`
+1. 启动 Gateway 网关并在群里 @ 提及机器人
+2. 运行 `openclaw logs --follow` 并查找 `chat_id`
 
-**方法二**：
-使用飞书 API 调试工具获取机器人所在群组列表。
+**方法 2**
 
-### 获取用户 ID（open_id）
+使用飞书 API 调试器列出群聊。
 
-用户 ID 格式为 `ou_xxx`，可以通过以下方式获取：
+### 用户 ID（`open_id`）
 
-**方法一**（推荐）：
+用户 ID 看起来像 `ou_xxx`。
 
-1. 启动网关并给机器人发消息
-2. 运行 `openclaw logs --follow` 查看日志中的 `open_id`
+**方法 1（推荐）**
 
-**方法二**：
-查看配对请求列表，其中包含用户的 Open ID：
+1. 启动 Gateway 网关并向机器人发送私信
+2. 运行 `openclaw logs --follow` 并查找 `open_id`
+
+**方法 2**
+
+检查配对请求中的用户 Open ID：
 
 ```bash
 openclaw pairing list feishu
@@ -429,65 +434,61 @@ openclaw pairing list feishu
 
 ## 常用命令
 
-| 命令      | 说明           |
+| Command   | Description    |
 | --------- | -------------- |
-| `/status` | 查看机器人状态 |
-| `/reset`  | 重置对话会话   |
-| `/model`  | 查看/切换模型  |
+| `/status` | 显示机器人状态 |
+| `/reset`  | 重置会话       |
+| `/model`  | 显示/切换模型  |
 
-> 注意：飞书目前不支持原生命令菜单，命令需要以文本形式发送。
+> 注意：飞书暂不支持原生命令菜单，因此命令必须以文本形式发送。
 
-## 网关管理命令
+## Gateway 网关管理命令
 
-在配置和使用飞书渠道时，您可能需要使用以下网关管理命令：
-
-| 命令                       | 说明              |
-| -------------------------- | ----------------- |
-| `openclaw gateway status`  | 查看网关运行状态  |
-| `openclaw gateway install` | 安装/启动网关服务 |
-| `openclaw gateway stop`    | 停止网关服务      |
-| `openclaw gateway restart` | 重启网关服务      |
-| `openclaw logs --follow`   | 实时查看日志输出  |
+| Command                    | Description                |
+| -------------------------- | -------------------------- |
+| `openclaw gateway status`  | 显示 Gateway 网关状态      |
+| `openclaw gateway install` | 安装/启动 Gateway 网关服务 |
+| `openclaw gateway stop`    | 停止 Gateway 网关服务      |
+| `openclaw gateway restart` | 重启 Gateway 网关服务      |
+| `openclaw logs --follow`   | 跟踪 Gateway 网关日志      |
 
 ---
 
 ## 故障排除
 
-### 机器人在群组中不响应
+### 机器人在群聊中没有响应
 
-1. 检查机器人是否已添加到群组
-2. 检查是否 @了机器人（默认需要 @提及）
-3. 检查 `groupPolicy` 是否为 `"disabled"`
-4. 查看日志：`openclaw logs --follow`
+1. 确保机器人已加入群组
+2. 确保你 @ 提及了机器人（默认行为）
+3. 检查 `groupPolicy` 未设置为 `"disabled"`
+4. 检查日志：`openclaw logs --follow`
 
-### 机器人收不到消息
+### 机器人未接收到消息
 
-1. 检查应用是否已发布并审批通过
-2. 检查事件订阅是否配置正确（`im.message.receive_v1`）
-3. 检查是否选择了 **长连接** 模式
-4. 检查应用权限是否完整
-5. 检查网关是否正在运行：`openclaw gateway status`
-6. 查看实时日志：`openclaw logs --follow`
+1. 确保应用已发布并获批准
+2. 确保事件订阅包含 `im.message.receive_v1`
+3. 确保已启用**长连接**
+4. 确保应用权限完整
+5. 确保 Gateway 网关正在运行：`openclaw gateway status`
+6. 检查日志：`openclaw logs --follow`
 
-### App Secret 泄露怎么办
+### App Secret 泄露
 
-1. 在飞书开放平台重置 App Secret
-2. 更新配置文件中的 App Secret
-3. 重启网关
+1. 在飞书开放平台中重置 App Secret
+2. 在你的配置中更新 App Secret
+3. 重启 Gateway 网关
 
-### 发送消息失败
+### 消息发送失败
 
-1. 检查应用是否有 `im:message:send_as_bot` 权限
-2. 检查应用是否已发布
-3. 查看日志获取详细错误信息
+1. 确保应用具有 `im:message:send_as_bot` 权限
+2. 确保应用已发布
+3. 查看日志以获取详细错误信息
 
 ---
 
 ## 高级配置
 
-### 多账号配置
-
-如果需要管理多个飞书机器人，可配置 `defaultAccount` 指定出站未显式指定 `accountId` 时使用的账号：
+### 多账户
 
 ```json5
 {
@@ -498,13 +499,13 @@ openclaw pairing list feishu
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-          botName: "主机器人",
+          name: "Primary bot",
         },
         backup: {
           appId: "cli_yyy",
           appSecret: "yyy",
-          botName: "备用机器人",
-          enabled: false, // 暂时禁用
+          name: "Backup bot",
+          enabled: false,
         },
       },
     },
@@ -512,66 +513,102 @@ openclaw pairing list feishu
 }
 ```
 
+`defaultAccount` 用于控制当出站 API 未显式指定 `accountId` 时，使用哪个飞书账户。
+
 ### 消息限制
 
-- `textChunkLimit`：出站文本分块大小（默认 2000 字符）
-- `mediaMaxMb`：媒体上传/下载限制（默认 30MB）
+- `textChunkLimit`：出站文本分块大小（默认：2000 个字符）
+- `mediaMaxMb`：媒体上传/下载限制（默认：30 MB）
 
-### 流式输出
+### 流式传输
 
-飞书支持通过交互式卡片实现流式输出，机器人会实时更新卡片内容显示生成进度。默认配置：
+飞书通过交互式卡片支持流式回复。启用后，机器人会在生成文本时更新卡片。
 
 ```json5
 {
   channels: {
     feishu: {
       streaming: true, // 启用流式卡片输出（默认 true）
-      blockStreaming: true, // 启用块级流式（默认 true）
+      blockStreaming: true, // 启用分块流式传输（默认 true）
     },
   },
 }
 ```
 
-如需禁用流式输出（等待完整回复后一次性发送），可设置 `streaming: false`。
+将 `streaming: false` 设为等待完整回复生成后再发送。
 
-### 消息引用
+### ACP 会话
 
-在群聊中，机器人的回复可以引用用户发送的原始消息，让对话上下文更加清晰。
+飞书支持以下 ACP 场景：
 
-配置选项：
+- 私信
+- 群组话题会话
+
+飞书 ACP 由文本命令驱动。没有原生斜杠命令菜单，因此请直接在会话中使用 `/acp ...` 消息。
+
+#### 持久化 ACP 绑定
+
+使用顶层类型化 ACP 绑定，将飞书私信或话题会话固定到持久化 ACP 会话。
 
 ```json5
 {
-  channels: {
-    feishu: {
-      // 账户级别配置（默认 "all"）
-      replyToMode: "all",
-      groups: {
-        oc_xxx: {
-          // 特定群组可以覆盖
-          replyToMode: "first",
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
         },
       },
-    },
+    ],
   },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        peer: { kind: "direct", id: "ou_1234567890" },
+      },
+    },
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        peer: { kind: "group", id: "oc_group_chat:topic:om_topic_root" },
+      },
+      acp: { label: "codex-feishu-topic" },
+    },
+  ],
 }
 ```
 
-`replyToMode` 值说明：
+#### 从聊天中按线程绑定 ACP 生成
 
-| 值        | 行为                               |
-| --------- | ---------------------------------- |
-| `"off"`   | 不引用原消息（私聊默认值）         |
-| `"first"` | 仅在第一条回复时引用原消息         |
-| `"all"`   | 所有回复都引用原消息（群聊默认值） |
+在飞书私信或话题会话中，你可以就地生成并绑定一个 ACP 会话：
 
-> 注意：消息引用功能与流式卡片输出（`streaming: true`）不能同时使用。当启用流式输出时，回复会以卡片形式呈现，不会显示引用。
+```text
+/acp spawn codex --thread here
+```
 
-### 多 Agent 路由
+说明：
 
-通过 `bindings` 配置，您可以用一个飞书机器人对接多个不同功能或性格的 Agent。系统会根据用户 ID 或群组 ID 自动将对话分发到对应的 Agent。
+- `--thread here` 适用于私信和飞书话题。
+- 绑定后的私信/话题中的后续消息会直接路由到该 ACP 会话。
+- v1 不支持针对通用的非话题群聊。
 
-配置示例：
+### 多智能体路由
+
+使用 `bindings` 将飞书私信或群组路由到不同的智能体。
 
 ```json5
 {
@@ -592,86 +629,81 @@ openclaw pairing list feishu
   },
   bindings: [
     {
-      // 用户 A 的私聊 → main agent
       agentId: "main",
       match: {
         channel: "feishu",
-        peer: { kind: "dm", id: "ou_28b31a88..." },
+        peer: { kind: "direct", id: "ou_xxx" },
       },
     },
     {
-      // 用户 B 的私聊 → clawd-fan agent
       agentId: "clawd-fan",
       match: {
         channel: "feishu",
-        peer: { kind: "dm", id: "ou_0fe6b1c9..." },
+        peer: { kind: "direct", id: "ou_yyy" },
       },
     },
     {
-      // 某个群组 → clawd-xi agent
       agentId: "clawd-xi",
       match: {
         channel: "feishu",
-        peer: { kind: "group", id: "oc_xxx..." },
+        peer: { kind: "group", id: "oc_zzz" },
       },
     },
   ],
 }
 ```
 
-匹配规则说明：
+路由字段：
 
-| 字段              | 说明                                          |
-| ----------------- | --------------------------------------------- |
-| `agentId`         | 目标 Agent 的 ID，需要在 `agents.list` 中定义 |
-| `match.channel`   | 渠道类型，这里固定为 `"feishu"`               |
-| `match.peer.kind` | 对话类型：`"dm"`（私聊）或 `"group"`（群组）  |
-| `match.peer.id`   | 用户 Open ID（`ou_xxx`）或群组 ID（`oc_xxx`） |
+- `match.channel`：`"feishu"`
+- `match.peer.kind`：`"direct"` 或 `"group"`
+- `match.peer.id`：用户 Open ID（`ou_xxx`）或群组 ID（`oc_xxx`）
 
-> 获取 ID 的方法：参见上文 [获取群组/用户 ID](#获取群组用户-id) 章节。
+查找提示请参见 [获取群组/用户 ID](#get-groupuser-ids)。
 
 ---
 
 ## 配置参考
 
-完整配置请参考：[网关配置](/gateway/configuration)
+完整配置：[Gateway 网关配置](/gateway/configuration)
 
-主要选项：
+关键选项：
 
-| 配置项                                            | 说明                              | 默认值           |
-| ------------------------------------------------- | --------------------------------- | ---------------- |
-| `channels.feishu.enabled`                         | 启用/禁用渠道                     | `true`           |
-| `channels.feishu.domain`                          | API 域名（`feishu` 或 `lark`）    | `feishu`         |
-| `channels.feishu.connectionMode`                  | 事件传输模式（websocket/webhook） | `websocket`      |
-| `channels.feishu.defaultAccount`                  | 出站路由默认账号 ID               | `default`        |
-| `channels.feishu.verificationToken`               | Webhook 模式必填                  | -                |
-| `channels.feishu.webhookPath`                     | Webhook 路由路径                  | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook 监听地址                  | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook 监听端口                  | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | 应用 App ID                       | -                |
-| `channels.feishu.accounts.<id>.appSecret`         | 应用 App Secret                   | -                |
-| `channels.feishu.accounts.<id>.domain`            | 单账号 API 域名覆盖               | `feishu`         |
-| `channels.feishu.dmPolicy`                        | 私聊策略                          | `pairing`        |
-| `channels.feishu.allowFrom`                       | 私聊白名单（open_id 列表）        | -                |
-| `channels.feishu.groupPolicy`                     | 群组策略                          | `open`           |
-| `channels.feishu.groupAllowFrom`                  | 群组白名单                        | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | 是否需要 @提及                    | `true`           |
-| `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                    | `true`           |
-| `channels.feishu.textChunkLimit`                  | 消息分块大小                      | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | 媒体大小限制                      | `30`             |
-| `channels.feishu.streaming`                       | 启用流式卡片输出                  | `true`           |
-| `channels.feishu.blockStreaming`                  | 启用块级流式                      | `true`           |
+| Setting                                           | Description                      | Default          |
+| ------------------------------------------------- | -------------------------------- | ---------------- |
+| `channels.feishu.enabled`                         | 启用/禁用渠道                    | `true`           |
+| `channels.feishu.domain`                          | API 域名（`feishu` 或 `lark`）   | `feishu`         |
+| `channels.feishu.connectionMode`                  | 事件传输模式                     | `websocket`      |
+| `channels.feishu.defaultAccount`                  | 出站路由的默认账户 ID            | `default`        |
+| `channels.feishu.verificationToken`               | webhook 模式必填                 | -                |
+| `channels.feishu.encryptKey`                      | webhook 模式必填                 | -                |
+| `channels.feishu.webhookPath`                     | webhook 路由路径                 | `/feishu/events` |
+| `channels.feishu.webhookHost`                     | webhook 绑定主机                 | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                     | webhook 绑定端口                 | `3000`           |
+| `channels.feishu.accounts.<id>.appId`             | App ID                           | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                       | -                |
+| `channels.feishu.accounts.<id>.domain`            | 按账户覆盖 API 域名              | `feishu`         |
+| `channels.feishu.dmPolicy`                        | 私信策略                         | `pairing`        |
+| `channels.feishu.allowFrom`                       | 私信 allowlist（`open_id` 列表） | -                |
+| `channels.feishu.groupPolicy`                     | 群组策略                         | `open`           |
+| `channels.feishu.groupAllowFrom`                  | 群组 allowlist                   | -                |
+| `channels.feishu.groups.<chat_id>.requireMention` | 要求 @ 提及                      | `true`           |
+| `channels.feishu.groups.<chat_id>.enabled`        | 启用群组                         | `true`           |
+| `channels.feishu.textChunkLimit`                  | 消息分块大小                     | `2000`           |
+| `channels.feishu.mediaMaxMb`                      | 媒体大小限制                     | `30`             |
+| `channels.feishu.streaming`                       | 启用流式卡片输出                 | `true`           |
+| `channels.feishu.blockStreaming`                  | 启用分块流式传输                 | `true`           |
 
 ---
 
-## dmPolicy 策略说明
+## dmPolicy 参考
 
-| 值            | 行为                                               |
-| ------------- | -------------------------------------------------- |
-| `"pairing"`   | **默认**。未知用户收到配对码，管理员批准后才能对话 |
-| `"allowlist"` | 仅 `allowFrom` 列表中的用户可对话，其他静默忽略    |
-| `"open"`      | 允许所有人对话（需在 allowFrom 中加 `"*"`）        |
-| `"disabled"`  | 完全禁止私聊                                       |
+| Value         | Behavior                                             |
+| ------------- | ---------------------------------------------------- |
+| `"pairing"`   | **默认。**未知用户会收到配对码；必须获批准后才能使用 |
+| `"allowlist"` | 只有 `allowFrom` 中的用户可以聊天                    |
+| `"open"`      | 允许所有用户（要求 `allowFrom` 中有 `"*"`）          |
+| `"disabled"`  | 禁用私信                                             |
 
 ---
 
@@ -679,17 +711,17 @@ openclaw pairing list feishu
 
 ### 接收
 
-- ✅ 文本消息
-- ✅ 富文本（帖子）
+- ✅ 文本
+- ✅ 富文本（post）
 - ✅ 图片
 - ✅ 文件
 - ✅ 音频
 - ✅ 视频
-- ✅ 表情包
+- ✅ 贴纸
 
 ### 发送
 
-- ✅ 文本消息
+- ✅ 文本
 - ✅ 图片
 - ✅ 文件
 - ✅ 音频

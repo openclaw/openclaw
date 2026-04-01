@@ -61,17 +61,22 @@ cat ~/.openclaw/openclaw.json
 - Optional pre-flight update for git installs (interactive only).
 - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
 - Health check + restart prompt.
-- Skills status summary (eligible/missing/blocked).
+- Skills status summary (eligible/missing/blocked) and plugin status.
 - Config normalization for legacy values.
+- Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
 - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
+- OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+- Legacy plugin manifest contract key migration (`speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
+- Session lock file inspection and stale lock cleanup.
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
 - Extra workspace dir detection (`~/openclaw`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
+- Matrix channel legacy state migration (in `--fix` / `--repair` mode).
 - Gateway runtime checks (service installed but not running; cached launchd label).
 - Channel status warnings (probed from the running gateway).
 - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
@@ -80,6 +85,9 @@ cat ~/.openclaw/openclaw.json
 - Security warnings for open DM policies.
 - Gateway auth checks for local token mode (offers token generation when no token source exists; does not overwrite token SecretRef configs).
 - systemd linger check on Linux.
+- Workspace bootstrap file size check (truncation/near-limit warnings for context files).
+- Shell completion status check and auto-install/upgrade.
+- Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
 - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
 - Writes updated config + wizard metadata.
 
@@ -121,6 +129,10 @@ Current migrations:
 - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
+- `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
+- `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
+- `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
 - `bindings[].match.accountID` → `bindings[].match.accountId`
 - For channels with named `accounts` but missing `accounts.default`, move account-scoped top-level single-account channel values into `channels.<channel>.accounts.default` when present
 - `identity` → `agents.list[].identity`
@@ -128,6 +140,8 @@ Current migrations:
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
   → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
 - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
+- `browser.profiles.*.driver: "extension"` → `"existing-session"`
+- remove `browser.relayBindHost` (legacy extension relay setting)
 
 Doctor warnings also include account-default guidance for multi-account channels:
 
@@ -140,6 +154,45 @@ If you’ve added `models.providers.opencode`, `opencode-zen`, or `opencode-go`
 manually, it overrides the built-in OpenCode catalog from `@mariozechner/pi-ai`.
 That can force models onto the wrong API or zero out costs. Doctor warns so you
 can remove the override and restore per-model API routing + costs.
+
+### 2c) Browser migration and Chrome MCP readiness
+
+If your browser config still points at the removed Chrome extension path, doctor
+normalizes it to the current host-local Chrome MCP attach model:
+
+- `browser.profiles.*.driver: "extension"` becomes `"existing-session"`
+- `browser.relayBindHost` is removed
+
+Doctor also audits the host-local Chrome MCP path when you use `defaultProfile:
+"user"` or a configured `existing-session` profile:
+
+- checks whether Google Chrome is installed on the same host for default
+  auto-connect profiles
+- checks the detected Chrome version and warns when it is below Chrome 144
+- reminds you to enable remote debugging in the browser inspect page (for
+  example `chrome://inspect/#remote-debugging`, `brave://inspect/#remote-debugging`,
+  or `edge://inspect/#remote-debugging`)
+
+Doctor cannot enable the Chrome-side setting for you. Host-local Chrome MCP
+still requires:
+
+- a Chromium-based browser 144+ on the gateway/node host
+- the browser running locally
+- remote debugging enabled in that browser
+- approving the first attach consent prompt in the browser
+
+This check does **not** apply to Docker, sandbox, remote-browser, or other
+headless flows. Those continue to use raw CDP.
+
+### 2d) OAuth TLS prerequisites
+
+When an OpenAI Codex OAuth profile is configured, doctor probes the OpenAI
+authorization endpoint to verify that the local Node/OpenSSL TLS stack can
+validate the certificate chain. If the probe fails with a certificate error (for
+example `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, expired cert, or self-signed cert),
+doctor prints platform-specific fix guidance. On macOS with a Homebrew Node, the
+fix is usually `brew postinstall ca-certificates`. With `--deep`, the probe runs
+even if the gateway is healthy.
 
 ### 3) Legacy state migrations (disk layout)
 
@@ -159,6 +212,14 @@ the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
 migrated via `openclaw doctor`.
 
+### 3a) Legacy plugin manifest migrations
+
+Doctor scans all installed plugin manifests for deprecated top-level capability keys
+(`speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`).
+When found, it offers to move them into the `contracts` object and rewrite the manifest
+file in-place. This migration is idempotent; if the `contracts` key already has the
+same values, the legacy key is removed without duplicating the data.
+
 ### 3b) Legacy cron store migrations
 
 Doctor also checks the cron job store (`~/.openclaw/cron/jobs.json` by default,
@@ -177,6 +238,15 @@ Current cron cleanups include:
 Doctor only auto-migrates `notify: true` jobs when it can do so without
 changing behavior. If a job combines legacy notify fallback with an existing
 non-webhook delivery mode, doctor warns and leaves that job for manual review.
+
+### 3c) Session lock cleanup
+
+Doctor scans every agent session directory for stale write-lock files — files left
+behind when a session exited abnormally. For each lock file found it reports:
+the path, PID, whether the PID is still alive, lock age, and whether it is
+considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair`
+mode it removes stale lock files automatically; otherwise it prints a note and
+instructs you to rerun with `--fix`.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 
@@ -241,6 +311,15 @@ port. It can also scan for extra gateway-like services and print cleanup hints.
 Profile-named OpenClaw gateway services are considered first-class and are not
 flagged as "extra."
 
+### 8b) Startup Matrix migration
+
+When a Matrix channel account has a pending or actionable legacy state migration,
+doctor (in `--fix` / `--repair` mode) creates a pre-migration snapshot and then
+runs the best-effort migration steps: legacy Matrix state migration and legacy
+encrypted-state preparation. Both steps are non-fatal; errors are logged and
+startup continues. In read-only mode (`openclaw doctor` without `--fix`) this check
+is skipped entirely.
+
 ### 9) Security warnings
 
 Doctor emits warnings when a provider is open to DMs without an allowlist, or
@@ -251,10 +330,44 @@ when a policy is configured in a dangerous way.
 If running as a systemd user service, doctor ensures lingering is enabled so the
 gateway stays alive after logout.
 
-### 11) Skills status
+### 11) Workspace status (skills, plugins, and legacy dirs)
 
-Doctor prints a quick summary of eligible/missing/blocked skills for the current
-workspace.
+Doctor prints a summary of the workspace state for the default agent:
+
+- **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
+- **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories
+  exist alongside the current workspace.
+- **Plugin status**: counts loaded/disabled/errored plugins; lists plugin IDs for any
+  errors; reports bundle plugin capabilities.
+- **Plugin compatibility warnings**: flags plugins that have compatibility issues with
+  the current runtime.
+- **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the
+  plugin registry.
+
+### 11b) Bootstrap file size
+
+Doctor checks whether workspace bootstrap files (for example `AGENTS.md`,
+`CLAUDE.md`, or other injected context files) are near or over the configured
+character budget. It reports per-file raw vs. injected character counts, truncation
+percentage, truncation cause (`max/file` or `max/total`), and total injected
+characters as a fraction of the total budget. When files are truncated or near
+the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars`
+and `agents.defaults.bootstrapTotalMaxChars`.
+
+### 11c) Shell completion
+
+Doctor checks whether tab completion is installed for the current shell
+(zsh, bash, fish, or PowerShell):
+
+- If the shell profile uses a slow dynamic completion pattern
+  (`source <(openclaw completion ...)`), doctor upgrades it to the faster
+  cached file variant.
+- If completion is configured in the profile but the cache file is missing,
+  doctor regenerates the cache automatically.
+- If no completion is configured at all, doctor prompts to install it
+  (interactive mode only; skipped with `--non-interactive`).
+
+Run `openclaw completion --write-state` to regenerate the cache manually.
 
 ### 12) Gateway auth checks (local token)
 
@@ -276,6 +389,26 @@ Some repair flows need to inspect configured credentials without weakening runti
 
 Doctor runs a health check and offers to restart the gateway when it looks
 unhealthy.
+
+### 13b) Memory search readiness
+
+Doctor checks whether the configured memory search embedding provider is ready
+for the default agent. The behavior depends on the configured backend and provider:
+
+- **QMD backend**: probes whether the `qmd` binary is available and startable.
+  If not, prints fix guidance including the npm package and a manual binary path option.
+- **Explicit local provider**: checks for a local model file or a recognized
+  remote/downloadable model URL. If missing, suggests switching to a remote provider.
+- **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is
+  present in the environment or auth store. Prints actionable fix hints if missing.
+- **Auto provider**: checks local model availability first, then tries each remote
+  provider in auto-selection order.
+
+When a gateway probe result is available (gateway was healthy at the time of the
+check), doctor cross-references its result with the CLI-visible config and notes
+any discrepancy.
+
+Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
 ### 14) Channel status warnings
 

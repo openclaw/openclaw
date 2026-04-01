@@ -6,11 +6,19 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalize = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
+  const normalizeText = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
+  const coerceText = (value: unknown): string =>
+    typeof value === "string" ? value : value == null ? "" : String(value);
+  const sanitize = (text: unknown): string => {
+    const raw = coerceText(text);
+    const sanitized = opts?.sanitizeText ? opts.sanitizeText(raw) : raw;
+    return coerceText(sanitized);
+  };
+  const normalize = (text: unknown): string => coerceText(normalizeText(coerceText(text)));
 
   if (typeof content === "string") {
-    const value = opts?.sanitizeText ? opts.sanitizeText(content) : content;
+    const value = sanitize(content);
     const normalized = normalize(value);
     return normalized ? normalized : null;
   }
@@ -28,10 +36,7 @@ export function extractTextFromChatContent(
       continue;
     }
     const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string") {
-      continue;
-    }
-    const value = opts?.sanitizeText ? opts.sanitizeText(text) : text;
+    const value = sanitize(text);
     if (value.trim()) {
       chunks.push(value);
     }

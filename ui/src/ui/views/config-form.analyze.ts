@@ -249,11 +249,21 @@ function normalizeUnion(
     return res;
   }
 
-  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
+  const renderableUnionTypes = new Set([
+    "string",
+    "number",
+    "integer",
+    "boolean",
+    "object",
+    "array",
+  ]);
   if (
     remaining.length > 0 &&
     literals.length === 0 &&
-    remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
+    remaining.every((entry) => {
+      const type = schemaType(entry);
+      return Boolean(type) && renderableUnionTypes.has(String(type));
+    })
   ) {
     return {
       schema: {

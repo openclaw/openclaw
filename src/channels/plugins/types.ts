@@ -1,12 +1,21 @@
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
+export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
 
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+export type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type {
+  ChannelActionAvailabilityState,
+  ChannelApprovalAdapter,
+  ChannelApprovalForwardTarget,
+  ChannelApprovalInitiatingSurfaceState,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
+  ChannelCapabilitiesDiagnostics,
+  ChannelCapabilitiesDisplayLine,
+  ChannelCapabilitiesDisplayTone,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
   ChannelResolveKind,
@@ -17,12 +26,21 @@ export type {
   ChannelGatewayContext,
   ChannelGroupAdapter,
   ChannelHeartbeatAdapter,
+  ChannelLifecycleAdapter,
   ChannelLoginWithQrStartResult,
   ChannelLoginWithQrWaitResult,
   ChannelLogoutContext,
   ChannelLogoutResult,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
+  ChannelAllowlistAdapter,
+  ChannelCommandConversationContext,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+  ChannelConfiguredBindingProvider,
+  ChannelConversationBindingSupport,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
@@ -43,9 +61,12 @@ export type {
   ChannelLogSink,
   ChannelMentionAdapter,
   ChannelMessageActionAdapter,
+  ChannelMessageActionDiscoveryContext,
   ChannelMessageActionContext,
   ChannelMessagingAdapter,
+  ChannelMessageToolDiscovery,
   ChannelMeta,
+  ChannelMessageToolSchemaContribution,
   ChannelOutboundTargetMode,
   ChannelPollContext,
   ChannelPollResult,
@@ -54,6 +75,7 @@ export type {
   ChannelSetupInput,
   ChannelStatusIssue,
   ChannelStreamingAdapter,
+  ChannelStructuredComponents,
   ChannelThreadingAdapter,
   ChannelThreadingContext,
   ChannelThreadingToolContext,

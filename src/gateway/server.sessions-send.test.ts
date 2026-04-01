@@ -94,7 +94,9 @@ beforeAll(async () => {
     scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
     silent: false,
   });
-  await approveDevicePairing(pending.request.requestId);
+  await approveDevicePairing(pending.request.requestId, {
+    callerScopes: pending.request.scopes ?? ["operator.admin"],
+  });
   server = await startGatewayServer(gatewayPort);
 });
 
@@ -184,7 +186,18 @@ describe("sessions_send label lookup", () => {
         timeoutMs: 5000,
       });
 
-      const tool = getSessionsSendTool();
+      const tool = createOpenClawTools({
+        config: {
+          tools: {
+            sessions: {
+              visibility: "all",
+            },
+          },
+        },
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
 
       // Send using label instead of sessionKey
       const result = await tool.execute("call-by-label", {

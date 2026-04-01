@@ -42,6 +42,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes Ollama prompt-too-long payloads through the context-overflow path", () => {
+    const text =
+      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it.each([
     "Changelog note: we fixed false positives for `Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.` in 2026.2.9",
     "nah it failed, hit a context overflow. the prompt was too large for the model. want me to retry it with a different approach?",
@@ -74,9 +82,68 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("does not rewrite unprefixed raw API payloads without explicit errorContext", () => {
+    const raw = '{"type":"error","error":{"type":"server_error","message":"Something exploded"}}';
+    expect(sanitizeUserFacingText(raw)).toBe(raw);
+  });
+
+  it("sanitizes Codex error-prefixed API payloads", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+      "LLM error server_error: Something exploded",
+    );
+  });
+
+  it("sanitizes Codex error-prefixed API payloads without explicit errorContext", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
+  });
+
+  it("keeps regular JSON examples intact without explicit errorContext", () => {
+    const raw = '{"error":{"type":"validation_error","message":"showing an example payload"}}';
+    expect(sanitizeUserFacingText(raw)).toBe(raw);
+  });
+
+  it("preserves specialized context overflow guidance for raw API payloads", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
+  it("preserves specialized context overflow guidance for Codex-prefixed API payloads", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
+  it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
+    expect(
+      sanitizeUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
+        errorContext: true,
+      }),
+    ).toBe("LLM request failed: connection refused by the provider endpoint.");
+  });
+
+  it("sanitizes invalid streaming event order errors", () => {
+    expect(
+      sanitizeUserFacingText(
+        'Unexpected event order, got message_start before receiving "message_stop"',
+        { errorContext: true },
+      ),
+    ).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
     );
   });
 
@@ -110,6 +177,11 @@ describe("sanitizeUserFacingText", () => {
 
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
+  });
+
+  it("tolerates non-string input without throwing", () => {
+    expect(sanitizeUserFacingText(undefined as unknown as string)).toBe("");
+    expect(sanitizeUserFacingText(42 as unknown as string)).toBe("42");
   });
 });
 

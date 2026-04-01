@@ -5,6 +5,7 @@ import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
@@ -12,6 +13,44 @@ import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
+
+internal enum class SmsSearchAvailabilityReason {
+  Available,
+  PermissionRequired,
+  Unavailable,
+}
+
+internal fun classifySmsSearchAvailability(
+  readSmsAvailable: Boolean,
+  smsFeatureEnabled: Boolean,
+  smsTelephonyAvailable: Boolean,
+): SmsSearchAvailabilityReason {
+  if (readSmsAvailable) return SmsSearchAvailabilityReason.Available
+  if (!smsFeatureEnabled || !smsTelephonyAvailable) return SmsSearchAvailabilityReason.Unavailable
+  return SmsSearchAvailabilityReason.PermissionRequired
+}
+
+internal fun smsSearchAvailabilityError(
+  readSmsAvailable: Boolean,
+  smsFeatureEnabled: Boolean,
+  smsTelephonyAvailable: Boolean,
+): GatewaySession.InvokeResult? {
+  return when (
+    classifySmsSearchAvailability(
+      readSmsAvailable = readSmsAvailable,
+      smsFeatureEnabled = smsFeatureEnabled,
+      smsTelephonyAvailable = smsTelephonyAvailable,
+    )
+  ) {
+    SmsSearchAvailabilityReason.Available,
+    SmsSearchAvailabilityReason.PermissionRequired -> null
+    SmsSearchAvailabilityReason.Unavailable ->
+      GatewaySession.InvokeResult.error(
+        code = "SMS_UNAVAILABLE",
+        message = "SMS_UNAVAILABLE: SMS not available on this device",
+      )
+  }
+}
 
 class InvokeDispatcher(
   private val canvas: CanvasController,
@@ -27,10 +66,15 @@ class InvokeDispatcher(
   private val smsHandler: SmsHandler,
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
+  private val callLogHandler: CallLogHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
-  private val smsAvailable: () -> Boolean,
+  private val sendSmsAvailable: () -> Boolean,
+  private val readSmsAvailable: () -> Boolean,
+  private val smsFeatureEnabled: () -> Boolean,
+  private val smsTelephonyAvailable: () -> Boolean,
+  private val callLogAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val refreshNodeCanvasCapability: suspend () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
@@ -160,6 +204,10 @@ class InvokeDispatcher(
 
       // SMS command
       OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+      OpenClawSmsCommand.Search.rawValue -> smsHandler.handleSmsSearch(paramsJson)
+
+      // CallLog command
+      OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
@@ -251,13 +299,29 @@ class InvokeDispatcher(
             message = "PEDOMETER_UNAVAILABLE: step counter not available",
           )
         }
-      InvokeCommandAvailability.SmsAvailable ->
-        if (smsAvailable()) {
+      InvokeCommandAvailability.SendSmsAvailable ->
+        if (sendSmsAvailable()) {
           null
         } else {
           GatewaySession.InvokeResult.error(
             code = "SMS_UNAVAILABLE",
             message = "SMS_UNAVAILABLE: SMS not available on this device",
+          )
+        }
+      InvokeCommandAvailability.ReadSmsAvailable,
+      InvokeCommandAvailability.RequestableSmsSearchAvailable ->
+        smsSearchAvailabilityError(
+          readSmsAvailable = readSmsAvailable(),
+          smsFeatureEnabled = smsFeatureEnabled(),
+          smsTelephonyAvailable = smsTelephonyAvailable(),
+        )
+      InvokeCommandAvailability.CallLogAvailable ->
+        if (callLogAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "CALL_LOG_UNAVAILABLE",
+            message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
           )
         }
       InvokeCommandAvailability.DebugBuild ->

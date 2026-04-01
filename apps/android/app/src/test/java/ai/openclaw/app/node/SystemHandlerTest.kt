@@ -27,6 +27,16 @@ class SystemHandlerTest {
   }
 
   @Test
+  fun handleSystemNotify_rejectsInvalidRequestObject() {
+    val handler = SystemHandler.forTesting(poster = FakePoster(authorized = true))
+
+    val result = handler.handleSystemNotify("""{"title":"OpenClaw"}""")
+
+    assertFalse(result.ok)
+    assertEquals("INVALID_REQUEST", result.error?.code)
+  }
+
+  @Test
   fun handleSystemNotify_postsNotification() {
     val poster = FakePoster(authorized = true)
     val handler = SystemHandler.forTesting(poster = poster)
@@ -35,6 +45,23 @@ class SystemHandlerTest {
 
     assertTrue(result.ok)
     assertEquals(1, poster.posts)
+  }
+
+  @Test
+  fun handleSystemNotify_trimsAndPassesOptionalFields() {
+    val poster = FakePoster(authorized = true)
+    val handler = SystemHandler.forTesting(poster = poster)
+
+    val result =
+      handler.handleSystemNotify(
+        """{"title":" OpenClaw ","body":" done ","priority":" passive ","sound":" silent "}""",
+      )
+
+    assertTrue(result.ok)
+    assertEquals("OpenClaw", poster.lastRequest?.title)
+    assertEquals("done", poster.lastRequest?.body)
+    assertEquals("passive", poster.lastRequest?.priority)
+    assertEquals("silent", poster.lastRequest?.sound)
   }
 
   @Test
@@ -55,6 +82,7 @@ class SystemHandlerTest {
 
     assertFalse(result.ok)
     assertEquals("UNAVAILABLE", result.error?.code)
+    assertEquals("NOTIFICATION_FAILED: boom", result.error?.message)
   }
 }
 
@@ -63,11 +91,14 @@ private class FakePoster(
 ) : SystemNotificationPoster {
   var posts: Int = 0
     private set
+  var lastRequest: SystemNotifyRequest? = null
+    private set
 
   override fun isAuthorized(): Boolean = authorized
 
   override fun post(request: SystemNotifyRequest) {
     posts += 1
+    lastRequest = request
   }
 }
 

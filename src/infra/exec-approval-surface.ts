@@ -1,9 +1,10 @@
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { listEnabledDiscordAccounts } from "../discord/accounts.js";
-import { isDiscordExecApprovalClientEnabled } from "../discord/exec-approvals.js";
-import { listEnabledTelegramAccounts } from "../telegram/accounts.js";
-import { isTelegramExecApprovalClientEnabled } from "../telegram/exec-approvals.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string }
@@ -37,41 +38,22 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  if (channel === "telegram") {
-    return isTelegramExecApprovalClientEnabled({ cfg, accountId: params.accountId })
-      ? { kind: "enabled", channel, channelLabel }
-      : { kind: "disabled", channel, channelLabel };
+  const state = getChannelPlugin(channel)?.auth?.getActionAvailabilityState?.({
+    cfg,
+    accountId: params.accountId,
+    action: "approve",
+  });
+  if (state) {
+    return { ...state, channel, channelLabel };
   }
-  if (channel === "discord") {
-    return isDiscordExecApprovalClientEnabled({ cfg, accountId: params.accountId })
-      ? { kind: "enabled", channel, channelLabel }
-      : { kind: "disabled", channel, channelLabel };
+  if (isDeliverableMessageChannel(channel)) {
+    return { kind: "enabled", channel, channelLabel };
   }
   return { kind: "unsupported", channel, channelLabel };
 }
 
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  for (const account of listEnabledDiscordAccounts(cfg)) {
-    const execApprovals = account.config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      continue;
-    }
-    const target = execApprovals.target ?? "dm";
-    if (target === "dm" || target === "both") {
-      return true;
-    }
-  }
-
-  for (const account of listEnabledTelegramAccounts(cfg)) {
-    const execApprovals = account.config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      continue;
-    }
-    const target = execApprovals.target ?? "dm";
-    if (target === "dm" || target === "both") {
-      return true;
-    }
-  }
-
-  return false;
+  return listChannelPlugins().some(
+    (plugin) => plugin.approvals?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
+  );
 }

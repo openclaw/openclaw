@@ -4,7 +4,7 @@ export type ParsedTelegramTopicConversation = {
   canonicalConversationId: string;
 };
 
-function normalizeText(value: unknown): string {
+export function normalizeConversationText(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
   }
@@ -15,7 +15,7 @@ function normalizeText(value: unknown): string {
 }
 
 export function parseTelegramChatIdFromTarget(raw: unknown): string | undefined {
-  const text = normalizeText(raw);
+  const text = normalizeConversationText(raw);
   if (!text) {
     return undefined;
   }
@@ -43,7 +43,7 @@ export function parseTelegramTopicConversation(params: {
   parentConversationId?: string;
 }): ParsedTelegramTopicConversation | null {
   const conversation = params.conversationId.trim();
-  const directMatch = conversation.match(/^(-?\d+):topic:(\d+)$/);
+  const directMatch = conversation.match(/^(-?\d+):topic:(\d+)$/i);
   if (directMatch?.[1] && directMatch[2]) {
     const canonicalConversationId = buildTelegramTopicConversationId({
       chatId: directMatch[1],

@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.BuildConfig
 import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
@@ -15,9 +16,9 @@ import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
-import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.GatewaySession
 import java.util.Locale
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -25,7 +26,28 @@ import kotlinx.serialization.json.put
 
 class DeviceHandler(
   private val appContext: Context,
+  private val smsEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_SMS,
+  private val callLogEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
 ) {
+  companion object {
+    internal fun hasAnySmsCapability(
+      smsEnabled: Boolean,
+      telephonyAvailable: Boolean,
+      smsSendGranted: Boolean,
+      smsReadGranted: Boolean,
+    ): Boolean {
+      return smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
+    }
+
+    internal fun isSmsPromptable(
+      smsEnabled: Boolean,
+      telephonyAvailable: Boolean,
+      smsSendGranted: Boolean,
+      smsReadGranted: Boolean,
+    ): Boolean {
+      return smsEnabled && telephonyAvailable && (!smsSendGranted || !smsReadGranted)
+    }
+  }
   private data class BatterySnapshot(
     val status: Int,
     val plugged: Int,
@@ -129,6 +151,8 @@ class DeviceHandler(
 
   private fun permissionsPayloadJson(): String {
     val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+    val smsSendGranted = hasPermission(Manifest.permission.SEND_SMS)
+    val smsReadGranted = hasPermission(Manifest.permission.READ_SMS)
     val notificationAccess = DeviceNotificationListenerService.isAccessEnabled(appContext)
     val photosGranted =
       if (Build.VERSION.SDK_INT >= 33) {
@@ -172,10 +196,34 @@ class DeviceHandler(
           )
           put(
             "sms",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
-              promptableWhenDenied = canSendSms,
-            ),
+            buildJsonObject {
+              put(
+                "status",
+                JsonPrimitive(
+                  if (hasAnySmsCapability(smsEnabled, canSendSms, smsSendGranted, smsReadGranted)) "granted" else "denied",
+                ),
+              )
+              put("promptable", JsonPrimitive(isSmsPromptable(smsEnabled, canSendSms, smsSendGranted, smsReadGranted)))
+              put(
+                "capabilities",
+                buildJsonObject {
+                  put(
+                    "send",
+                    permissionStateJson(
+                      granted = smsEnabled && smsSendGranted && canSendSms,
+                      promptableWhenDenied = smsEnabled && canSendSms,
+                    ),
+                  )
+                  put(
+                    "read",
+                    permissionStateJson(
+                      granted = smsEnabled && smsReadGranted && canSendSms,
+                      promptableWhenDenied = smsEnabled && canSendSms,
+                    ),
+                  )
+                },
+              )
+            },
           )
           put(
             "notificationListener",
@@ -210,6 +258,13 @@ class DeviceHandler(
             permissionStateJson(
               granted = hasPermission(Manifest.permission.READ_CALENDAR),
               promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "callLog",
+            permissionStateJson(
+              granted = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
+              promptableWhenDenied = callLogEnabled,
             ),
           )
           put(

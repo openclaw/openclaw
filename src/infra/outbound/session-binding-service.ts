@@ -1,4 +1,14 @@
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import {
+  __testing as genericCurrentConversationBindingTesting,
+  bindGenericCurrentConversation,
+  getGenericCurrentConversationBindingCapabilities,
+  listGenericCurrentConversationBindingsBySession,
+  resolveGenericCurrentConversationBinding,
+  touchGenericCurrentConversationBinding,
+  unbindGenericCurrentConversationBindings,
+} from "./current-conversation-bindings.js";
 
 export type BindingTargetKind = "subagent" | "session";
 export type BindingStatus = "active" | "ending" | "ended";
@@ -145,25 +155,69 @@ function resolveAdapterCapabilities(
   };
 }
 
-const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
+const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBinding.adapters");
+
+type SessionBindingAdapterRegistration = {
+  adapter: SessionBindingAdapter;
+  normalizedAdapter: SessionBindingAdapter;
+};
+
+const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapterRegistration[]>(
+  SESSION_BINDING_ADAPTERS_KEY,
+);
+
+function getActiveAdapterForKey(key: string): SessionBindingAdapter | null {
+  const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
+  return registrations?.[0]?.normalizedAdapter ?? null;
+}
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
-  const key = toAdapterKey({
-    channel: adapter.channel,
-    accountId: adapter.accountId,
-  });
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, {
+  const normalizedAdapter = {
     ...adapter,
     channel: adapter.channel.trim().toLowerCase(),
     accountId: normalizeAccountId(adapter.accountId),
+  };
+  const key = toAdapterKey({
+    channel: normalizedAdapter.channel,
+    accountId: normalizedAdapter.accountId,
   });
+  const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
+  const registrations = existing ? [...existing] : [];
+  registrations.push({
+    adapter,
+    normalizedAdapter,
+  });
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
 export function unregisterSessionBindingAdapter(params: {
   channel: string;
   accountId: string;
+  adapter?: SessionBindingAdapter;
 }): void {
-  ADAPTERS_BY_CHANNEL_ACCOUNT.delete(toAdapterKey(params));
+  const key = toAdapterKey(params);
+  const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
+  if (!registrations || registrations.length === 0) {
+    return;
+  }
+  const nextRegistrations = [...registrations];
+  if (params.adapter) {
+    // Remove the matching owner so a surviving duplicate graph can stay active.
+    const registrationIndex = nextRegistrations.findLastIndex(
+      (registration) => registration.adapter === params.adapter,
+    );
+    if (registrationIndex < 0) {
+      return;
+    }
+    nextRegistrations.splice(registrationIndex, 1);
+  } else {
+    nextRegistrations.pop();
+  }
+  if (nextRegistrations.length === 0) {
+    ADAPTERS_BY_CHANNEL_ACCOUNT.delete(key);
+    return;
+  }
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, nextRegistrations);
 }
 
 function resolveAdapterForConversation(ref: ConversationRef): SessionBindingAdapter | null {
@@ -181,7 +235,13 @@ function resolveAdapterForChannelAccount(params: {
     channel: params.channel,
     accountId: params.accountId,
   });
-  return ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? null;
+  return getActiveAdapterForKey(key);
+}
+
+function getActiveRegisteredAdapters(): SessionBindingAdapter[] {
+  return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
+    .map((registrations) => registrations[0]?.normalizedAdapter ?? null)
+    .filter((adapter): adapter is SessionBindingAdapter => Boolean(adapter));
 }
 
 function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[] {
@@ -201,6 +261,42 @@ function createDefaultSessionBindingService(): SessionBindingService {
       const normalizedConversation = normalizeConversationRef(input.conversation);
       const adapter = resolveAdapterForConversation(normalizedConversation);
       if (!adapter) {
+        const genericCapabilities = getGenericCurrentConversationBindingCapabilities({
+          channel: normalizedConversation.channel,
+          accountId: normalizedConversation.accountId,
+        });
+        if (genericCapabilities?.bindSupported) {
+          const placement =
+            normalizePlacement(input.placement) ?? inferDefaultPlacement(normalizedConversation);
+          if (placement !== "current") {
+            throw new SessionBindingError(
+              "BINDING_CAPABILITY_UNSUPPORTED",
+              `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
+              {
+                channel: normalizedConversation.channel,
+                accountId: normalizedConversation.accountId,
+                placement,
+              },
+            );
+          }
+          const bound = await bindGenericCurrentConversation({
+            ...input,
+            conversation: normalizedConversation,
+            placement,
+          });
+          if (!bound) {
+            throw new SessionBindingError(
+              "BINDING_CREATE_FAILED",
+              "Session binding adapter failed to bind target conversation",
+              {
+                channel: normalizedConversation.channel,
+                accountId: normalizedConversation.accountId,
+                placement,
+              },
+            );
+          }
+          return bound;
+        }
         throw new SessionBindingError(
           "BINDING_ADAPTER_UNAVAILABLE",
           `Session binding adapter unavailable for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
@@ -257,6 +353,16 @@ function createDefaultSessionBindingService(): SessionBindingService {
         channel: params.channel,
         accountId: params.accountId,
       });
+      if (!adapter) {
+        return (
+          getGenericCurrentConversationBindingCapabilities(params) ?? {
+            adapterAvailable: false,
+            bindSupported: false,
+            unbindSupported: false,
+            placements: [],
+          }
+        );
+      }
       return resolveAdapterCapabilities(adapter);
     },
     listBySession: (targetSessionKey) => {
@@ -265,12 +371,13 @@ function createDefaultSessionBindingService(): SessionBindingService {
         return [];
       }
       const results: SessionBindingRecord[] = [];
-      for (const adapter of ADAPTERS_BY_CHANNEL_ACCOUNT.values()) {
+      for (const adapter of getActiveRegisteredAdapters()) {
         const entries = adapter.listBySession(key);
         if (entries.length > 0) {
           results.push(...entries);
         }
       }
+      results.push(...listGenericCurrentConversationBindingsBySession(key));
       return dedupeBindings(results);
     },
     resolveByConversation: (ref) => {
@@ -280,7 +387,7 @@ function createDefaultSessionBindingService(): SessionBindingService {
       }
       const adapter = resolveAdapterForConversation(normalized);
       if (!adapter) {
-        return null;
+        return resolveGenericCurrentConversationBinding(normalized);
       }
       return adapter.resolveByConversation(normalized);
     },
@@ -289,13 +396,14 @@ function createDefaultSessionBindingService(): SessionBindingService {
       if (!normalizedBindingId) {
         return;
       }
-      for (const adapter of ADAPTERS_BY_CHANNEL_ACCOUNT.values()) {
+      for (const adapter of getActiveRegisteredAdapters()) {
         adapter.touch?.(normalizedBindingId, at);
       }
+      touchGenericCurrentConversationBinding(normalizedBindingId, at);
     },
     unbind: async (input) => {
       const removed: SessionBindingRecord[] = [];
-      for (const adapter of ADAPTERS_BY_CHANNEL_ACCOUNT.values()) {
+      for (const adapter of getActiveRegisteredAdapters()) {
         if (!adapter.unbind) {
           continue;
         }
@@ -304,6 +412,7 @@ function createDefaultSessionBindingService(): SessionBindingService {
           removed.push(...entries);
         }
       }
+      removed.push(...(await unbindGenericCurrentConversationBindings(input)));
       return dedupeBindings(removed);
     },
   };
@@ -318,6 +427,9 @@ export function getSessionBindingService(): SessionBindingService {
 export const __testing = {
   resetSessionBindingAdaptersForTests() {
     ADAPTERS_BY_CHANNEL_ACCOUNT.clear();
+    genericCurrentConversationBindingTesting.resetCurrentConversationBindingsForTests({
+      deletePersistedFile: true,
+    });
   },
   getRegisteredAdapterKeys() {
     return [...ADAPTERS_BY_CHANNEL_ACCOUNT.keys()];

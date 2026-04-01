@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -19,8 +20,9 @@ export type RestartAttempt = {
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-// Cover slow in-flight embedded compaction work before forcing restart.
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 90_000;
+// Default to 5 minutes to avoid aborting in-flight subagent LLM calls.
+// Configurable via gateway.reload.deferralTimeoutMs.
+const DEFAULT_DEFERRAL_MAX_WAIT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
 
 const restartLog = createSubsystemLogger("restart");
@@ -475,7 +477,11 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         emitGatewayRestart();
         return;
       }
-      deferGatewayRestartUntilIdle({ getPendingCount: pendingCheck });
+      const cfg = getRuntimeConfig();
+      deferGatewayRestartUntilIdle({
+        getPendingCount: pendingCheck,
+        maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+      });
     },
     Math.max(0, requestedDueAt - nowMs),
   );

@@ -1,0 +1,45 @@
+{
+  "id": "openai",
+  "enabledByDefault": true,
+  "providers": ["openai", "openai-codex"],
+  "cliBackends": ["codex-cli"],
+  "providerAuthEnvVars": {
+    "openai": ["OPENAI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openai-codex",
+      "method": "oauth",
+      "choiceId": "openai-codex",
+      "deprecatedChoiceIds": ["codex-cli"],
+      "choiceLabel": "OpenAI Codex (ChatGPT OAuth)",
+      "choiceHint": "Browser sign-in",
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "Codex OAuth + API key"
+    },
+    {
+      "provider": "openai",
+      "method": "api-key",
+      "choiceId": "openai-api-key",
+      "choiceLabel": "OpenAI API key",
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "Codex OAuth + API key",
+      "optionKey": "openaiApiKey",
+      "cliFlag": "--openai-api-key",
+      "cliOption": "--openai-api-key <key>",
+      "cliDescription": "OpenAI API key"
+    }
+  ],
+  "contracts": {
+    "speechProviders": ["openai"],
+    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "imageGenerationProviders": ["openai"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

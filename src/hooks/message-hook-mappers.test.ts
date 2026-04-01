@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
+  toPluginInboundClaimEvent,
+  toPluginInboundClaimContext,
   toInternalMessagePreprocessedContext,
   toInternalMessageReceivedContext,
   toInternalMessageSentContext,
@@ -66,6 +68,32 @@ describe("message hook mappers", () => {
     expect(canonical.messageId).toBe("override-msg");
   });
 
+  it("preserves multi-attachment arrays for inbound claim metadata", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+      }),
+    );
+
+    expect(canonical.mediaPath).toBe("/tmp/tree.jpg");
+    expect(canonical.mediaType).toBe("image/jpeg");
+    expect(canonical.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
+    expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+    expect(toPluginInboundClaimEvent(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          mediaPath: "/tmp/tree.jpg",
+          mediaType: "image/jpeg",
+          mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+          mediaTypes: ["image/jpeg", "image/jpeg"],
+        }),
+      }),
+    );
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const canonical = deriveInboundMessageHookContext(makeInboundCtx());
 
@@ -96,6 +124,53 @@ describe("message hook mappers", () => {
         senderUsername: "userone",
         senderE164: "+15551234567",
       }),
+    });
+  });
+
+  it("normalizes Discord channel targets for inbound claim contexts", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        To: "channel:123456789012345678",
+        OriginatingTo: "channel:123456789012345678",
+        GroupChannel: "general",
+        GroupSubject: "guild",
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical)).toEqual({
+      channelId: "discord",
+      accountId: "acc-1",
+      conversationId: "channel:123456789012345678",
+      parentConversationId: undefined,
+      senderId: "sender-1",
+      messageId: "msg-1",
+    });
+  });
+
+  it("normalizes Discord DM targets for inbound claim contexts", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        From: "discord:1177378744822943744",
+        To: "channel:1480574946919846079",
+        OriginatingTo: "channel:1480574946919846079",
+        GroupChannel: undefined,
+        GroupSubject: undefined,
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical)).toEqual({
+      channelId: "discord",
+      accountId: "acc-1",
+      conversationId: "user:1177378744822943744",
+      parentConversationId: undefined,
+      senderId: "sender-1",
+      messageId: "msg-1",
     });
   });
 

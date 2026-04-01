@@ -5,7 +5,9 @@ import {
   getCallGatewayMock,
   getGatewayMethods,
   getSessionsSpawnTool,
+  resetSessionsSpawnHookRunnerOverride,
   setSessionsSpawnConfigOverride,
+  setSessionsSpawnHookRunnerOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
@@ -34,18 +36,6 @@ const hookRunnerMocks = vi.hoisted(() => ({
   }),
   runSubagentSpawned: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
-}));
-
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: vi.fn(() => ({
-    hasHooks: (hookName: string) =>
-      hookName === "subagent_spawning" ||
-      hookName === "subagent_spawned" ||
-      (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
-    runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
-    runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
-    runSubagentEnded: hookRunnerMocks.runSubagentEnded,
-  })),
 }));
 
 function expectSessionsDeleteWithoutAgentStart() {
@@ -136,10 +126,20 @@ function expectThreadBindFailureCleanup(
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    resetSessionsSpawnHookRunnerOverride();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
+    setSessionsSpawnHookRunnerOverride({
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_spawning" ||
+        hookName === "subagent_spawned" ||
+        (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
+      runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
+      runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
+      runSubagentEnded: hookRunnerMocks.runSubagentEnded,
+    });
     const callGatewayMock = getCallGatewayMock();
     callGatewayMock.mockClear();
     setSessionsSpawnConfigOverride({
@@ -376,6 +376,38 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expect(methods).toContain("sessions.delete");
     const deleteCall = findGatewayRequest("sessions.delete");
     expect(deleteCall?.params).toMatchObject({
+      deleteTranscript: true,
+      emitLifecycleHooks: true,
+    });
+  });
+
+  it("cleans up the provisional session when lineage patching fails after thread binding", async () => {
+    const callGatewayMock = getCallGatewayMock();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.patch" && typeof request.params?.spawnedBy === "string") {
+        throw new Error("lineage patch failed");
+      }
+      if (request.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await executeDiscordThreadSessionSpawn("call9");
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "lineage patch failed",
+    });
+    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
+    expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
+    const methods = getGatewayMethods();
+    expect(methods).toContain("sessions.delete");
+    expect(methods).not.toContain("agent");
+    const deleteCall = findGatewayRequest("sessions.delete");
+    expect(deleteCall?.params).toMatchObject({
+      key: (result.details as { childSessionKey?: string }).childSessionKey,
       deleteTranscript: true,
       emitLifecycleHooks: true,
     });

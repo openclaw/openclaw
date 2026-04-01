@@ -12,6 +12,12 @@ import UserNotifications
 private struct NotificationCallError: Error, Sendable {
     let message: String
 }
+
+private struct GatewayRelayIdentityResponse: Decodable {
+    let deviceId: String
+    let publicKey: String
+}
+
 // Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -140,6 +146,7 @@ final class NodeAppModel {
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
+    @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
     var gatewaySession: GatewayNodeSession { self.nodeGateway }
     var operatorSession: GatewayNodeSession { self.operatorGateway }
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -528,13 +535,6 @@ final class NodeAppModel {
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
     private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
     private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
-    private static var apnsEnvironment: String {
-#if DEBUG
-        "sandbox"
-#else
-        "production"
-#endif
-    }
 
     private func refreshBrandingFromGateway() async {
         do {
@@ -1189,7 +1189,15 @@ final class NodeAppModel {
             _ = try await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
         }
 
-        return await self.notificationAuthorizationStatus()
+        let updatedStatus = await self.notificationAuthorizationStatus()
+        if Self.isNotificationAuthorizationAllowed(updatedStatus) {
+            // Refresh APNs registration immediately after the first permission grant so the
+            // gateway can receive a push registration without requiring an app relaunch.
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+        return updatedStatus
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
@@ -1201,6 +1209,17 @@ final class NodeAppModel {
             return status
         case .failure:
             return .denied
+        }
+    }
+
+    private static func isNotificationAuthorizationAllowed(
+        _ status: NotificationAuthorizationStatus
+    ) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            true
+        case .denied, .notDetermined:
+            false
         }
     }
 
@@ -1661,6 +1680,7 @@ extension NodeAppModel {
         gatewayStableID: String,
         tls: GatewayTLSParams?,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         connectOptions: GatewayConnectOptions)
     {
@@ -1673,20 +1693,33 @@ extension NodeAppModel {
             stableID: stableID,
             tls: tls,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions)
         self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
-        self.startOperatorGatewayLoop(
-            url: url,
-            stableID: effectiveStableID,
+        if self.shouldStartOperatorGatewayLoop(
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: connectOptions,
-            sessionBox: sessionBox)
+            stableID: effectiveStableID)
+        {
+            self.startOperatorGatewayLoop(
+                url: url,
+                stableID: effectiveStableID,
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password,
+                nodeOptions: connectOptions,
+                sessionBox: sessionBox)
+        } else {
+            self.operatorGatewayTask = nil
+            Task { await self.operatorGateway.disconnect() }
+        }
         self.startNodeGatewayLoop(
             url: url,
             stableID: effectiveStableID,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions,
             sessionBox: sessionBox)
@@ -1702,6 +1735,7 @@ extension NodeAppModel {
             gatewayStableID: cfg.stableID,
             tls: cfg.tls,
             token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             connectOptions: cfg.nodeOptions)
     }
@@ -1761,6 +1795,86 @@ private extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
     }
 
+    func shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        stableID _: String) -> Bool
+    {
+        Self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator"))
+    }
+
+    func hasStoredGatewayRoleToken(_ role: String) -> Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role) != nil
+    }
+
+    static func shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedToken.isEmpty {
+            return true
+        }
+        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPassword.isEmpty {
+            return true
+        }
+        let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedBootstrapToken.isEmpty {
+            return false
+        }
+        return hasStoredOperatorToken
+    }
+
+    static func clearingBootstrapToken(in config: GatewayConnectConfig?) -> GatewayConnectConfig? {
+        guard let config else { return nil }
+        let trimmedBootstrapToken = config.bootstrapToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedBootstrapToken.isEmpty else { return config }
+        return GatewayConnectConfig(
+            url: config.url,
+            stableID: config.stableID,
+            tls: config.tls,
+            token: config.token,
+            bootstrapToken: nil,
+            password: config.password,
+            nodeOptions: config.nodeOptions)
+    }
+
+    func currentGatewayReconnectAuth(
+        fallbackToken: String?,
+        fallbackBootstrapToken: String?,
+        fallbackPassword: String?) -> (token: String?, bootstrapToken: String?, password: String?)
+    {
+        if let cfg = self.activeGatewayConnectConfig {
+            return (cfg.token, cfg.bootstrapToken, cfg.password)
+        }
+        return (fallbackToken, fallbackBootstrapToken, fallbackPassword)
+    }
+
+    func clearPersistedGatewayBootstrapTokenIfNeeded() {
+        // Always drop the in-memory bootstrap token after the first successful
+        // bootstrap connect so reconnect loops cannot reuse a spent token.
+        self.activeGatewayConnectConfig = Self.clearingBootstrapToken(in: self.activeGatewayConnectConfig)
+
+        let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedInstanceId.isEmpty else { return }
+        guard
+            GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: trimmedInstanceId) != nil
+        else { return }
+
+        GatewaySettingsStore.clearGatewayBootstrapToken(instanceId: trimmedInstanceId)
+    }
+
     func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
         guard self.isBackgrounded else { return }
         guard !self.backgroundReconnectSuppressed else { return }
@@ -1782,6 +1896,7 @@ private extension NodeAppModel {
         url: URL,
         stableID: String,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         nodeOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?)
@@ -1816,10 +1931,15 @@ private extension NodeAppModel {
                     displayName: nodeOptions.clientDisplayName)
 
                 do {
+                    let reconnectAuth = self.currentGatewayReconnectAuth(
+                        fallbackToken: token,
+                        fallbackBootstrapToken: bootstrapToken,
+                        fallbackPassword: password)
                     try await self.operatorGateway.connect(
                         url: url,
-                        token: token,
-                        password: password,
+                        token: reconnectAuth.token,
+                        bootstrapToken: reconnectAuth.bootstrapToken,
+                        password: reconnectAuth.password,
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
@@ -1834,6 +1954,7 @@ private extension NodeAppModel {
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
+                            await self.registerAPNsTokenIfNeeded()
                             await self.startVoiceWakeSync()
                             await MainActor.run { LiveActivityManager.shared.handleReconnect() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
@@ -1876,6 +1997,7 @@ private extension NodeAppModel {
         url: URL,
         stableID: String,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         nodeOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?)
@@ -1920,11 +2042,16 @@ private extension NodeAppModel {
 
                 do {
                     let epochMs = Int(Date().timeIntervalSince1970 * 1000)
+                    let reconnectAuth = self.currentGatewayReconnectAuth(
+                        fallbackToken: token,
+                        fallbackBootstrapToken: bootstrapToken,
+                        fallbackPassword: password)
                     GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(url.absoluteString)")
                     try await self.nodeGateway.connect(
                         url: url,
-                        token: token,
-                        password: password,
+                        token: reconnectAuth.token,
+                        bootstrapToken: reconnectAuth.bootstrapToken,
+                        password: reconnectAuth.password,
                         connectOptions: currentOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
@@ -1936,6 +2063,30 @@ private extension NodeAppModel {
                                 self.screen.errorText = nil
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
                             }
+                            let usedBootstrapToken =
+                                reconnectAuth.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                                reconnectAuth.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty == false
+                            if usedBootstrapToken {
+                                await MainActor.run {
+                                    self.clearPersistedGatewayBootstrapTokenIfNeeded()
+                                    if self.operatorGatewayTask == nil && self.shouldStartOperatorGatewayLoop(
+                                        token: reconnectAuth.token,
+                                        bootstrapToken: nil,
+                                        password: reconnectAuth.password,
+                                        stableID: stableID)
+                                    {
+                                        self.startOperatorGatewayLoop(
+                                            url: url,
+                                            stableID: stableID,
+                                            token: reconnectAuth.token,
+                                            bootstrapToken: nil,
+                                            password: reconnectAuth.password,
+                                            nodeOptions: currentOptions,
+                                            sessionBox: sessionBox)
+                                    }
+                                }
+                            }
                             let relayData = await MainActor.run {
                                 (
                                     sessionKey: self.mainSessionKey,
@@ -1946,8 +2097,8 @@ private extension NodeAppModel {
                             ShareGatewayRelaySettings.saveConfig(
                                 ShareGatewayRelayConfig(
                                     gatewayURLString: url.absoluteString,
-                                    token: token,
-                                    password: password,
+                                    token: reconnectAuth.token,
+                                    password: reconnectAuth.password,
                                     sessionKey: relayData.sessionKey,
                                     deliveryChannel: relayData.deliveryChannel,
                                     deliveryTo: relayData.deliveryTo))
@@ -2479,7 +2630,8 @@ extension NodeAppModel {
         else {
             return
         }
-        if token == self.apnsLastRegisteredTokenHex {
+        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        if !usesRelayTransport && token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2488,23 +2640,38 @@ extension NodeAppModel {
             return
         }
 
-        struct PushRegistrationPayload: Codable {
-            var token: String
-            var topic: String
-            var environment: String
-        }
-
-        let payload = PushRegistrationPayload(
-            token: token,
-            topic: topic,
-            environment: Self.apnsEnvironment)
         do {
-            let json = try Self.encodePayload(payload)
-            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: json)
+            let gatewayIdentity: PushRelayGatewayIdentity?
+            if usesRelayTransport {
+                guard self.operatorConnected else { return }
+                gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
+            } else {
+                gatewayIdentity = nil
+            }
+            let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
+                apnsTokenHex: token,
+                topic: topic,
+                gatewayIdentity: gatewayIdentity)
+            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
             self.apnsLastRegisteredTokenHex = token
         } catch {
-            // Best-effort only.
+            self.pushWakeLogger.error(
+                "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func fetchPushRelayGatewayIdentity() async throws -> PushRelayGatewayIdentity {
+        let response = try await self.operatorGateway.request(
+            method: "gateway.identity.get",
+            paramsJSON: "{}",
+            timeoutSeconds: 8)
+        let decoded = try JSONDecoder().decode(GatewayRelayIdentityResponse.self, from: response)
+        let deviceId = decoded.deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let publicKey = decoded.publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !deviceId.isEmpty, !publicKey.isEmpty else {
+            throw PushRelayError.relayMisconfigured("Gateway identity response missing required fields")
+        }
+        return PushRelayGatewayIdentity(deviceId: deviceId, publicKey: publicKey)
     }
 
     private static func isSilentPushPayload(_ userInfo: [AnyHashable: Any]) -> Bool {
@@ -2970,6 +3137,20 @@ extension NodeAppModel {
     static func _test_currentDeepLinkKey() -> String {
         self.expectedDeepLinkKey()
     }
+
+    static func _test_shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
+        self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            hasStoredOperatorToken: hasStoredOperatorToken)
+    }
+
 }
 #endif
 // swiftlint:enable type_body_length file_length

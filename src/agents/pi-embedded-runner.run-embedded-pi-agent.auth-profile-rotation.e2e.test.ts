@@ -4,7 +4,6 @@ import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -21,57 +20,137 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
-  runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-}));
-
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: (
-    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-    attempt: number,
-  ) => computeBackoffMock(policy, attempt),
-  sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
-}));
-
-vi.mock("../providers/github-copilot-token.js", () => ({
-  DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
-  resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
-}));
-
-vi.mock("./pi-embedded-runner/compact.js", () => ({
-  compactEmbeddedPiSessionDirect: vi.fn(async () => {
-    throw new Error("compact should not run in auth profile rotation tests");
-  }),
-}));
-
-vi.mock("./models-config.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("./models-config.js")>();
-  return {
-    ...mod,
-    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
-  };
-});
+const installRunEmbeddedMocks = () => {
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+  }));
+  vi.doMock("../context-engine/index.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
+  }));
+  vi.doMock("./runtime-plugins.js", () => ({
+    ensureRuntimePluginsLoaded: vi.fn(),
+  }));
+  vi.doMock("./pi-embedded-runner/model.js", () => ({
+    resolveModelAsync: async (provider: string, modelId: string) => ({
+      model: {
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        provider,
+        baseUrl:
+          provider === "github-copilot" ? "https://api.copilot.example" : "https://example.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 16_000,
+        maxTokens: 2048,
+      },
+      error: undefined,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    }),
+  }));
+  vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
+    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: async (params: {
+        provider: string;
+        context: { apiKey: string };
+      }) => {
+        if (params.provider !== "github-copilot") {
+          return undefined;
+        }
+        const token = await resolveCopilotApiTokenMock(params.context.apiKey);
+        return {
+          apiKey: token.token,
+          baseUrl: token.baseUrl,
+          expiresAt: token.expiresAt,
+        };
+      },
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
+  });
+  vi.doMock("../infra/backoff.js", () => ({
+    computeBackoff: (
+      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      attempt: number,
+    ) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
+  }));
+  vi.doMock("./pi-embedded-runner/compact.js", () => ({
+    compactEmbeddedPiSessionDirect: vi.fn(async () => {
+      throw new Error("compact should not run in auth profile rotation tests");
+    }),
+  }));
+  vi.doMock("./models-config.js", async (importOriginal) => {
+    const mod = await importOriginal<typeof import("./models-config.js")>();
+    return {
+      ...mod,
+      ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
+    };
+  });
+};
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 let unregisterLogTransport: (() => void) | undefined;
+let registerLogTransportFn: typeof import("../logging/logger.js").registerLogTransport;
+let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
+let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
+const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
+  vi.resetModules();
+  installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
+  ({
+    registerLogTransport: registerLogTransportFn,
+    resetLogger: resetLoggerFn,
+    setLoggerOverride: setLoggerOverrideFn,
+  } = await import("../logging/logger.js"));
 });
+
+async function runEmbeddedPiAgentInline(
+  params: Parameters<typeof runEmbeddedPiAgent>[0],
+): Promise<Awaited<ReturnType<typeof runEmbeddedPiAgent>>> {
+  return await runEmbeddedPiAgent({
+    ...params,
+    enqueue: async (task) => await task(),
+  });
+}
 
 beforeEach(() => {
   vi.useRealTimers();
-  runEmbeddedAttemptMock.mockClear();
+  runEmbeddedAttemptMock.mockReset();
+  runEmbeddedAttemptMock.mockImplementation(async () => {
+    throw new Error("unexpected extra runEmbeddedAttempt call");
+  });
   resolveCopilotApiTokenMock.mockReset();
+  resolveCopilotApiTokenMock.mockImplementation(async () => {
+    throw new Error("unexpected extra Copilot token refresh");
+  });
+  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  }) as unknown as typeof fetch;
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   unregisterLogTransport?.();
   unregisterLogTransport = undefined;
-  setLoggerOverride(null);
-  resetLogger();
+  setLoggerOverrideFn(null);
+  resetLoggerFn();
 });
 
 const baseUsage = {
@@ -114,8 +193,26 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   ...overrides,
 });
 
-const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
+const makeConfig = (opts?: {
+  fallbacks?: string[];
+  apiKey?: string;
+  overloadedBackoffMs?: number;
+  overloadedProfileRotations?: number;
+}): OpenClawConfig =>
   ({
+    auth:
+      opts?.overloadedBackoffMs != null || opts?.overloadedProfileRotations != null
+        ? {
+            cooldowns: {
+              ...(opts?.overloadedBackoffMs != null
+                ? { overloadedBackoffMs: opts.overloadedBackoffMs }
+                : {}),
+              ...(opts?.overloadedProfileRotations != null
+                ? { overloadedProfileRotations: opts.overloadedProfileRotations }
+                : {}),
+            },
+          }
+        : undefined,
     agents: {
       defaults: {
         model: {
@@ -305,14 +402,15 @@ async function runAutoPinnedOpenAiTurn(params: {
   sessionKey: string;
   runId: string;
   authProfileId?: string;
+  config?: OpenClawConfig;
 }) {
-  await runEmbeddedPiAgent({
+  await runEmbeddedPiAgentInline({
     sessionId: "session:test",
     sessionKey: params.sessionKey,
     sessionFile: path.join(params.workspaceDir, "session.jsonl"),
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
-    config: makeConfig(),
+    config: params.config ?? makeConfig(),
     prompt: "hello",
     provider: "openai",
     model: "mock-1",
@@ -349,8 +447,9 @@ async function runAutoPinnedRotationCase(params: {
   errorMessage: string;
   sessionKey: string;
   runId: string;
+  config?: OpenClawConfig;
 }) {
-  runEmbeddedAttemptMock.mockClear();
+  runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
     mockFailedThenSuccessfulAttempt(params.errorMessage);
@@ -359,6 +458,7 @@ async function runAutoPinnedRotationCase(params: {
       workspaceDir,
       sessionKey: params.sessionKey,
       runId: params.runId,
+      config: params.config,
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
@@ -371,8 +471,9 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   errorMessage: string;
   sessionKey: string;
   runId: string;
+  config?: OpenClawConfig;
 }) {
-  runEmbeddedAttemptMock.mockClear();
+  runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
     mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
@@ -381,6 +482,7 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
       workspaceDir,
       sessionKey: params.sessionKey,
       runId: params.runId,
+      config: params.config,
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
@@ -468,7 +570,7 @@ async function runTurnWithCooldownSeed(params: {
     });
     mockSingleSuccessfulAttempt();
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedPiAgentInline({
       sessionId: "session:test",
       sessionKey: params.sessionKey,
       sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -493,16 +595,16 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("refreshes copilot token after auth error and retries once", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
-    vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
       const now = Date.now();
-      vi.setSystemTime(now);
 
       resolveCopilotApiTokenMock
         .mockResolvedValueOnce({
           token: "copilot-initial",
-          expiresAt: now + 2 * 60 * 1000,
+          // Keep expiry beyond the runtime refresh margin so the test only
+          // exercises auth-error refresh, not the background scheduler.
+          expiresAt: now + 10 * 60 * 1000,
           source: "mock",
           baseUrl: "https://api.copilot.example",
         })
@@ -533,7 +635,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           }),
         );
 
-      await runEmbeddedPiAgent({
+      await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:copilot-auth-error",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -551,7 +653,6 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(2);
     } finally {
-      vi.useRealTimers();
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -560,22 +661,21 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("allows another auth refresh after a successful retry", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
-    vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
       const now = Date.now();
-      vi.setSystemTime(now);
 
       resolveCopilotApiTokenMock
         .mockResolvedValueOnce({
           token: "copilot-initial",
-          expiresAt: now + 2 * 60 * 1000,
+          // Avoid an immediate scheduled refresh racing the explicit auth retry.
+          expiresAt: now + 10 * 60 * 1000,
           source: "mock",
           baseUrl: "https://api.copilot.example",
         })
         .mockResolvedValueOnce({
           token: "copilot-refresh-1",
-          expiresAt: now + 4 * 60 * 1000,
+          expiresAt: now + 10 * 60 * 1000,
           source: "mock",
           baseUrl: "https://api.copilot.example",
         })
@@ -620,7 +720,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           }),
         );
 
-      await runEmbeddedPiAgent({
+      await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:copilot-auth-repeat",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -634,11 +734,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         timeoutMs: 5_000,
         runId: "run:copilot-auth-repeat",
       });
-
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(4);
       expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(3);
     } finally {
-      vi.useRealTimers();
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -670,7 +768,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       );
 
-      const runPromise = runEmbeddedPiAgent({
+      const runPromise = runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:copilot-shutdown",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -716,28 +814,18 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-    expect(computeBackoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialMs: 250,
-        maxMs: 1500,
-        factor: 2,
-        jitter: 0.2,
-      }),
-      1,
-    );
-    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
     const records: Array<Record<string, unknown>> = [];
-    setLoggerOverride({
+    setLoggerOverrideFn({
       level: "trace",
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
     });
-    unregisterLogTransport = registerLogTransport((record) => {
+    unregisterLogTransport = registerLogTransportFn((record) => {
       records.push(record);
     });
 
@@ -793,16 +881,19 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-    expect(computeBackoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialMs: 250,
-        maxMs: 1500,
-        factor: 2,
-        jitter: 0.2,
-      }),
-      1,
-    );
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
+  it("uses configured overload backoff before rotating profiles", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      sessionKey: "agent:test:overloaded-configured-backoff",
+      runId: "run:overloaded-configured-backoff",
+      config: makeConfig({ overloadedBackoffMs: 321 }),
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
@@ -846,7 +937,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       );
 
-      const result = await runEmbeddedPiAgent({
+      const result = await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:compaction-timeout",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -875,7 +966,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       mockSingleErrorAttempt({ errorMessage: "rate limit" });
 
-      await runEmbeddedPiAgent({
+      await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:user",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -923,7 +1014,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       );
 
-      await runEmbeddedPiAgent({
+      await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:mismatch",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -965,7 +1056,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       });
 
       await expect(
-        runEmbeddedPiAgent({
+        runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:cooldown-failover",
           sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1009,7 +1100,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       );
 
-      const result = await runEmbeddedPiAgent({
+      const result = await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:cooldown-probe",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1057,7 +1148,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       );
 
-      const result = await runEmbeddedPiAgent({
+      const result = await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:overloaded-cooldown-probe",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1105,7 +1196,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       );
 
-      const result = await runEmbeddedPiAgent({
+      const result = await runEmbeddedPiAgentInline({
         sessionId: "session:test",
         sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
         sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1136,7 +1227,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       });
 
       await expect(
-        runEmbeddedPiAgent({
+        runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:support:cooldown-failover",
           sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1181,7 +1272,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       });
 
       await expect(
-        runEmbeddedPiAgent({
+        runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:disabled-failover",
           sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1215,7 +1306,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {}, usageStats: {} }));
 
         await expect(
-          runEmbeddedPiAgent({
+          runEmbeddedPiAgentInline({
             sessionId: "session:test",
             sessionKey: "agent:test:auth-unavailable",
             sessionFile: path.join(workspaceDir, "session.jsonl"),
@@ -1253,7 +1344,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       let thrown: unknown;
       try {
-        await runEmbeddedPiAgent({
+        await runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:billing-failover-active-model",
           sessionFile: path.join(workspaceDir, "session.jsonl"),

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { MattermostInteractiveButtonInput } from "./interactions.js";
 import {
   loadSessionStore,
   normalizeProviderId,
@@ -6,8 +7,7 @@ import {
   resolveStoredModelOverride,
   type ModelsProviderData,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
-import type { MattermostInteractiveButtonInput } from "./interactions.js";
+} from "./runtime-api.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";
 const MODELS_PAGE_SIZE = 8;
@@ -36,15 +36,13 @@ export type MattermostModelPickerRenderedView = {
 
 function splitModelRef(modelRef?: string | null): { provider: string; model: string } | null {
   const trimmed = modelRef?.trim();
-  if (!trimmed) {
+  const match = trimmed?.match(/^([^/]+)\/(.+)$/u);
+  if (!match) {
     return null;
   }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(trimmed.slice(0, slashIndex));
-  const model = trimmed.slice(slashIndex + 1).trim();
+  const provider = normalizeProviderId(match[1]);
+  // Mattermost copy should normalize accidental whitespace around the model.
+  const model = match[2].trim();
   if (!provider || !model) {
     return null;
   }

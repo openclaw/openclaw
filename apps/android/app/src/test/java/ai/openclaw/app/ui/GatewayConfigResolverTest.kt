@@ -4,11 +4,90 @@ import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
+    val parsed = parseGatewayEndpoint("wss://gateway.example")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.example",
+        port = 443,
+        tls = true,
+        displayUrl = "https://gateway.example",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointUsesDefaultCleartextPortForBareWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://gateway.example")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.example",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://gateway.example:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointOmitsExplicitDefaultTlsPortFromDisplayUrl() {
+    val parsed = parseGatewayEndpoint("https://gateway.example:443")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.example",
+        port = 443,
+        tls = true,
+        displayUrl = "https://gateway.example",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointKeepsExplicitNonDefaultPortInDisplayUrl() {
+    val parsed = parseGatewayEndpoint("http://gateway.example:8080")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.example",
+        port = 8080,
+        tls = false,
+        displayUrl = "http://gateway.example:8080",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointKeepsExplicitCleartextPort80InDisplayUrl() {
+    val parsed = parseGatewayEndpoint("http://gateway.example:80")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.example",
+        port = 80,
+        tls = false,
+        displayUrl = "http://gateway.example:80",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
   fun resolveScannedSetupCodeAcceptsRawSetupCode() {
-    val setupCode = encodeSetupCode("""{"url":"wss://gateway.example:18789","token":"token-1"}""")
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
 
     val resolved = resolveScannedSetupCode(setupCode)
 
@@ -17,7 +96,8 @@ class GatewayConfigResolverTest {
 
   @Test
   fun resolveScannedSetupCodeAcceptsQrJsonPayload() {
-    val setupCode = encodeSetupCode("""{"url":"wss://gateway.example:18789","password":"pw-1"}""")
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
     val qrJson =
       """
       {
@@ -51,6 +131,143 @@ class GatewayConfigResolverTest {
     val qrJson = """{"setupCode":{"nested":"value"}}"""
     val resolved = resolveScannedSetupCode(qrJson)
     assertNull(resolved)
+  }
+
+  @Test
+  fun decodeGatewaySetupCodeParsesBootstrapToken() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val decoded = decodeGatewaySetupCode(setupCode)
+
+    assertEquals("wss://gateway.example:18789", decoded?.url)
+    assertEquals("bootstrap-1", decoded?.bootstrapToken)
+    assertNull(decoded?.token)
+    assertNull(decoded?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigPrefersBootstrapTokenFromSetupCode() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = setupCode,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
+      )
+
+    assertEquals("gateway.example", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigDefaultsPortlessWssSetupCodeTo443() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = setupCode,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
+      )
+
+    assertEquals("gateway.example", resolved?.host)
+    assertEquals(443, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualPreservesBootstrapTokenWhenNoReplacementAuthExists() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "192.168.31.100",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.100",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("192.168.31.100", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualDropsBootstrapTokenWhenReplacementPasswordExists() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "192.168.31.100",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.100",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "password-1",
+      )
+
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("password-1", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualDropsBootstrapTokenWhenEndpointChanges() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "192.168.31.100",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.101",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("192.168.31.101", resolved?.host)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {

@@ -14,7 +14,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -25,6 +25,7 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.js";
+import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -34,6 +35,7 @@ import { buildChannelsTable } from "./status-all/channels.js";
 import { formatDurationPrecise, formatGatewayAuthUsed } from "./status-all/format.js";
 import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
+import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
 
@@ -44,12 +46,13 @@ export async function statusAllCommand(
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     progress.setLabel("Loading config…");
     const loadedRaw = await readBestEffortConfig();
-    const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
-      config: loadedRaw,
-      commandName: "status --all",
-      targetIds: getStatusCommandSecretTargetIds(),
-      mode: "summary",
-    });
+    const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
+      await resolveCommandSecretRefsViaGateway({
+        config: loadedRaw,
+        commandName: "status --all",
+        targetIds: getStatusCommandSecretTargetIds(),
+        mode: "read_only_status",
+      });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);
     progress.tick();
@@ -122,10 +125,11 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const localProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "local" });
-    const remoteProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "remote" });
-    const probeAuthResolution =
-      isRemoteMode && !remoteUrlMissing ? remoteProbeAuthResolution : localProbeAuthResolution;
+    const probeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg,
+      mode: isRemoteMode && !remoteUrlMissing ? "remote" : "local",
+      env: process.env,
+    });
     const probeAuth = probeAuthResolution.auth;
 
     const gatewayProbe = await probeGateway({
@@ -144,6 +148,7 @@ export async function statusAllCommand(
         return {
           label: summary.label,
           installed: summary.installed,
+          externallyManaged: summary.externallyManaged,
           managedByOpenClaw: summary.managedByOpenClaw,
           loaded: summary.loaded,
           loadedText: summary.loadedText,
@@ -155,6 +160,13 @@ export async function statusAllCommand(
     };
     const daemon = await readServiceSummary(resolveGatewayService());
     const nodeService = await readServiceSummary(resolveNodeService());
+    const nodeOnlyGateway =
+      daemon && nodeService
+        ? await resolveNodeOnlyGatewayInfo({
+            daemon,
+            node: nodeService,
+          })
+        : null;
     progress.tick();
 
     progress.setLabel("Scanning agents…");
@@ -168,6 +180,9 @@ export async function statusAllCommand(
     progress.tick();
 
     const connectionDetailsForReport = (() => {
+      if (nodeOnlyGateway) {
+        return nodeOnlyGateway.connectionDetails;
+      }
       if (!remoteUrlMissing) {
         return connection.message;
       }
@@ -186,20 +201,22 @@ export async function statusAllCommand(
     const callOverrides = remoteUrlMissing
       ? {
           url: connection.url,
-          token: localProbeAuthResolution.auth.token,
-          password: localProbeAuthResolution.auth.password,
+          token: probeAuthResolution.auth.token,
+          password: probeAuthResolution.auth.password,
         }
       : {};
 
     progress.setLabel("Querying gateway…");
-    const health = gatewayReachable
-      ? await callGateway({
-          config: cfg,
-          method: "health",
-          timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
-          ...callOverrides,
-        }).catch((err) => ({ error: String(err) }))
-      : { error: gatewayProbe?.error ?? "gateway unreachable" };
+    const health = nodeOnlyGateway
+      ? undefined
+      : gatewayReachable
+        ? await callGateway({
+            config: cfg,
+            method: "health",
+            timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
+            ...callOverrides,
+          }).catch((err) => ({ error: String(err) }))
+        : { error: gatewayProbe?.error ?? "gateway unreachable" };
 
     const channelsStatus = gatewayReachable
       ? await callGateway({
@@ -237,6 +254,7 @@ export async function statusAllCommand(
             }
           })()
         : null;
+    const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
 
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     const dashboard = controlUiEnabled
@@ -257,6 +275,9 @@ export async function statusAllCommand(
         ? `unreachable (${gatewayProbe.error})`
         : "unreachable";
     const gatewayAuth = gatewayReachable ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
+    const gatewayValue =
+      nodeOnlyGateway?.gatewayValue ??
+      `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`;
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
         ? [
@@ -299,7 +320,7 @@ export async function statusAllCommand(
       { Item: "Update", Value: updateLine },
       {
         Item: "Gateway",
-        Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
+        Value: gatewayValue,
       },
       ...(probeAuthResolution.warning
         ? [{ Item: "Gateway auth warning", Value: probeAuthResolution.warning }]
@@ -328,6 +349,13 @@ export async function statusAllCommand(
         Item: "Agents",
         Value: `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${aliveAgents} active · ${agentStatus.totalSessions} sessions`,
       },
+      {
+        Item: "Secrets",
+        Value:
+          secretDiagnostics.length > 0
+            ? `${secretDiagnostics.length} diagnostic${secretDiagnostics.length === 1 ? "" : "s"}`
+            : "none",
+      },
     ];
 
     const lines = await buildStatusAllReportLines({
@@ -343,6 +371,7 @@ export async function statusAllCommand(
       diagnosis: {
         snap,
         remoteUrlMissing,
+        secretDiagnostics,
         sentinel,
         lastErr,
         port,
@@ -351,10 +380,12 @@ export async function statusAllCommand(
         tailscale,
         tailscaleHttpsUrl,
         skillStatus,
+        pluginCompatibility,
         channelsStatus,
         channelIssues,
         gatewayReachable,
         health,
+        nodeOnlyGateway,
       },
     });
 

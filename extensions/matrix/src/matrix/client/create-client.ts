@@ -1,10 +1,8 @@
 import fs from "node:fs";
-import type {
-  IStorageProvider,
-  ICryptoStorageProvider,
-  MatrixClient,
-} from "@vector-im/matrix-bot-sdk";
-import { loadMatrixSdk } from "../sdk-runtime.js";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import type { SsrFPolicy } from "../../runtime-api.js";
+import { MatrixClient } from "../sdk.js";
+import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,
@@ -12,114 +10,66 @@ import {
   writeStorageMeta,
 } from "./storage.js";
 
-function sanitizeUserIdList(input: unknown, label: string): string[] {
-  const LogService = loadMatrixSdk().LogService;
-  if (input == null) {
-    return [];
-  }
-  if (!Array.isArray(input)) {
-    LogService.warn(
-      "MatrixClientLite",
-      `Expected ${label} list to be an array, got ${typeof input}`,
-    );
-    return [];
-  }
-  const filtered = input.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-  if (filtered.length !== input.length) {
-    LogService.warn(
-      "MatrixClientLite",
-      `Dropping ${input.length - filtered.length} invalid ${label} entries from sync payload`,
-    );
-  }
-  return filtered;
-}
-
 export async function createMatrixClient(params: {
   homeserver: string;
-  userId: string;
+  userId?: string;
   accessToken: string;
+  password?: string;
+  deviceId?: string;
   encryption?: boolean;
   localTimeoutMs?: number;
+  initialSyncLimit?: number;
   accountId?: string | null;
+  autoBootstrapCrypto?: boolean;
+  allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixClient> {
-  const { MatrixClient, SimpleFsStorageProvider, RustSdkCryptoStorageProvider, LogService } =
-    loadMatrixSdk();
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
+  const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
+  const userId = params.userId?.trim() || "unknown";
+  const matrixClientUserId = params.userId?.trim() || undefined;
 
-  // Create storage provider
   const storagePaths = resolveMatrixStoragePaths({
-    homeserver: params.homeserver,
-    userId: params.userId,
+    homeserver,
+    userId,
     accessToken: params.accessToken,
     accountId: params.accountId,
+    deviceId: params.deviceId,
     env,
   });
-  maybeMigrateLegacyStorage({ storagePaths, env });
+  await maybeMigrateLegacyStorage({
+    storagePaths,
+    env,
+  });
   fs.mkdirSync(storagePaths.rootDir, { recursive: true });
-  const storage: IStorageProvider = new SimpleFsStorageProvider(storagePaths.storagePath);
-
-  // Create crypto storage if encryption is enabled
-  let cryptoStorage: ICryptoStorageProvider | undefined;
-  if (params.encryption) {
-    fs.mkdirSync(storagePaths.cryptoPath, { recursive: true });
-
-    try {
-      const { StoreType } = await import("@matrix-org/matrix-sdk-crypto-nodejs");
-      cryptoStorage = new RustSdkCryptoStorageProvider(storagePaths.cryptoPath, StoreType.Sqlite);
-    } catch (err) {
-      LogService.warn(
-        "MatrixClientLite",
-        "Failed to initialize crypto storage, E2EE disabled:",
-        err,
-      );
-    }
-  }
 
   writeStorageMeta({
     storagePaths,
-    homeserver: params.homeserver,
-    userId: params.userId,
+    homeserver,
+    userId,
     accountId: params.accountId,
+    deviceId: params.deviceId,
   });
 
-  const client = new MatrixClient(params.homeserver, params.accessToken, storage, cryptoStorage);
+  const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
 
-  if (client.crypto) {
-    const originalUpdateSyncData = client.crypto.updateSyncData.bind(client.crypto);
-    client.crypto.updateSyncData = async (
-      toDeviceMessages,
-      otkCounts,
-      unusedFallbackKeyAlgs,
-      changedDeviceLists,
-      leftDeviceLists,
-    ) => {
-      const safeChanged = sanitizeUserIdList(changedDeviceLists, "changed device list");
-      const safeLeft = sanitizeUserIdList(leftDeviceLists, "left device list");
-      try {
-        return await originalUpdateSyncData(
-          toDeviceMessages,
-          otkCounts,
-          unusedFallbackKeyAlgs,
-          safeChanged,
-          safeLeft,
-        );
-      } catch (err) {
-        const message = typeof err === "string" ? err : err instanceof Error ? err.message : "";
-        if (message.includes("Expect value to be String")) {
-          LogService.warn(
-            "MatrixClientLite",
-            "Ignoring malformed device list entries during crypto sync",
-            message,
-          );
-          return;
-        }
-        throw err;
-      }
-    };
-  }
-
-  return client;
+  return new MatrixClient(homeserver, params.accessToken, {
+    userId: matrixClientUserId,
+    password: params.password,
+    deviceId: params.deviceId,
+    encryption: params.encryption,
+    localTimeoutMs: params.localTimeoutMs,
+    initialSyncLimit: params.initialSyncLimit,
+    storagePath: storagePaths.storagePath,
+    recoveryKeyPath: storagePaths.recoveryKeyPath,
+    idbSnapshotPath: storagePaths.idbSnapshotPath,
+    cryptoDatabasePrefix,
+    autoBootstrapCrypto: params.autoBootstrapCrypto,
+    ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
+  });
 }

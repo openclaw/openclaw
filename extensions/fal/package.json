@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/fal-provider",
+  "version": "2026.4.1",
+  "private": true,
+  "description": "OpenClaw fal provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
