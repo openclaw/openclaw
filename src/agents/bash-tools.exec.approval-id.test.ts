@@ -527,6 +527,98 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-discord-"));
+    const markerPath = path.join(tempDir, "marker.txt");
+    let resolveDecision: ((value: { decision: string }) => void) | undefined;
+    const decisionPromise = new Promise<{ decision: string }>((resolve) => {
+      resolveDecision = resolve;
+    });
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return await decisionPromise;
+      }
+      if (method === "agent") {
+        agentCalls.push(params as Record<string, unknown>);
+        return { status: "ok" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:discord:channel:123",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "discord",
+      currentChannelId: "123",
+      accountId: "default",
+      currentThreadTs: "456",
+    });
+
+    const result = await tool.execute("call-gw-followup-discord-delayed", {
+      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
+      workdir: tempDir,
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    expect(agentCalls).toHaveLength(0);
+    await expect
+      .poll(
+        async () => {
+          try {
+            await fs.access(markerPath);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 500, interval: 50 },
+      )
+      .toBe(false);
+
+    resolveDecision?.({ decision: "allow-once" });
+
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(agentCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        deliver: true,
+        bestEffortDeliver: true,
+        channel: "discord",
+        to: "123",
+        accountId: "default",
+        threadId: "456",
+      }),
+    );
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain(
+      "If the task requires more steps, continue from this result before replying to the user.",
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            return await fs.readFile(markerPath, "utf8");
+          } catch {
+            return "";
+          }
+        },
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBe("ok");
+  });
+
   it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-sidefx-"));
