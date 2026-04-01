@@ -401,6 +401,11 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+async function runWSLEnvironmentHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWSLEnvironment } = await import("../commands/doctor-wsl.js");
+  await noteWSLEnvironment(ctx);
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -669,6 +674,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:hooks-model",
       label: "Hooks model",
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:wsl-environment",
+      label: "WSL environment",
+      hint: "WSL2 systemd, resource limits, kernel version",
+      run: runWSLEnvironmentHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
