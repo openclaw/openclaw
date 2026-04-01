@@ -2107,17 +2107,19 @@ export async function runEmbeddedAttempt(
 
           if (llmOutputResult?.assistantTexts !== undefined) {
             finalAssistantTexts = llmOutputResult.assistantTexts;
-            // Strip text/reasoning content from lastAssistant to prevent
-            // downstream payload construction from leaking the original
-            // model output (including reasoning blocks in reasoning mode).
-            // Preserve stopReason, errorMessage, and usage so that
-            // run.ts failover/retry logic can still detect auth, rate-limit,
-            // and billing errors on the original model response.
+            // Strip text, reasoning, and error content from lastAssistant to
+            // prevent downstream payload construction from leaking the original
+            // model output. This includes reasoning blocks (reasoning mode) and
+            // formatAssistantErrorText output (errored replies).
+            // Preserve stopReason and usage so that run.ts failover/retry
+            // logic can still detect auth, rate-limit, and billing errors on
+            // the original model response.
             if (lastAssistant) {
               lastAssistant = {
                 ...lastAssistant,
                 text: "",
                 content: [],
+                errorMessage: undefined,
               } as typeof lastAssistant;
             }
           }
