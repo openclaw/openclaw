@@ -160,6 +160,16 @@ describe("isRecoverableTelegramNetworkError", () => {
 });
 
 describe("isSafeToRetrySendError", () => {
+  class MockHttpError extends Error {
+    constructor(
+      message: string,
+      public readonly error: unknown,
+    ) {
+      super(message);
+      this.name = "HttpError";
+    }
+  }
+
   it.each([
     ["ECONNREFUSED", "connect ECONNREFUSED", true],
     ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
@@ -182,6 +192,13 @@ describe("isSafeToRetrySendError", () => {
   it("detects pre-connect error nested in cause chain", () => {
     const root = Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" });
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
+    expect(isSafeToRetrySendError(wrapped)).toBe(true);
+  });
+
+  it("detects pre-connect error wrapped in grammY HttpError", () => {
+    const root = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
 });

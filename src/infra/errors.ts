@@ -71,7 +71,7 @@ export function formatErrorMessage(err: unknown): string {
     formatted = err.message || err.name || "Error";
     // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
     let cause: unknown = err.cause;
-    const seen = new Set<unknown>();
+    const seen = new Set<unknown>([err]);
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {

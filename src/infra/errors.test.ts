@@ -84,8 +84,7 @@ describe("error helpers", () => {
     a.cause = b;
     b.cause = a;
     const formatted = formatErrorMessage(a);
-    expect(formatted).toContain("error A");
-    expect(formatted).toContain("error B");
+    expect(formatted).toBe("error A | error B");
   });
 
   it("redacts sensitive tokens from formatted error messages", () => {

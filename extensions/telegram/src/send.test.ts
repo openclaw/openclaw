@@ -940,6 +940,40 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
+  it("retries wrapped pre-connect HttpError sends", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
+      code: "ECONNREFUSED",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      name: "HttpError",
+      error: fetchError,
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({
+        message_id: 1,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "1", chatId });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));
