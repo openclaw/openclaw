@@ -6,7 +6,7 @@ import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 export function resolveCronSession(params: {

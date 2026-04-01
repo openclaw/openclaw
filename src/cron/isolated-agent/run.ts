@@ -32,7 +32,6 @@ import {
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
-import { updateSessionStore } from "../../config/sessions/store.runtime.js";
 import { setSessionRuntimeModel } from "../../config/sessions/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
@@ -63,6 +62,15 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+async function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return await sessionStoreRuntimePromise;
+}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -273,6 +281,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
     }
+    const { updateSessionStore } = await loadSessionStoreRuntime();
     await updateSessionStore(cronSession.storePath, (store) => {
       store[agentSessionKey] = cronSession.sessionEntry;
       if (runSessionKey !== agentSessionKey) {
