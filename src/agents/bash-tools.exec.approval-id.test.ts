@@ -517,6 +517,60 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.waitDecision");
   });
 
+  it("reuses exact-command durable trust for node shell-wrapper reruns", async () => {
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approvals.node.get") {
+        const prepared = buildPreparedSystemRunPayload({
+          params: { command: ["/bin/sh", "-lc", "cd ."], cwd: process.cwd() },
+        }) as { payload?: { plan?: { commandText?: string } } };
+        return {
+          file: {
+            version: 1,
+            agents: {
+              main: {
+                allowlist: [
+                  {
+                    pattern: "=command:test",
+                    source: "allow-always",
+                    commandText: prepared.payload?.plan?.commandText,
+                  },
+                ],
+              },
+            },
+          },
+        };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-shell-wrapper-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-shell-wrapper-durable-allow-always", {
+      command: "cd .",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("node-shell-wrapper-ok");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
   it("requires approval for elevated ask when allowlist misses", async () => {
     const calls: string[] = [];
     let resolveApproval: (() => void) | undefined;

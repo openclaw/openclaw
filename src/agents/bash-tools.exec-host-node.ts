@@ -183,7 +183,7 @@ export async function executeNodeHostCommand(
           analysisOk: allowlistEval.analysisOk,
           segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
           allowlist: resolved.allowlist,
-          commandText: params.command,
+          commandText: runRawCommand,
         });
         allowlistSatisfied = allowlistEval.allowlistSatisfied;
         analysisOk = allowlistEval.analysisOk;
