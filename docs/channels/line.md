@@ -221,6 +221,7 @@ Generic media sends fall back to the existing image-only route when a LINE-speci
   If your global npm layout is different, locate OpenClaw with `npm root -g`.
   Then restart the gateway. Re-run the `ln -sf` command after each upgrade until
   a patch release includes the fix.
+
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
 
