@@ -106,8 +106,10 @@ function buildEffectiveKnownNode(entry: {
     deviceFamily: live?.deviceFamily ?? nodePairing?.deviceFamily,
     modelIdentifier: live?.modelIdentifier ?? nodePairing?.modelIdentifier,
     remoteIp: live?.remoteIp ?? nodePairing?.remoteIp ?? devicePairing?.remoteIp,
-    caps: uniqueSortedStrings(live?.caps, nodePairing?.caps),
-    commands: uniqueSortedStrings(live?.commands, nodePairing?.commands),
+    caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
+    commands: live
+      ? uniqueSortedStrings(live.commands)
+      : uniqueSortedStrings(nodePairing?.commands),
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,

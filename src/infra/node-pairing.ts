@@ -29,18 +29,13 @@ export type NodeDeclaredSurface = {
 
 export type NodeApprovedSurface = NodeDeclaredSurface;
 
-export type NodePairingRepairReason = "approved-command-drift" | "paired-node-refresh";
-
 export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
-  repairReason?: NodePairingRepairReason;
 };
 
 export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   silent?: boolean;
-  isRepair?: boolean;
-  repairReason?: NodePairingRepairReason;
   ts: number;
 };
 
@@ -77,24 +72,10 @@ function normalizeStringList(values?: string[]): string[] | undefined {
   return normalized.length > 0 ? normalized : [];
 }
 
-function resolveNodePairingRepairReason(params: {
-  existingPairedNode: boolean;
-  requestedRepairReason?: NodePairingRepairReason;
-}): NodePairingRepairReason | undefined {
-  if (params.requestedRepairReason) {
-    return params.requestedRepairReason;
-  }
-  if (params.existingPairedNode) {
-    return "paired-node-refresh";
-  }
-  return undefined;
-}
-
 function buildPendingNodePairingRequest(params: {
   requestId?: string;
   req: NodePairingRequestInput;
 }): NodePairingPendingRequest {
-  const repairReason = params.req.repairReason;
   return {
     requestId: params.requestId ?? randomUUID(),
     nodeId: params.req.nodeId,
@@ -110,8 +91,6 @@ function buildPendingNodePairingRequest(params: {
     permissions: params.req.permissions,
     remoteIp: params.req.remoteIp,
     silent: params.req.silent,
-    repairReason,
-    isRepair: Boolean(repairReason),
     ts: Date.now(),
   };
 }
@@ -120,7 +99,6 @@ function refreshPendingNodePairingRequest(
   existing: NodePairingPendingRequest,
   incoming: NodePairingRequestInput,
 ): NodePairingPendingRequest {
-  const repairReason = incoming.repairReason ?? existing.repairReason;
   return {
     ...existing,
     displayName: incoming.displayName ?? existing.displayName,
@@ -136,8 +114,6 @@ function refreshPendingNodePairingRequest(
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // Preserve interactive visibility if either request needs attention.
     silent: Boolean(existing.silent && incoming.silent),
-    repairReason,
-    isRepair: Boolean(repairReason),
     ts: Date.now(),
   };
 }
@@ -218,10 +194,6 @@ export async function requestNodePairing(
     if (!nodeId) {
       throw new Error("nodeId required");
     }
-    const repairReason = resolveNodePairingRepairReason({
-      existingPairedNode: Boolean(state.pairedByNodeId[nodeId]),
-      requestedRepairReason: req.repairReason,
-    });
     const pendingForNode = Object.values(state.pendingById)
       .filter((pending) => pending.nodeId === nodeId)
       .toSorted((left, right) => right.ts - left.ts);
@@ -231,7 +203,6 @@ export async function requestNodePairing(
       incoming: {
         ...req,
         nodeId,
-        repairReason,
       },
       canRefreshSingle: () => true,
       refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
