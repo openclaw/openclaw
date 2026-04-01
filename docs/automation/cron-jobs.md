@@ -198,6 +198,7 @@ Common `agentTurn` fields:
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
 - `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
+- `toolsAllow`: optional array of tool names to restrict which tools the job can use (e.g. `["exec", "read", "write"]`).
 
 Delivery config:
 
@@ -380,7 +381,8 @@ Notes:
 - `"current"` is resolved to `"session:<sessionKey>"` at creation time.
 - Custom sessions (`session:xxx`) maintain persistent context across runs.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
-  `delivery`.
+  `delivery`, `toolsAllow`.
+- `toolsAllow`: optional array of tool names to restrict which tools the job can use (e.g. `["exec", "read"]`). Omit or set `null` to use all tools.
 - `wakeMode` defaults to `"now"` when omitted.
 
 ### cron.update params
@@ -665,6 +667,19 @@ openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --mes
 # Switch or clear the agent on an existing job
 openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
+```
+
+Tool allowlists (restrict which tools a job can use):
+
+```bash
+# Only allow exec and read tools for this job
+openclaw cron add --name "Scoped job" --cron "0 8 * * *" --session isolated --message "Run scoped checks" --tools exec,read
+
+# Update an existing job's tool allowlist
+openclaw cron edit <jobId> --tools exec,read,write
+
+# Remove a tool allowlist (use all tools)
+openclaw cron edit <jobId> --clear-tools
 ```
 
 Manual run (force is the default, use `--due` to only run when due):
