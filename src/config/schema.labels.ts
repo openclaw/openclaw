@@ -473,6 +473,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failover Window (hours)",
   "auth.cooldowns.overloadedProfileRotations": "Overloaded Profile Rotations",
   "auth.cooldowns.overloadedBackoffMs": "Overloaded Backoff (ms)",
+  "auth.cooldowns.rateLimitedProfileRotations": "Rate-Limited Profile Rotations",
   "agents.defaults.models": "Models",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",

@@ -138,10 +138,12 @@ If all profiles for a provider fail, OpenClaw moves to the next model in
 `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and
 timeouts that exhausted profile rotation (other errors do not advance fallback).
 
-Overloaded errors are handled more aggressively than billing cooldowns. By default,
-OpenClaw allows one same-provider auth-profile retry, then switches to the next
-configured model fallback without waiting. Tune this with
-`auth.cooldowns.overloadedProfileRotations` and `auth.cooldowns.overloadedBackoffMs`.
+Overloaded and rate-limit errors are handled more aggressively than billing
+cooldowns. By default, OpenClaw allows one same-provider auth-profile retry,
+then switches to the next configured model fallback without waiting. Tune this
+with `auth.cooldowns.overloadedProfileRotations`,
+`auth.cooldowns.overloadedBackoffMs`, and
+`auth.cooldowns.rateLimitedProfileRotations`.
 
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
@@ -154,6 +156,7 @@ See [Gateway configuration](/gateway/configuration) for:
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
 - `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
 - `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
+- `auth.cooldowns.rateLimitedProfileRotations`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 

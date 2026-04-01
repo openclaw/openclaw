@@ -238,8 +238,12 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
+  return job.enabled ?? true;
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled) {
+  if (!isJobEnabled(job)) {
     return undefined;
   }
   if (job.schedule.kind === "every") {
@@ -295,7 +299,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 }
 
 export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled || job.schedule.kind !== "cron") {
+  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
     return undefined;
   }
   const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
@@ -359,7 +363,21 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
-  if (!job.enabled) {
+  if (job.schedule.kind === "every") {
+    const normalizedAnchorMs = resolveEveryAnchorMs({
+      schedule: job.schedule,
+      fallbackAnchorMs: isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs,
+    });
+    if (job.schedule.anchorMs !== normalizedAnchorMs) {
+      job.schedule = {
+        ...job.schedule,
+        anchorMs: normalizedAnchorMs,
+      };
+      changed = true;
+    }
+  }
+
+  if (!isJobEnabled(job)) {
     if (job.state.nextRunAtMs !== undefined) {
       job.state.nextRunAtMs = undefined;
       changed = true;
@@ -840,7 +858,9 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (opts.forced) {
     return true;
   }
-  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
+  return (
+    isJobEnabled(job) && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs
+  );
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {

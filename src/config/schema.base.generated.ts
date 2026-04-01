@@ -799,6 +799,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 minimum: 0,
                 maximum: 9007199254740991,
               },
+              rateLimitedProfileRotations: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
             },
             additionalProperties: false,
           },
@@ -13671,6 +13676,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Overloaded Backoff (ms)",
       help: "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
       tags: ["auth", "access", "reliability", "storage"],
+    },
+    "auth.cooldowns.rateLimitedProfileRotations": {
+      label: "Rate-Limited Profile Rotations",
+      help: "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
+      tags: ["auth", "access", "performance", "storage"],
     },
     "agents.defaults.models": {
       label: "Models",

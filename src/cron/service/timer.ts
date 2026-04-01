@@ -20,6 +20,7 @@ import type {
 import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
+  isJobEnabled,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
   recordScheduleComputeError,
@@ -499,7 +500,7 @@ export function applyJobResult(
           );
         }
       }
-    } else if (result.status === "error" && job.enabled) {
+    } else if (result.status === "error" && isJobEnabled(job)) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
@@ -527,7 +528,7 @@ export function applyJobResult(
         },
         "cron: applying error backoff",
       );
-    } else if (job.enabled) {
+    } else if (isJobEnabled(job)) {
       let naturalNext: number | undefined;
       try {
         naturalNext =
@@ -836,7 +837,7 @@ function isRunnableJob(params: {
   if (!job.state) {
     job.state = {};
   }
-  if (!job.enabled) {
+  if (!isJobEnabled(job)) {
     return false;
   }
   if (params.skipJobIds?.has(job.id)) {
@@ -853,7 +854,7 @@ function isRunnableJob(params: {
     const nextRun = job.state.nextRunAtMs;
     if (
       job.state.lastStatus === "error" &&
-      job.enabled &&
+      isJobEnabled(job) &&
       typeof nextRun === "number" &&
       typeof lastRun === "number" &&
       nextRun > lastRun
@@ -1079,7 +1080,7 @@ async function applyStartupCatchupOutcomes(
       let offset = staggerMs;
       for (const jobId of plan.deferredJobIds) {
         const job = state.store.jobs.find((entry) => entry.id === jobId);
-        if (!job || !job.enabled) {
+        if (!job || !isJobEnabled(job)) {
           continue;
         }
         job.state.nextRunAtMs = baseNow + offset;

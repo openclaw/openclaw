@@ -2,8 +2,11 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { listTasksForAgentId, listTasksForSessionKey } from "../../tasks/task-registry.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import {
+  listTasksForAgentIdForStatus,
+  listTasksForSessionKeyForStatus,
+} from "../../tasks/task-status-access.js";
 import { buildTaskStatusSnapshot } from "../../tasks/task-status.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -35,7 +38,7 @@ function formatTaskHeadline(snapshot: ReturnType<typeof buildTaskStatusSnapshot>
 }
 
 function formatAgentFallbackLine(agentId: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForAgentId(agentId));
+  const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
     return undefined;
   }
@@ -75,7 +78,9 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
 }
 
 export function buildTasksText(params: { sessionKey: string; agentId: string }): string {
-  const sessionSnapshot = buildTaskStatusSnapshot(listTasksForSessionKey(params.sessionKey));
+  const sessionSnapshot = buildTaskStatusSnapshot(
+    listTasksForSessionKeyForStatus(params.sessionKey),
+  );
   const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot)];
 
   if (sessionSnapshot.totalCount > 0) {

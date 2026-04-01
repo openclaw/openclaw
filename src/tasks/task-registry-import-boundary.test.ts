@@ -6,9 +6,9 @@ const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
 const ALLOWED_IMPORTERS = new Set([
-  "auto-reply/reply/commands-status.ts",
   "tasks/runtime-internal.ts",
   "tasks/task-owner-access.ts",
+  "tasks/task-status-access.ts",
 ]);
 
 async function listSourceFiles(root: string): Promise<string[]> {
