@@ -13,6 +13,7 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
+import { isFeishuExecApprovalApprover } from "./exec-approvals.js";
 import {
   FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION,
   FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION,
@@ -319,6 +320,24 @@ export async function handleFeishuCardAction(params: {
           completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
           return;
         }
+        // Verify the operator is a configured approver before resolving.
+        if (
+          !isFeishuExecApprovalApprover({
+            cfg,
+            accountId: account.accountId,
+            senderId: event.operator.open_id,
+          })
+        ) {
+          await sendMessageFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            text: "❌ 你没有审批权限。",
+            accountId,
+          }).catch(() => {});
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+
         log(
           `feishu[${account.accountId}]: exec approval ${execApprovalDecision} for ${approvalId} by ${event.operator.open_id}`,
         );
