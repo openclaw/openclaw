@@ -25,8 +25,6 @@ export type SlackDmConfig = {
   groupChannels?: Array<string | number>;
   /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
   replyToMode?: ReplyToMode;
-  /** Optional system prompt applied to Slack DMs, including group DMs. */
-  systemPrompt?: string;
 };
 
 export type SlackChannelConfig = {

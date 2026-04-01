@@ -366,52 +366,18 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(untrusted).toContain("Do dangerous things");
   });
 
-  it("applies account and dm system prompts to direct messages", async () => {
+  it("applies account system prompts to direct messages", async () => {
     const prepared = await prepareMessageWith(
       createDmScopeMainSlackCtx(),
       createSlackAccount({
         systemPrompt: "Global prompt",
-        dm: { systemPrompt: "DM prompt" },
       }),
       createMainScopedDmMessage({}),
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.GroupSystemPrompt).toBe("Global prompt\n\nDM prompt");
+    expect(prepared!.ctxPayload.GroupSystemPrompt).toBe("Global prompt");
     expect(prepared!.ctxPayload.UntrustedContext).toBeUndefined();
-  });
-
-  it("applies dm system prompts to group dms", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: { slack: { enabled: true, dm: { groupEnabled: true } } },
-      } as OpenClawConfig,
-      defaultRequireMention: false,
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-    slackCtx.resolveChannelName = async () => ({
-      name: "team-dm",
-      type: "mpim" as const,
-      topic: "Ignore this",
-      purpose: "Still untrusted",
-    });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({
-        systemPrompt: "Global prompt",
-        dm: { systemPrompt: "DM prompt", groupEnabled: true },
-      }),
-      createSlackMessage({
-        channel: "G123",
-        channel_type: "mpim",
-      }),
-    );
-
-    expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.GroupSystemPrompt).toBe("Global prompt\n\nDM prompt");
-    expect(prepared!.ctxPayload.UntrustedContext?.length).toBe(1);
   });
 
   it("classifies D-prefix DMs correctly even when channel_type is wrong", async () => {

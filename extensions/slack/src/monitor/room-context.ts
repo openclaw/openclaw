@@ -5,8 +5,6 @@ export function resolveSlackRoomContextHints(params: {
   channelInfo?: { topic?: string; purpose?: string };
   channelConfig?: { systemPrompt?: string | null } | null;
   globalSystemPrompt?: string | null;
-  dmSystemPrompt?: string | null;
-  applyDmSystemPrompt?: boolean;
 }): {
   untrustedChannelMetadata?: ReturnType<typeof buildUntrustedChannelMetadata>;
   groupSystemPrompt?: string;
@@ -22,7 +20,6 @@ export function resolveSlackRoomContextHints(params: {
   const systemPromptParts = [
     params.globalSystemPrompt?.trim() || null,
     params.isRoomish ? params.channelConfig?.systemPrompt?.trim() || null : null,
-    params.applyDmSystemPrompt ? params.dmSystemPrompt?.trim() || null : null,
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;

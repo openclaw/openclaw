@@ -539,8 +539,6 @@ export async function registerSlackMonitorSlashCommands(params: {
         channelInfo,
         channelConfig,
         globalSystemPrompt: account.config?.systemPrompt ?? cfg.channels?.slack?.systemPrompt,
-        dmSystemPrompt: account.config?.dm?.systemPrompt ?? cfg.channels?.slack?.dm?.systemPrompt,
-        applyDmSystemPrompt: isDirectMessage || isGroupDm,
       });
 
       const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({

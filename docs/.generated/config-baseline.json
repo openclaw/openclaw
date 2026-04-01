@@ -29902,16 +29902,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.slack.accounts.*.dm.systemPrompt",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.accounts.*.dmHistoryLimit",
       "kind": "channel",
       "type": "integer",
@@ -31409,16 +31399,6 @@
     },
     {
       "path": "channels.slack.dm.replyToMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.slack.dm.systemPrompt",
       "kind": "channel",
       "type": "string",
       "required": false,

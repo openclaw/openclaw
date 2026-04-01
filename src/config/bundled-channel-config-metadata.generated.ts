@@ -10627,9 +10627,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
               ],
             },
-            systemPrompt: {
-              type: "string",
-            },
           },
           additionalProperties: false,
         },
@@ -11478,9 +11475,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         const: "all",
                       },
                     ],
-                  },
-                  systemPrompt: {
-                    type: "string",
                   },
                 },
                 additionalProperties: false,
