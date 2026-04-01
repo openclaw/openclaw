@@ -316,7 +316,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("skips agent events when cleaned text rewinds mid-stream", () => {
+  it("emits a replacement snapshot when cleaned text rewinds mid-stream", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -324,8 +324,13 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " https://example.com/a.png\nCaption");
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
+    expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("MEDIA:");
+    expect(payloads[0]?.delta).toBe("MEDIA:");
+    expect(payloads[0]?.replace).toBeUndefined();
+    expect(payloads[1]?.text).toBe("Caption");
+    expect(payloads[1]?.delta).toBe("");
+    expect(payloads[1]?.replace).toBe(true);
   });
 
   it("emits agent events when media arrives without text", () => {

@@ -461,14 +461,6 @@ export type MemorySearchConfig = {
   };
 };
 
-type WebSearchLegacyProviderConfig = {
-  apiKey?: SecretInput;
-  baseUrl?: string;
-  model?: string;
-  mode?: string;
-  inlineCitations?: boolean;
-};
-
 type XSearchToolConfig = {
   /** Enable X search tool (default: true when an xAI API key is available). */
   enabled?: boolean;
@@ -527,18 +519,6 @@ export type ToolsConfig = {
           timezone?: string;
         };
       };
-      /** @deprecated Legacy Brave scoped config. */
-      brave?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Firecrawl scoped config. */
-      firecrawl?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Gemini scoped config. */
-      gemini?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Grok scoped config. */
-      grok?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Kimi scoped config. */
-      kimi?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Perplexity scoped config. */
-      perplexity?: WebSearchLegacyProviderConfig;
     } & Record<string, unknown>;
     /** X (formerly Twitter) search tool configuration using xAI Grok. */
     x_search?: XSearchToolConfig;

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/byteplus-provider",
-  "version": "2026.3.31-beta.1",
+  "version": "2026.4.1",
   "private": true,
   "description": "OpenClaw BytePlus provider plugin",
   "type": "module",

@@ -95,6 +95,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     taskId: row.task_id,
     runtime: row.runtime,
     ...(row.source_id ? { sourceId: row.source_id } : {}),
+    requesterSessionKey: row.scope_kind === "system" ? "" : row.owner_key,
     ownerKey: row.owner_key,
     scopeKind: row.scope_kind,
     ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
@@ -403,7 +404,7 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
   db.exec(`PRAGMA journal_mode = WAL;`);
-  db.exec(`PRAGMA synchronous = FULL;`);
+  db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
   ensureSchema(db);
   ensureTaskRegistryPermissions(pathname);
@@ -454,7 +455,6 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   const store = openTaskRegistryDatabase();
   store.statements.upsertRow.run(bindTaskRecord(task));
-  ensureTaskRegistryPermissions(store.path);
 }
 
 export function upsertTaskWithDeliveryStateToSqlite(params: {
@@ -475,7 +475,6 @@ export function deleteTaskRegistryRecordFromSqlite(taskId: string) {
   const store = openTaskRegistryDatabase();
   store.statements.deleteRow.run(taskId);
   store.statements.deleteDeliveryState.run(taskId);
-  ensureTaskRegistryPermissions(store.path);
 }
 
 export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
@@ -488,13 +487,11 @@ export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {
   const store = openTaskRegistryDatabase();
   store.statements.replaceDeliveryState.run(bindTaskDeliveryState(state));
-  ensureTaskRegistryPermissions(store.path);
 }
 
 export function deleteTaskDeliveryStateFromSqlite(taskId: string) {
   const store = openTaskRegistryDatabase();
   store.statements.deleteDeliveryState.run(taskId);
-  ensureTaskRegistryPermissions(store.path);
 }
 
 export function closeTaskRegistrySqliteStore() {

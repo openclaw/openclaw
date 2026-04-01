@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
@@ -56,14 +57,21 @@ type GatewaySecretsResolveResult = {
 
 const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
   "tools.web.search",
+  "plugins.entries.",
   "tools.web.fetch.firecrawl",
   "tools.web.x_search",
 ] as const;
 const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
   "tools.web.search.",
+  "plugins.entries.",
   "tools.web.fetch.firecrawl.",
   "tools.web.x_search.",
 ] as const;
+
+function pluginIdFromRuntimeWebPath(path: string): string | undefined {
+  const match = /^plugins\.entries\.([^.]+)\.config\.webSearch\.apiKey$/.exec(path);
+  return match?.[1];
+}
 
 function normalizeCommandSecretResolutionMode(
   mode?: CommandSecretResolutionModeInput,
@@ -116,6 +124,20 @@ function classifyRuntimeWebTargetPathState(params: {
     return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
   }
 
+  const pluginId = pluginIdFromRuntimeWebPath(params.path);
+  if (pluginId) {
+    const search = params.config.tools?.web?.search;
+    if (search?.enabled === false) {
+      return "inactive";
+    }
+    const configuredProvider =
+      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    if (!configuredProvider) {
+      return "active";
+    }
+    return resolveBundledWebSearchPluginId(configuredProvider) === pluginId ? "active" : "inactive";
+  }
+
   const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
   if (!match) {
     return "unknown";
@@ -160,6 +182,23 @@ function describeInactiveRuntimeWebTargetPath(params: {
     return params.config.tools?.web?.search?.enabled === false
       ? "tools.web.search is disabled."
       : undefined;
+  }
+
+  const pluginId = pluginIdFromRuntimeWebPath(params.path);
+  if (pluginId) {
+    const search = params.config.tools?.web?.search;
+    if (search?.enabled === false) {
+      return "tools.web.search is disabled.";
+    }
+    const configuredProvider =
+      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    const configuredPluginId = configuredProvider
+      ? resolveBundledWebSearchPluginId(configuredProvider)
+      : undefined;
+    if (configuredPluginId && configuredPluginId !== pluginId) {
+      return `tools.web.search.provider is "${configuredProvider}".`;
+    }
+    return undefined;
   }
 
   const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
