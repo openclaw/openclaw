@@ -102,10 +102,11 @@ Key WSL2 setup notes:
 
 1. **Enable systemd** — add the following to `/etc/wsl.conf` inside your Ubuntu instance and restart WSL (`wsl --shutdown` from PowerShell). The gateway daemon service requires systemd:
 
-````ini
+```ini
    [boot]
    systemd=true
 ```
+
 2. **Resource limits** — create or edit `%UserProfile%\.wslconfig` on the Windows side to set memory and CPU limits. Without this, WSL2 claims up to 50% of host RAM, which can cause instability on machines with limited memory:
 
 ```ini
@@ -253,4 +254,3 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 8. **Remediation Advice**
 
 Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
-````
