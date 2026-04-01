@@ -37,10 +37,19 @@ function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown
 function timingSafeEqualString(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left, "utf8");
   const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+
+  // Pad to equal length before constant-time comparison to prevent
+  // leaking length information via early-return timing.
+  const maxLen = Math.max(leftBuffer.length, rightBuffer.length);
+  const paddedLeft = Buffer.alloc(maxLen);
+  const paddedRight = Buffer.alloc(maxLen);
+  leftBuffer.copy(paddedLeft);
+  rightBuffer.copy(paddedRight);
+
+  // Call timingSafeEqual unconditionally to ensure constant-time execution
+  // regardless of length mismatch (avoids early-return timing leak).
+  const timingResult = crypto.timingSafeEqual(paddedLeft, paddedRight);
+  return leftBuffer.length === rightBuffer.length && timingResult;
 }
 
 function buildFeishuWebhookEnvelope(
