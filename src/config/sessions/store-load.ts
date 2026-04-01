@@ -129,5 +129,12 @@ export function loadSessionStore(
     });
   }
 
+  // `skipCache` callers already forced a fresh disk load, so there is no shared
+  // cached object to protect here. Returning the parsed store directly avoids an
+  // extra full-store clone on hot read-modify-write paths.
+  if (opts.skipCache) {
+    return store;
+  }
+
   return structuredClone(store);
 }
