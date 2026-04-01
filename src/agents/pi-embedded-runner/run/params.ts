@@ -142,4 +142,6 @@ export type RunEmbeddedPiAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Per-request tool deny list override (supports group refs like "group:web"). */
+  toolDenyOverride?: string[];
 };

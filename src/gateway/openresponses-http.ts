@@ -427,6 +427,7 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
+  toolDenyOverride?: string[];
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -444,6 +445,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
+      toolDenyOverride: params.toolDenyOverride,
     },
     defaultRuntime,
     params.deps,
@@ -667,6 +669,9 @@ export async function handleOpenResponsesHttpRequest(
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
 
+  const toolDenyOverride =
+    payload.tool_deny && payload.tool_deny.length > 0 ? payload.tool_deny : undefined;
+
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
 
@@ -713,6 +718,7 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner,
+        toolDenyOverride,
         deps,
       });
 
@@ -966,6 +972,7 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner,
+        toolDenyOverride,
         deps,
       });
 

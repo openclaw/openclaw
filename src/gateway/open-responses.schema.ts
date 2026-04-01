@@ -202,6 +202,8 @@ export const CreateResponseBodySchema = z
       })
       .optional(),
     truncation: z.enum(["auto", "disabled"]).optional(),
+    /** OpenClaw extension: per-request tool deny list (supports group refs like "group:web"). */
+    tool_deny: z.array(z.string().min(1)).optional(),
   })
   .strict();
 

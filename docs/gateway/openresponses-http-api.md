@@ -71,6 +71,7 @@ The request follows the OpenResponses API with item-based input. Current support
 - `stream`: enables SSE streaming.
 - `max_output_tokens`: best-effort output limit (provider dependent).
 - `user`: stable session routing.
+- `tool_deny`: per-request tool deny list (OpenClaw extension).
 
 Accepted but **currently ignored**:
 
@@ -116,6 +117,36 @@ Provide tools with `tools: [{ type: "function", function: { name, description?, 
 
 If the agent decides to call a tool, the response returns a `function_call` output item.
 You then send a follow-up request with `function_call_output` to continue the turn.
+
+## Tool deny (per-request deny list)
+
+OpenClaw extension: pass a `tool_deny` array to exclude specific built-in tools or tool groups from the agent run. Supports individual tool names and group references.
+
+Disable all web tools (web_search, web_fetch, x_search):
+
+```json
+{
+  "model": "openclaw",
+  "input": "summarize this without searching the web",
+  "tool_deny": ["group:web"]
+}
+```
+
+Disable specific tools:
+
+```json
+{
+  "model": "openclaw",
+  "input": "analyze this code",
+  "tool_deny": ["web_fetch", "x_search"]
+}
+```
+
+Available tool groups: `group:web` (web_search, web_fetch, x_search), `group:memory` (memory_search, memory_get), `group:runtime` (exec, process, code_execution), `group:openclaw` (all OpenClaw built-in tools).
+
+When `tool_deny` is omitted, the agent uses its configured tool policy. Per-request denials are ephemeral and do not persist to session state. This deny list is additive with any existing agent or global `tools.deny` config.
+
+This is an OpenClaw-specific extension and not part of the upstream OpenResponses spec.
 
 ## Images (`input_image`)
 
