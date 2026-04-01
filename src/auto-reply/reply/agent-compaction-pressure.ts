@@ -42,12 +42,24 @@ export function maybeInjectAgentCompactionPressureSignal(params: {
     return entry;
   }
 
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
-    modelId: params.defaultModel,
-    agentCfgContextTokens: params.agentCfgContextTokens,
-  });
+  const contextWindowTokens =
+    (entry as Record<string, unknown>).contextTokens as number | undefined ??
+    resolveMemoryFlushContextWindowTokens({
+      modelId: params.defaultModel,
+      agentCfgContextTokens: params.agentCfgContextTokens,
+    });
 
   const totalTokens = resolveFreshSessionTotalTokens(entry);
+
+  // FORK DEBUG: log what values we're using
+  logVerbose(
+    `preflightCompaction check: sessionKey=${params.sessionKey} ` +
+    `tokenCount=${totalTokens} contextWindow=${contextWindowTokens} ` +
+    `threshold=${contextWindowTokens * 0.85} ` +
+    `isHeartbeat=${false} isCli=${false} ` +
+    `persistedFresh=${(entry as any).totalTokensFresh === true} ` +
+    `transcriptCheck=${(entry as any).totalTokens}`
+  );
 
   const signal = computeContextPressure({
     totalTokens: totalTokens ?? undefined,
