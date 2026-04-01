@@ -25,12 +25,7 @@ import {
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import {
-  MediaAttachmentCache,
-  type MediaAttachmentCacheOptions,
-  normalizeAttachments,
-  selectAttachments,
-} from "./attachments.js";
+import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import {
   AUTO_AUDIO_KEY_PROVIDERS,
   AUTO_IMAGE_KEY_PROVIDERS,
@@ -60,6 +55,7 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
+export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 
 export type ActiveMediaModel = {
   provider: string;
@@ -80,10 +76,6 @@ export function buildProviderRegistry(
   return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
-export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
-  return normalizeAttachments(ctx);
-}
-
 export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
@@ -95,13 +87,6 @@ export function resolveMediaAttachmentLocalRoots(params: {
       accountId: params.ctx.AccountId,
     }),
   );
-}
-
-export function createMediaAttachmentCache(
-  attachments: MediaAttachment[],
-  options?: MediaAttachmentCacheOptions,
-): MediaAttachmentCache {
-  return new MediaAttachmentCache(attachments, options);
 }
 
 const binaryCache = new Map<string, Promise<string | null>>();
