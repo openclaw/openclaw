@@ -142,9 +142,7 @@ describe("test planner", () => {
       },
     );
 
-    const hotspotUnit = plan.selectedUnits.find(
-      (unit) => unit.id === "extensions-plugin-entry.runtime-isolated",
-    );
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.id === "extensions-cli-isolated");
 
     expect(hotspotUnit).toBeTruthy();
     expect(hotspotUnit?.isolate).toBe(true);
@@ -455,7 +453,7 @@ describe("test planner", () => {
     const explanation = explainExecutionTarget(
       {
         mode: "ci",
-        fileFilters: ["extensions/matrix/src/plugin-entry.runtime.test.ts"],
+        fileFilters: ["extensions/matrix/src/cli.test.ts"],
       },
       {
         env: {

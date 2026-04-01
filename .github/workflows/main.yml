@@ -1,15 +1,19 @@
-name: 每30分钟自动同步上游 OpenClaw (main分支)
+name: 自动同步上游 OpenClaw (main分支)
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # 每30分钟一次
-  workflow_dispatch:        # 允许手动触发
+    - cron: "*/50 * * * *"  # 每50分钟执行一次
+  workflow_dispatch:        # 允许在网页端手动触发
 
 jobs:
-  sync:
+  sync_with_upstream:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # [非常重要] 必须授予内容写入权限，否则无法提交代码
+
     steps:
-      - uses: actions/checkout@v4
+      - name: 检出当前仓库代码
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -17,10 +21,8 @@ jobs:
       - name: 同步 Fork 与原仓库 main 分支
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
-          upstream_sync_repo: openclaw/openclaw
-          upstream_sync_branch: main
-          target_sync_branch: main
-          test_mode: false
-
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          target_sync_branch: main               # 当前被同步的 Fork 目标分支
+          upstream_sync_repo: openclaw/openclaw  # 上游原仓库地址 (所有者/仓库名)
+          upstream_sync_branch: main             # 上游被拉取的源分支
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # [修正] 在这里传入默认 token
+          test_mode: false                       # 设置为 false 才会真正触发合并推送

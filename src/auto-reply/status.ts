@@ -88,6 +88,7 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
+  taskLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -762,6 +763,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
@@ -821,6 +823,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.usageLine,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
+    args.taskLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
     activationLine,
