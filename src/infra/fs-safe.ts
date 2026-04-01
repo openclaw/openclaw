@@ -338,16 +338,46 @@ async function verifyAtomicWriteResult(params: {
 }): Promise<void> {
   const rootReal = await fs.realpath(params.rootDir);
   const rootWithSep = ensureTrailingSep(rootReal);
-  const opened = await openVerifiedLocalFile(params.targetPath, { rejectHardlinks: true });
   try {
-    if (!sameFileIdentity(opened.stat, params.expectedIdentity)) {
-      throw new SafeOpenError("path-mismatch", "path changed during write");
+    const opened = await openVerifiedLocalFile(params.targetPath, { rejectHardlinks: true });
+    try {
+      if (!sameFileIdentity(opened.stat, params.expectedIdentity)) {
+        throw new SafeOpenError("path-mismatch", "path changed during write");
+      }
+      if (!isPathInside(rootWithSep, opened.realPath)) {
+        throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+      }
+    } finally {
+      await opened.handle.close().catch(() => {});
     }
-    if (!isPathInside(rootWithSep, opened.realPath)) {
-      throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    return;
+  } catch (err) {
+    if (!hasNodeErrorCode(err, "EACCES") && !hasNodeErrorCode(err, "EPERM")) {
+      throw err;
     }
-  } finally {
-    await opened.handle.close().catch(() => {});
+  }
+
+  const lstat = await fs.lstat(params.targetPath);
+  if (lstat.isSymbolicLink() || !lstat.isFile()) {
+    throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+  }
+  if (lstat.nlink > 1) {
+    throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
+  }
+  if (!sameFileIdentity(lstat, params.expectedIdentity)) {
+    throw new SafeOpenError("path-mismatch", "path changed during write");
+  }
+
+  const realPath = await fs.realpath(params.targetPath);
+  if (!isPathInside(rootWithSep, realPath)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const realStat = await fs.stat(realPath);
+  if (!realStat.isFile() || !sameFileIdentity(realStat, lstat)) {
+    throw new SafeOpenError("path-mismatch", "path changed during write");
+  }
+  if (realStat.nlink > 1) {
+    throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
   }
 }
 
