@@ -251,6 +251,38 @@ describe("exec approvals CLI", () => {
     );
   });
 
+  it("keeps gateway approvals output when config.get fails", async () => {
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "config.get") {
+          throw new Error("gateway config unavailable");
+        }
+        if (method === "exec.approvals.get") {
+          return {
+            path: "/tmp/exec-approvals.json",
+            exists: true,
+            hash: "hash-1",
+            file: { version: 1, agents: {} },
+          };
+        }
+        return { method, params };
+      },
+    );
+
+    await runApprovalsCommand(["approvals", "get", "--gateway", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectivePolicy: {
+          note: "Config unavailable.",
+          scopes: [],
+        },
+      }),
+      0,
+    );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("reports agent scopes with inherited global requested policy", async () => {
     localSnapshot.file = {
       version: 1,

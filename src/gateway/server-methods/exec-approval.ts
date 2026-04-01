@@ -337,7 +337,7 @@ export function createExecApprovalHandlers(
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "allow-always is unavailable because host policy requires approval every time",
+            "allow-always is unavailable because the effective policy requires approval every time",
           ),
         );
         return;

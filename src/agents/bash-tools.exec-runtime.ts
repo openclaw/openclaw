@@ -368,11 +368,13 @@ export function buildApprovalPendingMessage(params: {
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode requires pre-approved policy (allow-always or ask=off)."
-      : "Background mode requires host policy that allows pre-approval (for example ask=off).",
+      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push("Host policy requires approval every time, so Allow Always is unavailable.");
+    lines.push(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");

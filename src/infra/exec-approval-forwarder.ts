@@ -238,11 +238,13 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
-      : "Background mode note: non-interactive runs cannot wait for chat approvals; host policy still requires per-run approval unless ask=off.",
+      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
   lines.push(`Reply with: /approve <id> ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push("Allow Always is unavailable because host policy requires approval every time.");
+    lines.push(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
   }
   return lines.join("\n");
 }

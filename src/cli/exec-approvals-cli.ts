@@ -168,8 +168,16 @@ async function loadConfigForApprovalsTarget(params: {
   if (params.source === "local") {
     return await readBestEffortConfig();
   }
-  const snapshot = (await callGatewayFromCli("config.get", params.opts, {})) as ConfigSnapshotLike;
-  return snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null;
+  try {
+    const snapshot = (await callGatewayFromCli(
+      "config.get",
+      params.opts,
+      {},
+    )) as ConfigSnapshotLike;
+    return snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null;
+  } catch {
+    return null;
+  }
 }
 
 function collectExecPolicySnapshots(params: { cfg: OpenClawConfig; approvals: ExecApprovalsFile }) {

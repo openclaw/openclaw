@@ -138,7 +138,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
-  it("omits allow-always actions when host policy requires approval every time", () => {
+  it("omits allow-always actions when the effective policy requires approval every time", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",
       approvalSlug: "slug-always",
@@ -156,7 +156,9 @@ describe("exec approval reply helpers", () => {
     });
     expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
     expect(payload.text).not.toContain("allow-always");
-    expect(payload.text).toContain("Allow Always is unavailable");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
     expect(payload.interactive).toEqual({
       blocks: [
         {

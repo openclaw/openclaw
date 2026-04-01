@@ -597,7 +597,8 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: "allow-always is unavailable because host policy requires approval every time",
+        message:
+          "allow-always is unavailable because the effective policy requires approval every time",
       }),
     );
 
