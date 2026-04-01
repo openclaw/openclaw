@@ -1700,7 +1700,9 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   systemPrompt: systemPromptText,
                   prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
+                  // Shallow-clone to prevent hooks from mutating session state
+                  // in place, which would bypass the declared result contract.
+                  historyMessages: [...activeSession.messages],
                   imagesCount: imageResult.images.length,
                 },
                 {
@@ -2044,7 +2046,8 @@ export async function runEmbeddedAttempt(
         .toReversed()
         .find((m) => m.role === "assistant");
 
-      let finalAssistantTexts = assistantTexts;
+      // Copy so hook handlers cannot mutate the original via shared reference.
+      let finalAssistantTexts = [...assistantTexts];
 
       const toolMetasNormalized = toolMetas
         .filter(

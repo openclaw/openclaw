@@ -590,9 +590,23 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       mergeResults: (acc, next) => ({
         block: next.block ?? acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
-        prompt: next.prompt ?? acc?.prompt,
-        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+        // Higher-priority (earlier) overrides are authoritative — only apply
+        // lower-priority prompt/systemPrompt if no earlier handler set them.
+        prompt: acc?.prompt ?? next.prompt,
+        systemPrompt: acc?.systemPrompt ?? next.systemPrompt,
       }),
+      // Evolve the event so lower-priority handlers see the effective prompt
+      // after higher-priority overrides, enabling accurate policy evaluation.
+      evolveEvent: (ev, result) => {
+        let evolved = ev;
+        if (result.prompt !== undefined) {
+          evolved = { ...evolved, prompt: result.prompt };
+        }
+        if (result.systemPrompt !== undefined) {
+          evolved = { ...evolved, systemPrompt: result.systemPrompt };
+        }
+        return evolved;
+      },
       shouldStop: (result) => result.block === true,
     });
   }
@@ -613,8 +627,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       // Evolve the event so later hooks see prior assistantTexts modifications
       // instead of the original model output — prevents a lower-priority hook
       // from silently overwriting a higher-priority redaction.
+      // Use !== undefined so empty arrays (full suppression) are propagated.
       evolveEvent: (ev, result) =>
-        result.assistantTexts ? { ...ev, assistantTexts: result.assistantTexts } : ev,
+        result.assistantTexts !== undefined ? { ...ev, assistantTexts: result.assistantTexts } : ev,
     });
   }
 
