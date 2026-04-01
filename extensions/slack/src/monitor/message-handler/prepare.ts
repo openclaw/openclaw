@@ -490,8 +490,14 @@ export async function prepareSlackMessage(params: {
   // Unlike Discord, Slack implicit mentions (thread participation) are very broad — they fire
   // for every message in a bot-participated thread. We intentionally ignore implicitMention here
   // so that tagging a coworker in a bot thread does not trigger a reply.
+  // Guard on canDetectMention: when botUserId is unknown and no custom mention regexes are
+  // configured, wasMentioned is unreliable — skip the gate to avoid false drops.
+  // Note: when inbound debouncing merges multiple messages, hasAnyMention and wasMentioned
+  // reflect the combined batch. This is intentional — debounced messages are a single logical
+  // unit, and a batch where someone tagged a coworker (but not the bot) is correctly dropped.
+  const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
-  if (isRoom && ignoreOtherMentions && hasAnyMention && !wasMentioned) {
+  if (isRoom && ignoreOtherMentions && canDetectMention && hasAnyMention && !wasMentioned) {
     logInboundDrop({
       log: logVerbose,
       channel: "slack",
