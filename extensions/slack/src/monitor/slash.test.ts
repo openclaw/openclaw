@@ -180,31 +180,21 @@ vi.mock("./slash-commands.runtime.js", () => {
 });
 
 type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
-let registerSlackMonitorSlashCommandsPromise: Promise<RegisterFn> | undefined;
-
-async function loadRegisterSlackMonitorSlashCommands(): Promise<RegisterFn> {
-  registerSlackMonitorSlashCommandsPromise ??= import("./slash.js").then((module) => {
-    const typed = module as unknown as {
-      registerSlackMonitorSlashCommands: RegisterFn;
-    };
-    return typed.registerSlackMonitorSlashCommands;
-  });
-  return await registerSlackMonitorSlashCommandsPromise;
-}
+let registerSlackMonitorSlashCommands: RegisterFn;
 
 const { dispatchMock } = getSlackSlashMocks();
 
-beforeAll(() => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
+    registerSlackMonitorSlashCommands: RegisterFn;
+  });
 });
 
-beforeEach(async () => {
-  registerSlackMonitorSlashCommandsPromise = undefined;
+beforeEach(() => {
   resetSlackSlashMocks();
 });
 
 async function registerCommands(ctx: unknown, account: unknown) {
-  const registerSlackMonitorSlashCommands = await loadRegisterSlackMonitorSlashCommands();
   await registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 }
 
@@ -989,8 +979,12 @@ describe("slack slash command session metadata", () => {
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
+    const recordStarted = createDeferred<void>();
     const deferred = createDeferred<void>();
-    recordSessionMetaFromInboundMock.mockClear().mockReturnValue(deferred.promise);
+    recordSessionMetaFromInboundMock.mockClear().mockImplementation(() => {
+      recordStarted.resolve();
+      return deferred.promise;
+    });
 
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerCommands(harness.ctx, harness.account);
@@ -1003,9 +997,8 @@ describe("slack slash command session metadata", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    });
+    await recordStarted.promise;
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
 
     deferred.resolve();

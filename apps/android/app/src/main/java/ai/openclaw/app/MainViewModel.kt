@@ -56,6 +56,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
   val discoveryStatusText: StateFlow<String> = runtimeState(initial = "Searching…") { it.discoveryStatusText }
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
@@ -80,6 +91,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
@@ -197,6 +209,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    ensureRuntime().setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    ensureRuntime().setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackagesCsv(csv: String) {
+    val packages =
+      csv
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+    ensureRuntime().setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    return ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    ensureRuntime().setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    ensureRuntime().setNotificationForwardingSessionKey(value)
+  }
+
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
   }
@@ -215,6 +260,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun connect(endpoint: GatewayEndpoint) {
     ensureRuntime().connect(endpoint)
+  }
+
+  fun connect(
+    endpoint: GatewayEndpoint,
+    token: String?,
+    bootstrapToken: String?,
+    password: String?,
+  ) {
+    ensureRuntime().connect(
+      endpoint,
+      NodeRuntime.GatewayConnectAuth(
+        token = token,
+        bootstrapToken = bootstrapToken,
+        password = password,
+      ),
+    )
   }
 
   fun connectManual() {

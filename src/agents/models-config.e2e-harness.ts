@@ -2,9 +2,9 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
-export async function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
 }
 
@@ -84,6 +84,8 @@ export async function withCopilotGithubToken<T>(
 }
 
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
+  "VITEST",
+  "NODE_ENV",
   "AI_GATEWAY_API_KEY",
   "CLOUDFLARE_AI_GATEWAY_API_KEY",
   "COPILOT_GITHUB_TOKEN",
@@ -102,8 +104,6 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "PI_CODING_AGENT_DIR",
   "QIANFAN_API_KEY",
   "MODELSTUDIO_API_KEY",
-  "QWEN_OAUTH_TOKEN",
-  "QWEN_PORTAL_API_KEY",
   "SYNTHETIC_API_KEY",
   "TOGETHER_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
@@ -116,6 +116,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_PROJECT_ID",
+  "ANTHROPIC_VERTEX_USE_GCP_METADATA",
   "VENICE_API_KEY",
   "VLLM_API_KEY",
   "XIAOMI_API_KEY",
@@ -147,10 +148,10 @@ export function snapshotImplicitProviderEnv(env?: NodeJS.ProcessEnv): NodeJS.Pro
   return snapshot;
 }
 
-export async function resolveImplicitProvidersForTest(
+export function resolveImplicitProvidersForTest(
   params: Parameters<typeof resolveImplicitProviders>[0],
 ) {
-  return await resolveImplicitProviders({
+  return resolveImplicitProviders({
     ...params,
     env: snapshotImplicitProviderEnv(params.env),
   });

@@ -8,16 +8,35 @@ title: "MiniMax"
 
 # MiniMax
 
-OpenClaw's MiniMax provider defaults to **MiniMax M2.7** and keeps
-**MiniMax M2.5** in the catalog for compatibility.
+OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 ## Model lineup
 
 - `MiniMax-M2.7`: default hosted text model.
 - `MiniMax-M2.7-highspeed`: faster M2.7 text tier.
-- `MiniMax-M2.5`: previous text model, still available in the MiniMax catalog.
-- `MiniMax-M2.5-highspeed`: faster M2.5 text tier.
-- `MiniMax-VL-01`: vision model for text + image inputs.
+- `image-01`: image generation model (generate and image-to-image editing).
+
+## Image generation
+
+The MiniMax plugin registers the `image-01` model for the `image_generate` tool. It supports:
+
+- **Text-to-image generation** with aspect ratio control.
+- **Image-to-image editing** (subject reference) with aspect ratio control.
+- Supported aspect ratios: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`.
+
+To use MiniMax for image generation, set it as the image generation provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: { primary: "minimax/image-01" },
+    },
+  },
+}
+```
+
+The plugin uses the same `MINIMAX_API_KEY` or OAuth auth as the text models. No additional configuration is needed if MiniMax is already set up.
 
 ## Choose a setup
 
@@ -38,7 +57,7 @@ You will be prompted to select an endpoint:
 - **Global** - International users (`api.minimax.io`)
 - **CN** - Users in China (`api.minimaxi.com`)
 
-See [MiniMax plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax) for details.
+See the MiniMax plugin package README in the OpenClaw repo for details.
 
 ### MiniMax M2.7 (API key)
 
@@ -80,24 +99,6 @@ Configure via CLI:
             contextWindow: 200000,
             maxTokens: 8192,
           },
-          {
-            id: "MiniMax-M2.5",
-            name: "MiniMax M2.5",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
-          },
-          {
-            id: "MiniMax-M2.5-highspeed",
-            name: "MiniMax M2.5 Highspeed",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
-          },
         ],
       },
     },
@@ -128,46 +129,6 @@ Example below uses Opus as a concrete primary; swap to your preferred latest-gen
 }
 ```
 
-### Optional: Local via LM Studio (manual)
-
-**Best for:** local inference with LM Studio.
-We have seen strong results with MiniMax M2.5 on powerful hardware (e.g. a
-desktop/server) using LM Studio's local server.
-
-Configure manually via `openclaw.json`:
-
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
-      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
-    },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      lmstudio: {
-        baseUrl: "http://127.0.0.1:1234/v1",
-        apiKey: "lmstudio",
-        api: "openai-responses",
-        models: [
-          {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 196608,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    },
-  },
-}
-```
-
 ## Configure via `openclaw configure`
 
 Use the interactive config wizard to set MiniMax without editing JSON:
@@ -190,7 +151,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 - Model refs are `minimax/<model>`.
 - Default text model: `MiniMax-M2.7`.
-- Alternate text models: `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`.
+- Alternate text model: `MiniMax-M2.7-highspeed`.
 - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
@@ -214,8 +175,6 @@ Make sure the model id is **case‑sensitive**:
 
 - `minimax/MiniMax-M2.7`
 - `minimax/MiniMax-M2.7-highspeed`
-- `minimax/MiniMax-M2.5`
-- `minimax/MiniMax-M2.5-highspeed`
 
 Then recheck with:
 

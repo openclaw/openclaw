@@ -1,6 +1,6 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
@@ -81,7 +81,6 @@ beforeEach(async () => {
 });
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ discordPlugin } = await import("./channel.js"));
   ({ setDiscordRuntime } = await import("./runtime.js"));
 });
@@ -187,6 +186,44 @@ describe("discordPlugin outbound", () => {
     );
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("discordPlugin bindings", () => {
+  it("preserves user-prefixed current conversation ids for DM binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "user:123456789012345678",
+    });
+
+    expect(result).toEqual({
+      conversationId: "user:123456789012345678",
+    });
+  });
+
+  it("preserves channel-prefixed current conversation ids for channel binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "channel:987654321098765432",
+    });
+
+    expect(result).toEqual({
+      conversationId: "channel:987654321098765432",
+    });
+  });
+
+  it("preserves channel-prefixed parent ids for thread binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "channel:thread-42",
+      threadId: "thread-42",
+      threadParentId: "parent-9",
+    });
+
+    expect(result).toEqual({
+      conversationId: "thread-42",
+      parentConversationId: "channel:parent-9",
+    });
   });
 });
 

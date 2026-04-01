@@ -4,6 +4,7 @@ export type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
   label?: string;
+  validator?: (record: Record<string, unknown>) => boolean;
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
@@ -23,14 +24,38 @@ export const CLAUDE_PARAM_GROUPS = {
     {
       keys: ["oldText", "old_string", "old_text", "oldString"],
       label: "oldText alias",
+      validator: hasValidEditReplacements,
     },
     {
       keys: ["newText", "new_string", "new_text", "newString"],
       label: "newText alias",
       allowEmpty: true,
+      validator: hasValidEditReplacements,
     },
   ],
 } as const;
+
+type ClaudeParamAlias = {
+  original: string;
+  alias: string;
+};
+
+const CLAUDE_PARAM_ALIASES: ClaudeParamAlias[] = [
+  { original: "path", alias: "file_path" },
+  { original: "path", alias: "filePath" },
+  { original: "path", alias: "file" },
+  { original: "oldText", alias: "old_string" },
+  { original: "oldText", alias: "old_text" },
+  { original: "oldText", alias: "oldString" },
+  { original: "newText", alias: "new_string" },
+  { original: "newText", alias: "new_text" },
+  { original: "newText", alias: "newString" },
+];
+
+type EditReplacement = {
+  oldText: string;
+  newText: string;
+};
 
 function extractStructuredText(value: unknown, depth = 0): string | undefined {
   if (depth > 6) {
@@ -82,6 +107,89 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
   }
 }
 
+function normalizeEditReplacement(value: unknown): EditReplacement | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const normalized = { ...(value as Record<string, unknown>) };
+  normalizeClaudeParamAliases(normalized);
+  normalizeTextLikeParam(normalized, "oldText");
+  normalizeTextLikeParam(normalized, "newText");
+  if (typeof normalized.oldText !== "string" || normalized.oldText.trim().length === 0) {
+    return undefined;
+  }
+  if (typeof normalized.newText !== "string") {
+    return undefined;
+  }
+  return {
+    oldText: normalized.oldText,
+    newText: normalized.newText,
+  };
+}
+
+function normalizeEditReplacements(record: Record<string, unknown>) {
+  const replacements: EditReplacement[] = [];
+  if (Array.isArray(record.edits)) {
+    for (const entry of record.edits) {
+      const normalized = normalizeEditReplacement(entry);
+      if (normalized) {
+        replacements.push(normalized);
+      }
+    }
+  }
+  if (typeof record.oldText === "string" && record.oldText.trim().length > 0) {
+    if (typeof record.newText === "string") {
+      replacements.push({
+        oldText: record.oldText,
+        newText: record.newText,
+      });
+    }
+  }
+  if (replacements.length > 0) {
+    record.edits = replacements;
+  }
+}
+
+function hasValidEditReplacements(record: Record<string, unknown>): boolean {
+  const edits = record.edits;
+  return (
+    Array.isArray(edits) &&
+    edits.length > 0 &&
+    edits.every((entry) => normalizeEditReplacement(entry) !== undefined)
+  );
+}
+
+function normalizeClaudeParamAliases(record: Record<string, unknown>) {
+  for (const { original, alias } of CLAUDE_PARAM_ALIASES) {
+    if (alias in record && !(original in record)) {
+      record[original] = record[alias];
+    }
+    delete record[alias];
+  }
+}
+
+function addClaudeParamAliasesToSchema(params: {
+  properties: Record<string, unknown>;
+  required: string[];
+}): boolean {
+  let changed = false;
+  for (const { original, alias } of CLAUDE_PARAM_ALIASES) {
+    if (!(original in params.properties)) {
+      continue;
+    }
+    if (!(alias in params.properties)) {
+      params.properties[alias] = params.properties[original];
+      changed = true;
+    }
+    const idx = params.required.indexOf(original);
+    if (idx !== -1) {
+      params.required.splice(idx, 1);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
@@ -91,28 +199,13 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   }
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
-  const aliasPairs: Array<{ original: string; alias: string }> = [
-    { original: "path", alias: "file_path" },
-    { original: "path", alias: "filePath" },
-    { original: "path", alias: "file" },
-    { original: "oldText", alias: "old_string" },
-    { original: "oldText", alias: "old_text" },
-    { original: "oldText", alias: "oldString" },
-    { original: "newText", alias: "new_string" },
-    { original: "newText", alias: "new_text" },
-    { original: "newText", alias: "newString" },
-  ];
-  for (const { original, alias } of aliasPairs) {
-    if (alias in normalized && !(original in normalized)) {
-      normalized[original] = normalized[alias];
-    }
-    delete normalized[alias];
-  }
+  normalizeClaudeParamAliases(normalized);
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+  normalizeEditReplacements(normalized);
   return normalized;
 }
 
@@ -130,34 +223,7 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
   const required = Array.isArray(schema.required)
     ? schema.required.filter((key): key is string => typeof key === "string")
     : [];
-  let changed = false;
-
-  const aliasPairs: Array<{ original: string; alias: string }> = [
-    { original: "path", alias: "file_path" },
-    { original: "path", alias: "filePath" },
-    { original: "path", alias: "file" },
-    { original: "oldText", alias: "old_string" },
-    { original: "oldText", alias: "old_text" },
-    { original: "oldText", alias: "oldString" },
-    { original: "newText", alias: "new_string" },
-    { original: "newText", alias: "new_text" },
-    { original: "newText", alias: "newString" },
-  ];
-
-  for (const { original, alias } of aliasPairs) {
-    if (!(original in properties)) {
-      continue;
-    }
-    if (!(alias in properties)) {
-      properties[alias] = properties[original];
-      changed = true;
-    }
-    const idx = required.indexOf(original);
-    if (idx !== -1) {
-      required.splice(idx, 1);
-      changed = true;
-    }
-  }
+  const changed = addClaudeParamAliasesToSchema({ properties, required });
 
   if (!changed) {
     return tool;
@@ -184,19 +250,21 @@ export function assertRequiredParams(
 
   const missingLabels: string[] = [];
   for (const group of groups) {
-    const satisfied = group.keys.some((key) => {
-      if (!(key in record)) {
-        return false;
-      }
-      const value = record[key];
-      if (typeof value !== "string") {
-        return false;
-      }
-      if (group.allowEmpty) {
-        return true;
-      }
-      return value.trim().length > 0;
-    });
+    const satisfied =
+      group.validator?.(record) ??
+      group.keys.some((key) => {
+        if (!(key in record)) {
+          return false;
+        }
+        const value = record[key];
+        if (typeof value !== "string") {
+          return false;
+        }
+        if (group.allowEmpty) {
+          return true;
+        }
+        return value.trim().length > 0;
+      });
 
     if (!satisfied) {
       const label = group.label ?? group.keys.join(" or ");

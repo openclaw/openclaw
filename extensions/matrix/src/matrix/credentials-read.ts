@@ -22,7 +22,18 @@ export type MatrixStoredCredentials = {
 };
 
 function resolveStateDir(env: NodeJS.ProcessEnv): string {
-  return getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  try {
+    return getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  } catch {
+    // Some config-only helpers read stored credentials before the Matrix plugin
+    // runtime is installed. Fall back to the standard state-dir env contract.
+    const override = env.OPENCLAW_STATE_DIR?.trim();
+    if (override) {
+      return path.resolve(override);
+    }
+    const homeDir = env.OPENCLAW_HOME?.trim() || env.HOME?.trim() || os.homedir();
+    return path.join(homeDir, ".openclaw");
+  }
 }
 
 function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string | null {

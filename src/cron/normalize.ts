@@ -160,6 +160,21 @@ function coercePayload(payload: UnknownRecord) {
   ) {
     delete next.allowUnsafeExternalContent;
   }
+  if ("toolsAllow" in next) {
+    if (Array.isArray(next.toolsAllow)) {
+      next.toolsAllow = (next.toolsAllow as unknown[])
+        .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+        .map((t) => t.trim());
+      if ((next.toolsAllow as string[]).length === 0) {
+        delete next.toolsAllow;
+      }
+    } else if (next.toolsAllow === null) {
+      // Explicit null means "clear the allow-list" (edit --clear-tools)
+      next.toolsAllow = null;
+    } else {
+      delete next.toolsAllow;
+    }
+  }
   return next;
 }
 
@@ -192,6 +207,18 @@ function coerceDelivery(delivery: UnknownRecord) {
     } else {
       delete next.to;
     }
+  }
+  if (typeof delivery.threadId === "number" && Number.isFinite(delivery.threadId)) {
+    next.threadId = delivery.threadId;
+  } else if (typeof delivery.threadId === "string") {
+    const trimmed = delivery.threadId.trim();
+    if (trimmed) {
+      next.threadId = trimmed;
+    } else {
+      delete next.threadId;
+    }
+  } else if ("threadId" in next) {
+    delete next.threadId;
   }
   if (typeof delivery.accountId === "string") {
     const trimmed = delivery.accountId.trim();
@@ -285,6 +312,13 @@ function copyTopLevelLegacyDeliveryFields(next: UnknownRecord, payload: UnknownR
     payload.to = next.to.trim();
   }
   if (
+    !("threadId" in payload) &&
+    ((typeof next.threadId === "number" && Number.isFinite(next.threadId)) ||
+      (typeof next.threadId === "string" && next.threadId.trim()))
+  ) {
+    payload.threadId = typeof next.threadId === "string" ? next.threadId.trim() : next.threadId;
+  }
+  if (
     typeof payload.bestEffortDeliver !== "boolean" &&
     typeof next.bestEffortDeliver === "boolean"
   ) {
@@ -309,6 +343,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.deliver;
   delete next.channel;
   delete next.to;
+  delete next.threadId;
   delete next.bestEffortDeliver;
   delete next.provider;
 }

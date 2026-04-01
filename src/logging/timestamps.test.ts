@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatLocalIsoWithOffset, isValidTimeZone } from "./timestamps.js";
+import { formatLocalIsoWithOffset, formatTimestamp, isValidTimeZone } from "./timestamps.js";
 
 describe("formatLocalIsoWithOffset", () => {
   const testDate = new Date("2025-01-01T04:00:00.000Z");
@@ -47,6 +47,35 @@ describe("formatLocalIsoWithOffset", () => {
     expect(source).not.toMatch(/\.getHours\s*\(/);
     expect(source).not.toMatch(/\.getMinutes\s*\(/);
     expect(source).not.toMatch(/\.getTimezoneOffset\s*\(/);
+  });
+});
+
+describe("formatTimestamp", () => {
+  const testDate = new Date("2024-01-15T14:30:45.123Z");
+
+  it("formats short style with explicit UTC offset", () => {
+    expect(formatTimestamp(testDate, { style: "short", timeZone: "UTC" })).toBe("14:30:45+00:00");
+  });
+
+  it("formats medium style with milliseconds and offset", () => {
+    expect(formatTimestamp(testDate, { style: "medium", timeZone: "UTC" })).toBe(
+      "14:30:45.123+00:00",
+    );
+  });
+
+  it.each(["UTC", "America/New_York", "Europe/Paris"])(
+    "matches formatLocalIsoWithOffset for long style in %s",
+    (timeZone) => {
+      expect(formatTimestamp(testDate, { style: "long", timeZone })).toBe(
+        formatLocalIsoWithOffset(testDate, timeZone),
+      );
+    },
+  );
+
+  it("falls back to a valid offset when the timezone is invalid", () => {
+    expect(formatTimestamp(testDate, { style: "short", timeZone: "not-a-tz" })).toMatch(
+      /^\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
+    );
   });
 });
 
