@@ -667,6 +667,11 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
   }
 }
 
+async function runWSLEnvironmentHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWSLEnvironment } = await import("../commands/doctor-wsl.js");
+  await noteWSLEnvironment(ctx);
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -1108,6 +1113,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Runtime tool schemas",
       healthCheckIds: ["core/doctor/runtime-tool-schemas"],
       run: runRuntimeToolSchemasHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:wsl-environment",
+      label: "WSL environment",
+      hint: "WSL2 systemd, resource limits, kernel version",
+      run: runWSLEnvironmentHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
