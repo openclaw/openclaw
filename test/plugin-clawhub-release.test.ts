@@ -216,19 +216,17 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
     expect(selected.map((plugin) => plugin.extensionId)).toEqual(["demo-plugin", "demo-two"]);
   });
 
-  it("selects all publishable plugins when shared setup or version helpers change", () => {
+  it("selects all publishable plugins when the shared setup action changes", () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two"],
     });
     const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
 
     mkdirSync(join(repoDir, ".github", "actions", "setup-node-env"), { recursive: true });
-    mkdirSync(join(repoDir, "scripts", "lib"), { recursive: true });
     writeFileSync(
       join(repoDir, ".github", "actions", "setup-node-env", "action.yml"),
       "name: setup-node-env\n",
     );
-    writeFileSync(join(repoDir, "scripts", "lib", "npm-publish-plan.mjs"), "export {};\n");
     git(repoDir, ["add", "."]);
     git(repoDir, [
       "-c",

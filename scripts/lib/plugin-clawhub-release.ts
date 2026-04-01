@@ -87,7 +87,6 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "scripts/plugin-clawhub-release-check.ts",
   "scripts/plugin-clawhub-release-plan.ts",
 ] as const;
-const CLAWHUB_SHARED_RELEASE_INPUT_PATH_SET = new Set<string>(CLAWHUB_SHARED_RELEASE_INPUT_PATHS);
 
 function readPluginPackageJson(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
@@ -266,7 +265,11 @@ function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
 }
 
 function hasSharedClawHubReleaseInputChanges(changedPaths: readonly string[]) {
-  return changedPaths.some((path) => CLAWHUB_SHARED_RELEASE_INPUT_PATH_SET.has(path));
+  return changedPaths.some((path) =>
+    CLAWHUB_SHARED_RELEASE_INPUT_PATHS.some(
+      (sharedPath) => path === sharedPath || path.startsWith(`${sharedPath}/`),
+    ),
+  );
 }
 
 export function resolveChangedClawHubPublishablePluginPackages(params: {
