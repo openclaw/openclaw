@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-import { closePlaywrightBrowserConnection, createPageViaPlaywright } from "./pw-session.js";
+import {
+  closePlaywrightBrowserConnection,
+  createPageViaPlaywright,
+  listPagesViaPlaywright,
+} from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
@@ -27,7 +31,13 @@ function installBrowserMocks() {
   const pageUnroute = vi.fn(async () => {
     routeHandler = null;
   });
-  const pageClose = vi.fn(async () => {});
+  const openPages: import("playwright-core").Page[] = [];
+  const pageClose = vi.fn(async () => {
+    const index = openPages.indexOf(page);
+    if (index >= 0) {
+      openPages.splice(index, 1);
+    }
+  });
   const mainFrame = {};
   const contextOn = vi.fn();
   const browserOn = vi.fn();
@@ -41,9 +51,12 @@ function installBrowserMocks() {
   const sessionDetach = vi.fn(async () => {});
 
   const context = {
-    pages: () => [],
+    pages: () => openPages,
     on: contextOn,
-    newPage: vi.fn(async () => page),
+    newPage: vi.fn(async () => {
+      openPages.push(page);
+      return page;
+    }),
     newCDPSession: vi.fn(async () => ({
       send: sessionSend,
       detach: sessionDetach,
@@ -189,5 +202,45 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps blocked tab manageable if close fails", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.targetId).toBe("TARGET_1");
+    expect(pageClose).toHaveBeenCalledTimes(1);
   });
 });

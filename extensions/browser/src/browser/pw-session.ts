@@ -581,10 +581,13 @@ async function closeBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   const targetId = opts.targetId?.trim() || (await pageTargetId(opts.page).catch(() => null)) || "";
-  if (targetId) {
+  const closed = await opts.page
+    .close()
+    .then(() => true)
+    .catch(() => false);
+  if (closed && targetId) {
     markTargetBlocked(opts.cdpUrl, targetId);
   }
-  await opts.page.close().catch(() => {});
 }
 
 export async function assertPageNavigationCompletedSafely(opts: {
