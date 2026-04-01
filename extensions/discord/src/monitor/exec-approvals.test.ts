@@ -646,6 +646,16 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
         },
         expected: [],
       },
+      {
+        name: "ownerAllowFrom still grants exec approver rights",
+        config: { enabled: true } as DiscordExecApprovalConfig,
+        cfgOverrides: {
+          commands: {
+            ownerAllowFrom: ["discord:123"],
+          },
+        },
+        expected: ["123"],
+      },
     ] as const;
 
     for (const testCase of cases) {

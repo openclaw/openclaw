@@ -22,7 +22,7 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("requires enablement and explicit approvers", () => {
+  it("requires enablement and explicit or owner approvers", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
@@ -33,6 +33,14 @@ describe("discord exec approvals", () => {
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+      }),
+    ).toBe(true);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: {
+          ...buildConfig({ enabled: true }),
+          commands: { ownerAllowFrom: ["discord:789"] },
+        } as OpenClawConfig,
       }),
     ).toBe(true);
   });
@@ -60,5 +68,15 @@ describe("discord exec approvals", () => {
 
     expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
+  });
+
+  it("falls back to commands.ownerAllowFrom for exec approvers", () => {
+    const cfg = {
+      ...buildConfig({ enabled: true }),
+      commands: { ownerAllowFrom: ["discord:123", "user:456", "789"] },
+    } as OpenClawConfig;
+
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789"]);
+    expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
   });
 });

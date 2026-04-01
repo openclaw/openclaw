@@ -180,4 +180,22 @@ describe("SlackExecApprovalHandler", () => {
 
     expect(handler.shouldHandle(buildRequest())).toBe(false);
   });
+
+  it("accepts commands.ownerAllowFrom as exec approver fallback", async () => {
+    const app = buildApp();
+    const cfg = {
+      ...buildConfig("dm", {
+        execApprovals: { enabled: true, target: "dm" },
+      }),
+      commands: { ownerAllowFrom: ["slack:U123APPROVER"] },
+    } as OpenClawConfig;
+    const handler = new SlackExecApprovalHandler({
+      app,
+      accountId: "default",
+      config: cfg.channels!.slack!.execApprovals!,
+      cfg,
+    });
+
+    expect(handler.shouldHandle(buildRequest())).toBe(true);
+  });
 });

@@ -29,7 +29,7 @@ function buildConfig(
 }
 
 describe("slack exec approvals", () => {
-  it("requires enablement and explicit approvers", () => {
+  it("requires enablement and explicit or owner approvers", () => {
     expect(isSlackExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(isSlackExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
@@ -40,6 +40,14 @@ describe("slack exec approvals", () => {
     expect(
       isSlackExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: true, approvers: ["U123"] }),
+      }),
+    ).toBe(true);
+    expect(
+      isSlackExecApprovalClientEnabled({
+        cfg: {
+          ...buildConfig({ enabled: true }),
+          commands: { ownerAllowFrom: ["slack:U123OWNER"] },
+        } as OpenClawConfig,
       }),
     ).toBe(true);
   });
@@ -67,6 +75,16 @@ describe("slack exec approvals", () => {
 
     expect(getSlackExecApprovalApprovers({ cfg })).toEqual([]);
     expect(isSlackExecApprovalApprover({ cfg, senderId: "U789" })).toBe(false);
+  });
+
+  it("falls back to commands.ownerAllowFrom for exec approvers", () => {
+    const cfg = {
+      ...buildConfig({ enabled: true }),
+      commands: { ownerAllowFrom: ["slack:U123", "user:U456", "<@U789>"] },
+    } as OpenClawConfig;
+
+    expect(getSlackExecApprovalApprovers({ cfg })).toEqual(["U123", "U456", "U789"]);
+    expect(isSlackExecApprovalApprover({ cfg, senderId: "U456" })).toBe(true);
   });
 
   it("defaults target to dm", () => {
