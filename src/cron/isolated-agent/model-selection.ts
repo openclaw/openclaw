@@ -1,6 +1,7 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
+  buildModelAliasIndex,
   getModelRefStatus,
   normalizeModelSelection,
   resolveAllowedModelRef,
@@ -107,9 +108,14 @@ export async function resolveCronModelSelection(
     // payload.model is set explicitly via --model flag and has highest
     // priority per the docs. Resolve the ref but skip the allowlist gate
     // so the user override is always honored.
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfgWithAgentDefaults,
+      defaultProvider: resolvedDefault.provider,
+    });
     const resolved = resolveModelRefFromString({
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
+      aliasIndex,
     });
     if (!resolved) {
       return { ok: false, error: `invalid cron model override: "${modelOverride}"` };

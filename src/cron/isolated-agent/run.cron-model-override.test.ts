@@ -180,6 +180,37 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
+  it("resolves model aliases for payload.model override", async () => {
+    const jobWithAlias = makeJob({
+      payload: { kind: "agentTurn", message: "run digest", model: "sonnet" },
+    });
+
+    const cfgWithAlias = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as never;
+
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      }),
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({ job: jobWithAlias, cfg: cfgWithAlias }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+  });
+
   it("persists session-level /model override on session entry before the run", async () => {
     // No cron payload model — the job has no model field
     const jobWithoutModel = makeJob({
