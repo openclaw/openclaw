@@ -1,0 +1,49 @@
+# Orchestrator Skill 配置示例
+# 部署时复制为 config/orchestrator.yaml
+
+# Agent类型映射
+agentMapping:
+  code: "coding-agent"          # 代码编写/修改
+  test: "testing-agent"         # 测试生成
+  docs: "docs-writer"           # 文档编写
+  research: "researcher"        # 信息收集
+  review: "code-reviewer"       # 代码评审
+  refactor: "coding-agent"      # 重构
+  config: "coding-agent"        # 配置修改
+
+# 默认agent（当匹配失败时使用）
+defaultAgent: "openclaw-main"
+
+# 超时配置
+timeouts:
+  defaultTaskSeconds: 900       # 每个子任务默认超时（15分钟）
+  maxTaskSeconds: 3600         # 单个任务最大超时（1小时）
+
+# 并发控制（可覆盖全局agents.defaults.subagents）
+concurrency:
+  maxConcurrent: 8             # 最大并行数
+  maxChildrenPerAgent: 10      # 每个orchestrator的最大子任务数
+
+# 分解配置
+decomposition:
+  # 是否自动生成context（基于任务描述中的文件路径）
+  autoContext: true
+  # 优先考虑文件扩展名推断type（如.test.ts → test）
+  inferTypesFromFiles: true
+  # 最大子任务数（超过则警告并调整）
+  maxSubtasks: 20
+
+# 冲突处理
+conflictResolution:
+  # 自动合并策略：none|safe|aggressive
+  autoMergeStrategy: "safe"
+  # 自动合并行不重叠的修改
+  autoMergeNonOverlapping: true
+  # 冲突阈值：超过N个冲突就中断orchestration
+  maxConflictsBeforeAbort: 10
+
+# 调试选项
+debug:
+  logDecomposition: true       # 记录分解过程
+  logMatches: true            # 记录agent匹配决策
+  dryRun: false               # 只生成计划不执行（测试用）
