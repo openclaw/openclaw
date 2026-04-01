@@ -47,3 +47,5 @@ export * from "../infra/wsl.ts";
 export * from "../utils/fetch-timeout.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
 export * from "./ssrf-policy.js";
+export { callGateway } from "../gateway/call.js";
+export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

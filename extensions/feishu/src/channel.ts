@@ -53,6 +53,8 @@ import {
   parseFeishuTargetId,
 } from "./conversation-id.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
+import { buildFeishuExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
+import { shouldSuppressLocalFeishuExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
@@ -1080,6 +1082,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           hint: "<chatId|user:openId|chat:chatId>",
         },
       },
+      approvals: {
+        render: {
+          exec: {
+            buildPendingPayload: (params) => buildFeishuExecApprovalPendingPayload(params),
+            // Resolved notifications are handled by in-place card updates
+            // in card-action.ts — suppress the default text message.
+            buildResolvedPayload: () => null,
+          },
+        },
+      },
       directory: createChannelDirectoryAdapter({
         listPeers: async ({ cfg, query, limit, accountId }) =>
           listFeishuDirectoryPeers({
@@ -1185,10 +1197,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, accountId, payload }),
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
       }),
+      sendPayload: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const sendPayloadFn = runtime.feishuOutbound.sendPayload;
+        if (!sendPayloadFn) {
+          throw new Error("feishu sendPayload is unavailable");
+        }
+        return sendPayloadFn(ctx);
+      },
     },
   });

@@ -1,3 +1,8 @@
+import {
+  callGateway,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "openclaw/plugin-sdk/infra-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -8,7 +13,13 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+import {
+  FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION,
+  FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION,
+  FEISHU_EXEC_APPROVAL_DENY_ACTION,
+  createExecApprovalResolvedCard,
+} from "./card-ux-exec-approval.js";
+import { sendCardFeishu, sendMessageFeishu, updateCardFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -25,6 +36,7 @@ export type FeishuCardActionEvent = {
     open_id: string;
     user_id: string;
     chat_id: string;
+    open_message_id?: string;
   };
 };
 
@@ -166,6 +178,21 @@ async function sendInvalidInteractionNotice(params: {
   });
 }
 
+function resolveExecApprovalDecision(
+  action: string,
+): "allow-once" | "allow-always" | "deny" | null {
+  if (action === FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION) {
+    return "allow-once";
+  }
+  if (action === FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION) {
+    return "allow-always";
+  }
+  if (action === FEISHU_EXEC_APPROVAL_DENY_ACTION) {
+    return "deny";
+  }
+  return null;
+}
+
 export async function handleFeishuCardAction(params: {
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
@@ -274,6 +301,77 @@ export async function handleFeishuCardAction(params: {
           accountId,
           chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
         });
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      }
+
+      const execApprovalDecision = resolveExecApprovalDecision(envelope.a);
+      if (execApprovalDecision) {
+        const approvalId =
+          typeof envelope.m?.approvalId === "string" ? envelope.m.approvalId.trim() : "";
+        if (!approvalId) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+        log(
+          `feishu[${account.accountId}]: exec approval ${execApprovalDecision} for ${approvalId} by ${event.operator.open_id}`,
+        );
+        try {
+          // Resolve the exec approval directly via gateway RPC instead of
+          // dispatching a synthetic /approve chat command.  This avoids
+          // the command reply and system notification messages.
+          const resolvedBy = `feishu:${event.operator.open_id}`;
+          await callGateway({
+            method: "exec.approval.resolve",
+            params: { id: approvalId, decision: execApprovalDecision },
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            clientDisplayName: `Feishu card approval (${resolvedBy})`,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          });
+          // Update original card in-place if message ID is available,
+          // otherwise fall back to sending a new card.
+          const command =
+            typeof envelope.m?.command === "string" ? envelope.m.command.trim() : undefined;
+          const cwd = typeof envelope.m?.cwd === "string" ? envelope.m.cwd.trim() : undefined;
+          const resolvedCard = createExecApprovalResolvedCard({
+            approvalId,
+            decision: execApprovalDecision,
+            resolvedBy: event.operator.open_id,
+            command: command || undefined,
+            cwd: cwd || undefined,
+          });
+          const originalMessageId = event.context.open_message_id;
+          if (originalMessageId) {
+            await updateCardFeishu({
+              cfg,
+              messageId: originalMessageId,
+              card: resolvedCard,
+              accountId,
+            }).catch(() => {});
+          } else {
+            await sendCardFeishu({
+              cfg,
+              to: resolveCallbackTarget(event),
+              card: resolvedCard,
+              accountId,
+            }).catch(() => {});
+          }
+        } catch (err) {
+          // Notify the user about the failure
+          const errorText = `❌ Failed to submit exec approval: ${String(err)}`;
+          await sendMessageFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            text: errorText,
+            accountId,
+          }).catch(() => {});
+        }
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
       }
