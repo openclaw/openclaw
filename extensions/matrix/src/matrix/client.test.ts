@@ -28,17 +28,6 @@ vi.mock("./credentials-write.runtime.js", () => ({
   touchMatrixCredentials: touchMatrixCredentialsMock,
 }));
 
-vi.mock("matrix-js-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("matrix-js-sdk")>();
-  return {
-    ...actual,
-    createClient: vi.fn(() => ({
-      // Minimal stub — auth tests spy on MatrixClient.prototype.doRequest
-      // rather than exercising the underlying js-sdk client.
-    })),
-  };
-});
-
 const {
   getMatrixScopedEnvVarNames,
   resolveImplicitMatrixAccountId,
