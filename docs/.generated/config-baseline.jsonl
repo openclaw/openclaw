@@ -3394,6 +3394,7 @@
 {"recordType":"path","path":"channels.whatsapp.accounts.*.mediaMaxMb","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.messagePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.name","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.whatsapp.accounts.*.reactionLevel","kind":"channel","type":"string","required":false,"enumValues":["off","ack","minimal","extensive"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.selfChatMode","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.sendReadReceipts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3458,6 +3459,7 @@
 {"recordType":"path","path":"channels.whatsapp.markdown.tables","kind":"channel","type":"string","required":false,"enumValues":["off","bullets","code","block"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.mediaMaxMb","kind":"channel","type":"integer","required":true,"defaultValue":50,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.messagePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.whatsapp.reactionLevel","kind":"channel","type":"string","required":false,"enumValues":["off","ack","minimal","extensive"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.selfChatMode","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"WhatsApp Self-Phone Mode","help":"Same-phone setup (bot uses your personal WhatsApp number).","hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.sendReadReceipts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
