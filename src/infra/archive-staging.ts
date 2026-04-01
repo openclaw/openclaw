@@ -129,9 +129,7 @@ async function applyStagedEntryMode(params: {
     targetPath: destinationPath,
     originalPath: params.originalPath,
   });
-  if (params.mode !== 0) {
-    await fs.chmod(destinationPath, params.mode).catch(() => undefined);
-  }
+  await fs.chmod(destinationPath, params.mode).catch(() => undefined);
 }
 
 export async function withStagedArchiveDestination<T>(params: {
