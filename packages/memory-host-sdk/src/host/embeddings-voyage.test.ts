@@ -39,7 +39,7 @@ const createFetchMock = () => {
 };
 
 function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  globalThis.fetch = fetchMock;
+  vi.stubGlobal("fetch", fetchMock);
 }
 
 let authModule: typeof import("../../../../src/agents/model-auth.js");

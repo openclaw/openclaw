@@ -44,7 +44,7 @@ const createGeminiBatchFetchMock = (count: number, embeddingValues = [1, 2, 3]) 
   }));
 
 function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  globalThis.fetch = fetchMock;
+  vi.stubGlobal("fetch", fetchMock);
 }
 
 function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {

@@ -37,7 +37,7 @@ const createGeminiFetchMock = () =>
   }));
 
 function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  globalThis.fetch = fetchMock;
+  vi.stubGlobal("fetch", fetchMock);
 }
 
 function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
