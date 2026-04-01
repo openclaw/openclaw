@@ -592,12 +592,24 @@ export async function runCronIsolatedAgentTurn(params: {
     // in the main agent runner (agent-runner-execution.ts). Without this, cron
     // jobs that specify a model different from the agent primary always fail.
     // See: https://github.com/openclaw/openclaw/issues/57206
+    //
+    // Circuit breaker: cap retries to prevent infinite loops when the live
+    // session model switch guard fires repeatedly during failover (#58466).
+    const MAX_MODEL_SWITCH_RETRIES = 2;
+    let modelSwitchRetries = 0;
     while (true) {
       try {
         await runPrompt(commandBody);
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
+          modelSwitchRetries += 1;
+          if (modelSwitchRetries > MAX_MODEL_SWITCH_RETRIES) {
+            logWarn(
+              `[cron:${params.job.id}] LiveSessionModelSwitchError retry limit reached (${MAX_MODEL_SWITCH_RETRIES}); aborting`,
+            );
+            throw err;
+          }
           liveSelection = {
             provider: err.provider,
             model: err.model,
