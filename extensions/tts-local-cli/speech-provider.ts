@@ -136,7 +136,7 @@ function detectFormat(filePath: string): "mp3" | "opus" | "wav" | null {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".opus" || ext === ".ogg") return "opus";
   if (ext === ".wav") return "wav";
-  if (ext === ".mp3") return "mp3";
+  if (ext === ".mp3" || ext === ".m4a") return "mp3";
   return null;
 }
 
@@ -179,6 +179,8 @@ async function runCli(params: {
     const timer = setTimeout(() => {
       timedOut = true;
       proc.kill();
+      // Escalate to SIGKILL if child ignores SIGTERM
+      setTimeout(() => proc.kill("SIGKILL"), 5000).unref();
     }, params.timeoutMs);
 
     const env = params.env ? { ...process.env, ...params.env } : process.env;
@@ -226,7 +228,8 @@ async function runCli(params: {
       reject(new Error("CLI TTS produced no output"));
     });
 
-    if (!baseArgs.some((a) => a.includes("{{Text}}"))) {
+    if (!baseArgs.some((a) => /{{\s*text\s*}}/i.test(a))) {
+      proc.stdin?.on("error", () => {}); // suppress EPIPE if child ignores stdin
       proc.stdin?.write(cleanText);
       proc.stdin?.end();
     }
