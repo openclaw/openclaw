@@ -12,7 +12,10 @@ import {
 import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
 import { normalizeProviderId } from "openclaw/plugin-sdk/agent-runtime";
-import { buildModelsProviderData, type ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import {
+  buildModelsProviderData,
+  type ModelsProviderData,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";

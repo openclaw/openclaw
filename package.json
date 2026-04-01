@@ -135,6 +135,10 @@
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
     },
+    "./plugin-sdk/runtime-config-snapshot": {
+      "types": "./dist/plugin-sdk/runtime-config-snapshot.d.ts",
+      "default": "./dist/plugin-sdk/runtime-config-snapshot.js"
+    },
     "./plugin-sdk/ssrf-runtime": {
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
       "default": "./dist/plugin-sdk/ssrf-runtime.js"
@@ -247,6 +251,10 @@
       "types": "./dist/plugin-sdk/logging-core.d.ts",
       "default": "./dist/plugin-sdk/logging-core.js"
     },
+    "./plugin-sdk/markdown-table-runtime": {
+      "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
+      "default": "./dist/plugin-sdk/markdown-table-runtime.js"
+    },
     "./plugin-sdk/account-helpers": {
       "types": "./dist/plugin-sdk/account-helpers.d.ts",
       "default": "./dist/plugin-sdk/account-helpers.js"
@@ -326,6 +334,14 @@
     "./plugin-sdk/command-auth-native": {
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
+    },
+    "./plugin-sdk/command-detection": {
+      "types": "./dist/plugin-sdk/command-detection.d.ts",
+      "default": "./dist/plugin-sdk/command-detection.js"
+    },
+    "./plugin-sdk/command-surface": {
+      "types": "./dist/plugin-sdk/command-surface.d.ts",
+      "default": "./dist/plugin-sdk/command-surface.js"
     },
     "./plugin-sdk/collection-runtime": {
       "types": "./dist/plugin-sdk/collection-runtime.d.ts",
@@ -671,6 +687,10 @@
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
     },
+    "./plugin-sdk/models-provider-runtime": {
+      "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
+      "default": "./dist/plugin-sdk/models-provider-runtime.js"
+    },
     "./plugin-sdk/nextcloud-talk": {
       "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
       "default": "./dist/plugin-sdk/nextcloud-talk.js"
@@ -858,6 +878,10 @@
     "./plugin-sdk/telegram-account": {
       "types": "./dist/plugin-sdk/telegram-account.d.ts",
       "default": "./dist/plugin-sdk/telegram-account.js"
+    },
+    "./plugin-sdk/telegram-command-config": {
+      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
+      "default": "./dist/plugin-sdk/telegram-command-config.js"
     },
     "./plugin-sdk/telegram-allow-from": {
       "types": "./dist/plugin-sdk/telegram-allow-from.d.ts",
