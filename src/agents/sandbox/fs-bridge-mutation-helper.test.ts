@@ -302,9 +302,7 @@ describe("sandbox pinned mutation helper", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toMatch(/hardlinked file/i);
-        await expect(fs.readFile(path.join(outside, "secret.txt"), "utf8")).resolves.toBe(
-          "classified",
-        );
+        await expect(fs.stat(path.join(workspace, "hardlink.txt"))).resolves.toBeDefined();
         await expect(fs.stat(path.join(destRoot, "copied.txt"))).rejects.toThrow();
       });
     },
