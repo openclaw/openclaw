@@ -205,6 +205,16 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function startScheduledSweep() {
+  if (sweepInProgress) {
+    return;
+  }
+  sweepInProgress = true;
+  void sweepTaskRegistry().finally(() => {
+    sweepInProgress = false;
+  });
+}
+
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
   ensureTaskRegistryReady();
   const now = Date.now();
@@ -256,32 +266,15 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
 
 export function startTaskRegistryMaintenance() {
   ensureTaskRegistryReady();
-  // Defer the first sweep to avoid blocking the critical startup window.
-  // Use setTimeout instead of running synchronously at startup.
   deferredSweep = setTimeout(() => {
     deferredSweep = null;
-    if (sweepInProgress) {
-      return;
-    }
-    sweepInProgress = true;
-    void sweepTaskRegistry().finally(() => {
-      sweepInProgress = false;
-    });
+    startScheduledSweep();
   }, 5_000);
+  deferredSweep.unref?.();
   if (sweeper) {
     return;
   }
-  sweeper = setInterval(() => {
-    // Prevent overlapping sweeps — if a previous async sweep is still
-    // running, skip this tick entirely.
-    if (sweepInProgress) {
-      return;
-    }
-    sweepInProgress = true;
-    void sweepTaskRegistry().finally(() => {
-      sweepInProgress = false;
-    });
-  }, TASK_SWEEP_INTERVAL_MS);
+  sweeper = setInterval(startScheduledSweep, TASK_SWEEP_INTERVAL_MS);
   sweeper.unref?.();
 }
 
