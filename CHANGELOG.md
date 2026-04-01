@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Cron/tool schemas: keep cron tool schemas strict-model-friendly while still preserving `failureAlert=false`, nullable `agentId`/`sessionKey`, and flattened add/update recovery for the newly exposed cron job fields. (#55043) Thanks @brunolorente.
 - BlueBubbles/config: accept `enrichGroupParticipantsFromContacts` in the core strict config schema so gateways no longer fail validation or startup when the BlueBubbles plugin writes that field. (#56889) Thanks @zqchris.
 - Agents/failover: classify AbortError and stream-abort messages as timeout so Ollama NDJSON stream aborts stop showing `reason=unknown` in model fallback logs. (#58324) Thanks @yelog
+- Exec approvals: route Slack, Discord, and Telegram approvals through the shared channel approval-capability path so native approval auth, delivery, and `/approve` handling stay aligned across channels while preserving Telegram session-key agent filtering. (#58634) thanks @gumadeiras
 
 ## 2026.4.2
 
@@ -87,8 +88,6 @@ Docs: https://docs.openclaw.ai
 - Config/Telegram: migrate removed `channels.telegram.groupMentionsOnly` into `channels.telegram.groups["*"].requireMention` on load so legacy configs no longer crash at startup. (#55336) thanks @jameslcowan.
 
 ### Fixes
-
-- Telegram/exec approvals: preserve `agentFilter` matching when the agent is only encoded in `sessionKey`, so Telegram approval requests keep reaching configured approvers after the shared approval-capability refactor. (#58634) thanks @gumadeiras
 
 ## 2026.3.31
 
