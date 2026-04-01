@@ -1,0 +1,12 @@
+{
+	"servers": {
+		"zapier": {
+			"url": "https://mcp.zapier.com/api/v1/connect",
+			"type": "http",
+			"icons": {
+				"src": "https://mcp.zapier.com/icon-mcp.png"
+			}
+		}
+	},
+	"inputs": []
+}
