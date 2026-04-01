@@ -59,6 +59,14 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
   });
 }
 
+async function postUnsignedPayload(url: string, payload: Record<string, unknown>) {
+  return await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 afterEach(() => {
   stopFeishuMonitor();
 });
@@ -92,7 +100,7 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
-  it("rejects missing signature headers with 401", async () => {
+  it("accepts plaintext url_verification challenges without signature headers", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
     await withRunningWebhookMonitor(
@@ -104,14 +112,13 @@ describe("Feishu webhook signed-request e2e", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ type: "url_verification", challenge: "challenge-token" }),
+        const response = await postUnsignedPayload(url, {
+          type: "url_verification",
+          challenge: "challenge-token",
         });
 
-        expect(response.status).toBe(401);
-        expect(await response.text()).toBe("Invalid signature");
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ challenge: "challenge-token" });
       },
     );
   });
@@ -242,6 +249,30 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("rejects unsigned non-challenge events without signature headers", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "unsigned-dispatch",
+        path: "/hook-e2e-unsigned-dispatch",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const response = await postUnsignedPayload(url, {
+          schema: "2.0",
+          header: { event_type: "unknown.event" },
+          event: {},
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
+  });
+
   it("accepts signed encrypted url_verification challenges end-to-end", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
@@ -261,6 +292,33 @@ describe("Feishu webhook signed-request e2e", () => {
           }),
         };
         const response = await postSignedPayload(url, payload);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          challenge: "encrypted-challenge-token",
+        });
+      },
+    );
+  });
+
+  it("accepts encrypted url_verification challenges without signature headers", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "encrypted-challenge-unsigned",
+        path: "/hook-e2e-encrypted-challenge-unsigned",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const response = await postUnsignedPayload(url, {
+          encrypt: encryptFeishuPayload("encrypt_key", {
+            type: "url_verification",
+            challenge: "encrypted-challenge-token",
+          }),
+        });
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
