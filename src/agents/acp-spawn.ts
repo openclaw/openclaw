@@ -67,6 +67,16 @@ import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
+const ACP_BOOTSTRAP_INCLUDE = new Set([
+  "AGENTS.md",
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
+  "TOOLS.md",
+  "MEMORY.md",
+  "memory.md",
+]);
+
 const log = createSubsystemLogger("agents/acp-spawn");
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
@@ -1007,15 +1017,6 @@ export async function spawnAcpDirect(
     if (bootstrapWorkspace && cfg.acp?.injectBootstrap !== false) {
       try {
         const bootstrapFiles = await loadWorkspaceBootstrapFiles(bootstrapWorkspace);
-        const ACP_BOOTSTRAP_INCLUDE = new Set([
-          "AGENTS.md",
-          "SOUL.md",
-          "IDENTITY.md",
-          "USER.md",
-          "TOOLS.md",
-          "MEMORY.md",
-          "memory.md",
-        ]);
         const includedFiles = bootstrapFiles.filter(
           (f) => !f.missing && f.content?.trim() && ACP_BOOTSTRAP_INCLUDE.has(f.name),
         );
