@@ -37811,6 +37811,22 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.reactionLevel",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "ack",
+        "minimal",
+        "extensive"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.responsePrefix",
       "kind": "channel",
       "type": "string",
@@ -38494,6 +38510,22 @@
       "kind": "channel",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.reactionLevel",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "ack",
+        "minimal",
+        "extensive"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],

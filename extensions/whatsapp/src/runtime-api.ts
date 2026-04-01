@@ -36,6 +36,7 @@ export {
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
 let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;

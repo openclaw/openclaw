@@ -32,6 +32,7 @@ export type ResolvedWhatsAppAccount = {
   mediaMaxMb?: number;
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
+  reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
 };
@@ -154,6 +155,7 @@ export function resolveWhatsAppAccount(params: {
     mediaMaxMb: merged.mediaMaxMb,
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
+    reactionLevel: merged.reactionLevel,
     groups: merged.groups,
     debounceMs: merged.debounceMs,
   };

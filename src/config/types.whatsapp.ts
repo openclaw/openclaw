@@ -1,3 +1,4 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -16,6 +17,8 @@ export type WhatsAppActionConfig = {
   sendMessage?: boolean;
   polls?: boolean;
 };
+
+export type WhatsAppReactionLevel = ReactionLevel;
 
 export type WhatsAppGroupConfig = {
   requireMention?: boolean;
@@ -77,6 +80,14 @@ type WhatsAppSharedConfig = {
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
+  /**
+   * Controls agent reaction behavior:
+   * - "off": No reactions
+   * - "ack": Only automatic ack reactions
+   * - "minimal" (default): Agent can react sparingly
+   * - "extensive": Agent can react liberally
+   */
+  reactionLevel?: WhatsAppReactionLevel;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Heartbeat visibility settings. */
