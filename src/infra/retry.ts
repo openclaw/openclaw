@@ -30,7 +30,8 @@ const DEFAULT_RETRY_CONFIG = {
   jitter: 0,
 };
 
-const RATE_LIMIT_RETRY_AFTER_RE = /retry[- ]after[^\d]*(\d+)/i;
+const RATE_LIMIT_RETRY_AFTER_RE =
+  /retry[- ]after[^\d]*(\d+(?:\.\d+)?)\s*(milliseconds?|msecs?|ms|seconds?|secs?|s)?/i;
 const RATE_LIMIT_MESSAGE_RE =
   /\b(?:429|too many requests|rate[_ -]?limit(?:ed)?|throttl(?:ed|ing)|resource exhausted)\b/i;
 
@@ -138,7 +139,16 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const retryAfterMatch = RATE_LIMIT_RETRY_AFTER_RE.exec(message);
   if (retryAfterMatch) {
-    return Math.max(0, Number(retryAfterMatch[1]) * 1000);
+    const amount = Number(retryAfterMatch[1]);
+    if (Number.isFinite(amount)) {
+      const unit = retryAfterMatch[2]?.toLowerCase();
+      if (!unit || unit.startsWith("s")) {
+        return Math.max(0, Math.round(amount * 1000));
+      }
+      if (unit === "ms" || unit.startsWith("msec") || unit.startsWith("millisecond")) {
+        return Math.max(0, Math.round(amount));
+      }
+    }
   }
   return undefined;
 };

@@ -254,6 +254,24 @@ describe("retryAsync", () => {
     });
     expect(delays[0]).toBe(3000);
   });
+
+  it("parses millisecond retry after hints in rate-limit style messages", async () => {
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 5000,
+      error: new Error("rate limited, retry after 500 ms"),
+    });
+    expect(delays[0]).toBe(500);
+  });
+
+  it("parses fractional second retry after hints in rate-limit style messages", async () => {
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 5000,
+      error: new Error("rate limited, retry after 1.5s"),
+    });
+    expect(delays[0]).toBe(1500);
+  });
 });
 
 describe("resolveRetryConfig", () => {
