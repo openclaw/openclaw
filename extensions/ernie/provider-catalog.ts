@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const ERNIE_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const ERNIE_DEFAULT_MODEL_ID = "ernie-5.0-thinking-preview";
