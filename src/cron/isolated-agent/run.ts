@@ -34,7 +34,8 @@ import {
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  resolveSessionTranscriptPath,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   setSessionRuntimeModel,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -286,6 +287,19 @@ export async function runCronIsolatedAgentTurn(params: {
         : params.job.id;
     cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
   }
+  const sessionFilePathOpts = resolveSessionFilePathOptions({
+    agentId,
+    storePath: cronSession.storePath,
+  });
+  if (cronSession.isNewSession) {
+    // Fresh isolated runs should persist their canonical transcript path
+    // immediately rather than waiting for a later re-entry path to backfill it.
+    cronSession.sessionEntry.sessionFile = resolveSessionFilePath(
+      runSessionId,
+      undefined,
+      sessionFilePathOpts,
+    );
+  }
 
   const resolvedModelSelection = await resolveCronModelSelection({
     cfg: params.cfg,
@@ -460,7 +474,11 @@ export async function runCronIsolatedAgentTurn(params: {
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
   try {
-    const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
+    const sessionFile = resolveSessionFilePath(
+      cronSession.sessionEntry.sessionId,
+      cronSession.sessionEntry,
+      sessionFilePathOpts,
+    );
     const resolvedVerboseLevel =
       normalizeVerboseLevel(cronSession.sessionEntry.verboseLevel) ??
       normalizeVerboseLevel(agentCfg?.verboseDefault) ??

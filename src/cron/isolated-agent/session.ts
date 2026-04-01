@@ -78,6 +78,7 @@ export function resolveCronSession(params: {
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
     ...(isNewSession && {
+      sessionFile: undefined,
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
