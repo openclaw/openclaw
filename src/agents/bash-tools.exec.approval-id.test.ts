@@ -25,10 +25,15 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
   })),
 }));
 
+vi.mock("../infra/outbound/message.js", () => ({
+  sendMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
+let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
 
 async function loadExecApprovalModules() {
   vi.resetModules();
@@ -36,6 +41,7 @@ async function loadExecApprovalModules() {
   ({ createExecTool } = await import("./bash-tools.exec.js"));
   ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
   ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
+  ({ sendMessage } = await import("../infra/outbound/message.js"));
 }
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
@@ -470,6 +476,55 @@ describe("exec approvals", () => {
     expect(agentCalls[0]?.message).toContain(
       "An async command the user already approved has completed.",
     );
+  });
+
+  it("continues the original agent session after approved gateway exec completes with an external route", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:discord:channel:123",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "discord",
+      currentChannelId: "123",
+      accountId: "default",
+      currentThreadTs: "456",
+    });
+
+    const result = await tool.execute("call-gw-followup-discord", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(agentCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        deliver: true,
+        bestEffortDeliver: true,
+        channel: "discord",
+        to: "123",
+        accountId: "default",
+        threadId: "456",
+        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
+      }),
+    );
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain(
+      "If the task requires more steps, continue from this result before replying to the user.",
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
