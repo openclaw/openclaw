@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 <<<<<<< HEAD
+
 - Chat/error replies: stop leaking raw provider/runtime failures into external chat channels, return a friendly retry message instead, and add a specific `/new` hint for Bedrock toolResult/toolUse session mismatches. (#58831) Thanks @ImLukeF.
 - Gateway/reload: ignore startup config writes by persisted hash in the config reloader so generated auth tokens and seeded Control UI origins do not trigger a restart loop, while real `gateway.auth.*` edits still require restart. (#58678) Thanks @yelog
 - Tasks/gateway: keep the task registry maintenance sweep from stalling the gateway event loop under synchronous SQLite pressure, so upgraded gateways stop hanging about a minute after startup. (#58670) Thanks @openperf
@@ -73,7 +74,9 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway: hand reconnect ownership back to Carbon, keep runtime status aligned with close/reconnect state, and force-stop sockets that open without reaching READY so Discord monitors recover promptly instead of waiting on stale health timeouts. (#59019) Thanks @obviyus
 
 ## 2026.3.31
+
 =======
+
 - Hooks/session routing: rebind hook-triggered `agent:` session keys to the actual target agent before isolated dispatch so dedicated hook agents keep their own session-scoped tool and plugin identity. Thanks @kexinoh and @vincentkoc.
 - Outbound media/local files: piggyback host-local `MEDIA:` reads on the configured fs policy instead of a separate media-root check, so generated files outside the workspace can send when `tools.fs.workspaceOnly=false` while plaintext-like host files stay blocked by the outbound media allowlist.
 - Gateway/auth: reject mismatched browser `Origin` headers on trusted-proxy HTTP operator requests while keeping origin-less headless proxy clients working. Thanks @AntAISecurityLab and @vincentkoc.
@@ -204,7 +207,6 @@ Docs: https://docs.openclaw.ai
 - Matrix/DM threads: keep strict unnamed fresh-invite rooms promotable even when Matrix omits the optional direct hint, preserve repair-failed local DM promotions while still revalidating later room metadata, and keep both bound and thread-isolated Matrix sessions reporting the correct route policy. (#58099) Thanks @gumadeiras.
 - ClawFlow: add a small flow runtime substrate for authoring layers with persisted wait targets and output bags, plus bundled skills/Lobster examples and richer `flows show` / `doctor` recovery hints for multi-task flow state. (#58336) Thanks @mbelinky.
 - Sessions/Feishu: preserve conversation ids that legitimately embed `:topic:` in shared session helper parsing, while keeping Telegram topic session parsing intact. (#58100) Thanks @gumadeiras.
-- Matrix/multi-account: keep room-level `account` scoping and implicit default-account selection consistent when the default Matrix account is configured directly on top-level `channels.matrix.*` alongside named accounts. (#58449) thanks @Daanvdplas.
 
 ### Breaking
 
