@@ -58,12 +58,10 @@ const normalizeModelSelectionMock = vi.fn((value: unknown) =>
   typeof value === "string" ? value.trim() || undefined : undefined,
 );
 const lookupContextTokensMock = vi.fn().mockReturnValue(128000);
-const resolveCronStyleNowMock = vi
-  .fn()
-  .mockReturnValue({
-    formattedTime: "2026-02-10 12:00",
-    timeLine: "Current time: 2026-02-10 12:00 UTC",
-  });
+const resolveCronStyleNowMock = vi.fn().mockReturnValue({
+  formattedTime: "2026-02-10 12:00",
+  timeLine: "Current time: 2026-02-10 12:00 UTC",
+});
 const resolveAgentTimeoutMsMock = vi.fn().mockReturnValue(60_000);
 const deriveSessionTotalTokensMock = vi.fn().mockReturnValue(30);
 const hasNonzeroUsageMock = vi.fn().mockReturnValue(false);
@@ -84,6 +82,12 @@ const resolveBootstrapWarningSignaturesSeenMock = vi.fn().mockReturnValue([]);
 const resolveFastModeStateMock = vi.fn().mockReturnValue({ enabled: false });
 const resolveNestedAgentLaneMock = vi.fn((lane: string | undefined) => lane);
 
+vi.mock("../../agents/cli-runner.runtime.js", () => ({
+  runCliAgent: runCliAgentMock,
+  getCliSessionId: getCliSessionIdMock,
+  setCliSessionId: vi.fn(),
+}));
+
 vi.mock("./run.runtime.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 128000,
   DEFAULT_MODEL: "gpt-4",
@@ -96,14 +100,13 @@ vi.mock("./run.runtime.js", () => ({
   detectSuspiciousPatterns: detectSuspiciousPatternsMock,
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   estimateUsageCost: estimateUsageCostMock,
-  getCliSessionId: getCliSessionIdMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
   getModelRefStatus: getModelRefStatusMock,
   getRemoteSkillEligibility: vi.fn().mockReturnValue({}),
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   hasNonzeroUsage: hasNonzeroUsageMock,
   isCliProvider: isCliProviderMock,
   isExternalHookSession: isExternalHookSessionMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
   loadModelCatalog: loadModelCatalogMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
   lookupContextTokens: lookupContextTokensMock,
@@ -132,10 +135,8 @@ vi.mock("./run.runtime.js", () => ({
   resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
-  runCliAgent: runCliAgentMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   runWithModelFallback: runWithModelFallbackMock,
-  setCliSessionId: vi.fn(),
   setSessionRuntimeModel: setSessionRuntimeModelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
   updateSessionStore: updateSessionStoreMock,
