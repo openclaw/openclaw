@@ -194,6 +194,39 @@ describe("pruneContextMessages", () => {
     expect(textBlock.text).toContain("[Tool result trimmed:");
   });
 
+  it("ignores non-latest thinking signatures that will be dropped before send", () => {
+    const messages: AgentMessage[] = [
+      makeUser("first"),
+      makeAssistant([
+        {
+          type: "thinking",
+          thinking: "internal",
+          thinkingSignature: "S".repeat(40_000),
+        } as unknown as AssistantContentBlock,
+        { type: "text", text: "older reply" },
+      ]),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeUser("latest"),
+      makeAssistant([{ type: "text", text: "latest reply" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.5,
+        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+      },
+      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
+      isToolPrunable: () => true,
+      dropThinkingBlocksForEstimate: true,
+    });
+
+    expect(result).toBe(messages);
+  });
+
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
