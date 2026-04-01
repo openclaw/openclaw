@@ -2,6 +2,14 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+  resolveAnthropicBetas,
+  resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
+} from "../../../extensions/anthropic/api.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { AgentStreamParams } from "../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -11,16 +19,8 @@ import {
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { normalizeToolName } from "../tool-policy.js";
-import {
-  createAnthropicBetaHeadersWrapper,
-  createAnthropicFastModeWrapper,
-  createAnthropicServiceTierWrapper,
-  createAnthropicToolPayloadCompatibilityWrapper,
-  resolveAnthropicFastMode,
-  resolveAnthropicServiceTier,
-  resolveAnthropicBetas,
-  resolveCacheRetention,
-} from "./anthropic-stream-wrappers.js";
+import { resolveCacheRetention } from "./anthropic-cache-retention.js";
+import { createAnthropicToolPayloadCompatibilityWrapper } from "./anthropic-family-tool-payload-compat.js";
 import { createBedrockNoCacheWrapper, isAnthropicBedrockModel } from "./bedrock-stream-wrappers.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
@@ -441,7 +441,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(ctx.sanitizedExtraParams, ctx.provider, ctx.modelId);
+  const anthropicBetas = resolveAnthropicBetas(ctx.sanitizedExtraParams, ctx.modelId);
   if (anthropicBetas?.length) {
     log.debug(
       `applying Anthropic beta header for ${ctx.provider}/${ctx.modelId}: ${anthropicBetas.join(",")}`,
@@ -494,6 +494,27 @@ function applyPostPluginStreamWrappers(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
+
+  if (ctx.provider === "anthropic") {
+    const anthropicServiceTier = resolveAnthropicServiceTier(ctx.effectiveExtraParams);
+    if (anthropicServiceTier) {
+      log.debug(
+        `applying Anthropic service_tier=${anthropicServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createAnthropicServiceTierWrapper(
+        ctx.agent.streamFn,
+        anthropicServiceTier,
+      );
+    }
+  }
+
+  const anthropicFastMode = resolveAnthropicFastMode(ctx.effectiveExtraParams);
+  if (anthropicFastMode !== undefined) {
+    log.debug(
+      `applying Anthropic fast mode=${anthropicFastMode} for ${ctx.provider}/${ctx.modelId}`,
+    );
+    ctx.agent.streamFn = createAnthropicFastModeWrapper(ctx.agent.streamFn, anthropicFastMode);
+  }
 
   if (typeof ctx.effectiveExtraParams?.fastMode === "boolean") {
     log.debug(
