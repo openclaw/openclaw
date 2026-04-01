@@ -113,8 +113,8 @@ function hasExplicitCommandAllowlist(accountConfig?: QQBotAccountConfig): boolea
   if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
     return false;
   }
-  return allowFrom.some((entry) => {
-    const normalized = entry.trim();
+  return allowFrom.every((entry) => {
+    const normalized = entry.trim().replace(/^qqbot:/i, "");
     return normalized.length > 0 && normalized !== "*";
   });
 }

@@ -129,6 +129,20 @@ describe("/bot-logs framework command hardening", () => {
     expect(result as string).toContain("权限不足");
   });
 
+  it("rejects /bot-logs when allowFrom mixes wildcard and explicit entries", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["*", "qqbot:user-1"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
+  it("rejects /bot-logs when allowFrom uses qqbot:* wildcard form", async () => {
+    const handler = getBotLogsHandler();
+    const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot:*"] } }));
+    expect(result).toBeTypeOf("string");
+    expect(result as string).toContain("权限不足");
+  });
+
   it("allows /bot-logs execution when allowFrom is explicit", async () => {
     const handler = getBotLogsHandler();
     const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot:user-1"] } }));
