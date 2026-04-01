@@ -379,6 +379,102 @@ describe("acquireSessionWriteLock", () => {
     await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: 123.5 });
   });
 
+  it("retries on EPERM during lock acquisition (Windows mandatory locking)", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+        // Simulate a contended lock file that another process holds open:
+        // the lock file exists on disk, but fs.open("wx") throws EPERM
+        // because Windows mandatory locking prevents exclusive creation.
+        await fs.writeFile(
+          lockPath,
+          JSON.stringify({ pid: 999_999, createdAt: new Date().toISOString() }),
+          "utf8",
+        );
+
+        const originalOpen = fs.open;
+        let epermThrown = false;
+        vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+          if (!epermThrown && String(args[0]).endsWith(".lock")) {
+            epermThrown = true;
+            const err = new Error(
+              "EPERM: operation not permitted, open '" + args[0] + "'",
+            ) as Error & {
+              code: string;
+            };
+            err.code = "EPERM";
+            throw err;
+          }
+          return originalOpen(...args);
+        });
+
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 2000, staleMs: 10 });
+        expect(epermThrown).toBe(true);
+        await lock.release();
+        await expect(fs.access(lockPath)).rejects.toThrow();
+      });
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
+  it("throws EPERM immediately on non-Windows platforms (real permission error)", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const originalOpen = fs.open;
+      vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        if (String(args[0]).endsWith(".lock")) {
+          const err = new Error(
+            "EPERM: operation not permitted, open '" + args[0] + "'",
+          ) as Error & {
+            code: string;
+          };
+          err.code = "EPERM";
+          throw err;
+        }
+        return originalOpen(...args);
+      });
+
+      await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 500 })).rejects.toThrow(
+        /EPERM/,
+      );
+    });
+  });
+
+  it("throws EPERM on Windows when no lock file exists (real permission error)", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      await withTempSessionLockFile(async ({ sessionFile }) => {
+        const originalOpen = fs.open;
+        vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+          if (String(args[0]).endsWith(".lock")) {
+            const err = new Error(
+              "EPERM: operation not permitted, open '" + args[0] + "'",
+            ) as Error & {
+              code: string;
+            };
+            err.code = "EPERM";
+            throw err;
+          }
+          return originalOpen(...args);
+        });
+
+        await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 500 })).rejects.toThrow(
+          /EPERM/,
+        );
+      });
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it("registers cleanup for SIGQUIT and SIGABRT", () => {
     expect(__testing.cleanupSignals).toContain("SIGQUIT");
     expect(__testing.cleanupSignals).toContain("SIGABRT");

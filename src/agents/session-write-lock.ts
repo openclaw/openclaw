@@ -496,6 +496,7 @@ export async function acquireSessionWriteLock(params: {
 
   const startedAt = Date.now();
   let attempt = 0;
+  let consecutiveEpermNoFile = 0;
   while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
     let handle: fs.FileHandle | null = null;
@@ -536,8 +537,38 @@ export async function acquireSessionWriteLock(params: {
       }
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") {
-        throw err;
+        if (code === "EPERM" && process.platform === "win32") {
+          // On Windows, a lock file held open by another process may cause
+          // fs.open("wx") to throw EPERM instead of EEXIST due to mandatory
+          // file locking.  Only retry when the lock file actually exists;
+          // otherwise this is a real permission error.
+          try {
+            await fs.access(lockPath);
+          } catch (accessErr) {
+            // ENOENT means the lock file does not exist.  This can happen
+            // in two scenarios:
+            // 1. The lock owner released between our open and this check
+            //    (race) — retry once to acquire the now-free lock.
+            // 2. A real permission error on the directory — the file was
+            //    never there.  If we see this twice in a row, surface the
+            //    original EPERM immediately.
+            if ((accessErr as { code?: string })?.code === "ENOENT") {
+              consecutiveEpermNoFile += 1;
+              if (consecutiveEpermNoFile >= 2) {
+                throw err;
+              }
+              continue;
+            }
+            throw err;
+          }
+        } else {
+          throw err;
+        }
       }
+      // Reset the EPERM+ENOENT race counter whenever we reach a normal
+      // retry path (EEXIST or EPERM-with-file-present), so that two
+      // non-adjacent races don't trip the "real permission error" guard.
+      consecutiveEpermNoFile = 0;
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
