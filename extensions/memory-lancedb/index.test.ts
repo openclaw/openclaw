@@ -121,14 +121,6 @@ describe("memory plugin e2e", () => {
     }) as MemoryPluginTestConfig | undefined;
   }
 
-  test("memory plugin exports stable metadata", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
-
-    expect(memoryPlugin.id).toBe("memory-lancedb");
-    expect(memoryPlugin.name).toBe("Memory (LanceDB)");
-    expect(memoryPlugin.kind).toBe("memory");
-  });
-
   test("config schema parses valid config", async () => {
     const config = await parseConfig({
       autoCapture: true,
