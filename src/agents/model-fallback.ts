@@ -776,13 +776,6 @@ export async function runWithModelFallback<T>(params: {
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
-      // LiveSessionModelSwitchError indicates a model switch was requested
-      // (e.g., user changed /model during a live session, or image model override
-      // was applied). This should be handled by the outer runner, not trigger fallback.
-      // Rethrow immediately so agent-runner-execution.ts can handle it.
-      if (err instanceof LiveSessionModelSwitchError) {
-        throw err;
-      }
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
