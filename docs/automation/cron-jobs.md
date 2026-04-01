@@ -36,7 +36,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
-- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields before the scheduler touches them.
+- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields, including old top-level delivery hints such as `threadId`.
 
 ## Quick start (actionable)
 
@@ -204,6 +204,7 @@ Delivery config:
 - `delivery.mode`: `none` | `announce` | `webhook`.
 - `delivery.channel`: `last` or a specific channel.
 - `delivery.to`: channel-specific target (announce) or webhook URL (webhook mode).
+- `delivery.threadId`: optional explicit thread or topic id when the target channel supports threaded delivery.
 - `delivery.bestEffort`: avoid failing the job if announce delivery fails.
 
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
@@ -272,6 +273,7 @@ Isolated jobs can deliver output to a channel via the top-level `delivery` confi
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
 - `delivery.channel`: `last` or any deliverable channel id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
 - `delivery.to`: channel-specific recipient target.
+- `delivery.threadId`: optional thread/topic override for channels like Telegram, Slack, Discord, or Matrix when you want a specific thread without encoding it into `delivery.to`.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
 `webhook` delivery is valid for both main and isolated jobs.

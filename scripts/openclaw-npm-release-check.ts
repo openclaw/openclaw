@@ -90,9 +90,12 @@ export function resolveNpmDistTagMirrorAuth(params?: {
   nodeAuthToken?: string | null;
   npmToken?: string | null;
 }): NpmDistTagMirrorAuth {
+  const nodeAuthToken =
+    params && "nodeAuthToken" in params ? params.nodeAuthToken : process.env.NODE_AUTH_TOKEN;
+  const npmToken = params && "npmToken" in params ? params.npmToken : process.env.NPM_TOKEN;
   return resolveNpmDistTagMirrorAuthBase({
-    nodeAuthToken: params?.nodeAuthToken ?? process.env.NODE_AUTH_TOKEN,
-    npmToken: params?.npmToken ?? process.env.NPM_TOKEN,
+    nodeAuthToken,
+    npmToken,
   }) as NpmDistTagMirrorAuth;
 }
 
