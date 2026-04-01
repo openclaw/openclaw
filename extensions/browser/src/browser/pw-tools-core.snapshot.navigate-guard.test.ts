@@ -74,7 +74,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
       page: expect.anything(),
-      response: undefined,
+      response: null,
       ssrfPolicy: { allowPrivateNetwork: true },
       targetId: undefined,
     });

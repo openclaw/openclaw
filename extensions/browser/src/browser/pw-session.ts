@@ -9,7 +9,7 @@ import type {
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   appendCdpPath,
@@ -135,12 +135,12 @@ function findNetworkRequestById(state: PageState, id: string): BrowserNetworkReq
   return undefined;
 }
 
-function roleRefsKey(cdpUrl: string, targetId: string) {
+function targetKey(cdpUrl: string, targetId: string) {
   return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
 }
 
-function blockedTargetKey(cdpUrl: string, targetId: string) {
-  return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
+function roleRefsKey(cdpUrl: string, targetId: string) {
+  return targetKey(cdpUrl, targetId);
 }
 
 function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
@@ -148,7 +148,7 @@ function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
   if (!normalizedTargetId) {
     return false;
   }
-  return blockedTargetsByCdpUrl.has(blockedTargetKey(cdpUrl, normalizedTargetId));
+  return blockedTargetsByCdpUrl.has(targetKey(cdpUrl, normalizedTargetId));
 }
 
 function markTargetBlocked(cdpUrl: string, targetId?: string): void {
@@ -156,7 +156,7 @@ function markTargetBlocked(cdpUrl: string, targetId?: string): void {
   if (!normalizedTargetId) {
     return;
   }
-  blockedTargetsByCdpUrl.add(blockedTargetKey(cdpUrl, normalizedTargetId));
+  blockedTargetsByCdpUrl.add(targetKey(cdpUrl, normalizedTargetId));
 }
 
 function clearBlockedTargetsForCdpUrl(cdpUrl?: string): void {
@@ -933,14 +933,21 @@ export async function createPageViaPlaywright(opts: {
       url: targetUrl,
       ...navigationPolicy,
     });
-    const response = await gotoPageWithNavigationGuard({
-      cdpUrl: opts.cdpUrl,
-      page,
-      url: targetUrl,
-      timeoutMs: 30_000,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: createdTargetId ?? undefined,
-    });
+    let response: Response | null = null;
+    try {
+      response = await gotoPageWithNavigationGuard({
+        cdpUrl: opts.cdpUrl,
+        page,
+        url: targetUrl,
+        timeoutMs: 30_000,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: createdTargetId ?? undefined,
+      });
+    } catch (err) {
+      if (err instanceof SsrFBlockedError || err instanceof BlockedBrowserTargetError) {
+        throw err;
+      }
+    }
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page,

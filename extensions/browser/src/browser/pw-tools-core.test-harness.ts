@@ -29,7 +29,7 @@ const sessionMocks = vi.hoisted(() => ({
       url: string;
       timeoutMs: number;
       page: { goto: (url: string, init: { timeout: number }) => Promise<unknown> };
-    }) => await opts.page.goto(opts.url, { timeout: opts.timeoutMs }),
+    }) => (await opts.page.goto(opts.url, { timeout: opts.timeoutMs })) ?? null,
   ),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),

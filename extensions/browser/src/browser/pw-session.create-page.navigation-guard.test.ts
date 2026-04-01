@@ -142,4 +142,19 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves the created tab on ordinary navigation failure", async () => {
+    const { pageGoto, pageClose } = installBrowserMocks();
+    pageGoto.mockRejectedValueOnce(new Error("page.goto: net::ERR_NAME_NOT_RESOLVED"));
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://example.invalid",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(created.url).toBe("about:blank");
+    expect(pageGoto).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
+  });
 });
