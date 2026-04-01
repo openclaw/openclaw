@@ -8,6 +8,15 @@ from pathlib import Path
 
 BACKOFF_SCHEDULE = [2, 4, 8]
 
+PRIORITIZED_REQUIREMENT_STEPS = [
+    ('API key may be required', 'configure_provider'),
+    ('provider configuration missing', 'configure_provider'),
+    ('model configuration missing', 'configure_provider'),
+    ('nim is not running', 'start_nim_runtime'),
+    ('gpu runtime not enabled', 'enable_gpu_runtime'),
+    ('nvidia policy missing', 'review_runtime_capabilities'),
+]
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -229,6 +238,15 @@ def annotate_gpu_status_from_start(gpu_status: dict, start_result: dict | None) 
     return status
 
 
+def resolve_missing_requirements_next_step(missing_requirements: list[str] | None) -> str | None:
+    if not isinstance(missing_requirements, list):
+        return None
+    for requirement, next_step in PRIORITIZED_REQUIREMENT_STEPS:
+        if requirement in missing_requirements:
+            return next_step
+    return None
+
+
 def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
@@ -251,22 +269,28 @@ def main() -> int:
         start_result = run_runtime_start(script_dir, args)
         followup_status = get_decision(script_dir, args)
         provider_status = build_provider_status(provider_signals, start_result)
+        resolved_next_step = resolve_missing_requirements_next_step(provider_status.get('missing_requirements'))
         response['remediation_result'] = 'checked provider readiness and triggered sense runtime start'
         response['provider_status'] = provider_status
+        response['missing_requirements'] = provider_status.get('missing_requirements') or []
+        response['resolved_next_step'] = resolved_next_step
         response['start_result'] = start_result
         response['followup_status'] = followup_status
         if provider_status.get('provider_ready') is False:
-            response['next_step'] = 'configure_provider'
+            response['next_step'] = resolved_next_step or 'configure_provider'
         else:
             response['next_step'] = followup_status.get('next_step') or response['next_step']
     elif recommended_action == 'check_gpu_runtime':
         sandbox_payload = get_sandbox_status(script_dir, args)
         gpu_status = build_gpu_status(summarize_capabilities(sandbox_payload))
+        resolved_next_step = resolve_missing_requirements_next_step(gpu_status.get('missing_requirements'))
         response['remediation_result'] = 'checked gpu runtime readiness'
         response['gpu_status'] = gpu_status
+        response['missing_requirements'] = gpu_status.get('missing_requirements') or []
+        response['resolved_next_step'] = resolved_next_step
         response['followup_status'] = gpu_status
         if gpu_status.get('gpu_ready') is False:
-            response['next_step'] = 'configure_gpu_runtime'
+            response['next_step'] = resolved_next_step or 'configure_gpu_runtime'
         else:
             response['next_step'] = 'inspect_gpu_runtime'
     elif recommended_action == 'configure_gpu_runtime':
@@ -282,8 +306,11 @@ def main() -> int:
         if initial_gpu_status.get('gpu_ready') and followup_gpu_status.get('gpu_ready'):
             remediation_steps.insert(1, 'gpu runtime already appeared ready before remediation')
 
+        resolved_next_step = resolve_missing_requirements_next_step(followup_gpu_status.get('missing_requirements'))
         response['remediation_result'] = '; '.join(remediation_steps)
         response['gpu_status'] = followup_gpu_status
+        response['missing_requirements'] = followup_gpu_status.get('missing_requirements') or []
+        response['resolved_next_step'] = resolved_next_step
         response['initial_gpu_status'] = initial_gpu_status
         response['start_result'] = start_result
         response['runtime_status'] = runtime_status
@@ -291,7 +318,7 @@ def main() -> int:
         if followup_gpu_status.get('gpu_ready') is True:
             response['next_step'] = 'run_runtime_task'
         else:
-            response['next_step'] = 'configure_gpu_runtime'
+            response['next_step'] = resolved_next_step or 'configure_gpu_runtime'
     elif recommended_action == 'wait_for_runtime_ready':
         attempts: list[dict] = []
         last_decision = decision

@@ -214,3 +214,33 @@ Current behavior after remediation:
   - routing loop stops with `final_state = gpu_not_ready`
 
 This is intentionally conservative. It can improve readiness when runtime start fixes a transient issue, but if GPU runtime prerequisites are still missing, the loop stops with a structured explanation instead of retrying indefinitely.
+
+Missing-requirements routing priority:
+
+- `API key may be required` -> `configure_provider`
+- `provider configuration missing` -> `configure_provider`
+- `model configuration missing` -> `configure_provider`
+- `nim is not running` -> `start_nim_runtime`
+- `gpu runtime not enabled` -> `enable_gpu_runtime`
+- `nvidia policy missing` -> `review_runtime_capabilities`
+
+Priority order is:
+
+- provider / API key / model
+- NIM runtime
+- GPU runtime enablement
+- capability review
+
+Remediation responses now include:
+
+- `missing_requirements[]`
+- `resolved_next_step`
+
+Routing loop uses `resolved_next_step` before the older generic `next_step`, so the manager can stop with a more specific final state:
+
+- `provider_not_ready`
+- `nim_not_ready`
+- `gpu_not_ready`
+- `capability_limited`
+
+This is still a transitional routing layer. `configure_provider`, `start_nim_runtime`, and `enable_gpu_runtime` are not yet fully automatic end-to-end remediations; they are structured branch targets for the next layer of automation.
