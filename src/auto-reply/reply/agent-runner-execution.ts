@@ -1306,8 +1306,13 @@ export async function runAgentTurnWithFallback(params: {
         runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
           ?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
+      // Plugin-blocked errors are intentional policy decisions — never rewrite
+      // them as rate-limit/overload messages even if the block reason text
+      // happens to contain matching phrases.
+      const isPluginBlocked = (finalEmbeddedError as { kind?: string })?.kind === "plugin_blocked";
       if (
         errorCandidate &&
+        !isPluginBlocked &&
         (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
       ) {
         const isOverloaded = isOverloadedErrorMessage(errorCandidate);

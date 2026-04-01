@@ -1725,6 +1725,12 @@ export async function runEmbeddedAttempt(
                 throw new PluginBlockedError(reason);
               }
 
+              // Save originals so we can revert if image re-detection fails,
+              // avoiding a state where the prompt is updated but images are stale.
+              const prevPrompt = effectivePrompt;
+              const prevSystemPrompt = systemPromptText;
+              const prevImageResult = imageResult;
+
               if (llmInputResult?.prompt !== undefined) {
                 effectivePrompt = llmInputResult.prompt;
               }
@@ -1738,20 +1744,32 @@ export async function runEmbeddedAttempt(
               // Re-detect images when the hook rewrote the prompt, so the
               // model receives attachments matching the updated text.
               if (llmInputResult?.prompt !== undefined) {
-                imageResult = await detectAndLoadPromptImages({
-                  prompt: effectivePrompt,
-                  workspaceDir: effectiveWorkspace,
-                  model: params.model,
-                  existingImages: params.images,
-                  imageOrder: params.imageOrder,
-                  maxBytes: MAX_IMAGE_BYTES,
-                  maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
-                  workspaceOnly: effectiveFsWorkspaceOnly,
-                  sandbox:
-                    sandbox?.enabled && sandbox?.fsBridge
-                      ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
-                      : undefined,
-                });
+                try {
+                  imageResult = await detectAndLoadPromptImages({
+                    prompt: effectivePrompt,
+                    workspaceDir: effectiveWorkspace,
+                    model: params.model,
+                    existingImages: params.images,
+                    imageOrder: params.imageOrder,
+                    maxBytes: MAX_IMAGE_BYTES,
+                    maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+                    workspaceOnly: effectiveFsWorkspaceOnly,
+                    sandbox:
+                      sandbox?.enabled && sandbox?.fsBridge
+                        ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                        : undefined,
+                  });
+                } catch (imgErr) {
+                  // Revert all overrides so the run continues with consistent
+                  // pre-hook state rather than mismatched prompt + stale images.
+                  log.warn(
+                    `llm_input image re-detection failed, reverting overrides: ${String(imgErr)}`,
+                  );
+                  effectivePrompt = prevPrompt;
+                  systemPromptText = prevSystemPrompt;
+                  applySystemPromptOverrideToSession(activeSession, prevSystemPrompt);
+                  imageResult = prevImageResult;
+                }
               }
             } catch (err) {
               // Re-throw block errors so the outer catch records them as promptError

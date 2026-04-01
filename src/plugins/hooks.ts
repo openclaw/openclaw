@@ -153,6 +153,11 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     next: TResult,
     registration: PluginHookRegistration<K>,
   ) => TResult;
+  /** Evolve the event between handlers so later hooks see prior modifications. */
+  evolveEvent?: (
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    result: TResult,
+  ) => Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0];
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
@@ -335,17 +340,23 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     let result: TResult | undefined;
 
+    let currentEvent = event;
+
     for (const hook of hooks) {
       try {
         const handlerResult = await (
           hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>
-        )(event, ctx);
+        )(currentEvent, ctx);
 
         if (handlerResult !== undefined && handlerResult !== null) {
           if (policy.mergeResults) {
             result = policy.mergeResults(result, handlerResult, hook);
           } else {
             result = handlerResult;
+          }
+          // Evolve the event so later handlers see prior modifications.
+          if (result && policy.evolveEvent) {
+            currentEvent = policy.evolveEvent(currentEvent, result);
           }
           if (result && policy.shouldStop?.(result)) {
             const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
@@ -599,6 +610,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       mergeResults: (acc, next) => ({
         assistantTexts: next.assistantTexts ?? acc?.assistantTexts,
       }),
+      // Evolve the event so later hooks see prior assistantTexts modifications
+      // instead of the original model output — prevents a lower-priority hook
+      // from silently overwriting a higher-priority redaction.
+      evolveEvent: (ev, result) =>
+        result.assistantTexts ? { ...ev, assistantTexts: result.assistantTexts } : ev,
     });
   }
 
