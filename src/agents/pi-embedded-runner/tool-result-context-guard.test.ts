@@ -249,11 +249,11 @@ describe("installToolResultContextGuard", () => {
 
     await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 
-    expect(getToolResultText(contextForNextCall[2])).toBe("same output");
-    expect(getToolResultText(contextForNextCall[4])).toContain(
+    expect(getToolResultText(contextForNextCall[2])).toContain(
       "This tool was called 3 times with identical results. Showing once.",
     );
-    expect(getToolResultText(contextForNextCall[6])).toBe(DUPLICATE_TOOL_RESULT_PLACEHOLDER);
+    expect(getToolResultText(contextForNextCall[4])).toBe(DUPLICATE_TOOL_RESULT_PLACEHOLDER);
+    expect(getToolResultText(contextForNextCall[6])).toBe("same output");
   });
 
   it("handles legacy role=tool string outputs when enforcing context budget", async () => {

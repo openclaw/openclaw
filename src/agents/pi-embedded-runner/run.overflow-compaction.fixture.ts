@@ -13,6 +13,7 @@ export function makeCompactionSuccess(params: {
   firstKeptEntryId?: string;
   tokensBefore?: number;
   tokensAfter?: number;
+  overheadTokens?: number;
 }) {
   return {
     ok: true as const,
@@ -22,6 +23,7 @@ export function makeCompactionSuccess(params: {
       ...(params.firstKeptEntryId ? { firstKeptEntryId: params.firstKeptEntryId } : {}),
       ...(params.tokensBefore !== undefined ? { tokensBefore: params.tokensBefore } : {}),
       ...(params.tokensAfter !== undefined ? { tokensAfter: params.tokensAfter } : {}),
+      ...(params.overheadTokens !== undefined ? { overheadTokens: params.overheadTokens } : {}),
     },
   };
 }
@@ -71,6 +73,7 @@ type MockCompactDirect = {
       firstKeptEntryId?: string;
       tokensBefore?: number;
       tokensAfter?: number;
+      overheadTokens?: number;
     };
   }) => unknown;
 };

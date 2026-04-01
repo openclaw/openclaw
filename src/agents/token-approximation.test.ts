@@ -8,6 +8,10 @@ import {
   estimateTextTokensApprox,
   estimateUnknownTokenChars,
 } from "./token-approximation.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentToolResultMessage,
+} from "./test-helpers/agent-message-fixtures.js";
 
 describe("token-approximation", () => {
   it("tracks plain English near the 4 chars per token heuristic", () => {
@@ -36,8 +40,7 @@ describe("token-approximation", () => {
   });
 
   it("estimates assistant tool-call arguments in message totals", () => {
-    const message = {
-      role: "assistant",
+    const message = makeAgentAssistantMessage({
       content: [
         {
           type: "toolCall",
@@ -47,24 +50,23 @@ describe("token-approximation", () => {
         },
       ],
       timestamp: Date.now(),
-    } as AgentMessage;
+    });
 
     expect(estimateMessageTokensApprox(message)).toBeGreaterThan(12);
   });
 
   it("includes tool-result details in the estimate", () => {
-    const withDetails = {
-      role: "toolResult",
+    const withDetails = makeAgentToolResultMessage({
       toolCallId: "tool_1",
       toolName: "read",
       content: [{ type: "text", text: "line 1\nline 2" }],
       details: { offset: 0, truncated: false, metadata: "x".repeat(400) },
       timestamp: Date.now(),
-    } as AgentMessage;
+    });
     const withoutDetails = {
       ...withDetails,
       details: undefined,
-    } as AgentMessage;
+    };
 
     expect(estimateMessageTokensApprox(withDetails)).toBeGreaterThan(
       estimateMessageTokensApprox(withoutDetails),

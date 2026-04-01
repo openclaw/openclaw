@@ -6,7 +6,11 @@ import {
   buildSessionWriteLockModuleMock,
   resetModulesWithSessionWriteLockDoMock,
 } from "../../test-utils/session-write-lock-module-mock.js";
-import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { estimateTextTokensApprox } from "../token-approximation.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
 const acquireSessionWriteLockMock = vi.hoisted(() =>
@@ -181,6 +185,16 @@ describe("getToolResultTextTokenCount", () => {
     const msg = makeToolResult("x".repeat(4_000));
     expect(getToolResultTextTokenCount(msg)).toBeGreaterThan(900);
   });
+
+  it("counts legacy role=tool string outputs", () => {
+    const msg = castAgentMessage({
+      role: "tool",
+      tool_call_id: "call_1",
+      tool_name: "read",
+      content: "x".repeat(4_000),
+    });
+    expect(getToolResultTextTokenCount(msg)).toBeGreaterThan(900);
+  });
 });
 
 describe("truncateToolResultMessage", () => {
@@ -244,6 +258,20 @@ describe("truncateToolResultMessageToTokens", () => {
     const result = truncateToolResultMessageToTokens(msg, 2_000);
     expect(result.role).toBe("toolResult");
     expect(getFirstToolResultText(result)).toContain("[Truncated: original");
+  });
+
+  it("truncates legacy role=tool string outputs", () => {
+    const msg = castAgentMessage({
+      role: "tool",
+      tool_call_id: "call_1",
+      tool_name: "read",
+      content: "x".repeat(12_000),
+    });
+
+    const result = truncateToolResultMessageToTokens(msg, 2_000);
+    expect((result as { content?: unknown }).content).toEqual(
+      expect.stringContaining("[Truncated: original"),
+    );
   });
 });
 
@@ -474,5 +502,13 @@ describe("truncateToolResultTextToTokens head+tail strategy", () => {
     expect(result).toContain("normal line");
     expect(result).toContain("middle content omitted");
     expect(result).toContain("[Truncated: original");
+  });
+
+  it("reports the final truncated token count in the notice", () => {
+    const text = "z".repeat(16_000);
+    const result = truncateToolResultTextToTokens(text, 2_000);
+    const match = result.match(/original (\d+) tokens → (\d+) tokens/);
+    expect(match).not.toBeNull();
+    expect(Number(match?.[2])).toBe(estimateTextTokensApprox(result));
   });
 });

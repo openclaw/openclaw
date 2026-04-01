@@ -88,8 +88,6 @@ export function shouldRunPreflightCompaction(params: {
    */
   tokenCount?: number;
   contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
 }): boolean {
   const totalTokens =
     resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);

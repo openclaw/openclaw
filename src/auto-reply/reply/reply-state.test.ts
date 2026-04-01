@@ -310,8 +310,6 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 96_000, totalTokensFresh: false },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
       }),
     ).toBe(false);
   });
@@ -322,8 +320,6 @@ describe("shouldRunPreflightCompaction", () => {
         entry: { totalTokens: 10, totalTokensFresh: false },
         tokenCount: 93_000,
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
       }),
     ).toBe(true);
   });
@@ -333,8 +329,6 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 80_000, totalTokensFresh: true },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 20_000,
       }),
     ).toBe(true);
   });
@@ -344,8 +338,6 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 79_999, totalTokensFresh: true },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 20_000,
       }),
     ).toBe(false);
   });

@@ -860,10 +860,6 @@ export async function runEmbeddedPiAgent(
                   runtimeContext: overflowCompactionRuntimeContext,
                 });
                 if (compactResult.ok && compactResult.compacted) {
-                  cumulativeCompactionOverheadTokens += Math.max(
-                    0,
-                    Math.floor(compactResult.result?.overheadTokens ?? 0),
-                  );
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: params.sessionId,

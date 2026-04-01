@@ -173,17 +173,19 @@ function collapseDuplicateToolResultsInPlace(params: {
     if (indexes.length < 2) {
       continue;
     }
-    for (let duplicateOrder = 1; duplicateOrder < indexes.length; duplicateOrder += 1) {
+    const canonicalIndex = indexes[indexes.length - 1];
+    for (let duplicateOrder = 0; duplicateOrder < indexes.length - 1; duplicateOrder += 1) {
       const index = indexes[duplicateOrder];
       const message = params.messages[index];
       const replacementText =
-        duplicateOrder === 1
+        duplicateOrder === 0
           ? buildDuplicateToolResultNotice(indexes.length)
           : DUPLICATE_TOOL_RESULT_PLACEHOLDER;
       const replacement = replaceToolResultText(message, replacementText);
       applyMessageMutationInPlace(message, replacement, params.cache);
       setStoredToolResultFingerprint(message, fingerprint);
     }
+    setStoredToolResultFingerprint(params.messages[canonicalIndex], fingerprint);
   }
 }
 

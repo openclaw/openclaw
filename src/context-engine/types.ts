@@ -20,6 +20,7 @@ export type CompactResult = {
     firstKeptEntryId?: string;
     tokensBefore: number;
     tokensAfter?: number;
+    overheadTokens?: number;
     details?: unknown;
   };
 };

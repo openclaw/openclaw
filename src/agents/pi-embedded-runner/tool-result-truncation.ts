@@ -6,6 +6,7 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { estimateTextTokensApprox } from "../token-approximation.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
+import { isToolResultMessage } from "./tool-result-char-estimator.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 /**
@@ -53,6 +54,17 @@ export function resolveToolResultMaxTokens(
 
 function buildTokenTruncationNotice(originalTokens: number, truncatedTokens: number): string {
   return `[Truncated: original ${originalTokens} tokens → ${truncatedTokens} tokens. Full output available via tool recall.]`;
+}
+
+function getToolResultContentBlocks(msg: AgentMessage): unknown[] {
+  if (!msg || !isToolResultMessage(msg)) {
+    return [];
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  return Array.isArray(content) ? content : [];
 }
 
 /**
@@ -167,11 +179,8 @@ export function calculateMaxToolResultChars(contextWindowTokens: number): number
  * Get the total character count of text content blocks in a tool result message.
  */
 export function getToolResultTextLength(msg: AgentMessage): number {
-  if (!msg || (msg as { role?: string }).role !== "toolResult") {
-    return 0;
-  }
-  const content = (msg as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const content = getToolResultContentBlocks(msg);
+  if (content.length === 0) {
     return 0;
   }
   let totalLength = 0;
@@ -187,11 +196,8 @@ export function getToolResultTextLength(msg: AgentMessage): number {
 }
 
 export function getToolResultTextTokenCount(msg: AgentMessage): number {
-  if (!msg || (msg as { role?: string }).role !== "toolResult") {
-    return 0;
-  }
-  const content = (msg as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const content = getToolResultContentBlocks(msg);
+  if (content.length === 0) {
     return 0;
   }
   let totalTokens = 0;
@@ -266,6 +272,24 @@ function resolveHeadTailTokenBudgets(maxTokens: number, noticeBudgetTokens: numb
   return { headTokens, tailTokens };
 }
 
+function buildTokenTruncatedTextCandidate(originalTokens: number, body: string): {
+  text: string;
+  totalTokens: number;
+} {
+  let reportedTokens = Math.max(1, estimateTextTokensApprox(body));
+  let text = "";
+  let totalTokens = reportedTokens;
+  for (let i = 0; i < 3; i += 1) {
+    text = `${buildTokenTruncationNotice(originalTokens, reportedTokens)}\n\n${body}`.trim();
+    totalTokens = estimateTextTokensApprox(text);
+    if (totalTokens === reportedTokens) {
+      break;
+    }
+    reportedTokens = totalTokens;
+  }
+  return { text, totalTokens };
+}
+
 /**
  * Token-aware truncation used for prompt context shaping. It preserves the
  * first and last ~500 tokens by default, then prepends a recall hint so the
@@ -286,10 +310,7 @@ export function truncateToolResultTextToTokens(text: string, maxTokens: number):
   let head = takeHeadByApproxTokens(text, headTokens);
   let tail = takeTailByApproxTokens(text, tailTokens);
   let body = `${head}${TOKEN_TRUNCATION_OMISSION_MARKER}${tail}`;
-  let truncatedTokens = estimateTextTokensApprox(body);
-  let truncatedText =
-    `${buildTokenTruncationNotice(originalTokens, truncatedTokens)}\n\n${body}`.trim();
-  let totalTokens = estimateTextTokensApprox(truncatedText);
+  let { text: truncatedText, totalTokens } = buildTokenTruncatedTextCandidate(originalTokens, body);
   let attempts = 0;
 
   while (totalTokens > resolvedMaxTokens && attempts < 8) {
@@ -302,9 +323,7 @@ export function truncateToolResultTextToTokens(text: string, maxTokens: number):
     head = takeHeadByApproxTokens(text, Math.max(32, headTokens - Math.ceil(shrinkBy / 2)));
     tail = takeTailByApproxTokens(text, Math.max(32, tailTokens - Math.floor(shrinkBy / 2)));
     body = `${head}${TOKEN_TRUNCATION_OMISSION_MARKER}${tail}`;
-    truncatedTokens = estimateTextTokensApprox(body);
-    truncatedText = `${buildTokenTruncationNotice(originalTokens, truncatedTokens)}\n\n${body}`.trim();
-    totalTokens = estimateTextTokensApprox(truncatedText);
+    ({ text: truncatedText, totalTokens } = buildTokenTruncatedTextCandidate(originalTokens, body));
   }
 
   return truncatedText;
@@ -314,8 +333,8 @@ export function truncateToolResultMessageToTokens(
   msg: AgentMessage,
   maxTokens: number,
 ): AgentMessage {
-  const content = (msg as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const content = getToolResultContentBlocks(msg);
+  if (content.length === 0) {
     return msg;
   }
   const totalTokens = getToolResultTextTokenCount(msg);
@@ -337,6 +356,10 @@ export function truncateToolResultMessageToTokens(
   }
 
   const truncatedText = truncateToolResultTextToTokens(textParts.join("\n"), maxTokens);
+  const currentContent = (msg as { content?: unknown }).content;
+  if (typeof currentContent === "string") {
+    return { ...msg, content: truncatedText } as AgentMessage;
+  }
   const nextContent = [{ type: "text", text: truncatedText }, ...nonTextBlocks];
   return { ...msg, content: nextContent } as AgentMessage;
 }
@@ -353,6 +376,15 @@ export function truncateToolResultMessage(
   const suffix = options.suffix ?? TRUNCATION_SUFFIX;
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    if (content.length <= maxChars) {
+      return msg;
+    }
+    return {
+      ...msg,
+      content: truncateToolResultText(content, maxChars, { suffix, minKeepChars }),
+    } as AgentMessage;
+  }
   if (!Array.isArray(content)) {
     return msg;
   }
@@ -428,7 +460,7 @@ export async function truncateOversizedToolResultsInSession(params: {
         continue;
       }
       const msg = entry.message;
-      if ((msg as { role?: string }).role !== "toolResult") {
+      if (!isToolResultMessage(msg)) {
         continue;
       }
       const tokenCount = getToolResultTextTokenCount(msg);
@@ -509,7 +541,7 @@ export function truncateOversizedToolResultsInMessages(
   let truncatedCount = 0;
 
   const result = messages.map((msg) => {
-    if ((msg as { role?: string }).role !== "toolResult") {
+    if (!isToolResultMessage(msg)) {
       return msg;
     }
     const tokenCount = getToolResultTextTokenCount(msg);
@@ -531,7 +563,7 @@ export function isOversizedToolResult(
   contextWindowTokens: number,
   options: { toolResultMaxTokens?: number; cfg?: OpenClawConfig } = {},
 ): boolean {
-  if ((msg as { role?: string }).role !== "toolResult") {
+  if (!isToolResultMessage(msg)) {
     return false;
   }
   const maxTokens = resolveToolResultMaxTokens(
@@ -561,7 +593,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   );
 
   for (const msg of messages) {
-    if ((msg as { role?: string }).role !== "toolResult") {
+    if (!isToolResultMessage(msg)) {
       continue;
     }
     const tokenCount = getToolResultTextTokenCount(msg);

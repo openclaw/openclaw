@@ -348,7 +348,7 @@ function isPinnedMessage(message: AgentMessage): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
-  const record = message as Record<string, unknown>;
+  const record = message as unknown as Record<string, unknown>;
   if (record.pinned === true || record.pin === true) {
     return true;
   }
