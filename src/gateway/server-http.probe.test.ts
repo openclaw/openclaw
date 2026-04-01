@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -151,5 +151,54 @@ describe("gateway probe endpoints", () => {
         expect(getBody()).toBe("");
       },
     });
+  });
+
+  it("serves /health even when a later request stage throws", async () => {
+    // Regression test for #58762: when an optional channel dependency is
+    // missing the Slack facade throws on first call.  Before the fix the
+    // gateway-probes stage ran *after* channel stages, so the thrown error
+    // propagated to the catch-all and returned 500 for every endpoint
+    // including health probes.
+    await withGatewayServer({
+      prefix: "probe-stage-throw-health",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        handleHooksRequest: async () => {
+          throw new Error("simulated optional-dep load failure");
+        },
+      },
+      run: async (server) => {
+        const req = createRequest({ path: "/health" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "live" });
+      },
+    });
+  });
+
+  it("serves /healthz even when a later request stage throws", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await withGatewayServer({
+      prefix: "probe-stage-throw-healthz",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        handleHooksRequest: async () => {
+          throw new Error("simulated optional-dep load failure");
+        },
+      },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "live" });
+      },
+    });
+
+    errorSpy.mockRestore();
   });
 });
