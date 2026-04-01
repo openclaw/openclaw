@@ -39,6 +39,13 @@ describe("normalizeExtraMemoryPaths", () => {
     ]);
     expect(result).toEqual([path.resolve(workspaceDir, "notes"), absPath]);
   });
+
+  it("expands tilde prefix to home directory", () => {
+    const workspaceDir = path.join(os.tmpdir(), "memory-test-workspace");
+    const home = os.homedir();
+    const result = normalizeExtraMemoryPaths(workspaceDir, ["~/Documents/notes"]);
+    expect(result).toEqual([path.resolve(home, "Documents/notes")]);
+  });
 });
 
 describe("listMemoryFiles", () => {
