@@ -65,6 +65,46 @@ describe("buildEmbeddedRunPayloads reasoning-on fallback", () => {
     expect(texts).toContain("Earlier block reply text");
     expect(texts).not.toContain("Final answer");
   });
+
+  it("does not duplicate when multi-chunk assistantTexts already covers the full answer", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "Part 1\nPart 2" }],
+    });
+
+    // Block-reply chunking split the answer into two entries.
+    // Concatenating them reproduces the fallback text.
+    const payloads = buildPayloads({
+      assistantTexts: ["Part 1", "Part 2"],
+      lastAssistant,
+      reasoningLevel: "on",
+    });
+
+    const answerPayloads = payloads.filter((p) => !p.isReasoning);
+    const answerTexts = answerPayloads.map((p) => p.text).filter(Boolean);
+    // Each chunk should appear once; the combined fallback must NOT be appended
+    expect(answerTexts).toEqual(["Part 1", "Part 2"]);
+  });
+
+  it("appends fallback when multi-chunk assistantTexts differ from the final answer", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "Completely different final answer" }],
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Part 1", "Part 2"],
+      lastAssistant,
+      reasoningLevel: "on",
+    });
+
+    const answerPayloads = payloads.filter((p) => !p.isReasoning);
+    const answerTexts = answerPayloads.map((p) => p.text).filter(Boolean);
+    // Chunks are preserved and the different fallback is appended
+    expect(answerTexts).toEqual(["Part 1", "Part 2", "Completely different final answer"]);
+  });
 });
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {

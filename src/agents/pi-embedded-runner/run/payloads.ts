@@ -254,14 +254,23 @@ export function buildEmbeddedRunPayloads(params: {
   // the final answer may not be represented. Ensure fallbackAnswerText is appended
   // when it is not already covered by assistantTexts.
   const rawAnswerSources = params.assistantTexts.length ? params.assistantTexts : [];
+  const normalizedFallback = fallbackAnswerText
+    ? normalizeTextForComparison(fallbackAnswerText)
+    : "";
+  const fallbackAlreadyCovered =
+    normalizedFallback &&
+    rawAnswerSources.length > 0 &&
+    // Check per-element exact match first (single chunk covers the full answer) ...
+    (rawAnswerSources.some((t) => normalizeTextForComparison(t) === normalizedFallback) ||
+      // ... then check whether concatenating all chunks reproduces the fallback,
+      // which handles multi-chunk block replies that split a single answer.
+      normalizeTextForComparison(rawAnswerSources.join("\n")) === normalizedFallback);
   const needsFallbackAppend =
     !suppressAssistantArtifacts &&
     rawAnswerSources.length > 0 &&
     params.reasoningLevel === "on" &&
-    fallbackAnswerText &&
-    !rawAnswerSources.some(
-      (t) => normalizeTextForComparison(t) === normalizeTextForComparison(fallbackAnswerText),
-    );
+    normalizedFallback &&
+    !fallbackAlreadyCovered;
   const answerTexts = suppressAssistantArtifacts
     ? []
     : (rawAnswerSources.length
