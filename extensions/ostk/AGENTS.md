@@ -15,11 +15,9 @@ Install the ostk binary:
 curl -fsSL https://ostk.ai/install.sh | sh
 ```
 
-Or via Homebrew:
-
-```bash
-brew install os-tack/tap/ostk
-```
+The install script ([source](https://github.com/os-tack/ostk.ai/blob/main/install.sh))
+downloads a platform-specific tarball from GitHub Releases, verifies the GPG
+signature, and installs a single static binary to `/usr/local/bin/ostk`.
 
 Then initialize the kernel in your project:
 
