@@ -11,6 +11,7 @@ export {
   maybeApplyTtsToPayload,
   resolveTtsAutoMode,
   resolveTtsConfig,
+  resolveTtsConfigForAccount,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
   setLastTtsAttempt,

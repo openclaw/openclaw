@@ -9,6 +9,11 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import {
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  resolveNormalizedAccountEntry,
+} from "openclaw/plugin-sdk/account-core";
 import { normalizeChannelId, type ChannelId } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   OpenClawConfig,
@@ -46,6 +51,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
+const ACCOUNT_TTS_CHANNELS = new Set<string>(["feishu"]);
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -220,6 +226,121 @@ function asProviderConfig(value: unknown): SpeechProviderConfig {
     : {};
 }
 
+function mergeProviderConfigMap(
+  base: TtsConfig["providers"] | undefined,
+  override: TtsConfig["providers"] | undefined,
+): TtsConfig["providers"] | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  const merged: TtsConfig["providers"] = {
+    ...(base ?? {}),
+  };
+  for (const [providerId, providerConfig] of Object.entries(override ?? {})) {
+    const baseProviderConfig = merged[providerId];
+    merged[providerId] =
+      typeof baseProviderConfig === "object" &&
+      baseProviderConfig !== null &&
+      !Array.isArray(baseProviderConfig) &&
+      typeof providerConfig === "object" &&
+      providerConfig !== null &&
+      !Array.isArray(providerConfig)
+        ? { ...baseProviderConfig, ...providerConfig }
+        : providerConfig;
+  }
+  return merged;
+}
+
+function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
+  if (!override) {
+    return base;
+  }
+  const mergedMicrosoftAlias =
+    base.microsoft || base.edge || override.microsoft || override.edge
+      ? {
+          ...base.edge,
+          ...base.microsoft,
+          ...override.edge,
+          ...override.microsoft,
+        }
+      : undefined;
+  return {
+    ...base,
+    ...override,
+    modelOverrides: {
+      ...base.modelOverrides,
+      ...override.modelOverrides,
+    },
+    ...(base.providers || override.providers
+      ? {
+          providers: mergeProviderConfigMap(base.providers, override.providers),
+        }
+      : {}),
+    ...(base.elevenlabs || override.elevenlabs
+      ? {
+          elevenlabs: {
+            ...base.elevenlabs,
+            ...override.elevenlabs,
+            voiceSettings: {
+              ...base.elevenlabs?.voiceSettings,
+              ...override.elevenlabs?.voiceSettings,
+            },
+          },
+        }
+      : {}),
+    ...(base.openai || override.openai ? { openai: { ...base.openai, ...override.openai } } : {}),
+    ...(mergedMicrosoftAlias
+      ? {
+          microsoft: mergedMicrosoftAlias,
+          edge: mergedMicrosoftAlias,
+        }
+      : {}),
+  };
+}
+
+function resolveAccountTtsOverride(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId?: string,
+): TtsConfig | undefined {
+  const channelId = normalizeChannelId(channel) ?? String(channel).trim().toLowerCase();
+  if (!channelId || !ACCOUNT_TTS_CHANNELS.has(channelId)) {
+    return undefined;
+  }
+  const channelConfig = cfg.channels?.[channelId] as
+    | { defaultAccount?: string; accounts?: Record<string, { tts?: TtsConfig } | undefined> }
+    | undefined;
+  if (!channelConfig) {
+    return undefined;
+  }
+  const defaultAccountId =
+    accountId == null ? normalizeOptionalAccountId(channelConfig.defaultAccount) : undefined;
+  return resolveNormalizedAccountEntry(
+    channelConfig.accounts,
+    defaultAccountId ?? normalizeAccountId(accountId),
+    normalizeAccountId,
+  )?.tts;
+}
+
+function resolveAccountScopedConfig(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId?: string,
+): OpenClawConfig {
+  const accountTts = resolveAccountTtsOverride(cfg, channel, accountId);
+  if (!accountTts) {
+    return cfg;
+  }
+  const merged = mergeTtsConfig(cfg.messages?.tts ?? {}, accountTts);
+  return {
+    ...cfg,
+    messages: {
+      ...cfg.messages,
+      tts: merged,
+    },
+  };
+}
+
 function asProviderConfigMap(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -332,6 +453,14 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     rawConfig: raw,
     sourceConfig: cfg,
   };
+}
+
+export function resolveTtsConfigForAccount(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId?: string,
+): ResolvedTtsConfig {
+  return resolveTtsConfig(resolveAccountScopedConfig(cfg, channel, accountId));
 }
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
@@ -956,6 +1085,7 @@ export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   channel?: string;
+  accountId?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
@@ -963,19 +1093,23 @@ export async function maybeApplyTtsToPayload(params: {
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
+  const sourceCfg =
+    params.channel != null
+      ? resolveAccountScopedConfig(params.cfg, params.channel, params.accountId)
+      : params.cfg;
   const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({
-    cfg: params.cfg,
+    cfg: sourceCfg,
     sessionAuto: params.ttsAuto,
   });
   if (autoMode === "off") {
     return params.payload;
   }
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(sourceCfg);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, {
-    cfg: params.cfg,
+    cfg: sourceCfg,
     providerConfigs: config.providerConfigs,
   });
   if (directives.warnings.length > 0) {
@@ -984,7 +1118,7 @@ export async function maybeApplyTtsToPayload(params: {
 
   if (isVerbose()) {
     const effectiveProvider = directives.overrides?.provider
-      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ??
+      ? (canonicalizeSpeechProviderId(directives.overrides.provider, sourceCfg) ??
         getTtsProvider(config, prefsPath))
       : getTtsProvider(config, prefsPath);
     logVerbose(

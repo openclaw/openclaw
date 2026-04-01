@@ -110,6 +110,9 @@ const ttsMocks = vi.hoisted(() => {
       typeof value === "string" ? value : undefined,
     ),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveTtsConfigForAccount: vi.fn(
+      (_cfg: OpenClawConfig, _channel: string, _accountId?: string) => ({ mode: "final" }),
+    ),
   };
 });
 
@@ -221,9 +224,14 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (cfg: OpenClawConfig, channel: string, accountId?: string) =>
+    ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
 }));
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (cfg: OpenClawConfig, channel: string, accountId?: string) =>
+    ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
 }));
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -376,6 +384,10 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
+      mode: "final",
+    });
+    ttsMocks.resolveTtsConfigForAccount.mockClear();
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({
       mode: "final",
     });
   });
@@ -1854,6 +1866,58 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
     expect(finalPayload?.text).toBeUndefined();
+  });
+
+  it("uses default-account TTS mode for Feishu ACP block-only fallback when AccountId is missing", async () => {
+    setNoAbort();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({ mode: "all" });
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "Default" },
+      { type: "text_delta", text: " account" },
+      { type: "text_delta", text: " streaming." },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 256 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      AccountId: undefined,
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "default account mode",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(ttsMocks.resolveTtsConfigForAccount).toHaveBeenCalledWith(cfg, "feishu", undefined);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("routes ACP block output to originating channel without parent dispatcher duplicates", async () => {

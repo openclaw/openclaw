@@ -39,7 +39,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
@@ -506,7 +506,8 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+    const { maybeApplyTtsToPayload, resolveTtsConfig, resolveTtsConfigForAccount } =
+      await loadTtsRuntime();
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -514,6 +515,7 @@ export async function dispatchReplyFromConfig(params: {
         payload,
         cfg,
         channel: ttsChannel,
+        accountId: ctx.AccountId,
         kind: "final",
         inboundAudio,
         ttsAuto: sessionTtsAuto,
@@ -669,6 +671,7 @@ export async function dispatchReplyFromConfig(params: {
               payload,
               cfg,
               channel: ttsChannel,
+              accountId: ctx.AccountId,
               kind: "tool",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
@@ -707,6 +710,7 @@ export async function dispatchReplyFromConfig(params: {
               payload,
               cfg,
               channel: ttsChannel,
+              accountId: ctx.AccountId,
               kind: "block",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
@@ -766,7 +770,11 @@ export async function dispatchReplyFromConfig(params: {
       routedFinalCount += finalReply.routedFinalCount;
     }
 
-    const ttsMode = resolveConfiguredTtsMode(cfg);
+    const ttsMode =
+      (ttsChannel
+        ? resolveTtsConfigForAccount(cfg, ttsChannel, ctx.AccountId)
+        : resolveTtsConfig(cfg)
+      ).mode ?? "final";
     // Generate TTS-only reply after block streaming completes (when there's no final reply).
     // This handles the case where block streaming succeeds and drops final payloads,
     // but we still want TTS audio to be generated from the accumulated block content.
@@ -781,6 +789,7 @@ export async function dispatchReplyFromConfig(params: {
           payload: { text: accumulatedBlockText },
           cfg,
           channel: ttsChannel,
+          accountId: ctx.AccountId,
           kind: "final",
           inboundAudio,
           ttsAuto: sessionTtsAuto,

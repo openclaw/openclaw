@@ -41,6 +41,9 @@ const ttsMocks = vi.hoisted(() => ({
     return params.payload;
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+  resolveTtsConfigForAccount: vi.fn(
+    (_cfg: OpenClawConfig, _channel: string, _accountId?: string) => ({ mode: "final" }),
+  ),
 }));
 
 const mediaUnderstandingMocks = vi.hoisted(() => ({
@@ -107,6 +110,7 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
+  ttsChannel?: string;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
@@ -124,6 +128,7 @@ async function runDispatch(params: {
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey: targetSessionKey,
     inboundAudio: false,
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
@@ -240,6 +245,8 @@ describe("tryDispatchAcpReply", () => {
     vi.doMock("../../tts/tts.js", () => ({
       maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
       resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+      resolveTtsConfigForAccount: (cfg: OpenClawConfig, channel: string, accountId?: string) =>
+        ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
     }));
     vi.doMock("../../media-understanding/apply.js", () => ({
       applyMediaUnderstanding: (params: unknown) =>
@@ -275,6 +282,8 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.resolveTtsConfigForAccount.mockReset();
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({ mode: "final" });
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     sessionMetaMocks.readAcpSessionEntry.mockReset();
@@ -965,6 +974,34 @@ describe("tryDispatchAcpReply", () => {
       mediaUrl: "https://example.com/final.mp3",
       audioAsVoice: true,
     });
+  });
+
+  it("uses account-aware TTS mode resolution for Feishu ACP fallback delivery", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hello");
+    ttsMocks.resolveTtsConfigForAccount.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "hello" }, {} as MockTtsReply);
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      ttsChannel: "feishu",
+      ctxOverrides: {
+        Provider: "feishu",
+        Surface: "feishu",
+        AccountId: "english-bot",
+      },
+    });
+
+    expect(ttsMocks.resolveTtsConfigForAccount).toHaveBeenCalledWith(
+      expect.any(Object),
+      "feishu",
+      "english-bot",
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello" }),
+    );
   });
 
   it("skips fallback when TTS mode is all (blocks already processed with TTS)", async () => {

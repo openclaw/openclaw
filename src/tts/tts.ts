@@ -12,6 +12,7 @@ export const listSpeechVoices = speechRuntime.listSpeechVoices;
 export const maybeApplyTtsToPayload = speechRuntime.maybeApplyTtsToPayload;
 export const resolveTtsAutoMode = speechRuntime.resolveTtsAutoMode;
 export const resolveTtsConfig = speechRuntime.resolveTtsConfig;
+export const resolveTtsConfigForAccount = speechRuntime.resolveTtsConfigForAccount;
 export const resolveTtsPrefsPath = speechRuntime.resolveTtsPrefsPath;
 export const resolveTtsProviderOrder = speechRuntime.resolveTtsProviderOrder;
 export const setLastTtsAttempt = speechRuntime.setLastTtsAttempt;
