@@ -364,6 +364,13 @@ export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
+  // Ensure built-in providers are registered before mergeConfig resolves
+  // provider adapters and their defaultModel values.
+  resolveRuntimePluginRegistry({
+    config: cfg,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  });
+
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const resolved = mergeConfig(defaults, overrides, agentId);
@@ -371,14 +378,6 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  if (multimodalActive && !getMemoryEmbeddingProvider(resolved.provider)) {
-    // Ensure built-in providers are registered before validation in CLI/Status flows.
-    // Use agent-specific workspace if available to avoid loading a conflicting registry later.
-    resolveRuntimePluginRegistry({
-      config: cfg,
-      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-    });
-  }
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
   if (
