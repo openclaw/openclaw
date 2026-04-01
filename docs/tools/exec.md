@@ -132,6 +132,8 @@ Manual allowlist enforcement matches **resolved binary paths only** (no basename
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
 allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
 Redirections remain unsupported.
+Durable `allow-always` trust does not bypass that rule: a chained command still requires every
+top-level segment to match.
 
 `autoAllowSkills` is a separate convenience path in exec approvals. It is not the same as
 manual path allowlist entries. For strict explicit trust, keep `autoAllowSkills` disabled.

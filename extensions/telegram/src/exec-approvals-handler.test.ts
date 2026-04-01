@@ -243,6 +243,34 @@ describe("TelegramExecApprovalHandler", () => {
     );
   });
 
+  it("delivers plugin approvals when the agent only exists in the Telegram session key", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            agentFilter: ["main"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...pluginRequest,
+      request: {
+        ...pluginRequest.request,
+        agentId: undefined,
+      },
+    });
+
+    const [chatId, text] = sendMessage.mock.calls[0] ?? [];
+    expect(chatId).toBe("8460800771");
+    expect(text).toContain("Plugin approval required");
+  });
+
   it("does not deliver plugin approvals for a different Telegram account", async () => {
     const cfg = {
       channels: {

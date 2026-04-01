@@ -36,7 +36,21 @@ export {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
-export { createApproverRestrictedNativeApprovalAdapter } from "./approval-delivery-helpers.js";
+export {
+  createChannelExecApprovalProfile,
+  isChannelExecApprovalTargetRecipient,
+} from "./approval-client-helpers.js";
+export {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+} from "./approval-native-helpers.js";
+export { createChannelNativeApprovalRuntime } from "../infra/approval-native-runtime.js";
+export {
+  createApproverRestrictedNativeApprovalAdapter,
+  createApproverRestrictedNativeApprovalCapability,
+  createChannelApprovalCapability,
+  splitChannelApprovalCapability,
+} from "./approval-delivery-helpers.js";
 export { resolveApprovalApprovers } from "./approval-approvers.js";
 export {
   matchesApprovalRequestFilters,
