@@ -143,6 +143,12 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("cxx")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTC_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTC_WORKSPACE_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustc_workspace_wrapper")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
@@ -158,6 +164,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("_java_options")).toBe(true);
     expect(isDangerousHostEnvVarName("JDK_JAVA_OPTIONS")).toBe(true);
     expect(isDangerousHostEnvVarName("jdk_java_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("JAVA_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("java_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("PYTHONBREAKPOINT")).toBe(true);
     expect(isDangerousHostEnvVarName("pythonbreakpoint")).toBe(true);
     expect(isDangerousHostEnvVarName("DOTNET_STARTUP_HOOKS")).toBe(true);
@@ -208,6 +216,8 @@ describe("sanitizeHostExecEnv", () => {
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
         GIT_TEMPLATE_DIR: "/tmp/git-template",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
+        RUSTC_WRAPPER: "/tmp/pwn-rustc-wrapper",
+        JAVA_OPTS: "-javaagent:/tmp/pwn.jar",
         AWS_CONFIG_FILE: "/tmp/aws-config",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
@@ -238,6 +248,9 @@ describe("sanitizeHostExecEnv", () => {
         CC: "/tmp/evil-cc",
         CXX: "/tmp/evil-cxx",
         CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
+        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
@@ -252,6 +265,8 @@ describe("sanitizeHostExecEnv", () => {
         PIP_PYPI_URL: "https://example.invalid/simple",
         PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
         PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+        PIP_REQUIREMENT: "/tmp/evil-requirements.txt",
+        PIP_CONSTRAINT: "/tmp/evil-constraints.txt",
         PIP_FIND_LINKS: "https://example.invalid/wheels",
         PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
@@ -278,6 +293,8 @@ describe("sanitizeHostExecEnv", () => {
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
         GONOSUMDB: "example.invalid/*",
+        GOSUMDB: "off",
+        GOINSECURE: "example.invalid/*",
         GONOPROXY: "example.invalid/*",
         GOPRIVATE: "example.invalid/*",
         GOENV: "/tmp/evil-goenv",
@@ -287,7 +304,11 @@ describe("sanitizeHostExecEnv", () => {
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
+        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         GOFLAGS: "-mod=mod",
+        RUSTFLAGS: "-C link-arg=-Wl,-rpath,/tmp/evil",
+        CARGO_ENCODED_RUSTFLAGS: "-Clink-arg=-Wl,-rpath,/tmp/evil",
+        CARGO_HOME: "/tmp/evil-cargo-home",
         PHPRC: "/tmp/evil-php.ini",
         XDG_CONFIG_HOME: "/tmp/evil-config",
         SAFE: "ok",
@@ -302,6 +323,9 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.CC).toBeUndefined();
     expect(env.CXX).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTC).toBeUndefined();
+    expect(env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
+    expect(env.RUSTC_WRAPPER).toBeUndefined();
+    expect(env.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
     expect(env.CMAKE_C_COMPILER).toBeUndefined();
     expect(env.CMAKE_CXX_COMPILER).toBeUndefined();
     expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
@@ -315,15 +339,21 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
+    expect(env.JAVA_OPTS).toBeUndefined();
     expect(env.GOFLAGS).toBeUndefined();
+    expect(env.RUSTFLAGS).toBeUndefined();
+    expect(env.CARGO_ENCODED_RUSTFLAGS).toBeUndefined();
+    expect(env.CARGO_HOME).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
     expect(env.PIP_INDEX_URL).toBeUndefined();
     expect(env.PIP_PYPI_URL).toBeUndefined();
     expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
     expect(env.PIP_CONFIG_FILE).toBeUndefined();
+    expect(env.PIP_CONSTRAINT).toBeUndefined();
     expect(env.PIP_FIND_LINKS).toBeUndefined();
     expect(env.PIP_TRUSTED_HOST).toBeUndefined();
+    expect(env.PIP_REQUIREMENT).toBeUndefined();
     expect(env.UV_INDEX).toBeUndefined();
     expect(env.UV_INDEX_URL).toBeUndefined();
     expect(env.UV_DEFAULT_INDEX).toBeUndefined();
@@ -345,6 +375,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOPROXY).toBeUndefined();
     expect(env.GONOSUMCHECK).toBeUndefined();
     expect(env.GONOSUMDB).toBeUndefined();
+    expect(env.GOSUMDB).toBeUndefined();
+    expect(env.GOINSECURE).toBeUndefined();
     expect(env.GONOPROXY).toBeUndefined();
     expect(env.GOPRIVATE).toBeUndefined();
     expect(env.GOENV).toBeUndefined();
@@ -488,7 +520,9 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("pip_config_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_CONSTRAINT")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_FIND_LINKS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_requirement")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("pip_trusted_host")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("pip_pypi_url")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_EXTRA_INDEX_URL")).toBe(true);
@@ -506,6 +540,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("c_include_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOPROXY")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gonosumdb")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gosumdb")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("goinsecure")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOPRIVATE")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("goenv")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PYTHONUSERBASE")).toBe(true);
@@ -514,6 +550,12 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("goflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("rustflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_ENCODED_RUSTFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_encoded_rustflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
@@ -535,12 +577,18 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         PATH: "/tmp/evil",
         CXX: "/tmp/evil-cxx",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
+        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         CLASSPATH: "/tmp/evil-classpath",
+        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         PIP_INDEX_URL: "https://example.invalid/simple",
         PIP_PYPI_URL: "https://example.invalid/simple",
         PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
         PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+        PIP_CONSTRAINT: "/tmp/evil-constraints.txt",
         PIP_FIND_LINKS: "https://example.invalid/wheels",
+        PIP_REQUIREMENT: "/tmp/evil-requirements.txt",
         PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
@@ -563,10 +611,15 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
         GONOSUMDB: "example.invalid/*",
+        GOSUMDB: "off",
+        GOINSECURE: "example.invalid/*",
         GONOPROXY: "example.invalid/*",
         GOPRIVATE: "example.invalid/*",
         GOENV: "/tmp/evil-goenv",
         GOPATH: "/tmp/evil-go",
+        CARGO_HOME: "/tmp/evil-cargo-home",
+        RUSTFLAGS: "-C link-arg=-Wl,-rpath,/tmp/evil",
+        CARGO_ENCODED_RUSTFLAGS: "-Clink-arg=-Wl,-rpath,/tmp/evil",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         VIRTUAL_ENV: "/tmp/evil-venv",
         HTTPS_PROXY: "http://proxy.example.test:8080",
@@ -581,6 +634,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "C_INCLUDE_PATH",
+      "CARGO_BUILD_RUSTC_WRAPPER",
+      "CARGO_ENCODED_RUSTFLAGS",
+      "CARGO_HOME",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
       "CPATH",
@@ -595,26 +651,34 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "GIT_SSL_CAPATH",
       "GIT_SSL_NO_VERIFY",
       "GOENV",
+      "GOINSECURE",
       "GONOPROXY",
       "GONOSUMCHECK",
       "GONOSUMDB",
       "GOPATH",
       "GOPRIVATE",
       "GOPROXY",
+      "GOSUMDB",
       "HTTPS_PROXY",
+      "JAVA_OPTS",
       "LIBRARY_PATH",
       "NODE_EXTRA_CA_CERTS",
       "NODE_TLS_REJECT_UNAUTHORIZED",
       "OBJC_INCLUDE_PATH",
       "PATH",
       "PIP_CONFIG_FILE",
+      "PIP_CONSTRAINT",
       "PIP_EXTRA_INDEX_URL",
       "PIP_FIND_LINKS",
       "PIP_INDEX_URL",
       "PIP_PYPI_URL",
+      "PIP_REQUIREMENT",
       "PIP_TRUSTED_HOST",
       "PYTHONUSERBASE",
       "REQUESTS_CA_BUNDLE",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "RUSTC_WRAPPER",
+      "RUSTFLAGS",
       "SSL_CERT_DIR",
       "SSL_CERT_FILE",
       "UV_DEFAULT_INDEX",
@@ -629,11 +693,17 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CLASSPATH).toBeUndefined();
     expect(result.env.CXX).toBeUndefined();
     expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(result.env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
+    expect(result.env.RUSTC_WRAPPER).toBeUndefined();
+    expect(result.env.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
+    expect(result.env.JAVA_OPTS).toBeUndefined();
     expect(result.env.PIP_INDEX_URL).toBeUndefined();
     expect(result.env.PIP_PYPI_URL).toBeUndefined();
     expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
     expect(result.env.PIP_CONFIG_FILE).toBeUndefined();
+    expect(result.env.PIP_CONSTRAINT).toBeUndefined();
     expect(result.env.PIP_FIND_LINKS).toBeUndefined();
+    expect(result.env.PIP_REQUIREMENT).toBeUndefined();
     expect(result.env.PIP_TRUSTED_HOST).toBeUndefined();
     expect(result.env.UV_INDEX).toBeUndefined();
     expect(result.env.UV_INDEX_URL).toBeUndefined();
@@ -659,10 +729,15 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GOPROXY).toBeUndefined();
     expect(result.env.GONOSUMCHECK).toBeUndefined();
     expect(result.env.GONOSUMDB).toBeUndefined();
+    expect(result.env.GOSUMDB).toBeUndefined();
+    expect(result.env.GOINSECURE).toBeUndefined();
     expect(result.env.GONOPROXY).toBeUndefined();
     expect(result.env.GOPRIVATE).toBeUndefined();
     expect(result.env.GOENV).toBeUndefined();
     expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.CARGO_HOME).toBeUndefined();
+    expect(result.env.RUSTFLAGS).toBeUndefined();
+    expect(result.env.CARGO_ENCODED_RUSTFLAGS).toBeUndefined();
     expect(result.env.HTTPS_PROXY).toBeUndefined();
     expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
@@ -684,6 +759,59 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.rejectedOverrideBlockedKeys).toEqual([]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env["ProgramFiles(x86)"]).toBe("D:\\SDKs");
+  });
+
+  it("blocks advisory toolchain overrides from an empty base env", () => {
+    const dangerous = {
+      RUSTC_WRAPPER: "/tmp/evil_rustc",
+      RUSTC_WORKSPACE_WRAPPER: "/tmp/evil_workspace_rustc",
+      GOPROXY: "https://attacker.example.com/proxy",
+      GOENV: "/tmp/evil-goenv",
+      GOINSECURE: "attacker.example.com/*",
+      GONOSUMCHECK: "attacker.example.com/*",
+      GONOSUMDB: "attacker.example.com/*",
+      GOSUMDB: "off",
+      GOPRIVATE: "attacker.example.com/*",
+      JAVA_OPTS: "-javaagent:/tmp/evil.jar",
+      CARGO_HOME: "/tmp/evil_cargo",
+      RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
+      CARGO_ENCODED_RUSTFLAGS: "-Clink-arg=-Wl,-rpath,/tmp/evil",
+      PIP_CONFIG_FILE: "/tmp/evil_pip.cfg",
+      PIP_CONSTRAINT: "/tmp/evil_constraints.txt",
+      PIP_REQUIREMENT: "/tmp/evil_requirements.txt",
+      LIBRARY_PATH: "/tmp/evil_lib",
+    };
+
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {},
+      overrides: dangerous,
+      blockPathOverrides: true,
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "CARGO_ENCODED_RUSTFLAGS",
+      "CARGO_HOME",
+      "GOENV",
+      "GOINSECURE",
+      "GONOSUMCHECK",
+      "GONOSUMDB",
+      "GOPRIVATE",
+      "GOPROXY",
+      "GOSUMDB",
+      "JAVA_OPTS",
+      "LIBRARY_PATH",
+      "PIP_CONFIG_FILE",
+      "PIP_CONSTRAINT",
+      "PIP_REQUIREMENT",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "RUSTC_WRAPPER",
+      "RUSTFLAGS",
+    ]);
+    expect(result.rejectedOverrideInvalidKeys).toEqual([]);
+    for (const key of Object.keys(dangerous)) {
+      expect(result.env[key]).toBeUndefined();
+    }
+    expect(result.env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 });
 
