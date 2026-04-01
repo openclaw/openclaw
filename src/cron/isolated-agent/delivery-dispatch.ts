@@ -3,7 +3,10 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
