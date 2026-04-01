@@ -25,7 +25,20 @@ export const STATIC_EXTENSION_ASSETS = [
     src: "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
     dest: "dist/extensions/acpx/mcp-proxy.mjs",
   },
+  // diffs viewer runtime bundle — co-deployed inside the plugin package so the
+  // built bundle can resolve `./assets/viewer-runtime.js` from dist.
+  {
+    src: "extensions/diffs/assets/viewer-runtime.js",
+    dest: "dist/extensions/diffs/assets/viewer-runtime.js",
+  },
 ];
+
+export function listStaticExtensionAssetOutputs(params = {}) {
+  const assets = params.assets ?? STATIC_EXTENSION_ASSETS;
+  return assets
+    .map(({ dest }) => dest.replace(/\\/g, "/"))
+    .toSorted((left, right) => left.localeCompare(right));
+}
 
 export function copyStaticExtensionAssets(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
