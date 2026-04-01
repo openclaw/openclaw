@@ -18,6 +18,7 @@ const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
 type MinimaxImageApiResponse = {
   data?: {
     image_base64?: string[];
+    image_url?: string[];
   };
   metadata?: {
     success_count?: number;
@@ -84,10 +85,20 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
 
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
 
+      // Allow response_format to be configured via provider config:
+      // models.providers.minimax.response_format = "url" | "base64"
+      // When "url", MiniMax returns a public OSS URL directly (no CDN upload needed).
+      // When "base64" (default), MiniMax returns base64 data (current behavior).
+      const providerConfig = req.cfg?.models?.providers?.[providerId] as
+        | Record<string, unknown>
+        | undefined;
+      const resolvedFormat =
+        providerConfig?.response_format === "url" ? "url" : "base64";
+
       const body: Record<string, unknown> = {
         model: req.model || DEFAULT_MODEL,
         prompt: req.prompt,
-        response_format: "base64",
+        response_format: resolvedFormat,
         n: req.count ?? 1,
       };
 
@@ -137,27 +148,38 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
       }
 
+      const useUrl = resolvedFormat === "url";
+      const imageUrls = data.data?.image_url ?? [];
       const base64Images = data.data?.image_base64 ?? [];
       const failedCount = data.metadata?.failed_count ?? 0;
 
-      if (base64Images.length === 0) {
+      if (imageUrls.length === 0 && base64Images.length === 0) {
         const reason =
           failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
         throw new Error(`MiniMax image generation returned no images: ${reason}`);
       }
 
-      const images = base64Images
-        .map((b64, index) => {
-          if (!b64) {
-            return null;
-          }
-          return {
-            buffer: Buffer.from(b64, "base64"),
-            mimeType: DEFAULT_OUTPUT_MIME,
-            fileName: `image-${index + 1}.png`,
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      const images = useUrl
+        ? imageUrls
+            .map((url, index) => {
+              if (!url) return null;
+              return {
+                url,
+                mimeType: DEFAULT_OUTPUT_MIME,
+                fileName: `image-${index + 1}.png`,
+              };
+            })
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+        : base64Images
+            .map((b64, index) => {
+              if (!b64) return null;
+              return {
+                buffer: Buffer.from(b64, "base64"),
+                mimeType: DEFAULT_OUTPUT_MIME,
+                fileName: `image-${index + 1}.png`,
+              };
+            })
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
       return {
         images,
