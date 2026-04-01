@@ -81,6 +81,14 @@ describe("cron service timer seam coverage", () => {
       .filter((delay): delay is number => typeof delay === "number");
     expect(delays.some((delay) => delay > 0)).toBe(true);
 
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextAt: now + 60_000,
+        nextAtReadable: new Date(now + 60_000).toISOString(),
+      }),
+      "cron: timer armed",
+    );
+
     timeoutSpy.mockRestore();
   });
 
