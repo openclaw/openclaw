@@ -129,6 +129,10 @@ function shouldRetainNamedSessionForDeadStatus(detail: AcpxJsonObject | undefine
   return summary?.includes("queue owner unavailable") ?? false;
 }
 
+function resolveResumeSessionIdFromDetail(detail: AcpxJsonObject | undefined): string | undefined {
+  return asOptionalString(detail?.acpxSessionId) ?? asOptionalString(detail?.agentSessionId);
+}
+
 function formatAcpxControlErrorMessage(params: {
   code?: string;
   message: string;
@@ -350,6 +354,27 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
+  private async replaceDeadNamedSession(params: {
+    detail: AcpxJsonObject | undefined;
+    sessionName: string;
+    agent: string;
+    cwd: string;
+    logContext: string;
+  }): Promise<AcpxJsonObject[]> {
+    const resumeSessionId = resolveResumeSessionIdFromDetail(params.detail);
+    this.logger?.warn?.(
+      resumeSessionId
+        ? `acpx ensureSession repairing dead named session by resuming backend session: session=${params.sessionName} cwd=${params.cwd} resumeSessionId=${resumeSessionId} ${params.logContext}`
+        : `acpx ensureSession repairing dead named session with fresh session owner: session=${params.sessionName} cwd=${params.cwd} ${params.logContext}`,
+    );
+    return await this.createNamedSession({
+      agent: params.agent,
+      cwd: params.cwd,
+      sessionName: params.sessionName,
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+    });
+  }
+
   private async shouldReplaceEnsuredSession(params: {
     sessionName: string;
     agent: string;
@@ -388,10 +413,14 @@ export class AcpxRuntime implements AcpRuntime {
     if (status === "dead") {
       const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
       if (shouldRetainNamedSessionForDeadStatus(detail)) {
-        this.logger?.warn?.(
-          `acpx ensureSession retaining dead named session with recoverable status: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
-        );
-        return false;
+        await this.replaceDeadNamedSession({
+          detail,
+          sessionName: params.sessionName,
+          agent: params.agent,
+          cwd: params.cwd,
+          logContext: `status=${status} summary=${summary || "<empty>"}`,
+        });
+        return true;
       }
       this.logger?.warn?.(
         `acpx ensureSession replacing dead named session: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
@@ -451,10 +480,13 @@ export class AcpxRuntime implements AcpRuntime {
     if (status === "dead") {
       const summary = summarizeLogText(asOptionalString(detail?.summary) ?? "");
       if (shouldRetainNamedSessionForDeadStatus(detail)) {
-        this.logger?.warn?.(
-          `acpx ensureSession retaining dead named session after ensure failure with recoverable status: session=${params.sessionName} cwd=${params.cwd} status=${status} summary=${summary || "<empty>"}`,
-        );
-        return events;
+        return await this.replaceDeadNamedSession({
+          detail,
+          sessionName: params.sessionName,
+          agent: params.agent,
+          cwd: params.cwd,
+          logContext: `status=${status} summary=${summary || "<empty>"}`,
+        });
       }
       this.logger?.warn?.(
         `acpx ensureSession replacing dead named session after ensure failure: session=${params.sessionName} cwd=${params.cwd}`,
