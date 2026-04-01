@@ -1,18 +1,18 @@
 /**
- * Context Tools - 上下文压缩工具
+ * Context Tools - Context compression tools
  *
- * 为 LLM 提供主动压缩上下文的工具
+ * Provides tools for LLM to proactively compress and archive context
  */
 
 import { Type } from "@sinclair/typebox";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { ContextArchive, createContextArchive } from "../context-engine/archive.js";
 
-// 存档管理器实例缓存
+// Archive manager instance cache
 const archiveInstances = new Map<string, ContextArchive>();
 
 /**
- * 获取或创建存档管理器
+ * Get or create archive manager
  */
 function getArchive(sessionId: string): ContextArchive {
   if (!archiveInstances.has(sessionId)) {
@@ -25,7 +25,7 @@ const importanceEnum = ["high", "medium", "low"] as const;
 const recallModeEnum = ["summary", "full", "key_points"] as const;
 
 /**
- * 创建 compress_context 工具
+ * Create compress_context tool
  */
 export function createCompressContextTool(): AnyAgentTool {
   return {
@@ -67,23 +67,22 @@ You should provide a meaningful summary that captures:
           { description: "Range of messages to archive" },
         ),
         importance: Type.Optional(
-          Type.Union(
-            importanceEnum.map((v) => Type.Literal(v)),
-            { description: "Importance level. High importance archives are kept longer." },
-          ),
+          Type.Union(importanceEnum.map((v) => Type.Literal(v)), {
+            description: "Importance level. High importance archives are kept longer.",
+          }),
         ),
       },
       { additionalProperties: true },
     ),
-    annotations: { readOnlyHint: false },
-    handler: async (params: Record<string, unknown>, context: { sessionId: string }) => {
+    execute: async (params: Record<string, unknown>) => {
       const topic = readStringParam(params, "topic", { required: true });
       const summary = readStringParam(params, "summary", { required: true });
       const importance = (params.importance as "high" | "medium" | "low") ?? "medium";
       const keyDecisions = params.key_decisions as string[] | undefined;
       const messageRange = params.message_range as { start: number; end: number };
 
-      const archive = getArchive(context.sessionId);
+      // Use a default session ID for now
+      const archive = getArchive("default");
       const result = await archive.archive({
         topic,
         summary,
@@ -103,7 +102,7 @@ You should provide a meaningful summary that captures:
 }
 
 /**
- * 创建 list_archives 工具
+ * Create list_archives tool
  */
 export function createListArchivesTool(): AnyAgentTool {
   return {
@@ -119,25 +118,18 @@ You can filter by:
 Returns a list of archives with their paths, topics, and token counts.`,
     parameters: Type.Object(
       {
-        date: Type.Optional(
-          Type.String({ description: "Filter by date (YYYY-MM-DD format)" }),
-        ),
-        topic_keyword: Type.Optional(
-          Type.String({ description: "Filter by topic keyword" }),
-        ),
-        limit: Type.Optional(
-          Type.Number({ description: "Maximum number of results to return" }),
-        ),
+        date: Type.Optional(Type.String({ description: "Filter by date (YYYY-MM-DD format)" })),
+        topic_keyword: Type.Optional(Type.String({ description: "Filter by topic keyword" })),
+        limit: Type.Optional(Type.Number({ description: "Maximum number of results to return" })),
       },
       { additionalProperties: true },
     ),
-    annotations: { readOnlyHint: true },
-    handler: async (params: Record<string, unknown>, context: { sessionId: string }) => {
+    execute: async (params: Record<string, unknown>) => {
       const date = readStringParam(params, "date");
       const topicKeyword = readStringParam(params, "topic_keyword");
       const limit = (params.limit as number) ?? 10;
 
-      const archive = getArchive(context.sessionId);
+      const archive = getArchive("default");
       const result = await archive.list({
         date,
         topic_keyword: topicKeyword,
@@ -153,7 +145,7 @@ Returns a list of archives with their paths, topics, and token counts.`,
 }
 
 /**
- * 创建 recall_archive 工具
+ * Create recall_archive tool
  */
 export function createRecallArchiveTool(): AnyAgentTool {
   return {
@@ -172,20 +164,18 @@ Use this when you need to reference previous discussions that were archived.`,
           description: "Path to the archive file (from list_archives)",
         }),
         mode: Type.Optional(
-          Type.Union(
-            recallModeEnum.map((v) => Type.Literal(v)),
-            { description: "How much content to restore" },
-          ),
+          Type.Union(recallModeEnum.map((v) => Type.Literal(v)), {
+            description: "How much content to restore",
+          }),
         ),
       },
       { additionalProperties: true },
     ),
-    annotations: { readOnlyHint: true },
-    handler: async (params: Record<string, unknown>, context: { sessionId: string }) => {
+    execute: async (params: Record<string, unknown>) => {
       const archivePath = readStringParam(params, "archive_path", { required: true });
       const mode = (params.mode as "summary" | "full" | "key_points") ?? "summary";
 
-      const archive = getArchive(context.sessionId);
+      const archive = getArchive("default");
       const result = await archive.recall(archivePath, mode);
 
       return jsonResult({
@@ -197,14 +187,10 @@ Use this when you need to reference previous discussions that were archived.`,
 }
 
 /**
- * 创建所有上下文工具
+ * Create all context tools
  */
 export function createContextTools(): AnyAgentTool[] {
-  return [
-    createCompressContextTool(),
-    createListArchivesTool(),
-    createRecallArchiveTool(),
-  ];
+  return [createCompressContextTool(), createListArchivesTool(), createRecallArchiveTool()];
 }
 
 export const contextTools = createContextTools();
