@@ -63,7 +63,7 @@ describe("provider usage fetch shared helpers", () => {
   it("aborts timed out requests and clears the timer on rejection", async () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    let observedSignal: AbortSignal | undefined;
+    let observedSignal: AbortSignal | null | undefined;
     const fetchFnMock = vi.fn(
       (_input: URL | RequestInfo, init?: RequestInit) =>
         new Promise<Response>((_, reject) => {
