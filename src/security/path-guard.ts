@@ -89,6 +89,12 @@ export async function checkPathGuardStrict(
       return false;
     }
 
+    // Canonicalize relative literal entries into realpath-space.
+    // Otherwise a policy like denyPaths:["vendor"] could be bypassed if "vendor" is a symlink
+    // that resolves outside workspace, because requested targets are matched in realpath-space.
+    const canonicalAbsoluteEntry = await resolveRealPathStrict(absoluteEntry);
+    const normalizedCanonicalAbsoluteEntry = toPosixPath(canonicalAbsoluteEntry);
+
     const normalizedPattern = toPosixPath(entry);
     const hasGlobMagic = new Minimatch(normalizedPattern, {
       dot: true,
@@ -108,8 +114,8 @@ export async function checkPathGuardStrict(
       return minimatch(relativeToWorkspace, normalizedPattern, { dot: true, magicalBraces: true });
     }
     return (
-      normalizedRealPath === normalizedAbsoluteEntry ||
-      isPathInside(normalizedAbsoluteEntry, normalizedRealPath)
+      normalizedRealPath === normalizedCanonicalAbsoluteEntry ||
+      isPathInside(normalizedCanonicalAbsoluteEntry, normalizedRealPath)
     );
   };
 
