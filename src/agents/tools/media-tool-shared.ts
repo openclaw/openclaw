@@ -1,9 +1,8 @@
 import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getDefaultLocalRoots } from "../../web/media.js";
-import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 

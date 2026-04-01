@@ -37,7 +37,6 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
@@ -340,7 +339,6 @@ export function createOpenClawCodingTools(options?: {
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
-    workspaceOnly: fsConfig.workspaceOnly,
     allowedPaths: fsConfig.allowedPaths,
     denyPaths: fsConfig.denyPaths,
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
