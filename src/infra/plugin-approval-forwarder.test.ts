@@ -106,7 +106,7 @@ describe("plugin approval forwarding", () => {
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin-req-1 always",
+                value: "/approve plugin-req-1 allow-always",
                 style: "primary",
               },
               {
