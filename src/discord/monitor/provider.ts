@@ -745,6 +745,18 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       listenerTimeout: 120_000,
       ...discordCfg.eventQueue,
     };
+    // Polyfill registerListener on Client if missing (carbon >=0.14 removed it,
+    // but VoicePlugin/GatewayPlugin still call it during registerClient).
+    const OrigClient = Client as unknown as { prototype: Record<string, unknown> };
+    if (typeof OrigClient.prototype.registerListener !== "function") {
+      OrigClient.prototype.registerListener = function (
+        this: { listeners: unknown[] },
+        listener: unknown,
+      ) {
+        this.listeners.push(listener);
+      };
+    }
+
     const client = new Client(
       {
         baseUrl: "http://localhost",
