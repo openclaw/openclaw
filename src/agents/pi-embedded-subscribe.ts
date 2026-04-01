@@ -117,8 +117,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     try {
       const result = params.onBlockReply(payload);
       // If the callback returns a promise, catch async errors without blocking.
-      if (result && typeof (result as Promise<void>).catch === "function") {
-        (result as Promise<void>).catch((err) => {
+      if (result && typeof result.catch === "function") {
+        result.catch((err) => {
           log.warn(`block reply callback failed: ${String(err)}`);
         });
       }
