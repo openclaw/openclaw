@@ -6,7 +6,7 @@ metadata:
   {
     "openclaw":
       {
-        "emoji": "🗣️",
+        "emoji": "🔊",
         "requires": { "bins": ["sag"], "env": ["ELEVENLABS_API_KEY"] },
         "primaryEnv": "ELEVENLABS_API_KEY",
         "install":
@@ -68,7 +68,7 @@ Confirm voice + speaker before long output.
 
 ## Chat voice responses
 
-When Peter asks for a "voice" reply (e.g., "crazy scientist voice", "explain in voice"), generate audio and send it:
+When the user asks for a "voice" reply (e.g., "crazy scientist voice", "explain in voice"), generate audio and send it:
 
 ```bash
 # Generate audio file

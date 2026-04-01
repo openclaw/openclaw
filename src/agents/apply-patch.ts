@@ -1,9 +1,18 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
+import {
+  mkdirPathWithinRoot,
+  removePathWithinRoot,
+  writeFileWithinRoot,
+} from "../infra/fs-safe.js";
+import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
+import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -154,7 +163,7 @@ export async function applyPatch(
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, "unlink");
+      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
@@ -234,11 +243,60 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
     };
   }
+  const workspaceOnly = options.workspaceOnly !== false;
   return {
-    readFile: (filePath) => fs.readFile(filePath, "utf8"),
-    writeFile: (filePath, content) => fs.writeFile(filePath, content, "utf8"),
-    remove: (filePath) => fs.rm(filePath),
-    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+    readFile: async (filePath) => {
+      if (!workspaceOnly) {
+        return await fs.readFile(filePath, "utf8");
+      }
+      const opened = await openBoundaryFile({
+        absolutePath: filePath,
+        rootPath: options.cwd,
+        boundaryLabel: "workspace root",
+      });
+      assertBoundaryRead(opened, filePath);
+      try {
+        return syncFs.readFileSync(opened.fd, "utf8");
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+    },
+    writeFile: async (filePath, content) => {
+      if (!workspaceOnly) {
+        await fs.writeFile(filePath, content, "utf8");
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      await writeFileWithinRoot({
+        rootDir: options.cwd,
+        relativePath: relative,
+        data: content,
+        encoding: "utf8",
+      });
+    },
+    remove: async (filePath) => {
+      if (!workspaceOnly) {
+        await fs.rm(filePath);
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      await removePathWithinRoot({
+        rootDir: options.cwd,
+        relativePath: relative,
+      });
+    },
+    mkdirp: async (dir) => {
+      if (!workspaceOnly) {
+        await fs.mkdir(dir, { recursive: true });
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
+      await mkdirPathWithinRoot({
+        rootDir: options.cwd,
+        relativePath: relative,
+        allowRoot: true,
+      });
+    },
   };
 }
 
@@ -253,16 +311,25 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
-  purpose: "readWrite" | "unlink" = "readWrite",
+  aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; display: string }> {
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
     });
+    if (options.workspaceOnly !== false && resolved.hostPath) {
+      await assertSandboxPath({
+        filePath: resolved.hostPath,
+        cwd: options.cwd,
+        root: options.cwd,
+        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
+      });
+    }
     return {
-      resolved: resolved.hostPath,
-      display: resolved.relativePath || resolved.hostPath,
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      display: resolved.relativePath || resolved.containerPath,
     };
   }
 
@@ -273,18 +340,26 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.cwd,
-          allowFinalSymlink: purpose === "unlink",
+          allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+          allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
       ).resolved
-    : resolvePathFromCwd(filePath, options.cwd);
+    : resolvePathFromInput(filePath, options.cwd);
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
   };
 }
 
-function resolvePathFromCwd(filePath: string, cwd: string): string {
-  return path.normalize(resolveSandboxInputPath(filePath, cwd));
+function assertBoundaryRead(
+  opened: BoundaryFileOpenResult,
+  targetPath: string,
+): asserts opened is Extract<BoundaryFileOpenResult, { ok: true }> {
+  if (opened.ok) {
+    return;
+  }
+  const reason = opened.reason === "validation" ? "unsafe path" : "path not found";
+  throw new Error(`Failed boundary read for ${targetPath} (${reason})`);
 }
 
 function toDisplayPath(resolved: string, cwd: string): string {

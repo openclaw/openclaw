@@ -97,12 +97,19 @@ exec ssh -T gateway-host imsg "$@"
       cliPath: "~/.openclaw/scripts/imsg-ssh",
       remoteHost: "user@gateway-host", // used for SCP attachment fetches
       includeAttachments: true,
+      // Optional: override allowed attachment roots.
+      // Defaults include /Users/*/Library/Messages/Attachments
+      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+      remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
     },
   },
 }
 ```
 
     If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH wrapper script.
+    `remoteHost` must be `host` or `user@host` (no spaces or SSH options).
+    OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
+    Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
   </Tab>
 </Tabs>
@@ -151,6 +158,7 @@ imsg send <handle> "test"
     Group sender allowlist: `channels.imessage.groupAllowFrom`.
 
     Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
+    Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     Mention gating for groups:
 
@@ -175,6 +183,58 @@ imsg send <handle> "test"
 
   </Tab>
 </Tabs>
+
+## ACP conversation bindings
+
+Legacy iMessage chats can also be bound to ACP sessions.
+
+Fast operator flow:
+
+- Run `/acp spawn codex --bind here` inside the DM or allowed group chat.
+- Future messages in that same iMessage conversation route to the spawned ACP session.
+- `/new` and `/reset` reset the same bound ACP session in place.
+- `/acp close` closes the ACP session and removes the binding.
+
+Configured persistent bindings are supported through top-level `bindings[]` entries with `type: "acp"` and `match.channel: "imessage"`.
+
+`match.peer.id` can use:
+
+- normalized DM handle such as `+15555550123` or `user@example.com`
+- `chat_id:<id>` (recommended for stable group bindings)
+- `chat_guid:<guid>`
+- `chat_identifier:<identifier>`
+
+Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: { agent: "codex", backend: "acpx", mode: "persistent" },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "imessage",
+        accountId: "default",
+        peer: { kind: "group", id: "chat_id:123" },
+      },
+      acp: { label: "codex-group" },
+    },
+  ],
+}
+```
+
+See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
 ## Deployment patterns
 
@@ -224,13 +284,14 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 ```
 
     Use SSH keys so both SSH and SCP are non-interactive.
+    Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
 
   </Accordion>
 
   <Accordion title="Multi-account pattern">
     iMessage supports per-account config under `channels.imessage.accounts`.
 
-    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, and history settings.
+    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
 
   </Accordion>
 </AccordionGroup>
@@ -241,6 +302,11 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
   <Accordion title="Attachments and media">
     - inbound attachment ingestion is optional: `channels.imessage.includeAttachments`
     - remote attachment paths can be fetched via SCP when `remoteHost` is set
+    - attachment paths must match allowed roots:
+      - `channels.imessage.attachmentRoots` (local)
+      - `channels.imessage.remoteAttachmentRoots` (remote SCP mode)
+      - default root pattern: `/Users/*/Library/Messages/Attachments`
+    - SCP uses strict host-key checking (`StrictHostKeyChecking=yes`)
     - outbound media size uses `channels.imessage.mediaMaxMb` (default 16 MB)
   </Accordion>
 
@@ -325,7 +391,9 @@ openclaw channels status --probe
     Check:
 
     - `channels.imessage.remoteHost`
+    - `channels.imessage.remoteAttachmentRoots`
     - SSH/SCP key auth from the gateway host
+    - host key exists in `~/.ssh/known_hosts` on the gateway host
     - remote path readability on the Mac running Messages
 
   </Accordion>
@@ -349,3 +417,11 @@ imsg send <handle> "test"
 - [Gateway configuration](/gateway/configuration)
 - [Pairing](/channels/pairing)
 - [BlueBubbles](/channels/bluebubbles)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

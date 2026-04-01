@@ -8,6 +8,7 @@ import { registerNodesInvokeCommands } from "./register.invoke.js";
 import { registerNodesLocationCommands } from "./register.location.js";
 import { registerNodesNotifyCommand } from "./register.notify.js";
 import { registerNodesPairingCommands } from "./register.pairing.js";
+import { registerNodesPushCommand } from "./register.push.js";
 import { registerNodesScreenCommands } from "./register.screen.js";
 import { registerNodesStatusCommands } from "./register.status.js";
 
@@ -21,7 +22,10 @@ export function registerNodesCli(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw nodes status", "List known nodes with live status."],
           ["openclaw nodes pairing pending", "Show pending node pairing requests."],
-          ['openclaw nodes run --node <id> --raw "uname -a"', "Run a shell command on a node."],
+          [
+            'openclaw nodes invoke --node <id> --command system.which --params \'{"name":"uname"}\'',
+            "Invoke a node command directly.",
+          ],
           ["openclaw nodes camera snap --node <id>", "Capture a photo from a node camera."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/nodes", "docs.openclaw.ai/cli/nodes")}\n`,
     );
@@ -30,6 +34,7 @@ export function registerNodesCli(program: Command) {
   registerNodesPairingCommands(nodes);
   registerNodesInvokeCommands(nodes);
   registerNodesNotifyCommand(nodes);
+  registerNodesPushCommand(nodes);
   registerNodesCanvasCommands(nodes);
   registerNodesCameraCommands(nodes);
   registerNodesScreenCommands(nodes);

@@ -1,11 +1,37 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, resetConfigRuntimeState } from "./config.js";
 import { withTempHome } from "./home-env.test-harness.js";
 
 describe("config identity defaults", () => {
+  beforeEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  const defaultIdentity = {
+    name: "Samantha",
+    theme: "helpful sloth",
+    emoji: "🦥",
+  };
+
+  const configWithDefaultIdentity = (messages: Record<string, unknown>) => ({
+    agents: {
+      list: [
+        {
+          id: "main",
+          identity: defaultIdentity,
+        },
+      ],
+    },
+    messages,
+  });
+
   const writeAndLoadConfig = async (home: string, config: Record<string, unknown>) => {
     const configDir = path.join(home, ".openclaw");
     await fs.mkdir(configDir, { recursive: true });
@@ -19,21 +45,7 @@ describe("config identity defaults", () => {
 
   it("does not derive mention defaults and only sets ackReactionScope when identity is present", async () => {
     await withTempHome("openclaw-config-identity-", async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "Samantha",
-                theme: "helpful sloth",
-                emoji: "🦥",
-              },
-            },
-          ],
-        },
-        messages: {},
-      });
+      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({}));
 
       expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
@@ -127,8 +139,8 @@ describe("config identity defaults", () => {
               api: "anthropic-messages",
               models: [
                 {
-                  id: "MiniMax-M2.1",
-                  name: "MiniMax M2.1",
+                  id: "MiniMax-M2.7",
+                  name: "MiniMax M2.7",
                   reasoning: false,
                   input: ["text"],
                   cost: {
@@ -150,23 +162,38 @@ describe("config identity defaults", () => {
     });
   });
 
-  it("respects empty responsePrefix to disable identity defaults", async () => {
+  it("accepts SecretRef values in model provider headers", async () => {
     await withTempHome("openclaw-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "Samantha",
-                theme: "helpful sloth",
-                emoji: "🦥",
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              headers: {
+                Authorization: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_HEADER_TOKEN",
+                },
               },
+              models: [],
             },
-          ],
+          },
         },
-        messages: { responsePrefix: "" },
       });
+
+      expect(cfg.models?.providers?.openai?.headers?.Authorization).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENAI_HEADER_TOKEN",
+      });
+    });
+  });
+
+  it("respects empty responsePrefix to disable identity defaults", async () => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
+      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({ responsePrefix: "" }));
 
       expect(cfg.messages?.responsePrefix).toBe("");
     });

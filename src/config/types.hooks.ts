@@ -22,17 +22,11 @@ export type HookMappingConfig = {
   deliver?: boolean;
   /** DANGEROUS: Disable external content safety wrapping for this hook. */
   allowUnsafeExternalContent?: boolean;
-  channel?:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "irc"
-    | "googlechat"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams";
+  /**
+   * "last" or any runtime channel id (including plugin channels).
+   * Validation against configured/registered channels happens in gateway hooks runtime.
+   */
+  channel?: "last" | (string & {});
   to?: string;
   /** Override model for this hook (provider/model or alias). */
   model?: string;
@@ -73,7 +67,7 @@ export type HooksGmailConfig = {
 };
 
 export type InternalHookHandlerConfig = {
-  /** Event key to listen for (e.g., 'command:new', 'session:start') */
+  /** Event key to listen for (e.g., 'command:new', 'message:received', 'message:transcribed', 'session:start') */
   event: string;
   /** Path to handler module (workspace-relative) */
   module: string;
@@ -87,13 +81,7 @@ export type HookConfig = {
   [key: string]: unknown;
 };
 
-export type HookInstallRecord = {
-  source: "npm" | "archive" | "path";
-  spec?: string;
-  sourcePath?: string;
-  installPath?: string;
-  version?: string;
-  installedAt?: string;
+export type HookInstallRecord = InstallRecordBase & {
   hooks?: string[];
 };
 
@@ -145,3 +133,4 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
+import type { InstallRecordBase } from "./types.installs.js";

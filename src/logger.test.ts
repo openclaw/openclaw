@@ -122,24 +122,17 @@ describe("globals", () => {
 });
 
 describe("stripRedundantSubsystemPrefixForConsole", () => {
-  it("drops '<subsystem>:' prefix", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discord: hello", "discord")).toBe("hello");
-  });
-
-  it("drops '<Subsystem>:' prefix case-insensitively", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("WhatsApp: hello", "whatsapp")).toBe("hello");
-  });
-
-  it("drops '<subsystem> ' prefix", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discord gateway: closed", "discord")).toBe(
-      "gateway: closed",
-    );
-  });
-
-  it("drops '[subsystem]' prefix", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("[discord] connection stalled", "discord")).toBe(
-      "connection stalled",
-    );
+  it.each([
+    { input: "discord: hello", subsystem: "discord", expected: "hello" },
+    { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
+    { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
+    {
+      input: "[discord] connection stalled",
+      subsystem: "discord",
+      expected: "connection stalled",
+    },
+  ] as const)("drops known subsystem prefix for $input", ({ input, subsystem, expected }) => {
+    expect(stripRedundantSubsystemPrefixForConsole(input, subsystem)).toBe(expected);
   });
 
   it("keeps messages that do not start with the subsystem", () => {

@@ -1,46 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
-
-const agentMocks = vi.hoisted(() => ({
-  runEmbeddedPiAgent: vi.fn(),
-  loadModelCatalog: vi.fn(),
-  webAuthExists: vi.fn().mockResolvedValue(true),
-  getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
-  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
-}));
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: agentMocks.runEmbeddedPiAgent,
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: agentMocks.loadModelCatalog,
-}));
-
-vi.mock("../web/session.js", () => ({
-  webAuthExists: agentMocks.webAuthExists,
-  getWebAuthAgeMs: agentMocks.getWebAuthAgeMs,
-  readWebSelfId: agentMocks.readWebSelfId,
-}));
-
-import { getReplyFromConfig } from "./reply.js";
+import {
+  createReplyRuntimeMocks,
+  createTempHomeHarness,
+  installReplyRuntimeMocks,
+  makeEmbeddedTextResult,
+  makeReplyConfig,
+  resetReplyRuntimeMocks,
+} from "./reply.test-harness.js";
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+const agentMocks = createReplyRuntimeMocks();
 
 const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-rawbody-" });
 
+installReplyRuntimeMocks(agentMocks);
+
 describe("RawBody directive parsing", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    agentMocks.runEmbeddedPiAgent.mockReset();
-    agentMocks.loadModelCatalog.mockReset();
-    agentMocks.loadModelCatalog.mockResolvedValue([
-      { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
-    ]);
+    resetReplyRuntimeMocks(agentMocks);
+    ({ getReplyFromConfig } = await import("./reply.js"));
   });
 
   afterEach(() => {
@@ -49,13 +29,7 @@ describe("RawBody directive parsing", () => {
 
   it("handles directives and history in the prompt", async () => {
     await withTempHome(async (home) => {
-      agentMocks.runEmbeddedPiAgent.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      agentMocks.runEmbeddedPiAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
 
       const groupMessageCtx = {
         Body: "/think:high status please",

@@ -24,3 +24,44 @@ export function pruneExpiredPending<T extends { ts: number }>(
     }
   }
 }
+
+export type PendingPairingRequestResult<TPending> = {
+  status: "pending";
+  request: TPending;
+  created: boolean;
+};
+
+export async function reconcilePendingPairingRequests<
+  TPending extends { requestId: string },
+  TIncoming,
+>(params: {
+  pendingById: Record<string, TPending>;
+  existing: readonly TPending[];
+  incoming: TIncoming;
+  canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
+  refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
+  buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
+  persist: () => Promise<void>;
+}): Promise<PendingPairingRequestResult<TPending>> {
+  if (
+    params.existing.length === 1 &&
+    params.canRefreshSingle(params.existing[0], params.incoming)
+  ) {
+    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    params.pendingById[refreshed.requestId] = refreshed;
+    await params.persist();
+    return { status: "pending", request: refreshed, created: false };
+  }
+
+  for (const existing of params.existing) {
+    delete params.pendingById[existing.requestId];
+  }
+
+  const request = params.buildReplacement({
+    existing: params.existing,
+    incoming: params.incoming,
+  });
+  params.pendingById[request.requestId] = request;
+  await params.persist();
+  return { status: "pending", request, created: true };
+}

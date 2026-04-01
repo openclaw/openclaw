@@ -82,17 +82,27 @@ See [Hooks](/automation/hooks) for setup and examples.
 These run inside the agent loop or gateway pipeline:
 
 - **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
-- **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`/`systemPrompt` before prompt submission.
+- **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext` before prompt submission. Use `prependContext` for per-turn dynamic text and system-context fields for stable guidance that should sit in system prompt space.
 - **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
+- **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
 
-See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration details.
+Hook decision rules for outbound/tool guards:
+
+- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: false }` is a no-op and does not clear a prior block.
+- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_install`: `{ block: false }` is a no-op and does not clear a prior block.
+- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
+- `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
+
+See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
 
 ## Streaming + partial replies
 
@@ -138,7 +148,7 @@ See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration deta
 ## Timeouts
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agents.defaults.timeoutSeconds` default 600s; enforced in `runEmbeddedPiAgent` abort timer.
+- Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
 
 ## Where things can end early
 
@@ -146,3 +156,11 @@ See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration deta
 - AbortSignal (cancel)
 - Gateway disconnect or RPC timeout
 - `agent.wait` timeout (wait-only, does not stop agent)
+
+## Related
+
+- [Tools](/tools) — available agent tools
+- [Hooks](/automation/hooks) — event-driven scripts triggered by agent lifecycle events
+- [Compaction](/concepts/compaction) — how long conversations are summarized
+- [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
+- [Thinking](/tools/thinking) — thinking/reasoning level configuration

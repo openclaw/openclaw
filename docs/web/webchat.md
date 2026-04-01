@@ -31,6 +31,18 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - History is always fetched from the gateway (no local file watching).
 - If the gateway is unreachable, WebChat is read-only.
 
+## Control UI agents tools panel
+
+- The Control UI `/agents` Tools panel has two separate views:
+  - **Available Right Now** uses `tools.effective(sessionKey=...)` and shows what the current
+    session can actually use at runtime, including core, plugin, and channel-owned tools.
+  - **Tool Configuration** uses `tools.catalog` and stays focused on profiles, overrides, and
+    catalog semantics.
+- Runtime availability is session-scoped. Switching sessions on the same agent can change the
+  **Available Right Now** list.
+- The config editor does not imply runtime availability; effective access still follows policy
+  precedence (`allow`/`deny`, per-agent and provider/channel overrides).
+
 ## Remote use
 
 - Remote mode tunnels the gateway WebSocket over SSH/Tailscale.
@@ -40,9 +52,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 Full configuration: [Configuration](/gateway/configuration)
 
-Channel options:
+WebChat options:
 
-- No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.
+- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
 
 Related global options:
 

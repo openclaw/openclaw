@@ -1,5 +1,5 @@
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveChannelGroupPolicy } from "../../../src/config/group-policy.js";
 import {
   resolveIrcGroupAccessGate,
   resolveIrcGroupMatch,
@@ -54,8 +54,25 @@ describe("irc policy", () => {
       resolveIrcGroupSenderAllowed({
         groupPolicy: "allowlist",
         message,
+        outerAllowFrom: ["alice!ident@example.org"],
+        innerAllowFrom: [],
+      }),
+    ).toBe(true);
+    expect(
+      resolveIrcGroupSenderAllowed({
+        groupPolicy: "allowlist",
+        message,
         outerAllowFrom: ["alice"],
         innerAllowFrom: [],
+      }),
+    ).toBe(false);
+    expect(
+      resolveIrcGroupSenderAllowed({
+        groupPolicy: "allowlist",
+        message,
+        outerAllowFrom: ["alice"],
+        innerAllowFrom: [],
+        allowNameMatching: true,
       }),
     ).toBe(true);
   });

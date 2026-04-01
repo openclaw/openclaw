@@ -3,7 +3,8 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk";
+  SecretInput,
+} from "../runtime-api.js";
 
 export type { DmPolicy, GroupPolicy };
 
@@ -29,13 +30,13 @@ export type NextcloudTalkAccountConfig = {
   /** Base URL of the Nextcloud instance (e.g., "https://cloud.example.com"). */
   baseUrl?: string;
   /** Bot shared secret from occ talk:bot:install output. */
-  botSecret?: string;
+  botSecret?: SecretInput;
   /** Path to file containing bot secret (for secret managers). */
   botSecretFile?: string;
   /** Optional API user for room lookups (DM detection). */
   apiUser?: string;
   /** Optional API password/app password for room lookups. */
-  apiPassword?: string;
+  apiPassword?: SecretInput;
   /** Path to file containing API password/app password. */
   apiPasswordFile?: string;
   /** Direct message policy (default: pairing). */
@@ -74,11 +75,15 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Nextcloud on LAN/VPN. */
+  allowPrivateNetwork?: boolean;
 };
 
 export type NextcloudTalkConfig = {
   /** Optional per-account Nextcloud Talk configuration (multi-account). */
   accounts?: Record<string, NextcloudTalkAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & NextcloudTalkAccountConfig;
 
 export type CoreConfig = {
@@ -169,6 +174,9 @@ export type NextcloudTalkWebhookServerOptions = {
   path: string;
   secret: string;
   maxBodyBytes?: number;
+  readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
+  isBackendAllowed?: (backend: string) => boolean;
+  shouldProcessMessage?: (message: NextcloudTalkInboundMessage) => boolean | Promise<boolean>;
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;

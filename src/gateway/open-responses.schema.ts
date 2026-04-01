@@ -35,7 +35,14 @@ export const InputImageSourceSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("base64"),
-    media_type: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
+    media_type: z.enum([
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+    ]),
     data: z.string().min(1), // base64-encoded
   }),
 ]);
@@ -141,18 +148,18 @@ export type ItemParam = z.infer<typeof ItemParamSchema>;
 // Tool Definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Responses API tool definition uses a flat format (not the Chat Completions
+// wrapped-function format). Fields are at the top level alongside `type`.
 export const FunctionToolDefinitionSchema = z
   .object({
     type: z.literal("function"),
-    function: z.object({
-      name: z.string().min(1, "Tool name cannot be empty"),
-      description: z.string().optional(),
-      parameters: z.record(z.string(), z.unknown()).optional(),
-    }),
+    name: z.string().min(1, "Tool name cannot be empty"),
+    description: z.string().optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    strict: z.boolean().optional(),
   })
   .strict();
 
-// OpenResponses tool definitions match internal ToolDefinition structure
 export const ToolDefinitionSchema = FunctionToolDefinitionSchema;
 
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;

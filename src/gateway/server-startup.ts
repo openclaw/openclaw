@@ -1,3 +1,6 @@
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -5,12 +8,15 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
-import { startGmailWatcher } from "../hooks/gmail-watcher.js";
+import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -20,7 +26,6 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
@@ -28,6 +33,36 @@ import {
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+
+async function prewarmConfiguredPrimaryModel(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  log: { warn: (msg: string) => void };
+}): Promise<void> {
+  const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
+  if (!explicitPrimary) {
+    return;
+  }
+  const { provider, model } = resolveConfiguredModelRef({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const agentDir = resolveOpenClawAgentDir();
+  try {
+    await ensureOpenClawModelsJson(params.cfg, agentDir);
+    const resolved = resolveModel(provider, model, agentDir, params.cfg, {
+      skipProviderRuntimeHooks: true,
+    });
+    if (!resolved.model) {
+      throw new Error(
+        resolved.error ??
+          `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,
+      );
+    }
+  } catch (err) {
+    params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
+  }
+}
 
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -42,7 +77,6 @@ export async function startGatewaySidecars(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  logBrowser: { error: (msg: string) => void };
 }) {
   try {
     const stateDir = resolveStateDir(process.env);
@@ -59,31 +93,11 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
   }
 
-  // Start OpenClaw browser control server (unless disabled via config).
-  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
-  try {
-    browserControl = await startBrowserControlServerIfEnabled();
-  } catch (err) {
-    params.logBrowser.error(`server failed to start: ${String(err)}`);
-  }
-
   // Start Gmail watcher if configured (hooks.gmail.account).
-  if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
-    try {
-      const gmailResult = await startGmailWatcher(params.cfg);
-      if (gmailResult.started) {
-        params.logHooks.info("gmail watcher started");
-      } else if (
-        gmailResult.reason &&
-        gmailResult.reason !== "hooks not enabled" &&
-        gmailResult.reason !== "no gmail account configured"
-      ) {
-        params.logHooks.warn(`gmail watcher not started: ${gmailResult.reason}`);
-      }
-    } catch (err) {
-      params.logHooks.error(`gmail watcher failed to start: ${String(err)}`);
-    }
-  }
+  await startGmailWatcherWithLogs({
+    cfg: params.cfg,
+    log: params.logHooks,
+  });
 
   // Validate hooks.gmail.model if configured.
   if (params.cfg.hooks?.gmail?.model) {
@@ -139,6 +153,10 @@ export async function startGatewaySidecars(params: {
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
   if (!skipChannels) {
     try {
+      await prewarmConfiguredPrimaryModel({
+        cfg: params.cfg,
+        log: params.log,
+      });
       await params.startChannels();
     } catch (err) {
       params.logChannels.error(`channel startup failed: ${String(err)}`);
@@ -149,7 +167,7 @@ export async function startGatewaySidecars(params: {
     );
   }
 
-  if (params.cfg.hooks?.internal?.enabled) {
+  if (params.cfg.hooks?.internal?.enabled !== false) {
     setTimeout(() => {
       const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
         cfg: params.cfg,
@@ -171,6 +189,22 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
   }
 
+  if (params.cfg.acp?.enabled) {
+    void getAcpSessionManager()
+      .reconcilePendingSessionIdentities({ cfg: params.cfg })
+      .then((result) => {
+        if (result.checked === 0) {
+          return;
+        }
+        params.log.warn(
+          `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
+        );
+      })
+      .catch((err) => {
+        params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
+      });
+  }
+
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
   });
@@ -181,5 +215,9 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices };
+  return { pluginServices };
 }
+
+export const __testing = {
+  prewarmConfiguredPrimaryModel,
+};

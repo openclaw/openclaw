@@ -27,10 +27,30 @@ describe("tool mutation helpers", () => {
     expect(writeFingerprint).toContain("tool=write");
     expect(writeFingerprint).toContain("path=/tmp/demo.txt");
     expect(writeFingerprint).toContain("id=42");
-    expect(writeFingerprint).toContain("meta=write /tmp/demo.txt");
+    expect(writeFingerprint).not.toContain("meta=write /tmp/demo.txt");
+
+    const metaOnlyFingerprint = buildToolActionFingerprint("exec", { command: "ls -la" }, "ls -la");
+    expect(metaOnlyFingerprint).toContain("tool=exec");
+    expect(metaOnlyFingerprint).toContain("meta=ls -la");
 
     const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
     expect(readFingerprint).toBeUndefined();
+  });
+
+  it("treats coding-tool path aliases as the same stable target", () => {
+    const filePathFingerprint = buildToolActionFingerprint("edit", {
+      file_path: "/tmp/demo.txt",
+      old_string: "before",
+      new_string: "after",
+    });
+    const fileAliasFingerprint = buildToolActionFingerprint("edit", {
+      file: "/tmp/demo.txt",
+      oldText: "before",
+      newText: "after again",
+    });
+
+    expect(filePathFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
+    expect(fileAliasFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
   });
 
   it("exposes mutation state for downstream payload rendering", () => {

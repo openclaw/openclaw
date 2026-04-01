@@ -1,17 +1,27 @@
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  type AuthProfileStore,
+} from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigEnvVars } from "../config/env-vars.js";
+import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+} from "../infra/host-env-security.js";
+import {
+  emitDaemonInstallRuntimeWarning,
+  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
+} from "./daemon-install-plan.shared.js";
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
-type WarnFn = (message: string, title?: string) => void;
+export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
 
 export type GatewayInstallPlan = {
   programArguments: string[];
@@ -19,65 +29,129 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
-export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
-  const entry = argv[1];
-  const normalizedEntry = entry?.replaceAll("\\", "/");
-  return Boolean(normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"));
+function collectAuthProfileServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
+  const entries: Record<string, string> = {};
+
+  for (const credential of Object.values(authStore.profiles)) {
+    const ref =
+      credential.type === "api_key"
+        ? credential.keyRef
+        : credential.type === "token"
+          ? credential.tokenRef
+          : undefined;
+    if (!ref || ref.source !== "env") {
+      continue;
+    }
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Auth profile env ref "${key}" blocked by host-env security policy`,
+        "Auth profile",
+      );
+      continue;
+    }
+    const value = params.env[key]?.trim();
+    if (!value) {
+      continue;
+    }
+    entries[key] = value;
+  }
+
+  return entries;
+}
+
+function buildGatewayInstallEnvironment(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
+  serviceEnvironment: Record<string, string | undefined>;
+}): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {
+    ...collectDurableServiceEnvVars({
+      env: params.env,
+      config: params.config,
+    }),
+    ...collectAuthProfileServiceEnvVars({
+      env: params.env,
+      authStore: params.authStore,
+      warn: params.warn,
+    }),
+  };
+  Object.assign(environment, params.serviceEnvironment);
+  return environment;
 }
 
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
   runtime: GatewayDaemonRuntime;
-  token?: string;
   devMode?: boolean;
   nodePath?: string;
-  warn?: WarnFn;
+  warn?: DaemonInstallWarnFn;
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
-  const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
-    params.nodePath ??
-    (await resolvePreferredNodePath({
-      env: params.env,
-      runtime: params.runtime,
-    }));
+  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    nodePath: params.nodePath,
+  });
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
     nodePath,
   });
-  if (params.runtime === "node") {
-    const systemNode = await resolveSystemNodeInfo({ env: params.env });
-    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) {
-      params.warn?.(warning, "Gateway runtime");
-    }
-  }
+  await emitDaemonInstallRuntimeWarning({
+    env: params.env,
+    runtime: params.runtime,
+    programArguments,
+    warn: params.warn,
+    title: "Gateway runtime",
+  });
   const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
-    token: params.token,
     launchdLabel:
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
+    // Keep npm/pnpm available to the service when the selected daemon node comes from
+    // a version-manager bin directory that isn't covered by static PATH guesses.
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge config env vars into the service environment (vars + inline env keys).
-  // Config env vars are added first so service-specific vars take precedence.
-  const environment: Record<string, string | undefined> = {
-    ...collectConfigEnvVars(params.config),
+  // Merge env sources into the service environment in ascending priority:
+  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
+  //   2. Config env vars              (openclaw.json env.vars + inline keys)
+  //   3. Auth-profile env refs        (credential store → env var lookups)
+  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+  return {
+    programArguments,
+    workingDirectory,
+    environment: buildGatewayInstallEnvironment({
+      env: params.env,
+      config: params.config,
+      authStore: params.authStore,
+      warn: params.warn,
+      serviceEnvironment,
+    }),
   };
-  Object.assign(environment, serviceEnvironment);
-
-  return { programArguments, workingDirectory, environment };
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
-    ? "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip service install."
+    ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
     : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
 }
