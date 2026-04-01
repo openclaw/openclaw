@@ -21,6 +21,20 @@ OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
+### AxonFlow Governance
+
+Policy enforcement, approval gates, and audit trails for OpenClaw tool
+execution. Governs tool inputs before execution, scans outbound messages
+for PII and secrets before delivery, and records tool and LLM activity
+to a centralized audit trail via AxonFlow.
+
+- **npm:** `@axonflow/openclaw`
+- **repo:** [github.com/getaxonflow/axonflow-openclaw-plugin](https://github.com/getaxonflow/axonflow-openclaw-plugin)
+
+```bash
+openclaw plugins install @axonflow/openclaw
+```
+
 ### Codex App Server Bridge
 
 Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
