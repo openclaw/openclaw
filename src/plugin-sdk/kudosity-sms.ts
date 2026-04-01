@@ -12,6 +12,8 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 
 // ─── Value re-exports (shared channel helpers) ─────────────────────────────
-export { DEFAULT_ACCOUNT_ID } from "../channels/channel-config-helpers.js";
-export { buildChannelConfigSchema } from "../channels/plugins/channel-config-schema.js";
-export { emptyPluginConfigSchema } from "../channels/plugins/channel-config-schema.js";
+export {
+  DEFAULT_ACCOUNT_ID,
+  buildChannelConfigSchema,
+  emptyPluginConfigSchema,
+} from "./channel-plugin-common.js";

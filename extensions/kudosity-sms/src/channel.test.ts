@@ -31,11 +31,16 @@ vi.mock("./kudosity-api.js", () => ({
   })),
 }));
 
-// Mock the runtime
+// Mock the runtime — must provide the logging.getChildLogger() chain
+// that channel.ts uses for structured warnings (e.g. media URL redaction).
+const mockWarn = vi.fn();
 vi.mock("./runtime.js", () => ({
-  getKudositySmsRuntime: vi.fn(() => ({})),
+  getKudositySmsRuntime: vi.fn(() => ({
+    logging: {
+      getChildLogger: () => ({ warn: mockWarn }),
+    },
+  })),
 }));
-
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -400,7 +405,7 @@ describe("kudositySmsPlugin", () => {
       });
 
       it("should warn when media URL is dropped", async () => {
-        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        mockWarn.mockClear();
 
         const cfg = {
           channels: {
@@ -418,11 +423,9 @@ describe("kudositySmsPlugin", () => {
           mediaUrl: "https://example.com/photo.jpg",
         } as any);
 
-        expect(warnSpy).toHaveBeenCalledWith(
+        expect(mockWarn).toHaveBeenCalledWith(
           expect.stringContaining("media attachments are not supported via SMS"),
         );
-
-        warnSpy.mockRestore();
       });
 
       it("should throw for empty phone number", async () => {
