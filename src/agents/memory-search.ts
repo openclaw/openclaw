@@ -366,17 +366,31 @@ export function resolveMemorySearchConfig(
 ): ResolvedMemorySearchConfig | null {
   // Ensure built-in providers are registered before mergeConfig resolves
   // provider adapters and their defaultModel values.
-  resolveRuntimePluginRegistry({
-    config: cfg,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  });
-
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+
+  // 1. Fast path: check if enabled and multimodal at all before triggering side effects.
+  const isEnabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  const isMultimodal = isMemoryMultimodalEnabled(
+    normalizeMemoryMultimodalSettings({
+      enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
+    }),
+  );
+
+  if (isEnabled && isMultimodal) {
+    // 2. Heavy path: Ensure built-in providers are registered before mergeConfig resolves
+    // provider adapters and their defaultModel values.
+    resolveRuntimePluginRegistry({
+      config: cfg,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+    });
+  }
+
   const resolved = mergeConfig(defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
   }
+
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
