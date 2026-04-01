@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 
@@ -55,13 +55,30 @@ vi.mock("./timeout.js", () => ({
 describe("subagent-registry context-engine bootstrap", () => {
   let mod: typeof import("./subagent-registry.js");
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    mod = await import("./subagent-registry.js");
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
     });
-    mod = await import("./subagent-registry.js");
+    mod.__testing.setDepsForTest({
+      loadConfig: mocks.loadConfig,
+      ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
+      ensureContextEnginesInitialized: mocks.ensureContextEnginesInitialized,
+      resolveContextEngine: mocks.resolveContextEngine,
+      onAgentEvent: mocks.onAgentEvent,
+      persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
+      restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
+      getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
+    });
+    mod.resetSubagentRegistryForTests({ persist: false });
+  });
+
+  afterEach(() => {
+    mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -88,17 +105,17 @@ describe("subagent-registry context-engine bootstrap", () => {
     mod.releaseSubagentRun("run-1");
 
     await vi.waitFor(() => {
-      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-        config: {},
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        childSessionKey: "agent:main:session:child",
+        reason: "released",
         workspaceDir: "/tmp/workspace",
-        allowGatewaySubagentBinding: true,
       });
     });
-    expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
-    expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
-      childSessionKey: "agent:main:session:child",
-      reason: "released",
+    expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: {},
       workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
     });
+    expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
   });
 });
