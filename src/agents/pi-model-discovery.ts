@@ -15,8 +15,8 @@ import {
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
-import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
+import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
