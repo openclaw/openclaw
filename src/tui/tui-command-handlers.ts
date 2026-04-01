@@ -251,6 +251,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     browser.onConfirm = (paths: string[]) => {
       closeOverlay();
       const blocks: string[] = [];
+      const attachedNames: string[] = [];
       for (const filePath of paths) {
         try {
           const raw = readFileSync(filePath);
@@ -258,17 +259,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           const sample = raw.subarray(0, 8192);
           let nonText = 0;
           for (const byte of sample) {
-            if (byte === 0 || (byte < 8 && byte !== 0)) {
+            if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
               nonText++;
             }
           }
+          const relPath = relative(process.cwd(), filePath) || basename(filePath);
           if (sample.length > 0 && nonText / sample.length > 0.1) {
-            const relPath = relative(process.cwd(), filePath) || basename(filePath);
             chatLog.addSystem(`skipped binary file: ${relPath}`);
             continue;
           }
           const content = raw.toString("utf-8").split("\x00").join("");
-          const relPath = relative(process.cwd(), filePath) || basename(filePath);
+          attachedNames.push(relPath);
           blocks.push(`--- ${relPath} ---\n${content}\n--- end ${relPath} ---`);
         } catch (err) {
           chatLog.addSystem(`failed to read ${filePath}: ${String(err)}`);
@@ -276,8 +277,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (blocks.length > 0) {
         pendingFileContext = blocks.join("\n\n");
-        const names = paths.map((p) => relative(process.cwd(), p) || basename(p));
-        chatLog.addSystem(`${names.length} file(s) attached: ${names.join(", ")}`);
+        chatLog.addSystem(`${attachedNames.length} file(s) attached: ${attachedNames.join(", ")}`);
         chatLog.addSystem("files will be included with your next message");
       }
       tui.requestRender();
@@ -504,6 +504,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "new":
+        pendingFileContext = null;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -522,6 +523,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "reset":
+        pendingFileContext = null;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
