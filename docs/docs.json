@@ -984,6 +984,7 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/qqbot",
                   "channels/signal",
                   "channels/slack",
                   "channels/synology-chat",
@@ -1121,6 +1122,7 @@
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/tasks",
+                  "automation/clawflow",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
@@ -1154,6 +1156,7 @@
                       "tools/grok-search",
                       "tools/kimi-search",
                       "tools/perplexity-search",
+                      "tools/searxng-search",
                       "tools/tavily"
                     ]
                   },
@@ -1432,6 +1435,7 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
+                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { channelsStatusCommand } from "./channels/status.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
@@ -38,8 +39,6 @@ vi.mock("../channels/plugins/index.js", () => ({
 vi.mock("../cli/progress.js", () => ({
   withProgress: (opts: unknown, run: () => Promise<unknown>) => withProgress(opts, run),
 }));
-
-const { channelsStatusCommand } = await import("./channels/status.js");
 
 function createTokenOnlyPlugin() {
   return {

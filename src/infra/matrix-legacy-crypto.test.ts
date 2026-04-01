@@ -176,6 +176,33 @@ describe("matrix legacy encrypted-state migration", () => {
     );
   });
 
+  it("skips inspector loading when no legacy Matrix plans exist", async () => {
+    await withTempHome(
+      async () => {
+        const matrixHelperModule = await import("./matrix-plugin-helper.js");
+        const loadInspectorSpy = vi.spyOn(matrixHelperModule, "loadMatrixLegacyCryptoInspector");
+
+        const result = await autoPrepareLegacyMatrixCrypto({
+          cfg: createDefaultMatrixConfig(),
+          env: process.env,
+        });
+
+        expect(result).toEqual({
+          migrated: false,
+          changes: [],
+          warnings: [],
+        });
+        expect(result.warnings).not.toContain(MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE);
+        expect(loadInspectorSpy).not.toHaveBeenCalled();
+      },
+      {
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: (home) => path.join(home, "empty-bundled"),
+        },
+      },
+    );
+  });
+
   it("warns when legacy local-only room keys cannot be recovered automatically", async () => {
     await withTempHome(async (home) => {
       const { cfg, rootDir } = writeDefaultLegacyCryptoFixture(home);

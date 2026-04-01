@@ -1,7 +1,7 @@
 import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
-import * as modelsCommandModule from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as modelsCommandModule from "openclaw/plugin-sdk/models-provider-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,

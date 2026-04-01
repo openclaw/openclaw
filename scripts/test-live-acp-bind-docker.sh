@@ -10,8 +10,12 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
 ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
-# Keep in sync with the pinned ACPX version used by the bundled ACP runtime.
-ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-0.3.1}"
+ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-$(node -p "const pkg=require(process.argv[1]); process.stdout.write(String(pkg.dependencies?.acpx ?? ''))" "$ROOT_DIR/extensions/acpx/package.json")}"
+
+if [[ -z "$ACPX_VERSION" ]]; then
+  echo "Unable to resolve bundled ACPX version from extensions/acpx/package.json" >&2
+  exit 1
+fi
 
 case "$ACP_AGENT" in
   claude)
@@ -38,39 +42,93 @@ if [[ -f "$PROFILE_FILE" ]]; then
 fi
 
 AUTH_DIRS=()
+AUTH_FILES=()
 if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
   done < <(openclaw_live_collect_auth_dirs)
+  while IFS= read -r auth_file; do
+    [[ -n "$auth_file" ]] || continue
+    AUTH_FILES+=("$auth_file")
+  done < <(openclaw_live_collect_auth_files)
 else
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
   done < <(openclaw_live_collect_auth_dirs_from_csv "$AUTH_PROVIDER")
+  while IFS= read -r auth_file; do
+    [[ -n "$auth_file" ]] || continue
+    AUTH_FILES+=("$auth_file")
+  done < <(openclaw_live_collect_auth_files_from_csv "$AUTH_PROVIDER")
 fi
-AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+AUTH_DIRS_CSV=""
+if ((${#AUTH_DIRS[@]} > 0)); then
+  AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+fi
+AUTH_FILES_CSV=""
+if ((${#AUTH_FILES[@]} > 0)); then
+  AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
+fi
 
 EXTERNAL_AUTH_MOUNTS=()
-for auth_dir in "${AUTH_DIRS[@]}"; do
-  host_path="$HOME/$auth_dir"
-  if [[ -d "$host_path" ]]; then
-    EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/home/node/"$auth_dir":ro)
-  fi
-done
+if ((${#AUTH_DIRS[@]} > 0)); then
+  for auth_dir in "${AUTH_DIRS[@]}"; do
+    host_path="$HOME/$auth_dir"
+    if [[ -d "$host_path" ]]; then
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/home/node/"$auth_dir":ro)
+    fi
+  done
+fi
+if ((${#AUTH_FILES[@]} > 0)); then
+  for auth_file in "${AUTH_FILES[@]}"; do
+    host_path="$HOME/$auth_file"
+    if [[ -f "$host_path" ]]; then
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
+    fi
+  done
+fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
 export PATH="$HOME/.npm-global/bin:$PATH"
+IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+if ((${#auth_files[@]} > 0)); then
+  for auth_file in "${auth_files[@]}"; do
+    [ -n "$auth_file" ] || continue
+    if [ -f "/host-auth-files/$auth_file" ]; then
+      cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
+      chmod u+rw "$HOME/$auth_file" || true
+    fi
+  done
+fi
 if [ ! -x "$HOME/.npm-global/bin/acpx" ]; then
-  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${OPENCLAW_DOCKER_ACPX_VERSION:-0.3.1}"
+  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${OPENCLAW_DOCKER_ACPX_VERSION}"
 fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
     if [ ! -x "$HOME/.npm-global/bin/claude" ]; then
       npm_config_prefix="$HOME/.npm-global" npm install -g @anthropic-ai/claude-code
+    fi
+    real_claude="$HOME/.npm-global/bin/claude-real"
+    if [ ! -x "$real_claude" ] && [ -x "$HOME/.npm-global/bin/claude" ]; then
+      mv "$HOME/.npm-global/bin/claude" "$real_claude"
+    fi
+    if [ -x "$real_claude" ]; then
+      cat > "$HOME/.npm-global/bin/claude" <<WRAP
+#!/usr/bin/env bash
+script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
+if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY:-}" ]; then
+  export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY}"
+fi
+if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD:-}" ]; then
+  export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD}"
+fi
+exec "\$script_dir/claude-real" "\$@"
+WRAP
+      chmod +x "$HOME/.npm-global/bin/claude"
     fi
     claude auth status || true
     ;;
@@ -114,11 +172,13 @@ docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$RO
 echo "==> Run ACP bind live test in Docker"
 echo "==> Agent: $ACP_AGENT"
 echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
+echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
-  -u node \
   --entrypoint bash \
   -e ANTHROPIC_API_KEY \
   -e ANTHROPIC_API_KEY_OLD \
+  -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
   -e OPENAI_API_KEY \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
@@ -126,6 +186,7 @@ docker run --rm -t \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
   -e OPENCLAW_DOCKER_ACPX_VERSION="$ACPX_VERSION" \
+  -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_ACP_BIND=1 \
   -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
