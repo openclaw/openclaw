@@ -61,6 +61,35 @@ describe("telegram error policy", () => {
     ).toBe(false);
   });
 
+  it("keeps cooldowns per error message within the same scope", () => {
+    const scopeKey = buildTelegramErrorScopeKey({
+      accountId: "work",
+      chatId: 42,
+    });
+
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "A",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "B",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "A",
+      }),
+    ).toBe(true);
+  });
+
   it("does not leak suppression across accounts or threads", () => {
     const workMain = buildTelegramErrorScopeKey({
       accountId: "work",

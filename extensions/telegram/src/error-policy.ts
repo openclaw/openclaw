@@ -13,12 +13,7 @@ type TelegramErrorConfig =
   | TelegramGroupConfig
   | TelegramTopicConfig;
 
-interface ErrorCooldownEntry {
-  errorMessage?: string;
-  expiresAt: number;
-}
-
-const errorCooldownStore = new Map<string, ErrorCooldownEntry>();
+const errorCooldownStore = new Map<string, Map<string, number>>();
 const DEFAULT_ERROR_COOLDOWN_MS = 14400000;
 
 export function resolveTelegramErrorPolicy(params: {
@@ -65,24 +60,30 @@ export function shouldSuppressTelegramError(params: {
 }): boolean {
   const { scopeKey, cooldownMs, errorMessage } = params;
   const now = Date.now();
-  const entry = errorCooldownStore.get(scopeKey);
+  const messageKey = errorMessage ?? "";
+  const scopeStore = errorCooldownStore.get(scopeKey);
 
   if (errorCooldownStore.size > 100) {
-    for (const [key, value] of errorCooldownStore) {
-      if (value.expiresAt <= now) {
-        errorCooldownStore.delete(key);
+    for (const [scope, messageStore] of errorCooldownStore) {
+      for (const [message, expiresAt] of messageStore) {
+        if (expiresAt <= now) {
+          messageStore.delete(message);
+        }
+      }
+      if (messageStore.size === 0) {
+        errorCooldownStore.delete(scope);
       }
     }
   }
 
-  if (entry && entry.expiresAt > now && entry.errorMessage === errorMessage) {
+  const expiresAt = scopeStore?.get(messageKey);
+  if (typeof expiresAt === "number" && expiresAt > now) {
     return true;
   }
 
-  errorCooldownStore.set(scopeKey, {
-    errorMessage,
-    expiresAt: now + cooldownMs,
-  });
+  const nextScopeStore = scopeStore ?? new Map<string, number>();
+  nextScopeStore.set(messageKey, now + cooldownMs);
+  errorCooldownStore.set(scopeKey, nextScopeStore);
   return false;
 }
 
