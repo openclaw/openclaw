@@ -155,6 +155,8 @@ describe("runReplyAgent onAgentRunStart", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "webchat",
@@ -506,7 +508,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         sessionFile: params.sessionFile ?? "/tmp/session.jsonl",
         workspaceDir: params.workspaceDir ?? "/tmp",
         config: params.config ?? {},
-        skillsSnapshot: {},
+        skillsSnapshot: { prompt: "", skills: [] },
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -1001,6 +1003,8 @@ describe("runReplyAgent block streaming", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "discord",
@@ -1017,7 +1021,7 @@ describe("runReplyAgent block streaming", () => {
             },
           },
         },
-        skillsSnapshot: {},
+        skillsSnapshot: { prompt: "", skills: [] },
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -1103,6 +1107,8 @@ describe("runReplyAgent block streaming", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "discord",
@@ -1119,7 +1125,7 @@ describe("runReplyAgent block streaming", () => {
             },
           },
         },
-        skillsSnapshot: {},
+        skillsSnapshot: { prompt: "", skills: [] },
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -1184,6 +1190,8 @@ describe("runReplyAgent claude-cli routing", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "webchat",
@@ -1283,6 +1291,8 @@ describe("runReplyAgent messaging tool suppression", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey,
         messageProvider,
@@ -1506,6 +1516,8 @@ describe("runReplyAgent reminder commitment guard", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "telegram",
@@ -1965,6 +1977,8 @@ describe("runReplyAgent transient HTTP retry", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "telegram",
@@ -2041,6 +2055,8 @@ describe("runReplyAgent billing error classification", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "telegram",
@@ -2102,6 +2118,8 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       display: { visibility: "user-visible", summaryLine: "hello" },
       enqueuedAt: Date.now(),
       run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "telegram",
