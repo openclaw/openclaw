@@ -1800,6 +1800,24 @@ describe("runReplyAgent response usage footer", () => {
     expect(String(payload?.text ?? "")).toContain("Usage:");
     expect(String(payload?.text ?? "")).not.toContain("· session ");
   });
+
+  it("formats input usage from prompt tokens when cache usage is present", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 7, cacheRead: 6_993, output: 545 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:main";
+    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(String(payload?.text ?? "")).toContain("Usage: 7.0k in / 545 out");
+  });
 });
 
 describe("runReplyAgent transient HTTP retry", () => {

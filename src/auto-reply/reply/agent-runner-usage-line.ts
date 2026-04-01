@@ -1,4 +1,5 @@
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { derivePromptTokens } from "../../agents/usage.js";
 import type { ReplyPayload } from "../types.js";
 
 export const formatResponseUsageLine = (params: {
@@ -22,10 +23,16 @@ export const formatResponseUsageLine = (params: {
   }
   const input = usage.input;
   const output = usage.output;
-  if (typeof input !== "number" && typeof output !== "number") {
+  const promptInput = derivePromptTokens({
+    input,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+  });
+  const inputDisplay = typeof promptInput === "number" ? promptInput : input;
+  if (typeof inputDisplay !== "number" && typeof output !== "number") {
     return null;
   }
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const inputLabel = typeof inputDisplay === "number" ? formatTokenCount(inputDisplay) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const cost =
     params.showCost && typeof input === "number" && typeof output === "number"
