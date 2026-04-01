@@ -17,6 +17,9 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "OPENCLAW_AGENT_DIR",
+  "OPENCLAW_BUNDLED_HOOKS_DIR",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_BUNDLED_SKILLS_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_PASSWORD",
   "OPENCLAW_GATEWAY_SECRET",
@@ -37,14 +40,23 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = ["ANTHROPIC_API_KEY_", "OPENAI_API_KEY_"];
 
-function shouldBlockRuntimeDotEnvKey(key: string): boolean {
+function shouldBlockWorkspaceRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+}
+
+function shouldBlockRuntimeDotEnvKey(key: string): boolean {
+  // The global ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env) is a trusted
+  // operator-controlled runtime surface. Workspace .env is untrusted and gets
+  // the strict blocklist, but the trusted global fallback is allowed to set
+  // runtime vars like proxy/base-url/auth values.
+  void key;
+  return false;
 }
 
 function shouldBlockWorkspaceDotEnvKey(key: string): boolean {
   const upper = key.toUpperCase();
   return (
-    shouldBlockRuntimeDotEnvKey(upper) ||
+    shouldBlockWorkspaceRuntimeDotEnvKey(upper) ||
     BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix))

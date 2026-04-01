@@ -275,15 +275,12 @@ TRASH
   }
 
   send_channels_flow() {
-    # Configure channels via configure wizard. Sync on prompt text so
-    # keystrokes do not drift into the wrong screen when render timing changes.
+    # Configure channels via configure wizard. Use the remove-config branch for
+    # a stable no-op smoke path when the config starts empty.
     wait_for_log "Where will the Gateway run?" 120
     send $'"'"'\r'"'"' 0.6
-    wait_for_log "Channels" 120
-    send $'"'"'\r'"'"' 0.6
-    # Select a channel -> Finished (last option; clack wraps on Up)
-    wait_for_log "Select a channel" 120
-    send $'"'"'\e[A\r'"'"' 0.8
+    wait_for_log "Configure/link" 120
+    send $'"'"'\e[B\r'"'"' 0.8
     # Keep stdin open until wizard exits.
     send "" 2.0
   }

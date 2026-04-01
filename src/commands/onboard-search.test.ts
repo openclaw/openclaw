@@ -57,7 +57,17 @@ function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConf
         search: {
           provider: "perplexity",
           ...(enabled === undefined ? {} : { enabled }),
-          perplexity: { apiKey },
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        perplexity: {
+          config: {
+            webSearch: {
+              apiKey,
+            },
+          },
         },
       },
     },
@@ -242,7 +252,6 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-disabled-key");
   });
@@ -256,7 +265,8 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
+    expect(pluginWebSearchApiKey(result, "xai")).toBe("xai-test");
+    expect(result.plugins?.entries?.xai?.enabled).toBe(true);
   });
 
   it("sets provider and key for kimi", async () => {
@@ -312,7 +322,7 @@ describe("setupSearch", () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
@@ -321,7 +331,7 @@ describe("setupSearch", () => {
       "existing-key", // pragma: allowlist secret
       false,
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
 
@@ -443,7 +453,6 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-configured-key");
   });

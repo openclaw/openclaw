@@ -799,6 +799,30 @@ describe("/approve command", () => {
     );
   });
 
+  it("accepts bare approve text for Slack-style manual approvals", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { slack: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("approve abc allow-once", cfg, {
+      Provider: "slack",
+      Surface: "slack",
+      SenderId: "U123",
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("accepts Telegram command mentions for /approve", async () => {
     const cfg = createTelegramApproveCfg();
     const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
