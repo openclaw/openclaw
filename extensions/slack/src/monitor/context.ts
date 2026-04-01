@@ -9,8 +9,7 @@ import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
@@ -349,7 +348,7 @@ export function createSlackMonitorContext(params: {
       // config (matchSource undefined) should be allowed under open policy.
       const hasExplicitConfig = Boolean(channelConfig?.matchSource);
       if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
-        warn(`slack: drop channel ${p.channelId} (allow=${channelConfig?.allowed}, ${channelMatchMeta})`);
+        logger.warn(`slack: drop channel ${p.channelId} (allow=false, ${channelMatchMeta})`);
         return false;
       }
       logVerbose(`slack: allow channel ${p.channelId} (${channelMatchMeta})`);
