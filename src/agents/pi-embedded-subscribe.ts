@@ -114,11 +114,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
-        log.warn(`block reply callback failed: ${String(err)}`);
-      });
+    try {
+      const result = params.onBlockReply(payload);
+      // If the callback returns a promise, catch async errors without blocking.
+      if (result && typeof (result as Promise<void>).catch === "function") {
+        (result as Promise<void>).catch((err) => {
+          log.warn(`block reply callback failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
   const emitBlockReply = (payload: BlockReplyPayload) => {
     emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload));

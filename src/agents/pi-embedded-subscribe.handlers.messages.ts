@@ -461,11 +461,17 @@ export function handleMessageEnd(
     if (!onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
-        ctx.log.warn(`block reply callback failed: ${String(err)}`);
-      });
+    try {
+      const result = onBlockReply(payload);
+      // If the callback returns a promise, catch async errors without blocking.
+      if (result && typeof (result as Promise<void>).catch === "function") {
+        (result as Promise<void>).catch((err) => {
+          ctx.log.warn(`block reply callback failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      ctx.log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
   const shouldEmitReasoning = Boolean(
     !ctx.params.silentExpected &&
