@@ -86,8 +86,28 @@ export type VideoDescriptionResult = {
   model?: string;
 };
 
+/**
+ * Input for a single image in batch image description requests.
+ * Either `buffer` or `url` must be provided.
+ */
+export type ImagesDescriptionInput = {
+  /** Image buffer. Provide either this or `url`. */
+  buffer?: Buffer;
+  /** Publicly accessible image URL. Provide either this or `buffer`. */
+  url?: string;
+  fileName: string;
+  mime?: string;
+};
+
+/**
+ * Request for describing a single image.
+ * Either `buffer` or `url` must be provided.
+ */
 export type ImageDescriptionRequest = {
-  buffer: Buffer;
+  /** Image buffer. Provide either this or `url`. */
+  buffer?: Buffer;
+  /** Publicly accessible image URL. Provide either this or `buffer`. */
+  url?: string;
   fileName: string;
   mime?: string;
   prompt?: string;
@@ -99,12 +119,6 @@ export type ImageDescriptionRequest = {
   cfg: import("../config/config.js").OpenClawConfig;
   model: string;
   provider: string;
-};
-
-export type ImagesDescriptionInput = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
 };
 
 export type ImagesDescriptionRequest = {
