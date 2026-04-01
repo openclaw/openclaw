@@ -1,8 +1,11 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
 import { readLocalFileSafely } from "openclaw/plugin-sdk/infra-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import {
+  fetchRemoteMedia,
+  MediaFetchError,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { retryAsync } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -158,6 +161,15 @@ function resolveOptionalTelegramTransport(transport?: TelegramTransport): Telegr
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
+function isTooLargeLocalReadError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "too-large"
+  );
+}
+
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
@@ -171,10 +183,23 @@ async function downloadAndSaveTelegramFile(params: {
     // Local Bot API returns absolute filesystem paths. Save them into OpenClaw's
     // inbound media store so downstream media-understanding can read them from an
     // allowed root instead of the Bot API cache directory.
-    const localFile = await readLocalFileSafely({
-      filePath: params.filePath,
-      maxBytes: params.maxBytes,
-    });
+    let localFile;
+    try {
+      localFile = await readLocalFileSafely({
+        filePath: params.filePath,
+        maxBytes: params.maxBytes,
+      });
+    } catch (err) {
+      const code = isTooLargeLocalReadError(err) ? "max_bytes" : "fetch_failed";
+      const detail = isTooLargeLocalReadError(err)
+        ? `payload exceeds maxBytes ${params.maxBytes}`
+        : formatErrorMessage(err);
+      throw new MediaFetchError(
+        code,
+        `Failed to read local Telegram Bot API media from ${params.filePath}: ${detail}`,
+        { cause: err },
+      );
+    }
     return await saveMediaBuffer(
       localFile.buffer,
       params.mimeType,

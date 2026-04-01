@@ -443,6 +443,48 @@ describe("resolveMedia getFile retry", () => {
       }),
     );
   });
+
+  it("maps local absolute path read failures to recoverable MediaFetchError instances", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+    readLocalFileSafely.mockRejectedValueOnce(
+      Object.assign(new Error("file not found"), { code: "not-found" }),
+    );
+
+    await expect(
+      resolveMedia(
+        makeCtx("document", getFile, { mime_type: "application/pdf" }),
+        MAX_MEDIA_BYTES,
+        BOT_TOKEN,
+      ),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        message: expect.stringContaining("/var/lib/telegram-bot-api/file.pdf"),
+      }),
+    );
+  });
+
+  it("maps oversized local absolute path reads to max_bytes MediaFetchError", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+    readLocalFileSafely.mockRejectedValueOnce(
+      Object.assign(new Error("file exceeds limit"), { code: "too-large" }),
+    );
+
+    await expect(
+      resolveMedia(
+        makeCtx("document", getFile, { mime_type: "application/pdf" }),
+        MAX_MEDIA_BYTES,
+        BOT_TOKEN,
+      ),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "MediaFetchError",
+        code: "max_bytes",
+        message: expect.stringContaining(`payload exceeds maxBytes ${MAX_MEDIA_BYTES}`),
+      }),
+    );
+  });
 });
 
 describe("resolveMedia original filename preservation", () => {
