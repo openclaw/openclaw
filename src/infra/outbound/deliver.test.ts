@@ -1,10 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  signalOutbound,
-  telegramOutbound,
-  whatsappOutbound,
-} from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
@@ -16,6 +11,12 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import {
+  imessageOutboundForTest,
+  signalOutbound,
+  telegramOutbound,
+  whatsappOutbound,
+} from "./deliver.test-outbounds.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -814,7 +815,7 @@ describe("deliverOutboundPayloads", () => {
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
         },
       ]),
     );
@@ -1317,7 +1318,7 @@ const defaultRegistry = createTestRegistry([
   },
   {
     pluginId: "imessage",
-    plugin: createIMessageTestPlugin(),
+    plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
     source: "test",
   },
 ]);

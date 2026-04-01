@@ -1,15 +1,16 @@
 import { vi } from "vitest";
-import {
-  signalOutbound,
-  telegramOutbound,
-  whatsappOutbound,
-} from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { DeliverOutboundPayloadsParams, OutboundDeliveryResult } from "./deliver.js";
+import {
+  imessageOutboundForTest,
+  signalOutbound,
+  telegramOutbound,
+  whatsappOutbound,
+} from "./deliver.test-outbounds.js";
 
 type DeliverMockState = {
   sessions: {
@@ -175,7 +176,7 @@ export const defaultRegistry = createTestRegistry([
   {
     pluginId: "imessage",
     source: "test",
-    plugin: createIMessageTestPlugin(),
+    plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
   },
 ]);
 
