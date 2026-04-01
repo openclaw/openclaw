@@ -94,6 +94,34 @@ describe("finalizeSlackPreviewEdit", () => {
     ).rejects.toThrow("socket closed");
   });
 
+  it("passes identity through to editSlackMessage", async () => {
+    const client = createClient();
+
+    await finalizeSlackPreviewEdit({
+      client,
+      token: "xoxb-test",
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "final answer",
+      identity: {
+        username: "OpenClaw Agent",
+        iconEmoji: ":lobster:",
+      },
+    });
+
+    expect(editSlackMessageMock).toHaveBeenCalledWith(
+      "C123",
+      "171234.567",
+      "final answer",
+      expect.objectContaining({
+        identity: {
+          username: "OpenClaw Agent",
+          iconEmoji: ":lobster:",
+        },
+      }),
+    );
+  });
+
   it("requires matching blocks when finalizing a blocks-only edit", async () => {
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Done*" } }] as const;
 

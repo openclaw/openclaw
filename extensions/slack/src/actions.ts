@@ -16,6 +16,12 @@ export type SlackActionClientOpts = {
   client?: WebClient;
 };
 
+export type SlackEditIdentity = {
+  username?: string;
+  iconUrl?: string;
+  iconEmoji?: string;
+};
+
 export type SlackMessageSummary = {
   ts?: string;
   text?: string;
@@ -192,16 +198,40 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts & {
+    blocks?: (Block | KnownBlock)[];
+    identity?: SlackEditIdentity;
+  } = {},
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
-  await client.chat.update({
+  const basePayload = {
     channel: channelId,
     ts: messageId,
     text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
     ...(blocks ? { blocks } : {}),
+  };
+  // Slack models icon_url and icon_emoji as mutually exclusive fields.
+  if (opts.identity?.iconUrl) {
+    await client.chat.update({
+      ...basePayload,
+      ...(opts.identity.username ? { username: opts.identity.username } : {}),
+      icon_url: opts.identity.iconUrl,
+    });
+    return;
+  }
+  if (opts.identity?.iconEmoji) {
+    await client.chat.update({
+      ...basePayload,
+      ...(opts.identity.username ? { username: opts.identity.username } : {}),
+      icon_emoji: opts.identity.iconEmoji,
+    });
+    return;
+  }
+  await client.chat.update({
+    ...basePayload,
+    ...(opts.identity?.username ? { username: opts.identity.username } : {}),
   });
 }
 

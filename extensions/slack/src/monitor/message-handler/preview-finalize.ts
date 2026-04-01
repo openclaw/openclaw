@@ -3,6 +3,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackMessage } from "../../actions.js";
 import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import type { SlackSendIdentity } from "../../send.js";
 
 type SlackReadbackMessage = {
   ts?: string;
@@ -104,12 +105,14 @@ export async function finalizeSlackPreviewEdit(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
   threadTs?: string;
+  identity?: SlackSendIdentity;
 }): Promise<void> {
   try {
     await editSlackMessage(params.channelId, params.messageId, params.text, {
       token: params.token,
       accountId: params.accountId,
       client: params.client,
+      identity: params.identity,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     });
     return;

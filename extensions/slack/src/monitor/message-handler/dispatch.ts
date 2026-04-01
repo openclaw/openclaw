@@ -17,7 +17,7 @@ import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runti
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
@@ -457,6 +457,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             threadTs: usedReplyThreadTs ?? statusThreadTs,
+            identity: slackIdentity,
           });
           observedReplyDelivery = true;
           return;
@@ -470,12 +471,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           const statusChannelId = draftStream?.channelId();
           const statusMessageId = draftStream?.messageId();
           if (statusChannelId && statusMessageId) {
-            await ctx.app.client.chat.update({
-              token: ctx.botToken,
-              channel: statusChannelId,
-              ts: statusMessageId,
-              text: "Status: complete. Final answer posted below.",
-            });
+            await editSlackMessage(
+              statusChannelId,
+              statusMessageId,
+              "Status: complete. Final answer posted below.",
+              {
+                token: ctx.botToken,
+                accountId: account.accountId,
+                client: ctx.app.client,
+                identity: slackIdentity,
+              },
+            );
           }
         } catch (err) {
           logVerbose(`slack: status_final completion update failed (${String(err)})`);
@@ -498,6 +504,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         target: prepared.replyTarget,
         token: ctx.botToken,
         accountId: account.accountId,
+        identity: slackIdentity,
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {
           const ts = replyPlan.nextThreadTs();

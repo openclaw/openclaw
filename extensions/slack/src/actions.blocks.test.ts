@@ -24,6 +24,29 @@ describe("editSlackMessage blocks", () => {
     );
   });
 
+  it("preserves custom identity on edit", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackMessage("C123", "171234.567", "updated", {
+      token: "xoxb-test",
+      client,
+      identity: {
+        username: "OpenClaw Agent",
+        iconUrl: "https://example.com/avatar.png",
+      },
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        ts: "171234.567",
+        text: "updated",
+        username: "OpenClaw Agent",
+        icon_url: "https://example.com/avatar.png",
+      }),
+    );
+  });
+
   it("uses image block text as edit fallback", async () => {
     const client = createSlackEditTestClient();
 
