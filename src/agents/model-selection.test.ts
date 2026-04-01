@@ -15,6 +15,7 @@ import {
   resolveSubagentConfiguredModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
+  stripRedundantProviderPrefix,
 } from "./model-selection.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -126,6 +127,41 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
       expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
+    });
+  });
+
+  describe("stripRedundantProviderPrefix", () => {
+    it("strips redundant provider prefix from Ollama-style model names", () => {
+      expect(stripRedundantProviderPrefix("ollama-beelink2", "ollama-beelink2/qwen2.5-coder:7b")).toBe(
+        "qwen2.5-coder:7b",
+      );
+    });
+
+    it("preserves OpenRouter vendor-prefixed model names", () => {
+      expect(stripRedundantProviderPrefix("openrouter", "anthropic/claude-haiku-4.5")).toBe(
+        "anthropic/claude-haiku-4.5",
+      );
+    });
+
+    it("preserves OpenRouter self-prefixed canonical model IDs", () => {
+      expect(stripRedundantProviderPrefix("openrouter", "openrouter/auto")).toBe("openrouter/auto");
+    });
+
+    it("handles case-insensitive prefix matching", () => {
+      expect(stripRedundantProviderPrefix("OLLAMA", "ollama/model")).toBe("model");
+    });
+
+    it("does not strip when it would produce an empty string", () => {
+      expect(stripRedundantProviderPrefix("ollama", "ollama/")).toBe("ollama/");
+    });
+
+    it("returns model unchanged for empty provider or model", () => {
+      expect(stripRedundantProviderPrefix("", "some-model")).toBe("some-model");
+      expect(stripRedundantProviderPrefix("ollama", "")).toBe("");
+    });
+
+    it("returns model unchanged when prefix does not match", () => {
+      expect(stripRedundantProviderPrefix("anthropic", "openai/gpt-5.4")).toBe("openai/gpt-5.4");
     });
   });
 

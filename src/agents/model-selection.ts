@@ -190,13 +190,20 @@ export function normalizeModelRef(
 
 /**
  * Strip a redundant `provider/` prefix from a model name when the provider
- * is already known separately. Safe to call for any provider: for providers
- * like OpenRouter that use vendor-prefixed model names (e.g.
- * "anthropic/claude-haiku-4.5"), the prefix differs from the provider key
- * ("openrouter") and is left intact.
+ * is already known separately.  Skips providers that use self-prefixed model
+ * IDs as canonical names (e.g. OpenRouter normalizes "auto" →
+ * "openrouter/auto"), and preserves vendor-prefixed names where the prefix
+ * differs from the provider key (e.g. "anthropic/claude-haiku-4.5" with
+ * provider "openrouter").
  */
 export function stripRedundantProviderPrefix(provider: string, model: string): string {
   if (!provider || !model) {
+    return model;
+  }
+  // OpenRouter uses `openrouter/<model>` as the canonical form for its
+  // native models (see normalizeProviderModelId). Stripping the prefix
+  // would turn "openrouter/auto" into "auto", which is invalid.
+  if (provider === "openrouter") {
     return model;
   }
   const prefix = `${provider}/`;
