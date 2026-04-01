@@ -1,4 +1,5 @@
 {
+	"inputs": [],
 	"servers": {
 		"zapier": {
 			"url": "https://mcp.zapier.com/api/v1/connect",
@@ -7,6 +8,5 @@
 				"src": "https://mcp.zapier.com/icon-mcp.png"
 			}
 		}
-	},
-	"inputs": []
+	}
 }
