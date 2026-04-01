@@ -4,6 +4,8 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createQueuedTaskRun, createRunningTaskRun } from "../../tasks/task-executor.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -41,10 +43,12 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
 describe("buildStatusReply subagent summary", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    resetTaskRegistryForTests();
   });
 
   afterEach(() => {
     resetSubagentRegistryForTests();
+    resetTaskRegistryForTests();
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {
@@ -177,5 +181,56 @@ describe("buildStatusReply subagent summary", () => {
     const reply = await buildStatusReplyForTest({});
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
+  });
+
+  it("includes active and total task counts for the current session", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-running",
+      runId: "run-status-task-running",
+      task: "active background task",
+      progressSummary: "still working",
+    });
+    createQueuedTaskRun({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-queued",
+      runId: "run-status-task-queued",
+      task: "queued background task",
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total");
+    expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
+  });
+
+  it("falls back to same-agent task counts without details when the current session has none", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:other",
+      childSessionKey: "agent:main:subagent:status-agent-fallback-running",
+      runId: "run-status-agent-fallback-running",
+      agentId: "main",
+      task: "hidden task title",
+      progressSummary: "hidden progress detail",
+    });
+    createQueuedTaskRun({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:another",
+      childSessionKey: "agent:main:subagent:status-agent-fallback-queued",
+      runId: "run-status-agent-fallback-queued",
+      agentId: "main",
+      task: "another hidden task title",
+    });
+
+    const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
+
+    expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total · agent-local");
+    expect(reply?.text).not.toContain("hidden task title");
+    expect(reply?.text).not.toContain("hidden progress detail");
+    expect(reply?.text).not.toContain("subagent");
+    expect(reply?.text).not.toContain("cron");
   });
 });

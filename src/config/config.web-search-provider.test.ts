@@ -84,17 +84,6 @@ beforeAll(async () => {
   } = await import("../agents/tools/web-search.js"));
 });
 
-function pluginWebSearchApiKey(
-  config: Record<string, unknown> | undefined,
-  pluginId: string,
-): unknown {
-  return (
-    config?.plugins as
-      | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
-      | undefined
-  )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
-}
-
 describe("web search provider config", () => {
   it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
@@ -190,7 +179,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("does not migrate the nonexistent legacy Tavily scoped config", () => {
+  it("rejects legacy scoped Tavily config", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -204,15 +193,24 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.config.tools?.web?.search?.provider).toBe("tavily");
-    expect((res.config.tools?.web?.search as Record<string, unknown> | undefined)?.tavily).toBe(
-      undefined,
-    );
-    expect(pluginWebSearchApiKey(res.config as Record<string, unknown>, "tavily")).toBe(undefined);
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects legacy scoped provider config for bundled providers", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            gemini: {
+              apiKey: "legacy-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("accepts gemini provider with no extra config", () => {

@@ -305,7 +305,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       slack: {} as PluginRuntime["channel"]["slack"],
       matrix: {} as PluginRuntime["channel"]["matrix"],
       signal: {} as PluginRuntime["channel"]["signal"],
-      whatsapp: {} as PluginRuntime["channel"]["whatsapp"],
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],

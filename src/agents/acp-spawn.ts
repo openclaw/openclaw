@@ -997,7 +997,8 @@ export async function spawnAcpDirect(
       createRunningTaskRun({
         runtime: "acp",
         sourceId: childRunId,
-        requesterSessionKey: requesterInternalKey,
+        ownerKey: requesterInternalKey,
+        scopeKind: "session",
         requesterOrigin: requesterState.origin,
         childSessionKey: sessionKey,
         runId: childRunId,
@@ -1028,7 +1029,8 @@ export async function spawnAcpDirect(
     createRunningTaskRun({
       runtime: "acp",
       sourceId: childRunId,
-      requesterSessionKey: requesterInternalKey,
+      ownerKey: requesterInternalKey,
+      scopeKind: "session",
       requesterOrigin: requesterState.origin,
       childSessionKey: sessionKey,
       runId: childRunId,

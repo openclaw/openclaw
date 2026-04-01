@@ -1,6 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
+import { setMatrixRuntime } from "../runtime.js";
+import { voteMatrixPoll } from "./actions/polls.js";
+import { sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } from "./send.js";
 
+const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
   fileName: "photo.png",
@@ -19,6 +23,14 @@ const resolveTextChunkLimitMock = vi.fn<
 >(() => 4000);
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+  };
+});
 
 const runtimeStub = {
   config: {
@@ -44,19 +56,6 @@ const runtimeStub = {
     },
   },
 } as unknown as PluginRuntime;
-
-let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
-let sendSingleTextMessageMatrix: typeof import("./send.js").sendSingleTextMessageMatrix;
-let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
-let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
-let setMatrixRuntime: typeof import("../runtime.js").setMatrixRuntime;
-
-async function primeMatrixSendModules() {
-  ({ setMatrixRuntime } = await import("../runtime.js"));
-  ({ sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } =
-    await import("./send.js"));
-  ({ voteMatrixPoll } = await import("./actions/polls.js"));
-}
 
 function applyMatrixSendRuntimeStub() {
   setMatrixRuntime(runtimeStub);
@@ -110,6 +109,22 @@ function makeEncryptedMediaClient() {
 
 function resetMatrixSendRuntimeMocks() {
   setMatrixRuntime(runtimeStub);
+  loadOutboundMediaFromUrlMock.mockReset().mockImplementation(
+    async (
+      mediaUrl: string,
+      options?: {
+        maxBytes?: number;
+        mediaLocalRoots?: readonly string[];
+        mediaReadFile?: (filePath: string) => Promise<Buffer>;
+      },
+    ) =>
+      await loadWebMediaMock(mediaUrl, {
+        maxBytes: options?.maxBytes,
+        localRoots: options?.mediaLocalRoots,
+        hostReadCapability: false,
+        readFile: options?.mediaReadFile,
+      }),
+  );
   loadWebMediaMock.mockReset().mockResolvedValue({
     buffer: Buffer.from("media"),
     fileName: "photo.png",
@@ -128,11 +143,9 @@ function resetMatrixSendRuntimeMocks() {
 }
 
 describe("sendMessageMatrix media", () => {
-  beforeAll(async () => {
-    await primeMatrixSendModules();
-  });
+  beforeAll(() => {});
 
-  beforeEach(async () => {
+  beforeEach(() => {
     resetMatrixSendRuntimeMocks();
   });
 
@@ -346,10 +359,13 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: 1024 * 1024,
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: 1024 * 1024,
+        localRoots: undefined,
+      }),
+    );
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
@@ -362,10 +378,13 @@ describe("sendMessageMatrix media", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: undefined,
-      localRoots: ["/tmp/openclaw-matrix-test"],
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: undefined,
+        localRoots: ["/tmp/openclaw-matrix-test"],
+      }),
+    );
   });
 });
 
@@ -432,11 +451,7 @@ describe("sendSingleTextMessageMatrix", () => {
 });
 
 describe("voteMatrixPoll", () => {
-  beforeAll(async () => {
-    await primeMatrixSendModules();
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     resetMatrixSendRuntimeMocks();
   });
@@ -574,11 +589,7 @@ describe("voteMatrixPoll", () => {
 });
 
 describe("sendTypingMatrix", () => {
-  beforeAll(async () => {
-    await primeMatrixSendModules();
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     resetMatrixSendRuntimeMocks();
   });
