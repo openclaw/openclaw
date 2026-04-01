@@ -57,15 +57,15 @@ describe("bundled plugin postinstall", () => {
         acpx: "0.4.0",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
       env: { npm_config_global: "false" },
       extensionsDir,
-      execSync,
+      spawnSync,
     });
 
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
@@ -76,7 +76,7 @@ describe("bundled plugin postinstall", () => {
         acpx: "0.4.0",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
@@ -86,18 +86,22 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false acpx@0.4.0",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.0"],
       {
         cwd: packageRoot,
         env: {
           HOME: "/tmp/home",
+          PATH: expect.any(String),
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -116,16 +120,16 @@ describe("bundled plugin postinstall", () => {
       "{}\n",
       "utf8",
     );
-    const execSync = vi.fn();
+    const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
       env: { npm_config_global: "true" },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
     });
 
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("discovers bundled plugin runtime deps from extension manifests", async () => {
@@ -197,7 +201,7 @@ describe("bundled plugin postinstall", () => {
         grammy: "1.38.4",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
@@ -207,18 +211,29 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false @slack/web-api@7.11.0 grammy@1.38.4",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "@slack/web-api@7.11.0",
+        "grammy@1.38.4",
+      ],
       {
         cwd: packageRoot,
         env: {
           HOME: "/tmp/home",
+          PATH: expect.any(String),
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -243,7 +258,7 @@ describe("bundled plugin postinstall", () => {
       path.join(packageRoot, "node_modules", "@slack", "web-api", "package.json"),
       "{}\n",
     );
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
@@ -253,18 +268,22 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
       {
         cwd: packageRoot,
         env: {
           HOME: "/tmp/home",
+          PATH: expect.any(String),
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });
