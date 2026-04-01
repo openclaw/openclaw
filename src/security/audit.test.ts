@@ -371,11 +371,12 @@ describe("security audit", () => {
     cases: readonly T[],
     run: (testCase: T, tmp: string) => Promise<void>,
   ) => {
-    await Promise.all(
-      cases.map(async (testCase) => {
-        await withChannelSecurityStateDir(async (tmp) => run(testCase, tmp));
-      }),
-    );
+    // These cases intentionally share one state dir to verify fallback behavior.
+    // Run them serially so Windows does not race on rm/mkdir for the shared
+    // credentials directory between concurrent cases.
+    for (const testCase of cases) {
+      await withChannelSecurityStateDir(async (tmp) => run(testCase, tmp));
+    }
   };
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
