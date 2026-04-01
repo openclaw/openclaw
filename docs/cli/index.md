@@ -172,10 +172,6 @@ openclaw [--dev] [--profile <name>] <command>
     show
     notify
     cancel
-  flows
-    list
-    show
-    cancel
   gateway
     call
     health
