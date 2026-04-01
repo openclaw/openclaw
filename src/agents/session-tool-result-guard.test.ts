@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -441,6 +441,31 @@ describe("installSessionToolResultGuard", () => {
 
     const messages = getPersistedMessages(sm);
     expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("does not branch when before_message_write blocks a synthetic tool result", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: string }).role === "toolResult") {
+          return { block: true };
+        }
+        return undefined;
+      },
+    });
+
+    sm.appendMessage(toolCallMessage);
+
+    const assistantId = sm.getEntries().find((e) => e.type === "message")!.id;
+    const branchSpy = vi.spyOn(sm, "branch");
+
+    guard.flushPendingToolResults();
+
+    // branch should never have been called since the hook blocked the synthetic result
+    expect(branchSpy).not.toHaveBeenCalled();
+    // leaf should still point at the assistant entry, not rewound
+    expect(sm.leafId).toBe(assistantId);
+    branchSpy.mockRestore();
   });
 
   it("applies message persistence transform to user messages", () => {

@@ -151,10 +151,6 @@ export function installSessionToolResultGuard(
     }
     if (allowSyntheticToolResults) {
       for (const [id, name] of pendingState.entries()) {
-        // Branch back to the assistant message so synthetic results don't chain.
-        if (assistantEntryId) {
-          sessionManager.branch(assistantEntryId);
-        }
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
@@ -164,6 +160,12 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
+          // Branch back to the assistant message so synthetic results don't chain.
+          // Done AFTER the write hook confirms persistence to avoid rewinding the
+          // leaf when the hook blocks the synthetic result.
+          if (assistantEntryId) {
+            sessionManager.branch(assistantEntryId);
+          }
           originalAppend(flushed as never);
         }
       }
