@@ -1020,12 +1020,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
     // Check channel type before marking the message as seen, so that a
     // transient unknown-channel post doesn't poison the dedup tracker.
+    // If the event has no channel_type, fall back to the API — but if that
+    // also returns nothing, drop the post.
     const channelTypeFromEvent = payload.data?.channel_type;
     if (mapMattermostChannelTypeToChatType(channelTypeFromEvent) === "unknown") {
-      logVerboseMessage(
-        `mattermost: drop post (cannot determine channel type for ${channelId}, post=${post.id ?? "?"})`,
-      );
-      return;
+      const channelInfoFallback = await resolveChannelInfo(channelId);
+      if (mapMattermostChannelTypeToChatType(channelInfoFallback?.type) === "unknown") {
+        logVerboseMessage(
+          `mattermost: drop post (cannot determine channel type for ${channelId}, post=${post.id ?? "?"})`,
+        );
+        return;
+      }
+      // channelInfoFallback.type is now set; continue with the normal path below.
+      // (resolveChannelInfo result is cached so the second call below
+      // is a cache hit — no extra network request.)
     }
     const dedupeEntries = allMessageIds.map((id) =>
       recentInboundMessages.check(`${account.accountId}:${id}`),
