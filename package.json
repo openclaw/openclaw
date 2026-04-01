@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.28",
+  "version": "2026.4.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -27,10 +27,13 @@
     "README.md",
     "assets/",
     "dist/",
+    "!dist/**/*.map",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
-    "skills/"
+    "skills/",
+    "scripts/npm-runner.mjs",
+    "scripts/postinstall-bundled-plugins.mjs"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -99,6 +102,14 @@
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
+    },
+    "./plugin-sdk/reply-dispatch-runtime": {
+      "types": "./dist/plugin-sdk/reply-dispatch-runtime.d.ts",
+      "default": "./dist/plugin-sdk/reply-dispatch-runtime.js"
+    },
+    "./plugin-sdk/reply-chunking": {
+      "types": "./dist/plugin-sdk/reply-chunking.d.ts",
+      "default": "./dist/plugin-sdk/reply-chunking.js"
     },
     "./plugin-sdk/reply-payload": {
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
@@ -312,6 +323,10 @@
       "types": "./dist/plugin-sdk/command-auth.d.ts",
       "default": "./dist/plugin-sdk/command-auth.js"
     },
+    "./plugin-sdk/command-auth-native": {
+      "types": "./dist/plugin-sdk/command-auth-native.d.ts",
+      "default": "./dist/plugin-sdk/command-auth-native.js"
+    },
     "./plugin-sdk/collection-runtime": {
       "types": "./dist/plugin-sdk/collection-runtime.d.ts",
       "default": "./dist/plugin-sdk/collection-runtime.js"
@@ -487,26 +502,6 @@
     "./plugin-sdk/image-generation-core": {
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
-    },
-    "./plugin-sdk/imessage": {
-      "types": "./dist/plugin-sdk/imessage.d.ts",
-      "default": "./dist/plugin-sdk/imessage.js"
-    },
-    "./plugin-sdk/imessage-core": {
-      "types": "./dist/plugin-sdk/imessage-core.d.ts",
-      "default": "./dist/plugin-sdk/imessage-core.js"
-    },
-    "./plugin-sdk/imessage-policy": {
-      "types": "./dist/plugin-sdk/imessage-policy.d.ts",
-      "default": "./dist/plugin-sdk/imessage-policy.js"
-    },
-    "./plugin-sdk/imessage-runtime": {
-      "types": "./dist/plugin-sdk/imessage-runtime.d.ts",
-      "default": "./dist/plugin-sdk/imessage-runtime.js"
-    },
-    "./plugin-sdk/imessage-targets": {
-      "types": "./dist/plugin-sdk/imessage-targets.d.ts",
-      "default": "./dist/plugin-sdk/imessage-targets.js"
     },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
@@ -740,10 +735,6 @@
       "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-shared.js"
     },
-    "./plugin-sdk/provider-catalog": {
-      "types": "./dist/plugin-sdk/provider-catalog.d.ts",
-      "default": "./dist/plugin-sdk/provider-catalog.js"
-    },
     "./plugin-sdk/provider-entry": {
       "types": "./dist/plugin-sdk/provider-entry.d.ts",
       "default": "./dist/plugin-sdk/provider-entry.js"
@@ -756,17 +747,9 @@
       "types": "./dist/plugin-sdk/provider-http.d.ts",
       "default": "./dist/plugin-sdk/provider-http.js"
     },
-    "./plugin-sdk/provider-google": {
-      "types": "./dist/plugin-sdk/provider-google.d.ts",
-      "default": "./dist/plugin-sdk/provider-google.js"
-    },
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
-    },
-    "./plugin-sdk/provider-models": {
-      "types": "./dist/plugin-sdk/provider-models.d.ts",
-      "default": "./dist/plugin-sdk/provider-models.js"
     },
     "./plugin-sdk/provider-moonshot": {
       "types": "./dist/plugin-sdk/provider-moonshot.d.ts",
@@ -872,10 +855,6 @@
       "types": "./dist/plugin-sdk/synthetic.d.ts",
       "default": "./dist/plugin-sdk/synthetic.js"
     },
-    "./plugin-sdk/telegram": {
-      "types": "./dist/plugin-sdk/telegram.d.ts",
-      "default": "./dist/plugin-sdk/telegram.js"
-    },
     "./plugin-sdk/telegram-account": {
       "types": "./dist/plugin-sdk/telegram-account.d.ts",
       "default": "./dist/plugin-sdk/telegram-account.js"
@@ -887,14 +866,6 @@
     "./plugin-sdk/telegram-core": {
       "types": "./dist/plugin-sdk/telegram-core.d.ts",
       "default": "./dist/plugin-sdk/telegram-core.js"
-    },
-    "./plugin-sdk/telegram-runtime": {
-      "types": "./dist/plugin-sdk/telegram-runtime.d.ts",
-      "default": "./dist/plugin-sdk/telegram-runtime.js"
-    },
-    "./plugin-sdk/telegram-runtime-surface": {
-      "types": "./dist/plugin-sdk/telegram-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/telegram-runtime-surface.js"
     },
     "./plugin-sdk/telegram-surface": {
       "types": "./dist/plugin-sdk/telegram-surface.d.ts",
@@ -1006,10 +977,10 @@
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
-    "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
-    "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts",
+    "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
     "canon:check": "node scripts/canon.mjs check",
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
@@ -1067,7 +1038,7 @@
     "ios:gen": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate'",
     "ios:open": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:run": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted ai.openclaw.ios'",
-    "lint": "oxlint --type-aware",
+    "lint": "node scripts/run-oxlint.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "pnpm lint && pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
@@ -1077,7 +1048,7 @@
     "lint:extensions:no-plugin-sdk-internal": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal",
     "lint:extensions:no-relative-outside-package": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk",
-    "lint:fix": "oxlint --type-aware --fix && pnpm format",
+    "lint:fix": "node scripts/run-oxlint.mjs --fix && pnpm format",
     "lint:plugins:no-extension-imports": "node scripts/check-plugin-extension-import-boundary.mjs",
     "lint:plugins:no-extension-src-imports": "node --import tsx scripts/check-no-extension-src-imports.ts",
     "lint:plugins:no-extension-test-core-imports": "node --import tsx scripts/check-no-extension-test-core-imports.ts",
@@ -1105,12 +1076,14 @@
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
-    "prepack": "pnpm build && pnpm ui:build",
+    "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
+    "prepack": "node --import tsx scripts/openclaw-prepack.ts",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
+    "prepush:ci": "bash scripts/prepush-ci.sh",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
-    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:facades:check && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:facades:check && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
@@ -1172,11 +1145,17 @@
     "test:perf:update-timings:extensions": "node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "node scripts/test-parallel.mjs --profile serial",
+    "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
+    "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
+    "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
+    "test:startup:bench:smoke": "node --import tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --runs 1 --warmup 0 --output .artifacts/cli-startup-bench-smoke.json",
+    "test:startup:bench:update": "node scripts/test-update-cli-startup-bench.mjs",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "vitest",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
+    "tsgo": "node scripts/run-tsgo.mjs",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
@@ -1184,20 +1163,20 @@
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.17.0",
+    "@agentclientprotocol/sdk": "0.17.1",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "@aws-sdk/client-bedrock": "^3.1019.0",
     "@clack/prompts": "^1.1.0",
-    "@homebridge/ciao": "^1.3.5",
+    "@homebridge/ciao": "^1.3.6",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.63.1",
-    "@mariozechner/pi-ai": "0.63.1",
-    "@mariozechner/pi-coding-agent": "0.63.1",
-    "@mariozechner/pi-tui": "0.63.1",
-    "@modelcontextprotocol/sdk": "1.28.0",
+    "@mariozechner/pi-agent-core": "0.64.0",
+    "@mariozechner/pi-ai": "0.64.0",
+    "@mariozechner/pi-coding-agent": "0.64.0",
+    "@mariozechner/pi-tui": "0.64.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@sinclair/typebox": "0.34.48",
+    "@sinclair/typebox": "0.34.49",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -1216,14 +1195,14 @@
     "linkedom": "^0.18.12",
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
-    "matrix-js-sdk": "41.2.0",
+    "matrix-js-sdk": "41.3.0-rc.0",
     "node-edge-tts": "^1.2.10",
     "osc-progress": "^0.3.0",
-    "pdfjs-dist": "^5.5.207",
+    "pdfjs-dist": "^5.6.205",
     "playwright-core": "1.58.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
-    "sqlite-vec": "0.1.7",
+    "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
     "undici": "^7.24.6",
@@ -1241,14 +1220,15 @@
     "@types/node": "^25.5.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260326.1",
+    "@typescript/native-preview": "7.0.0-dev.20260331.1",
     "@vitest/coverage-v8": "^4.1.2",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",
     "lit": "^3.3.2",
-    "oxfmt": "0.42.0",
-    "oxlint": "^1.57.0",
-    "oxlint-tsgolint": "^0.17.4",
+    "oxfmt": "0.43.0",
+    "oxlint": "^1.58.0",
+    "oxlint-tsgolint": "^0.18.1",
+    "semver": "7.7.4",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.7",
     "tsx": "^4.21.0",
@@ -1273,10 +1253,10 @@
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
-    "minimumReleaseAge": 2880,
     "overrides": {
       "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
+      "axios": "1.13.6",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
@@ -1286,7 +1266,7 @@
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
-      "@sinclair/typebox": "0.34.48",
+      "@sinclair/typebox": "0.34.49",
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1"

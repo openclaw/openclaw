@@ -1,17 +1,20 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { resolveApiKeyForProvider, resolveEnvApiKey } from "../../src/agents/model-auth.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildKilocodeModelDefinition,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MODEL_ID,
-} from "../../src/plugin-sdk/kilocode.js";
+} from "openclaw/plugin-sdk/kilocode";
+import {
+  resolveApiKeyForProvider,
+  resolveEnvApiKey,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import { describe, expect, it } from "vitest";
 import { captureEnv } from "../../test/helpers/plugins/env.js";
 import {
   applyKilocodeProviderConfig,
@@ -137,10 +140,6 @@ describe("Kilo Gateway provider config", () => {
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
         KILOCODE_DEFAULT_MODEL_REF,
       );
-    });
-
-    it("also registers the provider", () => {
-      const result = applyKilocodeConfig(emptyCfg);
       const provider = result.models?.providers?.kilocode;
       expect(provider).toBeDefined();
       expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);

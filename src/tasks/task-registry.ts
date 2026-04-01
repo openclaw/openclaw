@@ -10,28 +10,44 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
+  formatTaskBlockedFollowupMessage,
+  formatTaskStateChangeMessage,
+  formatTaskTerminalMessage,
+  isTerminalTaskStatus,
+  shouldAutoDeliverTaskStateChange,
+  shouldAutoDeliverTaskTerminalUpdate,
+  shouldSuppressDuplicateTerminalDelivery,
+} from "./task-executor-policy.js";
+import {
   getTaskRegistryHooks,
   getTaskRegistryStore,
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryHookEvent,
 } from "./task-registry.store.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
-  TaskBindingTargetKind,
+  TaskDeliveryState,
   TaskDeliveryStatus,
   TaskEventKind,
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
+  TaskRegistrySummary,
   TaskRegistrySnapshot,
   TaskRuntime,
-  TaskSource,
+  TaskScopeKind,
   TaskStatus,
+  TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/registry");
+const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const tasks = new Map<string, TaskRecord>();
+const taskDeliveryStates = new Map<string, TaskDeliveryState>();
 const taskIdsByRunId = new Map<string, Set<string>>();
+const taskIdsByOwnerKey = new Map<string, Set<string>>();
+const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
 const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -39,13 +55,26 @@ let restoreAttempted = false;
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
 
+type TaskDeliveryOwner = {
+  sessionKey?: string;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+};
+
+function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind }) {
+  const ownerKey = params.ownerKey.trim();
+  if (!ownerKey && params.scopeKind !== "system") {
+    throw new Error("Task ownerKey is required.");
+  }
+}
+
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
+  return { ...record };
+}
+
+function cloneTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   return {
-    ...record,
-    ...(record.requesterOrigin ? { requesterOrigin: { ...record.requesterOrigin } } : {}),
-    ...(record.recentEvents
-      ? { recentEvents: record.recentEvents.map((event) => ({ ...event })) }
-      : {}),
+    ...state,
+    ...(state.requesterOrigin ? { requesterOrigin: { ...state.requesterOrigin } } : {}),
   };
 }
 
@@ -69,23 +98,127 @@ function emitTaskRegistryHookEvent(createEvent: () => TaskRegistryHookEvent): vo
 }
 
 function persistTaskRegistry() {
-  getTaskRegistryStore().saveSnapshot(tasks);
+  getTaskRegistryStore().saveSnapshot({
+    tasks,
+    deliveryStates: taskDeliveryStates,
+  });
 }
 
-function ensureDeliveryStatus(requesterSessionKey: string): TaskDeliveryStatus {
-  return requesterSessionKey.trim() ? "pending" : "parent_missing";
+function persistTaskUpsert(task: TaskRecord) {
+  const store = getTaskRegistryStore();
+  const deliveryState = taskDeliveryStates.get(task.taskId);
+  if (store.upsertTaskWithDeliveryState) {
+    store.upsertTaskWithDeliveryState({
+      task,
+      ...(deliveryState ? { deliveryState } : {}),
+    });
+    return;
+  }
+  if (store.upsertTask) {
+    store.upsertTask(task);
+    return;
+  }
+  store.saveSnapshot({
+    tasks,
+    deliveryStates: taskDeliveryStates,
+  });
+}
+
+function persistTaskDelete(taskId: string) {
+  const store = getTaskRegistryStore();
+  if (store.deleteTaskWithDeliveryState) {
+    store.deleteTaskWithDeliveryState(taskId);
+    return;
+  }
+  if (store.deleteTask) {
+    store.deleteTask(taskId);
+    return;
+  }
+  store.saveSnapshot({
+    tasks,
+    deliveryStates: taskDeliveryStates,
+  });
+}
+
+function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {
+  const store = getTaskRegistryStore();
+  if (store.upsertDeliveryState) {
+    store.upsertDeliveryState(state);
+    return;
+  }
+  store.saveSnapshot({
+    tasks,
+    deliveryStates: taskDeliveryStates,
+  });
+}
+
+function persistTaskDeliveryStateDelete(taskId: string) {
+  const store = getTaskRegistryStore();
+  if (store.deleteDeliveryState) {
+    store.deleteDeliveryState(taskId);
+    return;
+  }
+  store.saveSnapshot({
+    tasks,
+    deliveryStates: taskDeliveryStates,
+  });
+}
+
+function ensureDeliveryStatus(params: {
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
+}): TaskDeliveryStatus {
+  if (params.scopeKind === "system") {
+    return "not_applicable";
+  }
+  return params.ownerKey.trim() ? "pending" : "parent_missing";
 }
 
 function ensureNotifyPolicy(params: {
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
-  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
 }): TaskNotifyPolicy {
   if (params.notifyPolicy) {
     return params.notifyPolicy;
   }
-  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
+  const deliveryStatus =
+    params.deliveryStatus ??
+    ensureDeliveryStatus({
+      ownerKey: params.ownerKey,
+      scopeKind: params.scopeKind,
+    });
   return deliveryStatus === "not_applicable" ? "silent" : "done_only";
+}
+
+function resolveTaskScopeKind(params: {
+  scopeKind?: TaskScopeKind;
+  requesterSessionKey: string;
+}): TaskScopeKind {
+  if (params.scopeKind) {
+    return params.scopeKind;
+  }
+  return params.requesterSessionKey.trim() ? "session" : "system";
+}
+
+function resolveTaskRequesterSessionKey(params: {
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
+}): string {
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  if (requesterSessionKey) {
+    return requesterSessionKey;
+  }
+  if (params.scopeKind === "system") {
+    return "";
+  }
+  return params.ownerKey?.trim() ?? "";
+}
+
+function resolveTaskOwnerKey(params: { requesterSessionKey: string; ownerKey?: string }): string {
+  return params.ownerKey?.trim() || params.requesterSessionKey.trim();
 }
 
 function normalizeTaskSummary(value: string | null | undefined): string | undefined {
@@ -93,25 +226,46 @@ function normalizeTaskSummary(value: string | null | undefined): string | undefi
   return normalized || undefined;
 }
 
-const TASK_RECENT_EVENT_LIMIT = 12;
+function normalizeTaskStatus(value: TaskStatus | null | undefined): TaskStatus {
+  return value === "running" ||
+    value === "queued" ||
+    value === "succeeded" ||
+    value === "failed" ||
+    value === "timed_out" ||
+    value === "cancelled" ||
+    value === "lost"
+    ? value
+    : "queued";
+}
 
-function appendTaskEvent(
-  current: TaskRecord,
-  event: {
-    at: number;
-    kind: TaskEventKind;
-    summary?: string | null;
-  },
-): TaskEventRecord[] {
+function normalizeTaskTerminalOutcome(
+  value: TaskTerminalOutcome | null | undefined,
+): TaskTerminalOutcome | undefined {
+  return value === "succeeded" || value === "blocked" ? value : undefined;
+}
+
+function resolveTaskTerminalOutcome(params: {
+  status: TaskStatus;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}): TaskTerminalOutcome | undefined {
+  const normalized = normalizeTaskTerminalOutcome(params.terminalOutcome);
+  if (normalized) {
+    return normalized;
+  }
+  return params.status === "succeeded" ? "succeeded" : undefined;
+}
+
+function appendTaskEvent(event: {
+  at: number;
+  kind: TaskEventKind;
+  summary?: string | null;
+}): TaskEventRecord {
   const summary = normalizeTaskSummary(event.summary);
-  const nextEvent: TaskEventRecord = {
+  return {
     at: event.at,
     kind: event.kind,
     ...(summary ? { summary } : {}),
   };
-  const previous = current.recentEvents ?? [];
-  const merged = [...previous, nextEvent];
-  return merged.slice(-TASK_RECENT_EVENT_LIMIT);
 }
 
 function loadTaskRegistryDeliveryRuntime() {
@@ -132,10 +286,94 @@ function addRunIdIndex(taskId: string, runId?: string) {
   ids.add(taskId);
 }
 
+function normalizeSessionIndexKey(sessionKey?: string): string | undefined {
+  const trimmed = sessionKey?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function addIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
+  let ids = index.get(key);
+  if (!ids) {
+    ids = new Set<string>();
+    index.set(key, ids);
+  }
+  ids.add(taskId);
+}
+
+function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
+  const ids = index.get(key);
+  if (!ids) {
+    return;
+  }
+  ids.delete(taskId);
+  if (ids.size === 0) {
+    index.delete(key);
+  }
+}
+
+function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
+  return [
+    ...new Set(
+      [
+        normalizeSessionIndexKey(task.ownerKey),
+        normalizeSessionIndexKey(task.childSessionKey),
+      ].filter(Boolean) as string[],
+    ),
+  ];
+}
+
+function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+  const key = normalizeSessionIndexKey(task.ownerKey);
+  if (!key) {
+    return;
+  }
+  addIndexedKey(taskIdsByOwnerKey, key, taskId);
+}
+
+function deleteOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+  const key = normalizeSessionIndexKey(task.ownerKey);
+  if (!key) {
+    return;
+  }
+  deleteIndexedKey(taskIdsByOwnerKey, key, taskId);
+}
+
+function addRelatedSessionKeyIndex(
+  taskId: string,
+  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
+) {
+  for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
+    addIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
+  }
+}
+
+function deleteRelatedSessionKeyIndex(
+  taskId: string,
+  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
+) {
+  for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
+    deleteIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
+  }
+}
+
 function rebuildRunIdIndex() {
   taskIdsByRunId.clear();
   for (const [taskId, task] of tasks.entries()) {
     addRunIdIndex(taskId, task.runId);
+  }
+}
+
+function rebuildOwnerKeyIndex() {
+  taskIdsByOwnerKey.clear();
+  for (const [taskId, task] of tasks.entries()) {
+    addOwnerKeyIndex(taskId, task);
+  }
+}
+
+function rebuildRelatedSessionKeyIndex() {
+  taskIdsByRelatedSessionKey.clear();
+  for (const [taskId, task] of tasks.entries()) {
+    addRelatedSessionKeyIndex(taskId, task);
   }
 }
 
@@ -149,11 +387,60 @@ function getTasksByRunId(runId: string): TaskRecord[] {
     .filter((task): task is TaskRecord => Boolean(task));
 }
 
+function taskRunScopeKey(
+  task: Pick<TaskRecord, "runtime" | "scopeKind" | "ownerKey" | "childSessionKey">,
+): string {
+  return [
+    task.runtime,
+    task.scopeKind,
+    normalizeComparableText(task.ownerKey),
+    normalizeComparableText(task.childSessionKey),
+  ].join("\u0000");
+}
+
+function getTasksByRunScope(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunId(params.runId).filter(
+    (task) => !params.runtime || task.runtime === params.runtime,
+  );
+  const sessionKey = normalizeSessionIndexKey(params.sessionKey);
+  if (sessionKey) {
+    const childMatches = matches.filter(
+      (task) => normalizeSessionIndexKey(task.childSessionKey) === sessionKey,
+    );
+    if (childMatches.length > 0) {
+      return childMatches;
+    }
+    const ownerMatches = matches.filter(
+      (task) =>
+        task.scopeKind === "session" && normalizeSessionIndexKey(task.ownerKey) === sessionKey,
+    );
+    return ownerMatches;
+  }
+  const scopeKeys = new Set(matches.map((task) => taskRunScopeKey(task)));
+  return scopeKeys.size <= 1 ? matches : [];
+}
+
+function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
+  if (!task.runId?.trim()) {
+    return [];
+  }
+  return getTasksByRunId(task.runId).filter(
+    (candidate) =>
+      candidate.runtime === task.runtime &&
+      candidate.scopeKind === task.scopeKind &&
+      normalizeComparableText(candidate.ownerKey) === normalizeComparableText(task.ownerKey) &&
+      normalizeComparableText(candidate.childSessionKey) ===
+        normalizeComparableText(task.childSessionKey),
+  );
+}
+
 function taskLookupPriority(task: TaskRecord): number {
-  const sourcePriority =
-    task.source === "sessions_spawn" ? 0 : task.source === "background_cli" ? 1 : 2;
   const runtimePriority = task.runtime === "cli" ? 1 : 0;
-  return sourcePriority * 10 + runtimePriority;
+  return runtimePriority;
 }
 
 function pickPreferredRunIdTask(matches: TaskRecord[]): TaskRecord | undefined {
@@ -170,28 +457,40 @@ function normalizeComparableText(value: string | undefined): string {
   return value?.trim() ?? "";
 }
 
+function compareTasksNewestFirst(
+  left: Pick<TaskRecord, "createdAt"> & { insertionIndex?: number },
+  right: Pick<TaskRecord, "createdAt"> & { insertionIndex?: number },
+): number {
+  const createdAtDiff = right.createdAt - left.createdAt;
+  if (createdAtDiff !== 0) {
+    return createdAtDiff;
+  }
+  return (right.insertionIndex ?? 0) - (left.insertionIndex ?? 0);
+}
+
 function findExistingTaskForCreate(params: {
-  source: TaskSource;
   runtime: TaskRuntime;
-  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
   childSessionKey?: string;
   runId?: string;
-  bindingTargetKind?: TaskBindingTargetKind;
   label?: string;
   task: string;
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
-  const exact = runId
-    ? getTasksByRunId(runId).find(
+  const runScopeMatches = runId
+    ? getTasksByRunId(runId).filter(
         (task) =>
-          task.source === params.source &&
           task.runtime === params.runtime &&
-          normalizeComparableText(task.requesterSessionKey) ===
-            normalizeComparableText(params.requesterSessionKey) &&
+          task.scopeKind === params.scopeKind &&
+          normalizeComparableText(task.ownerKey) === normalizeComparableText(params.ownerKey) &&
           normalizeComparableText(task.childSessionKey) ===
-            normalizeComparableText(params.childSessionKey) &&
-          normalizeComparableText(task.bindingTargetKind) ===
-            normalizeComparableText(params.bindingTargetKind) &&
+            normalizeComparableText(params.childSessionKey),
+      )
+    : [];
+  const exact = runId
+    ? runScopeMatches.find(
+        (task) =>
           normalizeComparableText(task.label) === normalizeComparableText(params.label) &&
           normalizeComparableText(task.task) === normalizeComparableText(params.task),
       )
@@ -202,56 +501,56 @@ function findExistingTaskForCreate(params: {
   if (!runId || params.runtime !== "acp") {
     return undefined;
   }
-  const siblingMatches = getTasksByRunId(runId).filter(
-    (task) =>
-      task.runtime === params.runtime &&
-      normalizeComparableText(task.requesterSessionKey) ===
-        normalizeComparableText(params.requesterSessionKey) &&
-      normalizeComparableText(task.childSessionKey) ===
-        normalizeComparableText(params.childSessionKey),
-  );
-  if (siblingMatches.length === 0) {
+  if (runScopeMatches.length === 0) {
     return undefined;
   }
-  return pickPreferredRunIdTask(siblingMatches);
-}
-
-function sourceUpgradePriority(source: TaskSource): number {
-  return source === "sessions_spawn" ? 0 : source === "background_cli" ? 1 : 2;
+  return pickPreferredRunIdTask(runScopeMatches);
 }
 
 function mergeExistingTaskForCreate(
   existing: TaskRecord,
   params: {
-    source: TaskSource;
-    requesterOrigin?: TaskRecord["requesterOrigin"];
-    bindingTargetKind?: TaskBindingTargetKind;
+    requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+    sourceId?: string;
+    parentTaskId?: string;
+    agentId?: string;
     label?: string;
     task: string;
+    preferMetadata?: boolean;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
-    streamLogPath?: string;
   },
 ): TaskRecord {
   const patch: Partial<TaskRecord> = {};
-  if (sourceUpgradePriority(params.source) < sourceUpgradePriority(existing.source)) {
-    patch.source = params.source;
-  }
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  if (requesterOrigin && !existing.requesterOrigin) {
-    patch.requesterOrigin = requesterOrigin;
+  const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
+  if (requesterOrigin && !currentDeliveryState?.requesterOrigin) {
+    upsertTaskDeliveryState({
+      taskId: existing.taskId,
+      requesterOrigin,
+      lastNotifiedEventAt: currentDeliveryState?.lastNotifiedEventAt,
+    });
   }
-  if (params.bindingTargetKind && !existing.bindingTargetKind) {
-    patch.bindingTargetKind = params.bindingTargetKind;
+  if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
+    patch.sourceId = params.sourceId.trim();
   }
-  if (params.label?.trim() && !existing.label?.trim()) {
-    patch.label = params.label.trim();
+  if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
+    patch.parentTaskId = params.parentTaskId.trim();
   }
-  if (params.streamLogPath?.trim() && !existing.streamLogPath?.trim()) {
-    patch.streamLogPath = params.streamLogPath.trim();
+  if (params.agentId?.trim() && !existing.agentId?.trim()) {
+    patch.agentId = params.agentId.trim();
   }
-  if (params.source === "sessions_spawn" && existing.source !== "sessions_spawn") {
-    patch.task = params.task;
+  const nextLabel = params.label?.trim();
+  if (params.preferMetadata) {
+    if (nextLabel && normalizeComparableText(existing.label) !== nextLabel) {
+      patch.label = nextLabel;
+    }
+    const nextTask = params.task.trim();
+    if (nextTask && normalizeComparableText(existing.task) !== nextTask) {
+      patch.task = nextTask;
+    }
+  } else if (nextLabel && !existing.label?.trim()) {
+    patch.label = nextLabel;
   }
   if (params.deliveryStatus === "pending" && existing.deliveryStatus !== "delivered") {
     patch.deliveryStatus = "pending";
@@ -259,7 +558,8 @@ function mergeExistingTaskForCreate(
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus,
-    requesterSessionKey: existing.requesterSessionKey,
+    ownerKey: existing.ownerKey,
+    scopeKind: existing.scopeKind,
   });
   if (notifyPolicy !== existing.notifyPolicy && existing.notifyPolicy === "silent") {
     patch.notifyPolicy = notifyPolicy;
@@ -271,7 +571,30 @@ function mergeExistingTaskForCreate(
 }
 
 function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
-  return `task-terminal:${task.taskId}:${task.status}`;
+  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
+  return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
+}
+
+function resolveTaskStateChangeIdempotencyKey(params: {
+  task: TaskRecord;
+  latestEvent: TaskEventRecord;
+  owner: TaskDeliveryOwner;
+}): string {
+  return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
+}
+
+function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
+  return taskTerminalDeliveryIdempotencyKey(task);
+}
+
+function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
+  if (task.scopeKind !== "session") {
+    return {};
+  }
+  return {
+    sessionKey: task.ownerKey.trim(),
+    requesterOrigin: normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin),
+  };
 }
 
 function restoreTaskRegistryOnce() {
@@ -281,13 +604,18 @@ function restoreTaskRegistryOnce() {
   restoreAttempted = true;
   try {
     const restored = getTaskRegistryStore().loadSnapshot();
-    if (restored.size === 0) {
+    if (restored.tasks.size === 0 && restored.deliveryStates.size === 0) {
       return;
     }
-    for (const [taskId, task] of restored.entries()) {
+    for (const [taskId, task] of restored.tasks.entries()) {
       tasks.set(taskId, task);
     }
+    for (const [taskId, state] of restored.deliveryStates.entries()) {
+      taskDeliveryStates.set(taskId, state);
+    }
     rebuildRunIdIndex();
+    rebuildOwnerKeyIndex();
+    rebuildRelatedSessionKeyIndex();
     emitTaskRegistryHookEvent(() => ({
       kind: "restored",
       tasks: snapshotTaskRecords(tasks),
@@ -308,11 +636,25 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     return null;
   }
   const next = { ...current, ...patch };
+  if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
+    const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
+    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+  }
+  const sessionIndexChanged =
+    normalizeSessionIndexKey(current.ownerKey) !== normalizeSessionIndexKey(next.ownerKey) ||
+    normalizeSessionIndexKey(current.childSessionKey) !==
+      normalizeSessionIndexKey(next.childSessionKey);
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
   }
-  persistTaskRegistry();
+  if (sessionIndexChanged) {
+    deleteOwnerKeyIndex(taskId, current);
+    addOwnerKeyIndex(taskId, next);
+    deleteRelatedSessionKeyIndex(taskId, current);
+    addRelatedSessionKeyIndex(taskId, next);
+  }
+  persistTaskUpsert(next);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
@@ -321,122 +663,85 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   return cloneTaskRecord(next);
 }
 
-function formatTaskTerminalEvent(task: TaskRecord): string {
-  // User-facing task notifications stay intentionally terse. Detailed runtime chatter lives
-  // in task metadata for inspection, not in the default channel ping.
-  const title =
-    task.label?.trim() ||
-    (task.runtime === "acp"
-      ? "ACP background task"
-      : task.runtime === "subagent"
-        ? "Subagent task"
-        : task.task.trim() || "Background task");
-  const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
-  const summary = task.terminalSummary?.trim();
-  if (task.status === "done") {
-    return summary
-      ? `Background task done: ${title}${runLabel}. ${summary}`
-      : `Background task done: ${title}${runLabel}.`;
+function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
+  const current = taskDeliveryStates.get(state.taskId);
+  const next: TaskDeliveryState = {
+    taskId: state.taskId,
+    ...(state.requesterOrigin
+      ? { requesterOrigin: normalizeDeliveryContext(state.requesterOrigin) }
+      : {}),
+    ...(state.lastNotifiedEventAt != null
+      ? { lastNotifiedEventAt: state.lastNotifiedEventAt }
+      : {}),
+  };
+  if (!next.requesterOrigin && typeof next.lastNotifiedEventAt !== "number" && !current) {
+    return cloneTaskDeliveryState({ taskId: state.taskId });
   }
-  if (task.status === "timed_out") {
-    return `Background task timed out: ${title}${runLabel}.`;
-  }
-  if (task.status === "lost") {
-    return `Background task lost: ${title}${runLabel}. ${task.error ?? "Backing session disappeared."}`;
-  }
-  if (task.status === "cancelled") {
-    return `Background task cancelled: ${title}${runLabel}.`;
-  }
-  const error = task.error?.trim();
-  return error
-    ? `Background task failed: ${title}${runLabel}. ${error}`
-    : `Background task failed: ${title}${runLabel}.`;
+  taskDeliveryStates.set(state.taskId, next);
+  persistTaskDeliveryStateUpsert(next);
+  return cloneTaskDeliveryState(next);
+}
+
+function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
+  const state = taskDeliveryStates.get(taskId);
+  return state ? cloneTaskDeliveryState(state) : undefined;
 }
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
-  const origin = normalizeDeliveryContext(task.requesterOrigin);
+  const origin = resolveTaskDeliveryOwner(task).requesterOrigin;
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
+  return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
+}
+
 function queueTaskSystemEvent(task: TaskRecord, text: string) {
-  const requesterSessionKey = task.requesterSessionKey.trim();
-  if (!requesterSessionKey) {
+  const owner = resolveTaskDeliveryOwner(task);
+  const ownerKey = owner.sessionKey?.trim();
+  if (!ownerKey) {
     return false;
   }
   enqueueSystemEvent(text, {
-    sessionKey: requesterSessionKey,
+    sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
-    deliveryContext: task.requesterOrigin,
+    deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
     reason: "background-task",
-    sessionKey: requesterSessionKey,
+    sessionKey: ownerKey,
   });
   return true;
 }
 
-function formatTaskStateChangeEvent(task: TaskRecord, event: TaskEventRecord): string | null {
-  const title =
-    task.label?.trim() ||
-    (task.runtime === "acp"
-      ? "ACP background task"
-      : task.runtime === "subagent"
-        ? "Subagent task"
-        : task.task.trim() || "Background task");
-  if (event.kind === "running") {
-    return `Background task started: ${title}.`;
-  }
-  if (event.kind === "progress") {
-    return event.summary ? `Background task update: ${title}. ${event.summary}` : null;
-  }
-  return null;
-}
-
-function shouldAutoDeliverTaskUpdate(task: TaskRecord): boolean {
-  if (task.notifyPolicy === "silent") {
+function queueBlockedTaskFollowup(task: TaskRecord) {
+  const followupText = formatTaskBlockedFollowupMessage(task);
+  if (!followupText) {
     return false;
   }
-  if (task.runtime === "subagent" && task.status !== "cancelled") {
+  const owner = resolveTaskDeliveryOwner(task);
+  const ownerKey = owner.sessionKey?.trim();
+  if (!ownerKey) {
     return false;
   }
-  if (
-    task.status !== "done" &&
-    task.status !== "failed" &&
-    task.status !== "timed_out" &&
-    task.status !== "lost" &&
-    task.status !== "cancelled"
-  ) {
-    return false;
-  }
-  return task.deliveryStatus === "pending";
-}
-
-function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {
-  return (
-    task.notifyPolicy === "state_changes" &&
-    task.deliveryStatus === "pending" &&
-    task.status !== "done" &&
-    task.status !== "failed" &&
-    task.status !== "timed_out" &&
-    task.status !== "lost" &&
-    task.status !== "cancelled"
-  );
-}
-
-function shouldSuppressDuplicateTerminalDelivery(task: TaskRecord): boolean {
-  if (task.runtime !== "acp" || !task.runId?.trim()) {
-    return false;
-  }
-  const preferred = pickPreferredRunIdTask(getTasksByRunId(task.runId));
-  return Boolean(preferred && preferred.taskId !== task.taskId);
+  enqueueSystemEvent(followupText, {
+    sessionKey: ownerKey,
+    contextKey: `task:${task.taskId}:blocked-followup`,
+    deliveryContext: owner.requesterOrigin,
+  });
+  requestHeartbeatNow({
+    reason: "background-task-blocked",
+    sessionKey: ownerKey,
+  });
+  return true;
 }
 
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
-  if (!current || !shouldAutoDeliverTaskUpdate(current)) {
+  if (!current || !shouldAutoDeliverTaskTerminalUpdate(current)) {
     return current ? cloneTaskRecord(current) : null;
   }
   if (tasksWithPendingDelivery.has(taskId)) {
@@ -445,25 +750,35 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
   tasksWithPendingDelivery.add(taskId);
   try {
     const latest = tasks.get(taskId);
-    if (!latest || !shouldAutoDeliverTaskUpdate(latest)) {
+    if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
     }
-    if (shouldSuppressDuplicateTerminalDelivery(latest)) {
+    const preferred = latest.runId
+      ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
+      : undefined;
+    if (
+      shouldSuppressDuplicateTerminalDelivery({ task: latest, preferredTaskId: preferred?.taskId })
+    ) {
       return updateTask(taskId, {
         deliveryStatus: "not_applicable",
         lastEventAt: Date.now(),
       });
     }
-    if (!latest.requesterSessionKey.trim()) {
+    const owner = resolveTaskDeliveryOwner(latest);
+    const ownerSessionKey = owner.sessionKey?.trim();
+    if (!ownerSessionKey) {
       return updateTask(taskId, {
-        deliveryStatus: "parent_missing",
+        deliveryStatus: resolveMissingOwnerDeliveryStatus(latest),
         lastEventAt: Date.now(),
       });
     }
-    const eventText = formatTaskTerminalEvent(latest);
+    const eventText = formatTaskTerminalMessage(latest);
     if (!canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
+        if (latest.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(latest);
+        }
         return updateTask(taskId, {
           deliveryStatus: "session_queued",
           lastEventAt: Date.now(),
@@ -471,7 +786,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       } catch (error) {
         log.warn("Failed to queue background task session delivery", {
           taskId,
-          requesterSessionKey: latest.requesterSessionKey,
+          ownerKey: latest.ownerKey,
           error,
         });
         return updateTask(taskId, {
@@ -482,22 +797,25 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     }
     try {
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-      const origin = normalizeDeliveryContext(latest.requesterOrigin);
-      const requesterAgentId = parseAgentSessionKey(latest.requesterSessionKey)?.agentId;
+      const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
+      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
       await sendMessage({
-        channel: origin?.channel,
-        to: origin?.to ?? "",
-        accountId: origin?.accountId,
-        threadId: origin?.threadId,
+        channel: owner.requesterOrigin?.channel,
+        to: owner.requesterOrigin?.to ?? "",
+        accountId: owner.requesterOrigin?.accountId,
+        threadId: owner.requesterOrigin?.threadId,
         content: eventText,
         agentId: requesterAgentId,
-        idempotencyKey: taskTerminalDeliveryIdempotencyKey(latest),
+        idempotencyKey,
         mirror: {
-          sessionKey: latest.requesterSessionKey,
+          sessionKey: ownerSessionKey,
           agentId: requesterAgentId,
-          idempotencyKey: taskTerminalDeliveryIdempotencyKey(latest),
+          idempotencyKey,
         },
       });
+      if (latest.terminalOutcome === "blocked") {
+        queueBlockedTaskFollowup(latest);
+      }
       return updateTask(taskId, {
         deliveryStatus: "delivered",
         lastEventAt: Date.now(),
@@ -505,16 +823,19 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     } catch (error) {
       log.warn("Failed to deliver background task update", {
         taskId,
-        requesterSessionKey: latest.requesterSessionKey,
-        requesterOrigin: latest.requesterOrigin,
+        ownerKey: ownerSessionKey,
+        requesterOrigin: owner.requesterOrigin,
         error,
       });
       try {
         queueTaskSystemEvent(latest, eventText);
+        if (latest.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(latest);
+        }
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
           taskId,
-          requesterSessionKey: latest.requesterSessionKey,
+          ownerKey: latest.ownerKey,
           error: fallbackError,
         });
       }
@@ -530,75 +851,185 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
 
 export async function maybeDeliverTaskStateChangeUpdate(
   taskId: string,
+  latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
   if (!current || !shouldAutoDeliverTaskStateChange(current)) {
     return current ? cloneTaskRecord(current) : null;
   }
-  const latestEvent = current.recentEvents?.at(-1);
-  if (!latestEvent || (current.lastNotifiedEventAt ?? 0) >= latestEvent.at) {
+  const deliveryState = getTaskDeliveryState(taskId);
+  if (!latestEvent || (deliveryState?.lastNotifiedEventAt ?? 0) >= latestEvent.at) {
     return cloneTaskRecord(current);
   }
-  const eventText = formatTaskStateChangeEvent(current, latestEvent);
+  const eventText = formatTaskStateChangeMessage(current, latestEvent);
   if (!eventText) {
     return cloneTaskRecord(current);
   }
   try {
+    const owner = resolveTaskDeliveryOwner(current);
+    const ownerSessionKey = owner.sessionKey?.trim();
+    if (!ownerSessionKey) {
+      return updateTask(taskId, {
+        deliveryStatus: resolveMissingOwnerDeliveryStatus(current),
+        lastEventAt: Date.now(),
+      });
+    }
     if (!canDeliverTaskToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
-      return updateTask(taskId, {
+      upsertTaskDeliveryState({
+        taskId,
+        requesterOrigin: deliveryState?.requesterOrigin,
         lastNotifiedEventAt: latestEvent.at,
+      });
+      return updateTask(taskId, {
         lastEventAt: Date.now(),
       });
     }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-    const origin = normalizeDeliveryContext(current.requesterOrigin);
-    const requesterAgentId = parseAgentSessionKey(current.requesterSessionKey)?.agentId;
+    const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
+    const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
+      task: current,
+      latestEvent,
+      owner,
+    });
     await sendMessage({
-      channel: origin?.channel,
-      to: origin?.to ?? "",
-      accountId: origin?.accountId,
-      threadId: origin?.threadId,
+      channel: owner.requesterOrigin?.channel,
+      to: owner.requesterOrigin?.to ?? "",
+      accountId: owner.requesterOrigin?.accountId,
+      threadId: owner.requesterOrigin?.threadId,
       content: eventText,
       agentId: requesterAgentId,
-      idempotencyKey: `task-event:${current.taskId}:${latestEvent.at}:${latestEvent.kind}`,
+      idempotencyKey,
       mirror: {
-        sessionKey: current.requesterSessionKey,
+        sessionKey: ownerSessionKey,
         agentId: requesterAgentId,
-        idempotencyKey: `task-event:${current.taskId}:${latestEvent.at}:${latestEvent.kind}`,
+        idempotencyKey,
       },
     });
-    return updateTask(taskId, {
+    upsertTaskDeliveryState({
+      taskId,
+      requesterOrigin: deliveryState?.requesterOrigin,
       lastNotifiedEventAt: latestEvent.at,
+    });
+    return updateTask(taskId, {
       lastEventAt: Date.now(),
     });
   } catch (error) {
     log.warn("Failed to deliver background task state change", {
       taskId,
-      requesterSessionKey: current.requesterSessionKey,
+      ownerKey: current.ownerKey,
       error,
     });
     return cloneTaskRecord(current);
   }
 }
 
-export function updateTaskRecordById(
-  taskId: string,
-  patch: Partial<TaskRecord>,
-): TaskRecord | null {
+export function setTaskProgressById(params: {
+  taskId: string;
+  progressSummary?: string | null;
+  lastEventAt?: number;
+}): TaskRecord | null {
   ensureTaskRegistryReady();
-  return updateTask(taskId, patch);
+  const patch: Partial<TaskRecord> = {};
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  return updateTask(params.taskId, patch);
 }
 
-function updateTasksByRunId(runId: string, patch: Partial<TaskRecord>): TaskRecord[] {
-  const ids = taskIdsByRunId.get(runId.trim());
-  if (!ids || ids.size === 0) {
+export function setTaskTimingById(params: {
+  taskId: string;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {};
+  if (params.startedAt != null) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.endedAt != null) {
+    patch.endedAt = params.endedAt;
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  return updateTask(params.taskId, patch);
+}
+
+export function setTaskCleanupAfterById(params: {
+  taskId: string;
+  cleanupAfter: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    cleanupAfter: params.cleanupAfter,
+  });
+}
+
+export function markTaskTerminalById(params: {
+  taskId: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    status: params.status,
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt ?? params.endedAt,
+    ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.terminalSummary !== undefined
+      ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
+      : {}),
+    ...(params.terminalOutcome !== undefined
+      ? {
+          terminalOutcome: resolveTaskTerminalOutcome({
+            status: params.status,
+            terminalOutcome: params.terminalOutcome,
+          }),
+        }
+      : {}),
+  });
+}
+
+export function markTaskLostById(params: {
+  taskId: string;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  cleanupAfter?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    status: "lost",
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt ?? params.endedAt,
+    ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.cleanupAfter !== undefined ? { cleanupAfter: params.cleanupAfter } : {}),
+  });
+}
+
+function updateTasksByRunId(params: {
+  runId: string;
+  patch: Partial<TaskRecord>;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
     return [];
   }
   const updated: TaskRecord[] = [];
-  for (const taskId of ids) {
-    const task = updateTask(taskId, patch);
+  for (const match of matches) {
+    const task = updateTask(match.taskId, params.patch);
     if (task) {
       updated.push(task);
     }
@@ -613,16 +1044,15 @@ function ensureListener() {
   listenerStarted = true;
   listenerStop = onAgentEvent((evt) => {
     restoreTaskRegistryOnce();
-    const ids = taskIdsByRunId.get(evt.runId);
-    if (!ids || ids.size === 0) {
+    const scopedTasks = getTasksByRunScope({
+      runId: evt.runId,
+      sessionKey: evt.sessionKey,
+    });
+    if (scopedTasks.length === 0) {
       return;
     }
     const now = evt.ts || Date.now();
-    for (const taskId of ids) {
-      const current = tasks.get(taskId);
-      if (!current) {
-        continue;
-      }
+    for (const current of scopedTasks) {
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -637,7 +1067,7 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          patch.status = evt.data?.aborted === true ? "timed_out" : "done";
+          patch.status = evt.data?.aborted === true ? "timed_out" : "succeeded";
           patch.endedAt = endedAt ?? now;
         } else if (phase === "error") {
           patch.status = "failed";
@@ -647,74 +1077,105 @@ function ensureListener() {
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
       }
-      if (patch.status && patch.status !== current.status) {
-        patch.recentEvents = appendTaskEvent(current, {
-          at: now,
-          kind: patch.status,
-          summary:
-            patch.status === "failed"
-              ? (patch.error ?? current.error)
-              : patch.status === "done"
-                ? current.terminalSummary
-                : undefined,
-        });
-      }
-      const updated = updateTask(taskId, patch);
+      const stateChangeEvent =
+        patch.status && patch.status !== current.status
+          ? appendTaskEvent({
+              at: now,
+              kind: patch.status,
+              summary:
+                patch.status === "failed"
+                  ? (patch.error ?? current.error)
+                  : patch.status === "succeeded"
+                    ? current.terminalSummary
+                    : undefined,
+            })
+          : undefined;
+      const updated = updateTask(current.taskId, patch);
       if (updated) {
-        void maybeDeliverTaskStateChangeUpdate(taskId);
-        void maybeDeliverTaskTerminalUpdate(taskId);
+        void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
+        void maybeDeliverTaskTerminalUpdate(current.taskId);
       }
     }
   });
 }
 
 export function createTaskRecord(params: {
-  source: TaskSource;
   runtime: TaskRuntime;
-  requesterSessionKey: string;
-  requesterOrigin?: TaskRecord["requesterOrigin"];
+  sourceId?: string;
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
   runId?: string;
-  bindingTargetKind?: TaskBindingTargetKind;
   label?: string;
   task: string;
+  preferMetadata?: boolean;
   status?: TaskStatus;
   deliveryStatus?: TaskDeliveryStatus;
   notifyPolicy?: TaskNotifyPolicy;
   startedAt?: number;
   lastEventAt?: number;
+  cleanupAfter?: number;
   progressSummary?: string | null;
   terminalSummary?: string | null;
-  transcriptPath?: string;
-  streamLogPath?: string;
-  backend?: string;
-  agentSessionId?: string;
-  backendSessionId?: string;
+  terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord {
   ensureTaskRegistryReady();
-  const existing = findExistingTaskForCreate(params);
+  const requesterSessionKey = resolveTaskRequesterSessionKey(params);
+  const scopeKind = resolveTaskScopeKind({
+    scopeKind: params.scopeKind,
+    requesterSessionKey,
+  });
+  const ownerKey = resolveTaskOwnerKey({
+    requesterSessionKey,
+    ownerKey: params.ownerKey,
+  });
+  assertTaskOwner({
+    ownerKey,
+    scopeKind,
+  });
+  const existing = findExistingTaskForCreate({
+    runtime: params.runtime,
+    ownerKey,
+    scopeKind,
+    childSessionKey: params.childSessionKey,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
+  });
   if (existing) {
     return mergeExistingTaskForCreate(existing, params);
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
-  const status = params.status ?? "accepted";
-  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
+  const status = normalizeTaskStatus(params.status);
+  const deliveryStatus =
+    params.deliveryStatus ??
+    ensureDeliveryStatus({
+      ownerKey,
+      scopeKind,
+    });
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus,
-    requesterSessionKey: params.requesterSessionKey,
+    ownerKey,
+    scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
   const record: TaskRecord = {
     taskId,
-    source: params.source,
     runtime: params.runtime,
-    requesterSessionKey: params.requesterSessionKey,
-    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
+    sourceId: params.sourceId?.trim() || undefined,
+    requesterSessionKey,
+    ownerKey,
+    scopeKind,
     childSessionKey: params.childSessionKey,
+    parentTaskId: params.parentTaskId?.trim() || undefined,
+    agentId: params.agentId?.trim() || undefined,
     runId: params.runId?.trim() || undefined,
-    bindingTargetKind: params.bindingTargetKind,
     label: params.label?.trim() || undefined,
     task: params.task,
     status,
@@ -723,43 +1184,41 @@ export function createTaskRecord(params: {
     createdAt: now,
     startedAt: params.startedAt,
     lastEventAt,
+    cleanupAfter: params.cleanupAfter,
     progressSummary: normalizeTaskSummary(params.progressSummary),
     terminalSummary: normalizeTaskSummary(params.terminalSummary),
-    recentEvents: appendTaskEvent(
-      {
-        taskId,
-        source: params.source,
-        runtime: params.runtime,
-        requesterSessionKey: params.requesterSessionKey,
-        task: params.task,
-        status,
-        deliveryStatus,
-        notifyPolicy,
-        createdAt: now,
-      } as TaskRecord,
-      {
-        at: lastEventAt,
-        kind: status,
-      },
-    ),
-    transcriptPath: params.transcriptPath,
-    streamLogPath: params.streamLogPath,
-    backend: params.backend,
-    agentSessionId: params.agentSessionId,
-    backendSessionId: params.backendSessionId,
+    terminalOutcome: resolveTaskTerminalOutcome({
+      status,
+      terminalOutcome: params.terminalOutcome,
+    }),
   };
+  if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
+    record.cleanupAfter =
+      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+  }
   tasks.set(taskId, record);
+  upsertTaskDeliveryState({
+    taskId,
+    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
+  });
   addRunIdIndex(taskId, record.runId);
-  persistTaskRegistry();
+  addOwnerKeyIndex(taskId, record);
+  addRelatedSessionKeyIndex(taskId, record);
+  persistTaskUpsert(record);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
+  if (isTerminalTaskStatus(record.status)) {
+    void maybeDeliverTaskTerminalUpdate(taskId);
+  }
   return cloneTaskRecord(record);
 }
 
-export function updateTaskStateByRunId(params: {
+function updateTaskStateByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   status?: TaskStatus;
   startedAt?: number;
   endedAt?: number;
@@ -767,24 +1226,21 @@ export function updateTaskStateByRunId(params: {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
-  const ids = taskIdsByRunId.get(params.runId.trim());
-  if (!ids || ids.size === 0) {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
     return [];
   }
   const updated: TaskRecord[] = [];
-  for (const taskId of ids) {
-    const current = tasks.get(taskId);
-    if (!current) {
-      continue;
-    }
+  for (const current of matches) {
     const patch: Partial<TaskRecord> = {};
-    const nextStatus = params.status ?? current.status;
+    const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
     if (params.status) {
-      patch.status = params.status;
+      patch.status = normalizeTaskStatus(params.status);
     }
     if (params.startedAt != null) {
       patch.startedAt = params.startedAt;
@@ -804,43 +1260,133 @@ export function updateTaskStateByRunId(params: {
     if (params.terminalSummary !== undefined) {
       patch.terminalSummary = normalizeTaskSummary(params.terminalSummary);
     }
+    if (params.terminalOutcome !== undefined) {
+      patch.terminalOutcome = resolveTaskTerminalOutcome({
+        status: nextStatus,
+        terminalOutcome: params.terminalOutcome,
+      });
+    }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
       (nextStatus === "failed"
         ? normalizeTaskSummary(params.error ?? current.error)
-        : nextStatus === "done"
+        : nextStatus === "succeeded"
           ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
           : undefined);
     const shouldAppendEvent =
       (params.status && params.status !== current.status) ||
       Boolean(normalizeTaskSummary(params.eventSummary));
-    if (shouldAppendEvent) {
-      patch.recentEvents = appendTaskEvent(current, {
-        at: eventAt,
-        kind: params.status && params.status !== current.status ? params.status : "progress",
-        summary: eventSummary,
-      });
-    }
-    const task = updateTask(taskId, patch);
+    const nextEvent = shouldAppendEvent
+      ? appendTaskEvent({
+          at: eventAt,
+          kind:
+            params.status && normalizeTaskStatus(params.status) !== current.status
+              ? normalizeTaskStatus(params.status)
+              : "progress",
+          summary: eventSummary,
+        })
+      : undefined;
+    const task = updateTask(current.taskId, patch);
     if (task) {
       updated.push(task);
+      void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
+      void maybeDeliverTaskTerminalUpdate(task.taskId);
     }
-  }
-  for (const task of updated) {
-    void maybeDeliverTaskStateChangeUpdate(task.taskId);
-    void maybeDeliverTaskTerminalUpdate(task.taskId);
   }
   return updated;
 }
 
-export function updateTaskDeliveryByRunId(params: {
+function updateTaskDeliveryByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
 }) {
   ensureTaskRegistryReady();
-  return updateTasksByRunId(params.runId, {
-    deliveryStatus: params.deliveryStatus,
+  return updateTasksByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    patch: {
+      deliveryStatus: params.deliveryStatus,
+    },
   });
+}
+
+export function markTaskRunningByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+  eventSummary?: string | null;
+}) {
+  return updateTaskStateByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    status: "running",
+    startedAt: params.startedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+    eventSummary: params.eventSummary,
+  });
+}
+
+export function recordTaskProgressByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+  eventSummary?: string | null;
+}) {
+  return updateTaskStateByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+    eventSummary: params.eventSummary,
+  });
+}
+
+export function markTaskTerminalByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
+  return updateTaskStateByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    status: params.status,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt,
+    error: params.error,
+    progressSummary: params.progressSummary,
+    terminalSummary: params.terminalSummary,
+    terminalOutcome: params.terminalOutcome,
+  });
+}
+
+export function setTaskRunDeliveryStatusByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  deliveryStatus: TaskDeliveryStatus;
+}) {
+  return updateTaskDeliveryByRunId(params);
 }
 
 export function updateTaskNotifyPolicyById(params: {
@@ -864,7 +1410,7 @@ export async function cancelTaskById(params: {
     return { found: false, cancelled: false, reason: "Task not found." };
   }
   if (
-    task.status === "done" ||
+    task.status === "succeeded" ||
     task.status === "failed" ||
     task.status === "timed_out" ||
     task.status === "lost" ||
@@ -919,11 +1465,6 @@ export async function cancelTaskById(params: {
       endedAt: Date.now(),
       lastEventAt: Date.now(),
       error: "Cancelled by operator.",
-      recentEvents: appendTaskEvent(task, {
-        at: Date.now(),
-        kind: "cancelled",
-        summary: "Cancelled by operator.",
-      }),
     });
     if (updated) {
       void maybeDeliverTaskTerminalUpdate(updated.taskId);
@@ -946,13 +1487,20 @@ export async function cancelTaskById(params: {
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]
-    .map((task) => cloneTaskRecord(task))
-    .toSorted((a, b) => b.createdAt - a.createdAt);
+    .map((task, insertionIndex) => ({ ...cloneTaskRecord(task), insertionIndex }))
+    .toSorted(compareTasksNewestFirst)
+    .map(({ insertionIndex: _, ...task }) => task);
+}
+
+export function getTaskRegistrySummary(): TaskRegistrySummary {
+  ensureTaskRegistryReady();
+  return summarizeTaskRecords(tasks.values());
 }
 
 export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {
   return {
     tasks: listTaskRecords(),
+    deliveryStates: [...taskDeliveryStates.values()].map((state) => cloneTaskDeliveryState(state)),
   };
 }
 
@@ -968,14 +1516,78 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
-  const key = sessionKey.trim();
-  if (!key) {
-    return undefined;
+function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskRecord[] {
+  const ids = index.get(key);
+  if (!ids || ids.size === 0) {
+    return [];
   }
-  return listTaskRecords().find(
-    (task) => task.childSessionKey === key || task.requesterSessionKey === key,
-  );
+  return [...ids]
+    .map((taskId, insertionIndex) => {
+      const task = tasks.get(taskId);
+      return task ? { ...cloneTaskRecord(task), insertionIndex } : null;
+    })
+    .filter(
+      (
+        task,
+      ): task is TaskRecord & {
+        insertionIndex: number;
+      } => Boolean(task),
+    )
+    .toSorted(compareTasksNewestFirst)
+    .map(({ insertionIndex: _, ...task }) => task);
+}
+
+export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
+  const task = listTasksForSessionKey(sessionKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(sessionKey);
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
+}
+
+export function listTasksForAgentId(agentId: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const lookup = agentId.trim();
+  if (!lookup) {
+    return [];
+  }
+  return snapshotTaskRecords(tasks)
+    .filter((task) => task.agentId?.trim() === lookup)
+    .toSorted(compareTasksNewestFirst);
+}
+
+export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
+  const task = listTasksForOwnerKey(ownerKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(ownerKey);
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
+export function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
+  const task = listTasksForRelatedSessionKey(sessionKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForRelatedSessionKey(sessionKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(sessionKey);
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
 }
 
 export function resolveTaskForLookupToken(token: string): TaskRecord | undefined {
@@ -983,7 +1595,9 @@ export function resolveTaskForLookupToken(token: string): TaskRecord | undefined
   if (!lookup) {
     return undefined;
   }
-  return getTaskById(lookup) ?? findTaskByRunId(lookup) ?? findLatestTaskForSessionKey(lookup);
+  return (
+    getTaskById(lookup) ?? findTaskByRunId(lookup) ?? findLatestTaskForRelatedSessionKey(lookup)
+  );
 }
 
 export function deleteTaskRecordById(taskId: string): boolean {
@@ -992,9 +1606,13 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
+  deleteOwnerKeyIndex(taskId, current);
+  deleteRelatedSessionKeyIndex(taskId, current);
   tasks.delete(taskId);
+  taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
-  persistTaskRegistry();
+  persistTaskDelete(taskId);
+  persistTaskDeliveryStateDelete(taskId);
   emitTaskRegistryHookEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,
@@ -1005,7 +1623,11 @@ export function deleteTaskRecordById(taskId: string): boolean {
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   tasks.clear();
+  taskDeliveryStates.clear();
   taskIdsByRunId.clear();
+  taskIdsByOwnerKey.clear();
+  taskIdsByRelatedSessionKey.clear();
+  tasksWithPendingDelivery.clear();
   restoreAttempted = false;
   resetTaskRegistryRuntimeForTests();
   if (listenerStop) {
@@ -1015,5 +1637,8 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   listenerStarted = false;
   if (opts?.persist !== false) {
     persistTaskRegistry();
+    // Close the sqlite handle after persisting the empty snapshot so Windows temp-dir
+    // cleanup can remove the state directory without hitting runs.sqlite EBUSY errors.
+    getTaskRegistryStore().close?.();
   }
 }

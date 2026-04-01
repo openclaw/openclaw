@@ -121,7 +121,7 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   browser?: {
     sandboxBridgeUrl?: string;
@@ -1603,6 +1603,14 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+/**
+ * Top-level CLI metadata for plugin-owned commands.
+ *
+ * Descriptors are the parse-time contract for lazy plugin CLI registration.
+ * If you want OpenClaw to keep a plugin command lazy-loaded while still
+ * advertising it at the root CLI level, provide descriptors that cover every
+ * top-level command root registered by that plugin CLI surface.
+ */
 export type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
@@ -1656,7 +1664,7 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
@@ -1666,7 +1674,7 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
+export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
@@ -1707,7 +1715,15 @@ export type OpenClawPluginApi = {
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {
+      /** Explicit top-level command roots owned by this registrar. */
       commands?: string[];
+      /**
+       * Parse-time command descriptors for lazy root CLI registration.
+       *
+       * When descriptors cover every top-level command root, OpenClaw can keep
+       * the plugin registrar lazy in the normal root CLI path. Command-only
+       * registrations stay on the eager compatibility path.
+       */
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
   ) => void;
@@ -1734,7 +1750,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
@@ -2003,7 +2019,7 @@ export type PluginHookBeforeCompactionEvent = {
   sessionFile?: string;
 };
 
-// before_reset hook — fired when /new or /reset clears a session
+// before_reset hook - fired when /new or /reset clears a session
 export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
@@ -2123,7 +2139,7 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
@@ -2163,7 +2179,7 @@ export type PluginHookBeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
-    /** Set automatically by the hook runner — plugins should not set this. */
+    /** Set automatically by the hook runner - plugins should not set this. */
     pluginId?: string;
     /**
      * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
@@ -2336,6 +2352,13 @@ export type PluginHookGatewayStartEvent = {
 export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
+
+export type PluginInstallRequestKind =
+  | "skill-install"
+  | "plugin-dir"
+  | "plugin-archive"
+  | "plugin-file"
+  | "plugin-npm";
 
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {

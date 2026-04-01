@@ -1,10 +1,4 @@
 import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import {
   buildMentionRegexes,
   formatLocationText,
   logInboundDrop,
@@ -62,16 +56,8 @@ async function resolveStickerVisionSupport(params: {
   agentId?: string;
 }): Promise<boolean> {
   try {
-    const catalog = await loadModelCatalog({ config: params.cfg });
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    if (!entry) {
-      return false;
-    }
-    return modelSupportsVision(entry);
+    const { resolveStickerVisionSupportRuntime } = await import("./sticker-vision.runtime.js");
+    return await resolveStickerVisionSupportRuntime(params);
   } catch {
     return false;
   }
@@ -171,6 +157,8 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+  const senderAllowedForAudioPreflight =
+    !useAccessGroups || !allowForCommands.hasEntries || senderAllowedForCommands;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -179,7 +167,8 @@ export async function resolveTelegramInboundBody(params: {
     hasAudio &&
     !hasUserText &&
     mentionRegexes.length > 0 &&
-    !disableAudioPreflight;
+    !disableAudioPreflight &&
+    senderAllowedForAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {

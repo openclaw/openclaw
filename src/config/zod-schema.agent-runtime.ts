@@ -260,6 +260,37 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
   }
 }).optional();
 
+const TrimmedOptionalConfigStringSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().optional());
+
+const CodexAllowedDomainsSchema = z
+  .array(z.string())
+  .transform((values) => {
+    const deduped = [
+      ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+    ];
+    return deduped.length > 0 ? deduped : undefined;
+  })
+  .optional();
+
+const CodexUserLocationSchema = z
+  .object({
+    country: TrimmedOptionalConfigStringSchema,
+    region: TrimmedOptionalConfigStringSchema,
+    city: TrimmedOptionalConfigStringSchema,
+    timezone: TrimmedOptionalConfigStringSchema,
+  })
+  .strict()
+  .transform((value) => {
+    return value.country || value.region || value.city || value.timezone ? value : undefined;
+  })
+  .optional();
+
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -268,53 +299,13 @@ export const ToolsWebSearchSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
-    brave: z
+    openaiCodex: z
       .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
-        mode: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    firecrawl: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    gemini: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    grok: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
-        inlineCitations: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    kimi: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    perplexity: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
+        enabled: z.boolean().optional(),
+        mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
+        allowedDomains: CodexAllowedDomainsSchema,
+        contextSize: z.union([z.literal("low"), z.literal("medium"), z.literal("high")]).optional(),
+        userLocation: CodexUserLocationSchema,
       })
       .strict()
       .optional(),
@@ -432,7 +423,7 @@ const ToolExecSafeBinProfileSchema = z
   .strict();
 
 const ToolExecBaseShape = {
-  host: z.enum(["sandbox", "gateway", "node"]).optional(),
+  host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
@@ -604,6 +595,22 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    qmd: z
+      .object({
+        extraCollections: z
+          .array(
+            z
+              .object({
+                path: z.string(),
+                name: z.string().optional(),
+                pattern: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     multimodal: z
       .object({
         enabled: z.boolean().optional(),
@@ -796,6 +803,7 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

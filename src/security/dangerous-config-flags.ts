@@ -26,6 +26,8 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   }
   if (cfg.plugins?.entries?.["voice-call"]?.config?.skipSignatureVerification === true) {
     enabledFlags.push("plugins.entries.voice-call.config.skipSignatureVerification=true");
+  if (cfg.plugins?.entries?.acpx?.config?.permissionMode === "approve-all") {
+    enabledFlags.push("plugins.entries.acpx.config.permissionMode=approve-all");
   }
   return enabledFlags;
 }

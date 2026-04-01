@@ -544,11 +544,37 @@ export function classifyFailoverReasonFromHttpStatus(
   return null;
 }
 
-function stripFinalTagsFromText(text: string): string {
-  if (!text) {
-    return text;
+function coerceText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
   }
-  return text.replace(FINAL_TAG_RE, "");
+  if (value == null) {
+    return "";
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function stripFinalTagsFromText(text: unknown): string {
+  const normalized = coerceText(text);
+  if (!normalized) {
+    return normalized;
+  }
+  return normalized.replace(FINAL_TAG_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -755,12 +781,13 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
-  if (!text) {
-    return text;
+export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
+  const raw = coerceText(text);
+  if (!raw) {
+    return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripFinalTagsFromText(raw);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
@@ -859,7 +886,7 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
 // Non-transient api_error payloads (context overflow, validation/schema errors)
 // must NOT be classified as timeout.
 const API_ERROR_TRANSIENT_SIGNALS_RE =
-  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable/i;
+  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable|unexpected error/i;
 
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {

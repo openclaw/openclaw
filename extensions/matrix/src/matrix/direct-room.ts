@@ -49,16 +49,25 @@ export async function hasDirectMatrixMemberFlag(
   client: MatrixClient,
   roomId: string,
   userId?: string | null,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const normalizedUserId = trimMaybeString(userId);
   if (!normalizedUserId) {
-    return false;
+    return null;
   }
   try {
     const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
-    return state?.is_direct === true;
+    // Return true if is_direct is explicitly true, false if explicitly false, null if absent
+    if (state?.is_direct === true) {
+      return true;
+    }
+    if (state?.is_direct === false) {
+      return false;
+    }
+    // is_direct field is absent from the membership event
+    return null;
   } catch {
-    return false;
+    // API/network error - treat as unavailable
+    return null;
   }
 }
 
@@ -66,6 +75,7 @@ export type MatrixDirectRoomEvidence = {
   joinedMembers: string[] | null;
   strict: boolean;
   viaMemberState: boolean;
+  memberStateFlag: boolean | null;
 };
 
 export async function inspectMatrixDirectRoomEvidence(params: {
@@ -89,14 +99,15 @@ export async function inspectMatrixDirectRoomEvidence(params: {
       joinedMembers,
       strict: false,
       viaMemberState: false,
+      memberStateFlag: null,
     };
   }
+  const memberStateFlag = await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId);
   return {
     joinedMembers,
     strict,
-    viaMemberState:
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ||
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)),
+    viaMemberState: memberStateFlag === true,
+    memberStateFlag,
   };
 }
 

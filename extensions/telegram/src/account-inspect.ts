@@ -8,7 +8,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import type { TelegramAccountConfig } from "../runtime-api.js";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram-core";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,

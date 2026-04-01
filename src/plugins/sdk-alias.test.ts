@@ -53,7 +53,6 @@ function createPluginSdkAliasFixture(params?: {
   distFile?: string;
   srcBody?: string;
   distBody?: string;
-  packageName?: string;
   packageExports?: Record<string, unknown>;
   trustedRootIndicators?: boolean;
   trustedRootIndicatorMode?: "bin+marker" | "cli-entry-only" | "none";
@@ -67,7 +66,7 @@ function createPluginSdkAliasFixture(params?: {
     params?.trustedRootIndicatorMode ??
     (params?.trustedRootIndicators === false ? "none" : "bin+marker");
   const packageJson: Record<string, unknown> = {
-    name: params?.packageName ?? "openclaw",
+    name: "openclaw",
     type: "module",
   };
   if (trustedRootIndicatorMode === "bin+marker") {
@@ -456,7 +455,7 @@ describe("plugin sdk alias helpers", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
-        "./plugin-sdk/telegram": { default: "./dist/plugin-sdk/telegram.js" },
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
         "./plugin-sdk/nested/value": { default: "./dist/plugin-sdk/nested/value.js" },
         "./plugin-sdk/..\\..\\evil": { default: "./dist/plugin-sdk/evil.js" },
         "./plugin-sdk/C:temp": { default: "./dist/plugin-sdk/drive.js" },
@@ -466,42 +465,14 @@ describe("plugin sdk alias helpers", () => {
     const subpaths = listPluginSdkExportedSubpaths({
       modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
     });
-    expect(subpaths).toEqual(["compat", "telegram"]);
-  });
-
-  it("derives plugin-sdk subpaths from nearest package exports even when package name is renamed", () => {
-    const fixture = createPluginSdkAliasFixture({
-      packageName: "moltbot",
-      packageExports: {
-        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-        "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
-      },
-    });
-    const subpaths = listPluginSdkExportedSubpaths({
-      modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
-    });
-    expect(subpaths).toEqual(["channel-runtime", "compat", "core"]);
+    expect(subpaths).toEqual(["compat", "core"]);
   });
 
   it.each([
     {
-      name: "derives plugin-sdk subpaths via cwd fallback when module path is a transpiler cache and package is renamed",
-      fixture: () =>
-        createPluginSdkAliasFixture({
-          packageName: "moltbot",
-          packageExports: {
-            "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-            "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-          },
-        }),
-      expected: ["channel-runtime", "core"],
-    },
-    {
       name: "does not derive plugin-sdk subpaths from cwd fallback when package root is not an OpenClaw root",
       fixture: () =>
         createPluginSdkAliasFixture({
-          packageName: "moltbot",
           trustedRootIndicators: false,
           packageExports: {
             "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -514,7 +485,6 @@ describe("plugin sdk alias helpers", () => {
       name: "derives plugin-sdk subpaths via cwd fallback when trusted root indicator is cli-entry export",
       fixture: () =>
         createPluginSdkAliasFixture({
-          packageName: "moltbot",
           trustedRootIndicatorMode: "cli-entry-only",
           packageExports: {
             "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -631,25 +601,11 @@ describe("plugin sdk alias helpers", () => {
 
   it.each([
     {
-      name: "resolves plugin-sdk alias files via cwd fallback when module path is a transpiler cache and package is renamed",
-      fixture: () =>
-        createPluginSdkAliasFixture({
-          srcFile: "channel-runtime.ts",
-          distFile: "channel-runtime.js",
-          packageName: "moltbot",
-          packageExports: {
-            "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-          },
-        }),
-      expected: "src" as const,
-    },
-    {
       name: "does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root",
       fixture: () =>
         createPluginSdkAliasFixture({
           srcFile: "channel-runtime.ts",
           distFile: "channel-runtime.js",
-          packageName: "moltbot",
           trustedRootIndicators: false,
           packageExports: {
             "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },

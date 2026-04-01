@@ -5,6 +5,7 @@ import {
   ResolvedThemes,
   ResolvingThemes,
 } from "@pierre/diffs";
+import AjvPkg from "ajv";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
@@ -164,6 +165,41 @@ describe("resolveDiffsPluginDefaults", () => {
       fileMaxWidth: 1024,
     });
   });
+
+  it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema: Record<string, unknown> };
+    const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
+    const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
+    const validate = ajv.compile(manifest.configSchema);
+
+    const aliasOnly = {
+      defaults: {
+        format: "pdf",
+        imageQuality: "hq",
+      },
+    };
+    expect(validate(aliasOnly)).toBe(true);
+    expect(resolveDiffsPluginDefaults(aliasOnly)).toMatchObject({
+      fileFormat: "pdf",
+      fileQuality: "hq",
+      fileScale: 2.5,
+      fileMaxWidth: 1200,
+    });
+
+    const qualityOnly = {
+      defaults: {
+        fileQuality: "hq",
+      },
+    };
+    expect(validate(qualityOnly)).toBe(true);
+    expect(resolveDiffsPluginDefaults(qualityOnly)).toMatchObject({
+      fileQuality: "hq",
+      fileScale: 2.5,
+      fileMaxWidth: 1200,
+    });
+  });
 });
 
 describe("resolveDiffsPluginSecurity", () => {
@@ -179,6 +215,63 @@ describe("resolveDiffsPluginSecurity", () => {
 });
 
 describe("diffs plugin schema surfaces", () => {
+  it("preserves defaults and security for direct safeParse callers", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        defaults: {
+          theme: "light",
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        defaults: {
+          fontFamily: "Fira Code",
+          fontSize: 15,
+          lineSpacing: 1.6,
+          layout: "unified",
+          showLineNumbers: true,
+          diffIndicators: "bars",
+          wordWrap: true,
+          background: true,
+          theme: "light",
+          fileFormat: "png",
+          fileQuality: "standard",
+          fileScale: 2,
+          fileMaxWidth: 960,
+          mode: "both",
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      },
+    });
+  });
+
+  it("canonicalizes alias-driven defaults for direct safeParse callers", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        defaults: {
+          format: "pdf",
+          imageQuality: "hq",
+        },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        defaults: {
+          fileFormat: "pdf",
+          fileQuality: "hq",
+          fileScale: 2.5,
+          fileMaxWidth: 1200,
+        },
+      },
+    });
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
@@ -261,8 +354,8 @@ describe("renderDiffDocument", () => {
     expect(rendered.fileCount).toBe(1);
     expect(rendered.html).toContain("data-openclaw-diff-root");
     expect(rendered.html).toContain("src/example.ts");
-    expect(rendered.html).toContain("/plugins/diffs/assets/viewer.js");
-    expect(rendered.imageHtml).toContain("/plugins/diffs/assets/viewer.js");
+    expect(rendered.html).toContain("../../assets/viewer.js");
+    expect(rendered.imageHtml).toContain("../../assets/viewer.js");
     expect(rendered.imageHtml).toContain("max-width: 960px;");
     expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
     expect(rendered.html).toContain("min-height: 100vh;");
@@ -271,6 +364,58 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("--diffs-line-height: 24px;");
     expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
+  });
+
+  it("resolves viewer assets under an optional base path", async () => {
+    const rendered = await renderDiffDocument(
+      {
+        kind: "before_after",
+        before: "const value = 1;\n",
+        after: "const value = 2;\n",
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+    );
+
+    const html = rendered.html ?? "";
+    const loaderSrc = html.match(/<script type="module" src="([^"]+)"><\/script>/)?.[1];
+    expect(loaderSrc).toBe("../../assets/viewer.js");
+    expect(
+      new URL(loaderSrc ?? "", "https://example.com/openclaw/plugins/diffs/view/id/token").pathname,
+    ).toBe("/openclaw/plugins/diffs/assets/viewer.js");
+  });
+
+  it("downgrades invalid language hints to plain text", async () => {
+    const rendered = await renderDiffDocument(
+      {
+        kind: "before_after",
+        before: "const value = 1;\n",
+        after: "const value = 2;\n",
+        lang: "not-a-real-language",
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+    );
+
+    const html = rendered.html ?? "";
+
+    expect(rendered.title).toBe("Text diff");
+    expect(html).toContain("diff.txt");
+    expect(html).not.toContain("not-a-real-language");
+
+    const payloads = [...html.matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g)].map(
+      (match) => parseViewerPayloadJson(match[1] ?? ""),
+    );
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.langs).toEqual(["text"]);
+    expect(payloads[0]?.oldFile?.lang).toBeUndefined();
+    expect(payloads[0]?.newFile?.lang).toBeUndefined();
   });
 
   it("renders multi-file patch input", async () => {
@@ -399,7 +544,7 @@ describe("viewer assets", () => {
     const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
 
     expect(loader?.contentType).toBe("text/javascript; charset=utf-8");
-    expect(String(loader?.body)).toContain(`${VIEWER_RUNTIME_PATH}?v=`);
+    expect(String(loader?.body)).toContain(`./viewer-runtime.js?v=`);
   });
 
   it("serves the runtime bundle body", async () => {
@@ -407,6 +552,8 @@ describe("viewer assets", () => {
 
     expect(runtime?.contentType).toBe("text/javascript; charset=utf-8");
     expect(String(runtime?.body)).toContain("openclawDiffsReady");
+    expect(String(runtime?.body)).toContain('style.width="24px"');
+    expect(String(runtime?.body)).toContain('style.gap="6px"');
   });
 
   it("returns null for unknown asset paths", async () => {

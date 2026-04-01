@@ -59,4 +59,41 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(String(result.summary ?? "")).toMatch(/…$/);
   });
+
+  it("preserves all successful deliverable payloads for announce delivery", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "line 1" },
+        { text: "temporary error", isError: true },
+        { text: "line 2" },
+      ],
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "line 1" }, { text: "line 2" }]);
+    expect(result.deliveryPayload).toEqual({ text: "line 2" });
+  });
+
+  it("keeps structured-content detection scoped to the last delivery payload", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ mediaUrl: "https://example.com/report.png" }, { text: "final text" }],
+    });
+
+    expect(result.deliveryPayloads).toEqual([
+      { mediaUrl: "https://example.com/report.png" },
+      { text: "final text" },
+    ]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("returns only the last error payload when all payloads are errors", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "first error", isError: true },
+        { text: "last error", isError: true },
+      ],
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
+    expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+  });
 });

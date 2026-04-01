@@ -163,6 +163,52 @@ describe("createPluginApprovalHandlers", () => {
       expect(hasExecApprovalClients).toHaveBeenCalledWith("backend-conn-42");
     });
 
+    it("keeps plugin approvals pending when the originating chat can handle /approve directly", async () => {
+      vi.useFakeTimers();
+      try {
+        const handlers = createPluginApprovalHandlers(manager);
+        const respond = vi.fn();
+        const opts = createMockOptions(
+          "plugin.approval.request",
+          {
+            title: "Sensitive action",
+            description: "Desc",
+            twoPhase: true,
+            turnSourceChannel: "slack",
+            turnSourceTo: "C123",
+          },
+          {
+            respond,
+            context: {
+              broadcast: vi.fn(),
+              logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+              hasExecApprovalClients: () => false,
+            } as unknown as GatewayRequestHandlerOptions["context"],
+          },
+        );
+
+        const requestPromise = handlers["plugin.approval.request"](opts);
+
+        await vi.waitFor(() => {
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+            undefined,
+          );
+        });
+
+        const acceptedCall = respond.mock.calls.find(
+          (call) => (call[1] as Record<string, unknown>)?.status === "accepted",
+        );
+        const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+        manager.resolve(approvalId, "allow-once");
+
+        await requestPromise;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("rejects invalid severity value", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", {
@@ -385,7 +431,7 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
-    it("requires exact id and rejects prefixes", async () => {
+    it("accepts unique short id prefixes", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000, "abcdef-1234");
       void manager.register(record, 60_000);
@@ -395,15 +441,8 @@ describe("createPluginApprovalHandlers", () => {
         decision: "allow-always",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("unknown or expired"),
-          details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
-        }),
-      );
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(record.id)?.decision).toBe("allow-always");
     });
 
     it("does not leak candidate ids when prefixes are ambiguous", async () => {

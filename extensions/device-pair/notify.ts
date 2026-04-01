@@ -254,17 +254,23 @@ async function notifySubscriber(params: {
   subscriber: NotifySubscription;
   text: string;
 }): Promise<boolean> {
-  const send = params.api.runtime?.channel?.telegram?.sendMessageTelegram;
+  const adapter = await params.api.runtime.channel.outbound.loadAdapter("telegram");
+  const send = adapter?.sendText;
   if (!send) {
-    params.api.logger.warn("device-pair: telegram runtime unavailable for pairing notifications");
+    params.api.logger.warn(
+      "device-pair: telegram outbound adapter unavailable for pairing notifications",
+    );
     return false;
   }
 
   try {
-    await send(params.subscriber.to, params.text, {
+    await send({
+      cfg: params.api.config,
+      to: params.subscriber.to,
+      text: params.text,
       ...(params.subscriber.accountId ? { accountId: params.subscriber.accountId } : {}),
-      ...(typeof params.subscriber.messageThreadId === "number"
-        ? { messageThreadId: params.subscriber.messageThreadId }
+      ...(params.subscriber.messageThreadId != null
+        ? { threadId: params.subscriber.messageThreadId }
         : {}),
     });
     return true;

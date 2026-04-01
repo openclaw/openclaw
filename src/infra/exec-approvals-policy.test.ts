@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+} from "./exec-approvals-test-helpers.js";
+import {
+  evaluateExecAllowlist,
+  hasDurableExecApproval,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
   normalizeExecHost,
+  normalizeExecTarget,
   normalizeExecSecurity,
   requiresExecApproval,
 } from "./exec-approvals.js";
@@ -16,6 +23,16 @@ describe("exec approvals policy helpers", () => {
     { raw: "ssh", expected: null },
   ])("normalizes exec host value %j", ({ raw, expected }) => {
     expect(normalizeExecHost(raw)).toBe(expected);
+  });
+
+  it.each([
+    { raw: " auto ", expected: "auto" },
+    { raw: " gateway ", expected: "gateway" },
+    { raw: "NODE", expected: "node" },
+    { raw: "", expected: null },
+    { raw: "ssh", expected: null },
+  ])("normalizes exec target value %j", ({ raw, expected }) => {
+    expect(normalizeExecTarget(raw)).toBe(expected);
   });
 
   it.each([
@@ -67,6 +84,14 @@ describe("exec approvals policy helpers", () => {
       expected: true,
     },
     {
+      ask: "always" as const,
+      security: "full" as const,
+      analysisOk: true,
+      allowlistSatisfied: false,
+      durableApprovalSatisfied: true,
+      expected: true,
+    },
+    {
       ask: "off" as const,
       security: "allowlist" as const,
       analysisOk: true,
@@ -96,5 +121,72 @@ describe("exec approvals policy helpers", () => {
     },
   ])("requiresExecApproval respects ask mode and allowlist satisfaction for %j", (testCase) => {
     expect(requiresExecApproval(testCase)).toBe(testCase.expected);
+  });
+
+  it("treats exact-command allow-always approvals as durable trust", () => {
+    expect(
+      hasDurableExecApproval({
+        analysisOk: false,
+        segmentAllowlistEntries: [],
+        allowlist: [
+          {
+            pattern: "=command:613b5a60181648fd",
+            source: "allow-always",
+          },
+        ],
+        commandText: 'powershell -NoProfile -Command "Write-Output hi"',
+      }),
+    ).toBe(true);
+  });
+
+  it("marks policy-blocked segments as non-durable allowlist entries", () => {
+    const executable = makeMockExecutableResolution({
+      rawExecutable: "/usr/bin/echo",
+      resolvedPath: "/usr/bin/echo",
+      executableName: "echo",
+    });
+    const result = evaluateExecAllowlist({
+      analysis: {
+        ok: true,
+        segments: [
+          {
+            raw: "/usr/bin/echo ok",
+            argv: ["/usr/bin/echo", "ok"],
+            resolution: makeMockCommandResolution({
+              execution: executable,
+            }),
+          },
+          {
+            raw: "/bin/sh -lc whoami",
+            argv: ["/bin/sh", "-lc", "whoami"],
+            resolution: makeMockCommandResolution({
+              execution: makeMockExecutableResolution({
+                rawExecutable: "/bin/sh",
+                resolvedPath: "/bin/sh",
+                executableName: "sh",
+              }),
+              policyBlocked: true,
+            }),
+          },
+        ],
+      },
+      allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      safeBins: new Set(),
+      cwd: "/tmp",
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/echo" }),
+      null,
+    ]);
+    expect(
+      hasDurableExecApproval({
+        analysisOk: true,
+        segmentAllowlistEntries: result.segmentAllowlistEntries,
+        allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      }),
+    ).toBe(false);
   });
 });
