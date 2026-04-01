@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Breaking
+
+- Docs/CLI: stop documenting `openclaw flows`; use `openclaw tasks list|show|cancel` instead. Update old notes or scripts that still reference `openclaw flows`. (#58690) Thanks @neeravmakwana
+
 ### Changes
 
 - Gateway/webchat: make `chat.history` text truncation configurable with `gateway.webchat.chatHistoryMaxChars` and per-request `maxChars`, while preserving silent-reply filtering and existing default payload limits. (#58900)
