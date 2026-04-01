@@ -81,3 +81,36 @@ export function resolveIngressWorkspaceOverrideForSpawnedRun(
   const normalized = normalizeSpawnedRunMetadata(metadata);
   return normalized.spawnedBy ? normalized.workspaceDir : undefined;
 }
+
+export function resolveIngressToolFsPolicyOverrideForSpawnedRun(
+  metadata?:
+    | {
+        spawnedBy?: string | null;
+        toolFsPolicy?: {
+          workspaceOnly: boolean;
+          allowedPaths?: string[];
+          denyPaths?: string[];
+        } | null;
+      }
+    | null,
+):
+  | {
+      workspaceOnly: boolean;
+      allowedPaths?: string[];
+      denyPaths?: string[];
+    }
+  | undefined {
+  const spawnedBy = normalizeOptionalText(metadata?.spawnedBy);
+  if (!spawnedBy) {
+    return undefined;
+  }
+  const policy = metadata?.toolFsPolicy;
+  if (!policy) {
+    return undefined;
+  }
+  return {
+    workspaceOnly: policy.workspaceOnly,
+    allowedPaths: policy.allowedPaths,
+    denyPaths: policy.denyPaths,
+  };
+}

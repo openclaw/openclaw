@@ -207,6 +207,40 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnedToolFsPolicy" in patch) {
+    const raw = (patch as Record<string, unknown>).spawnedToolFsPolicy;
+    if (raw === null) {
+      if (existing?.spawnedToolFsPolicy) {
+        return invalid("spawnedToolFsPolicy cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedToolFsPolicy is only supported for subagent:* or acp:* sessions");
+      }
+      if (typeof raw !== "object") {
+        return invalid("invalid spawnedToolFsPolicy");
+      }
+      const record = raw as Record<string, unknown>;
+      const workspaceOnly = record.workspaceOnly === true;
+      const allowedPaths = Array.isArray(record.allowedPaths)
+        ? record.allowedPaths.filter((v) => typeof v === "string")
+        : undefined;
+      const denyPaths = Array.isArray(record.denyPaths)
+        ? record.denyPaths.filter((v) => typeof v === "string")
+        : undefined;
+
+      if (existing?.spawnedToolFsPolicy) {
+        // Keep it immutable after first set.
+        return invalid("spawnedToolFsPolicy cannot be changed once set");
+      }
+      next.spawnedToolFsPolicy = {
+        workspaceOnly,
+        allowedPaths,
+        denyPaths,
+      };
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {

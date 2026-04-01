@@ -94,6 +94,15 @@ const SessionsSpawnToolSchema = Type.Object({
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
 
+  // Optional filesystem policy tightening for the spawned subagent (can only reduce access).
+  fsPolicy: Type.Optional(
+    Type.Object({
+      workspaceOnly: Type.Optional(Type.Boolean()),
+      allowedPaths: Type.Optional(Type.Array(Type.String())),
+      denyPaths: Type.Optional(Type.Array(Type.String())),
+    }),
+  ),
+
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
   attachments: Type.Optional(
@@ -169,6 +178,21 @@ export function createSessionsSpawnTool(
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const fsPolicyRaw =
+        params.fsPolicy && typeof params.fsPolicy === "object"
+          ? (params.fsPolicy as Record<string, unknown>)
+          : undefined;
+      const fsPolicy = fsPolicyRaw
+        ? {
+            workspaceOnly: fsPolicyRaw.workspaceOnly === true,
+            allowedPaths: Array.isArray(fsPolicyRaw.allowedPaths)
+              ? fsPolicyRaw.allowedPaths.filter((v) => typeof v === "string")
+              : undefined,
+            denyPaths: Array.isArray(fsPolicyRaw.denyPaths)
+              ? fsPolicyRaw.denyPaths.filter((v) => typeof v === "string")
+              : undefined,
+          }
+        : undefined;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;
@@ -302,6 +326,7 @@ export function createSessionsSpawnTool(
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
+          fsPolicy,
         },
         {
           agentSessionKey: opts?.agentSessionKey,

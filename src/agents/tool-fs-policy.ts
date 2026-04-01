@@ -38,6 +38,70 @@ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: st
   };
 }
 
+export type ToolFsPolicyCombineParams = {
+  globalPolicy?: Partial<ToolFsPolicy>;
+  agentPolicy?: Partial<ToolFsPolicy>;
+  spawnPolicy?: Partial<ToolFsPolicy>;
+};
+
+function normalizeList(value: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const out = value.map((v) => v.trim()).filter(Boolean);
+  return out.length > 0 ? out : [];
+}
+
+function union(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
+  if (a === undefined && b === undefined) {
+    return undefined;
+  }
+  const merged = [...(a ?? []), ...(b ?? [])];
+  return merged.length > 0 ? Array.from(new Set(merged)) : [];
+}
+
+function intersectAll(lists: Array<string[] | undefined>): string[] | undefined {
+  const defined = lists.filter((v) => v !== undefined);
+  if (defined.length === 0) {
+    return undefined;
+  }
+  // If any level explicitly sets an empty allowlist, deny all.
+  if (defined.some((v) => v.length === 0)) {
+    return [];
+  }
+  let acc = new Set(defined[0]);
+  for (const list of defined.slice(1)) {
+    const next = new Set(list);
+    acc = new Set([...acc].filter((v) => next.has(v)));
+  }
+  return Array.from(acc);
+}
+
+export function combineToolFsPolicies(params: ToolFsPolicyCombineParams): ToolFsPolicy {
+  const globalAllowed = normalizeList(params.globalPolicy?.allowedPaths);
+  const agentAllowed = normalizeList(params.agentPolicy?.allowedPaths);
+  const spawnAllowed = normalizeList(params.spawnPolicy?.allowedPaths);
+
+  const globalDeny = normalizeList(params.globalPolicy?.denyPaths);
+  const agentDeny = normalizeList(params.agentPolicy?.denyPaths);
+  const spawnDeny = normalizeList(params.spawnPolicy?.denyPaths);
+
+  const allowedPaths = intersectAll([globalAllowed, agentAllowed, spawnAllowed]);
+  const denyPaths = union(union(globalDeny, agentDeny), spawnDeny);
+
+  const workspaceOnly =
+    params.globalPolicy?.workspaceOnly === true ||
+    params.agentPolicy?.workspaceOnly === true ||
+    params.spawnPolicy?.workspaceOnly === true;
+
+  return {
+    workspaceOnly,
+    allowedPaths,
+    denyPaths,
+  };
+}
+
+
 export function resolveEffectiveToolFsWorkspaceOnly(params: {
   cfg?: OpenClawConfig;
   agentId?: string;

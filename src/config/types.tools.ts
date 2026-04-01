@@ -634,6 +634,15 @@ export type ToolsConfig = {
       alsoAllow?: string[];
       deny?: string[];
     };
+    /**
+     * Optional filesystem policy ceiling + defaults for sub-agents.
+     * The effective sub-agent fs policy is the intersection/union/or of:
+     * - global tools.fs
+     * - agent tools.fs
+     * - tools.subagents.fs (this block)
+     * - sessions_spawn.fsPolicy (spawn-time overrides, can only tighten)
+     */
+    fs?: FsToolsConfig;
   };
   /** Sandbox tool policy defaults (deny wins). */
   sandbox?: {
