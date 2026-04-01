@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -35,6 +37,7 @@ const createMockConfig = () => ({
 });
 
 let mockConfig: Record<string, unknown> = createMockConfig();
+const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
   return new Map<string, Record<string, unknown>>([
@@ -209,29 +212,10 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
     buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
       relatedSessionKey: string;
       callerOwnerKey: string;
-    }) => {
-      const tasks = listTasksForRelatedSessionKeyForOwnerMock(params) as Array<
-        {
-          status?: string;
-        } & Record<string, unknown>
-      >;
-      const active = tasks.filter((task) => task.status === "queued" || task.status === "running");
-      const recentTerminal = active.length > 0 ? [] : tasks;
-      const recentFailureCount = recentTerminal.filter(
-        (task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost",
-      ).length;
-      const visible = active.length > 0 ? active : recentTerminal;
-      const latest = visible[0] as Record<string, unknown> | undefined;
-      return {
-        latest,
-        visible,
-        active,
-        recentTerminal,
-        activeCount: active.length,
-        totalCount: visible.length,
-        recentFailureCount,
-      };
-    },
+    }) =>
+      buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
+        now: TASK_STATUS_SNAPSHOT_NOW,
+      }),
   }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
