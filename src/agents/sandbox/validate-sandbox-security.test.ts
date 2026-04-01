@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getBlockedBindReason,
   validateBindMounts,
@@ -16,6 +16,10 @@ function expectBindMountsToThrow(binds: string[], expected: RegExp, label: strin
 }
 
 describe("getBlockedBindReason", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("blocks common Docker socket directories", () => {
     expect(getBlockedBindReason("/run:/run")).toEqual(expect.objectContaining({ kind: "targets" }));
     expect(getBlockedBindReason("/var/run:/var/run:ro")).toEqual(
@@ -26,9 +30,46 @@ describe("getBlockedBindReason", () => {
   it("does not block /var by default", () => {
     expect(getBlockedBindReason("/var:/var")).toBeNull();
   });
+
+  it("blocks sensitive home credential paths", () => {
+    vi.stubEnv("HOME", "/home/tester");
+
+    const cases = [
+      "/home/tester/.aws/credentials",
+      "/home/tester/.cargo/credentials.toml",
+      "/home/tester/.config/gcloud",
+      "/home/tester/.docker/config.json",
+      "/home/tester/.gnupg/private-keys-v1.d",
+      "/home/tester/.netrc",
+      "/home/tester/.npm/_logs",
+      "/home/tester/.ssh/config",
+    ] as const;
+
+    for (const source of cases) {
+      expect(getBlockedBindReason(`${source}:/mnt/test:ro`)).toEqual(
+        expect.objectContaining({ kind: "targets" }),
+      );
+    }
+  });
+
+  it("still blocks OS-home credential paths when OPENCLAW_HOME points elsewhere", () => {
+    vi.stubEnv("HOME", "/home/tester");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+
+    expect(getBlockedBindReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/home/tester/.gnupg",
+      }),
+    );
+  });
 });
 
 describe("validateBindMounts", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("allows legitimate project directory mounts", () => {
     expect(() =>
       validateBindMounts([
@@ -100,6 +141,15 @@ describe("validateBindMounts", () => {
 
   it("allows parent mounts that are not blocked", () => {
     expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
+  });
+
+  it("blocks sensitive home credential binds", () => {
+    vi.stubEnv("HOME", "/home/tester");
+
+    expect(() => validateBindMounts(["/home/tester/.docker/config.json:/mnt/docker:ro"])).toThrow(
+      /blocked path/,
+    );
+    expect(() => validateBindMounts(["/home/tester/.netrc:/mnt/netrc:ro"])).toThrow(/blocked path/);
   });
 
   it("blocks symlink escapes into blocked directories", () => {
