@@ -157,4 +157,37 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).not.toHaveBeenCalled();
   });
+
+  it("does not quarantine a tab when route.continue fails", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        {
+          continue: vi.fn(async () => {
+            throw new Error("page.goto: Frame has been detached");
+          }),
+          abort: vi.fn(async () => {}),
+        },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://example.com",
+        },
+      );
+      throw new Error("page.goto: Frame has been detached");
+    });
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://example.com",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(pageGoto).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
+  });
 });

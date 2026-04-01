@@ -639,11 +639,12 @@ export async function gotoPageWithNavigationGuard(opts: {
         url: request.url(),
         ...navigationPolicy,
       });
-      await route.continue();
     } catch (err) {
       blockedError = err;
       await route.abort().catch(() => {});
+      return;
     }
+    await route.continue();
   };
 
   await opts.page.route("**", handler);
