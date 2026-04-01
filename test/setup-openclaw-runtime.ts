@@ -6,6 +6,7 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
@@ -27,37 +28,12 @@ const [
   import("../src/test-utils/session-state-cleanup.js"),
 ]);
 
-const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
-
-type RegistryState = {
-  registry: PluginRegistry | null;
-  httpRouteRegistry: PluginRegistry | null;
-  httpRouteRegistryPinned: boolean;
-  key: string | null;
-  version: number;
-};
 
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
-
-const globalRegistryState = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [REGISTRY_STATE]?: RegistryState;
-  };
-  if (!globalState[REGISTRY_STATE]) {
-    globalState[REGISTRY_STATE] = {
-      registry: null,
-      httpRouteRegistry: null,
-      httpRouteRegistryPinned: false,
-      key: null,
-      version: 0,
-    };
-  }
-  return globalState[REGISTRY_STATE];
-})();
 
 const workerRuntimeState = (() => {
   const globalState = globalThis as typeof globalThis & {
@@ -289,11 +265,9 @@ function resolveDefaultPluginRegistryProxy(): PluginRegistry {
 }
 
 function installDefaultPluginRegistry(): void {
-  const defaultRegistry = resolveDefaultPluginRegistryProxy();
-  globalRegistryState.registry = defaultRegistry;
-  if (!globalRegistryState.httpRouteRegistryPinned) {
-    globalRegistryState.httpRouteRegistry = defaultRegistry;
-  }
+  workerRuntimeState.materializedDefaultPluginRegistry = null;
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
 }
 
 beforeAll(() => {
@@ -305,11 +279,7 @@ afterEach(async () => {
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
-  if (globalRegistryState.registry !== resolveDefaultPluginRegistryProxy()) {
-    installDefaultPluginRegistry();
-    globalRegistryState.key = null;
-    globalRegistryState.version += 1;
-  }
+  installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
