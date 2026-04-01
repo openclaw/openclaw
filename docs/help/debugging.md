@@ -52,6 +52,14 @@ rebuild `dist` first.
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
 each restart.
 
+> If `pnpm gateway:watch` fails with `ERR_INVALID_PACKAGE_CONFIG` or points to a file under `node_modules`, one of your local dependency files may be corrupted or truncated. A common recovery path is:
+>
+> ```bash
+> rm -rf node_modules
+> pnpm store prune
+> pnpm install
+> ```
+
 ## Dev profile + dev gateway (--dev)
 
 Use the dev profile to isolate state and spin up a safe, disposable setup for
