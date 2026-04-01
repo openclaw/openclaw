@@ -61,7 +61,7 @@ function expectBootstrapArgs() {
 }
 
 describe("outbound channel resolution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     getChannelPluginMock.mockReset();
@@ -86,6 +86,9 @@ describe("outbound channel resolution", () => {
     });
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+
+    const channelResolution = await importChannelResolution("reset");
+    channelResolution.resetOutboundChannelResolutionStateForTest();
   });
 
   it.each([
