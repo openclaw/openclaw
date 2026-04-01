@@ -9,6 +9,7 @@ import {
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
+  appendSystemPromptAddition,
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
   prependSystemPromptAddition,
@@ -1832,6 +1833,25 @@ describe("prependSystemPromptAddition", () => {
 
   it("returns the original system prompt when no addition is provided", () => {
     const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+    });
+
+    expect(result).toBe("base system");
+  });
+});
+
+describe("appendSystemPromptAddition", () => {
+  it("appends context-engine addition after the system prompt for cache stability", () => {
+    const result = appendSystemPromptAddition({
+      systemPrompt: "base system",
+      systemPromptAddition: "extra behavior",
+    });
+
+    expect(result).toBe("base system\n\nextra behavior");
+  });
+
+  it("returns the original system prompt when no addition is provided", () => {
+    const result = appendSystemPromptAddition({
       systemPrompt: "base system",
     });
 

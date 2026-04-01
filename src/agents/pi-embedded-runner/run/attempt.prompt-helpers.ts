@@ -115,6 +115,20 @@ export function prependSystemPromptAddition(params: {
   return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
 }
 
+/**
+ * Append context-engine additions to the **end** of the system prompt so that
+ * the static prefix remains stable and eligible for prompt caching.
+ */
+export function appendSystemPromptAddition(params: {
+  systemPrompt: string;
+  systemPromptAddition?: string;
+}): string {
+  if (!params.systemPromptAddition) {
+    return params.systemPrompt;
+  }
+  return `${params.systemPrompt}\n\n${params.systemPromptAddition}`;
+}
+
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
   attempt: Pick<
