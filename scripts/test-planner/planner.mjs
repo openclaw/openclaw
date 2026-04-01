@@ -1325,7 +1325,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     targetDurationMs: 120_000,
     targetFilesPerShard: 140,
     minShards: 4,
-    maxShards: 5,
+    maxShards: 6,
   });
 
   const checksFastInclude = nodeEligible
