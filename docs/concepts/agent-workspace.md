@@ -103,9 +103,16 @@ These are the standard files OpenClaw expects inside the workspace:
   - Daily memory log (one file per day).
   - Recommended to read today + yesterday on session start.
 
+- `memory/topics/*.md`, `memory/projects/*.md` (optional conventions)
+  - Evergreen topic or project notes kept under `memory/`.
+  - Useful for deeper reference material that should be searchable but not
+    always loaded at startup.
+
 - `MEMORY.md` (optional)
   - Curated long-term memory.
   - Only load in the main, private session (not shared/group contexts).
+  - Best kept concise; move detail into topic notes and keep summary pointers
+    here.
 
 See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 

@@ -28,6 +28,76 @@ If you want your agent to remember something, just ask it: "Remember that I
 prefer TypeScript." It will write it to the appropriate file.
 </Tip>
 
+## Recommended memory taxonomy
+
+As your note history grows, it helps to treat memory as **layers** instead of
+putting everything into `MEMORY.md`.
+
+### 1) Startup memory -- `MEMORY.md`
+
+Use `MEMORY.md` for the small set of things the agent should start with every
+private/main session:
+
+- durable preferences
+- standing rules and boundaries
+- stable facts about people, projects, and infrastructure
+- one-line pointers to deeper notes
+
+Keep this file **curated and concise**. If it starts reading like a journal or
+incident log, move the detail elsewhere and leave a short summary plus pointer.
+
+### 2) Running log -- `memory/YYYY-MM-DD.md`
+
+Use dated daily files for:
+
+- recent events
+- rough observations
+- temporary state
+- things that might matter later, but are not yet durable
+
+Daily notes can be messier. Periodically distill the important parts into
+`MEMORY.md` or a topic note.
+
+### 3) Evergreen topic notes -- `memory/topics/*.md`, `memory/projects/*.md`
+
+When a subject needs more detail than belongs in startup memory, create a
+separate note under `memory/`.
+
+Examples:
+
+- `memory/projects/openclaw-memory.md`
+- `memory/topics/home-assistant.md`
+- `memory/topics/briefgen-outreach.md`
+
+These notes are ideal for:
+
+- project-specific conventions
+- architecture notes
+- research summaries
+- runbooks
+- decision histories
+
+By default, they are **searchable** with `memory_search` but are not meant to
+all be loaded automatically at session start.
+
+### 4) Conversation recall -- transcripts, compaction, and recall tools
+
+Past conversations are a **separate layer** from curated memory. Use transcript
+search, compaction summaries, or recall extensions/plugins when you need to ask
+"what happened?" without promoting everything into `MEMORY.md`.
+
+A good rule of thumb:
+
+- put **preferences / durable facts** in `MEMORY.md`
+- put **recent rough context** in daily notes
+- put **deep reference material** in topic notes
+- use **conversation recall** for historical reconstruction
+
+<Tip>
+A strong pattern is to keep `MEMORY.md` short enough to skim quickly, then move
+project detail into searchable topic files under `memory/`.
+</Tip>
+
 ## Memory tools
 
 The agent has two tools for working with memory:
