@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
   buildPluginStatusReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
+  listFlowRecords: vi.fn(() => []),
+  listTasksForFlowId: vi.fn(() => []),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -30,9 +32,21 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
+vi.mock("../tasks/flow-registry.js", () => ({
+  listFlowRecords: (...args: unknown[]) => mocks.listFlowRecords(...args),
+}));
+
+vi.mock("../tasks/task-registry.js", () => ({
+  listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowId(...args),
+}));
+
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
+  opts?: {
+    flows?: unknown[];
+    tasksByFlowId?: (flowId: string) => unknown[];
+  },
 ) {
   mocks.resolveDefaultAgentId.mockReturnValue("default");
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
@@ -44,6 +58,10 @@ async function runNoteWorkspaceStatusForTest(
     ...loadResult,
   });
   mocks.buildPluginCompatibilityWarnings.mockReturnValue(compatibilityWarnings);
+  mocks.listFlowRecords.mockReturnValue(opts?.flows ?? []);
+  mocks.listTasksForFlowId.mockImplementation((flowId: string) =>
+    opts?.tasksByFlowId ? opts.tasksByFlowId(flowId) : [],
+  );
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   noteWorkspaceStatus({});
@@ -155,6 +173,33 @@ describe("noteWorkspaceStatus", () => {
       expect(String(compatibilityCalls[0]?.[0])).toContain(
         "legacy-plugin still uses legacy before_agent_start",
       );
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("adds ClawFlow recovery hints for broken blocked flows", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(createPluginLoadResult(), [], {
+      flows: [
+        {
+          flowId: "flow-123",
+          shape: "linear",
+          ownerKey: "agent:main:main",
+          status: "blocked",
+          notifyPolicy: "done_only",
+          goal: "Investigate PR batch",
+          blockedTaskId: "task-missing",
+          createdAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      tasksByFlowId: () => [],
+    });
+    try {
+      const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "ClawFlow recovery");
+      expect(recoveryCalls).toHaveLength(1);
+      expect(String(recoveryCalls[0]?.[0])).toContain("flow-123");
+      expect(String(recoveryCalls[0]?.[0])).toContain("openclaw flows show <flow-id>");
     } finally {
       noteSpy.mockRestore();
     }
