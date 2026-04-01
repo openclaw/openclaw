@@ -5,7 +5,11 @@ import { pathToFileURL } from "node:url";
 import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAcpxPluginConfig } from "./config.js";
-import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
+import {
+  AcpxRuntime,
+  decodeAcpxRuntimeHandleState,
+  encodeAcpxRuntimeHandleState,
+} from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
   createMockRuntimeFixture,
@@ -1095,6 +1099,35 @@ describe("AcpxRuntime", () => {
       delete process.env.MOCK_ACPX_PROMPT_LOAD_INVALID;
       delete process.env.MOCK_ACPX_PROMPT_NEW_AGENT_SESSION_ID;
     }
+  });
+
+  it("prefers decoded runtime session identifiers over stale handle fallbacks", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const sessionKey = "agent:gemini:acp:stale-handle-fallback";
+    const handle = await runtime.ensureSession({
+      sessionKey,
+      agent: "gemini",
+      mode: "persistent",
+    });
+
+    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+    expect(decoded).not.toBeNull();
+
+    handle.runtimeSessionName = encodeAcpxRuntimeHandleState({
+      ...decoded!,
+      backendSessionId: "sid-decoded-gemini-session",
+      agentSessionId: "decoded-gemini-session",
+    });
+    handle.backendSessionId = "sid-stale-gemini-session";
+    handle.agentSessionId = "stale-gemini-session";
+
+    await runtime.getStatus({ handle });
+
+    const statusEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+      (entry) => entry.kind === "status",
+    );
+    expect(statusEntries.length).toBeGreaterThan(0);
+    expect(statusEntries.at(-1)?.sessionName).toBe("decoded-gemini-session");
   });
 
   it("does not promote session/update params.sessionId into the runtime handle", async () => {

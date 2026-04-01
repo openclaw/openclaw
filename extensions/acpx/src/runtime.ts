@@ -245,6 +245,21 @@ function mergeHandleStateWithIdentifiers(
   };
 }
 
+function mergeHandleStateWithFallbackIdentifiers(
+  state: AcpxHandleState,
+  identifiers: AcpxSessionIdentifiers,
+): AcpxHandleState {
+  const acpxRecordId = state.acpxRecordId ?? identifiers.acpxRecordId;
+  const backendSessionId = state.backendSessionId ?? identifiers.backendSessionId;
+  const agentSessionId = state.agentSessionId ?? identifiers.agentSessionId;
+  return {
+    ...state,
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(backendSessionId ? { backendSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+  };
+}
+
 function resolveInteractiveSessionReference(state: AcpxHandleState): string {
   return state.agentSessionId ?? state.name;
 }
@@ -1095,7 +1110,9 @@ export class AcpxRuntime implements AcpRuntime {
   private resolveHandleState(handle: AcpRuntimeHandle): AcpxHandleState {
     const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
     if (decoded) {
-      return mergeHandleStateWithIdentifiers(decoded, {
+      // Prefer the encoded runtime state over legacy handle fields so stale
+      // fallback metadata does not resurrect older session identifiers.
+      return mergeHandleStateWithFallbackIdentifiers(decoded, {
         acpxRecordId: asOptionalString((handle as { acpxRecordId?: unknown }).acpxRecordId),
         backendSessionId: asOptionalString(handle.backendSessionId),
         agentSessionId: asOptionalString(handle.agentSessionId),
