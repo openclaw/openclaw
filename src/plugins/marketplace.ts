@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
+import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
@@ -485,7 +486,7 @@ async function loadMarketplace(params: {
     if (!parsed.ok) {
       return parsed;
     }
-    const validated = validateMarketplaceManifest({
+    const validated = await validateMarketplaceManifest({
       manifest: parsed.manifest,
       sourceLabel: local.manifestPath,
       rootDir: local.rootDir,
@@ -561,7 +562,7 @@ async function loadMarketplace(params: {
     await cloned.cleanup();
     return parsed;
   }
-  const validated = validateMarketplaceManifest({
+  const validated = await validateMarketplaceManifest({
     manifest: parsed.manifest,
     sourceLabel: cloned.label,
     rootDir: cloned.rootDir,
@@ -802,10 +803,10 @@ async function downloadUrlToTempFile(
   }
 }
 
-function ensureInsideMarketplaceRoot(
+async function ensureInsideMarketplaceRoot(
   rootDir: string,
   candidate: string,
-): { ok: true; path: string } | { ok: false; error: string } {
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
   const relative = path.relative(rootDir, resolved);
   if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
@@ -814,15 +815,29 @@ function ensureInsideMarketplaceRoot(
       error: `plugin source escapes marketplace root: ${candidate}`,
     };
   }
+
+  try {
+    await assertCanonicalPathWithinBase({
+      baseDir: rootDir,
+      candidatePath: resolved,
+      boundaryLabel: "marketplace root",
+    });
+  } catch {
+    return {
+      ok: false,
+      error: `plugin source escapes marketplace root: ${candidate}`,
+    };
+  }
+
   return { ok: true, path: resolved };
 }
 
-function validateMarketplaceManifest(params: {
+async function validateMarketplaceManifest(params: {
   manifest: MarketplaceManifest;
   sourceLabel: string;
   rootDir: string;
   origin: MarketplaceManifestOrigin;
-}): { ok: true; manifest: MarketplaceManifest } | { ok: false; error: string } {
+}): Promise<{ ok: true; manifest: MarketplaceManifest } | { ok: false; error: string }> {
   if (params.origin === "local") {
     return { ok: true, manifest: params.manifest };
   }
@@ -846,7 +861,7 @@ function validateMarketplaceManifest(params: {
             "remote marketplaces may only use relative plugin paths",
         };
       }
-      const resolved = ensureInsideMarketplaceRoot(params.rootDir, source.path);
+      const resolved = await ensureInsideMarketplaceRoot(params.rootDir, source.path);
       if (!resolved.ok) {
         return {
           ok: false,
@@ -895,7 +910,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
     }
     const resolved = path.isAbsolute(params.source.path)
       ? { ok: true as const, path: params.source.path }
-      : ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path);
+      : await ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path);
     if (!resolved.ok) {
       return resolved;
     }
@@ -923,7 +938,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
       params.source.kind === "github" || params.source.kind === "git"
         ? params.source.path?.trim() || "."
         : params.source.path.trim();
-    const target = ensureInsideMarketplaceRoot(cloned.rootDir, subPath);
+    const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath);
     if (!target.ok) {
       await cloned.cleanup();
       return target;

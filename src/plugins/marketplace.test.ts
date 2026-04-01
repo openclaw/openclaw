@@ -23,6 +23,7 @@ const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 let installPluginFromMarketplace: typeof import("./marketplace.js").installPluginFromMarketplace;
 let listMarketplacePlugins: typeof import("./marketplace.js").listMarketplacePlugins;
 let resolveMarketplaceInstallShortcut: typeof import("./marketplace.js").resolveMarketplaceInstallShortcut;
+const tempOutsideDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
@@ -111,6 +112,27 @@ function mockRemoteMarketplaceClone(params: { manifest: unknown; pluginDir?: str
   });
 }
 
+function mockRemoteMarketplaceCloneWithOutsideSymlink(params: {
+  manifest: unknown;
+  symlinkPath: string;
+}) {
+  runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+    const repoDir = argv.at(-1);
+    expect(typeof repoDir).toBe("string");
+    await writeRemoteMarketplaceFixture({
+      repoDir: repoDir as string,
+      manifest: params.manifest,
+    });
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-outside-"));
+    tempOutsideDirs.push(outsideDir);
+    await fs.mkdir(path.dirname(path.join(repoDir as string, params.symlinkPath)), {
+      recursive: true,
+    });
+    await fs.symlink(outsideDir, path.join(repoDir as string, params.symlinkPath));
+    return { code: 0, stdout: "", stderr: "", killed: false };
+  });
+}
+
 async function expectRemoteMarketplaceError(params: { manifest: unknown; expectedError: string }) {
   mockRemoteMarketplaceClone({ manifest: params.manifest });
 
@@ -183,11 +205,16 @@ function expectLocalMarketplaceInstallResult(params: {
 }
 
 describe("marketplace plugins", () => {
-  afterEach(() => {
+  afterEach(async () => {
     fetchWithSsrFGuardMock.mockClear();
     installPluginFromPathMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     vi.unstubAllGlobals();
+    await Promise.all(
+      tempOutsideDirs.splice(0, tempOutsideDirs.length).map(async (dir) => {
+        await fs.rm(dir, { recursive: true, force: true });
+      }),
+    );
   });
 
   it("lists plugins from a local marketplace root", async () => {
@@ -342,6 +369,36 @@ describe("marketplace plugins", () => {
 
     expectRemoteMarketplaceInstallResult(result);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects remote marketplace plugin paths that resolve through symlinks outside the cloned repo",
+    async () => {
+      mockRemoteMarketplaceCloneWithOutsideSymlink({
+        symlinkPath: "plugins/evil-link",
+        manifest: {
+          plugins: [
+            {
+              name: "frontend-design",
+              source: "./plugins/evil-link",
+            },
+          ],
+        },
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: "owner/repo",
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          'invalid marketplace entry "frontend-design" in owner/repo: ' +
+          "plugin source escapes marketplace root: ./plugins/evil-link",
+      });
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns a structured error for archive downloads with an empty response body", async () => {
     await withTempDir(async (rootDir) => {
@@ -796,4 +853,33 @@ describe("marketplace plugins", () => {
   ] as const)("$name", async ({ manifest, expectedError }) => {
     await expectRemoteMarketplaceError({ manifest, expectedError });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects remote marketplace symlink plugin paths during manifest validation",
+    async () => {
+      mockRemoteMarketplaceCloneWithOutsideSymlink({
+        symlinkPath: "evil-link",
+        manifest: {
+          plugins: [
+            {
+              name: "frontend-design",
+              source: {
+                type: "path",
+                path: "evil-link",
+              },
+            },
+          ],
+        },
+      });
+
+      const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          'invalid marketplace entry "frontend-design" in owner/repo: ' +
+          "plugin source escapes marketplace root: evil-link",
+      });
+    },
+  );
 });
