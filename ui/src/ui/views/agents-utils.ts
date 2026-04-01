@@ -556,25 +556,62 @@ function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
 ): ConfiguredModelOption[] {
   const cfg = configForm as ConfigSnapshot | null;
-  const models = cfg?.agents?.defaults?.models;
-  if (!models || typeof models !== "object") {
-    return [];
-  }
+  const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
-  for (const [modelId, modelRaw] of Object.entries(models)) {
-    const trimmed = modelId.trim();
-    if (!trimmed) {
-      continue;
+
+  // 1. Collect from agents.defaults.models (allowlist with optional aliases)
+  const models = cfg?.agents?.defaults?.models;
+  if (models && typeof models === "object") {
+    for (const [modelId, modelRaw] of Object.entries(models)) {
+      const trimmed = modelId.trim();
+      if (!trimmed || seen.has(trimmed.toLowerCase())) {
+        continue;
+      }
+      seen.add(trimmed.toLowerCase());
+      const alias =
+        modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
+          ? typeof (modelRaw as { alias?: unknown }).alias === "string"
+            ? (modelRaw as { alias?: string }).alias?.trim()
+            : undefined
+          : undefined;
+      const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
+      options.push({ value: trimmed, label });
     }
-    const alias =
-      modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
-        ? typeof (modelRaw as { alias?: unknown }).alias === "string"
-          ? (modelRaw as { alias?: string }).alias?.trim()
-          : undefined
-        : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
   }
+
+  // 2. Also collect from agents.defaults.model (primary + fallbacks)
+  const defaultModel = cfg?.agents?.defaults?.model;
+  if (defaultModel) {
+    const addModelOption = (value: unknown) => {
+      if (typeof value !== "string") {
+        return;
+      }
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed.toLowerCase())) {
+        return;
+      }
+      seen.add(trimmed.toLowerCase());
+      options.push({ value: trimmed, label: trimmed });
+    };
+    if (typeof defaultModel === "string") {
+      addModelOption(defaultModel);
+    } else if (typeof defaultModel === "object") {
+      const record = defaultModel as Record<string, unknown>;
+      addModelOption(record.primary);
+      addModelOption(record.model);
+      addModelOption(record.id);
+      addModelOption(record.value);
+      const fallbacks = Array.isArray(record.fallbacks)
+        ? record.fallbacks
+        : Array.isArray(record.fallback)
+          ? record.fallback
+          : [];
+      for (const fb of fallbacks) {
+        addModelOption(fb);
+      }
+    }
+  }
+
   return options;
 }
 
