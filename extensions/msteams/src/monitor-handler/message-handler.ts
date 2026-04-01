@@ -369,6 +369,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      teamId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
