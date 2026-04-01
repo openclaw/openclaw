@@ -10,7 +10,7 @@ import type { ProviderConfig } from "./models-config.providers.secrets.js";
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
 
-  it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
+  it("refreshes implicit model metadata while preserving explicit input and reasoning overrides", () => {
     const merged = mergeProviderModels(
       {
         api: "openai-responses",
@@ -43,10 +43,48 @@ describe("models-config merge helpers", () => {
     expect(merged.models).toEqual([
       expect.objectContaining({
         id: "gpt-5.4",
-        input: ["text"],
+        input: ["image"],
         reasoning: false,
         contextWindow: 2_000_000,
         maxTokens: 200_000,
+      }),
+    ]);
+  });
+
+  it("preserves explicit input config when user specifies vision capabilities", () => {
+    // When a user explicitly configures input: ["text", "image"] for a vision-capable
+    // model, that config should be preserved even if the implicit provider model only
+    // advertises input: ["text"]. This is critical for MiniMax models where the registry
+    // doesn't advertise vision but the user has configured it.
+    const merged = mergeProviderModels(
+      {
+        baseUrl: "https://api.minimax.io",
+        api: "minimax-direct",
+        models: [
+          {
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            input: ["text"], // implicit provider entry
+          },
+        ],
+      } as unknown as ProviderConfig,
+      {
+        baseUrl: "https://api.minimax.io",
+        api: "minimax-direct",
+        models: [
+          {
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            input: ["text", "image"], // user's explicit vision config
+          },
+        ],
+      } as unknown as ProviderConfig,
+    );
+
+    expect(merged.models).toEqual([
+      expect.objectContaining({
+        id: "MiniMax-M2.7-highspeed",
+        input: ["text", "image"], // explicit input should be preserved
       }),
     ]);
   });
