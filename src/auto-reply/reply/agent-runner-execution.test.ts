@@ -459,6 +459,43 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces node-unavailable copy on pre-turn node.invoke timeout failures", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("errorCode=UNAVAILABLE errorMessage=TIMEOUT: node invoke timed out"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("paired node appears unavailable");
+      expect(result.payload.text).not.toContain("API rate limit reached");
+    }
+  });
+
   it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
