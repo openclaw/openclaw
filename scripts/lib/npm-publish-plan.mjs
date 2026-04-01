@@ -31,6 +31,10 @@ const CORRECTION_VERSION_REGEX =
  */
 
 /**
+ * @typedef {"--dry-run" | "--publish"} NpmPublishMode
+ */
+
+/**
  * @param {string} version
  * @param {Record<string, string | undefined>} groups
  * @param {"stable" | "beta"} channel
@@ -200,4 +204,20 @@ export function resolveNpmDistTagMirrorAuth(params = {}) {
   }
 
   return { hasAuth: false, source: "none" };
+}
+
+/**
+ * @param {{
+ *   mode: NpmPublishMode;
+ *   mirrorDistTags: string[] | readonly string[];
+ *   hasAuth: boolean;
+ * }} params
+ * @returns {boolean}
+ */
+export function shouldRequireNpmDistTagMirrorAuth(params) {
+  return (
+    params.mode === "--publish" &&
+    params.mirrorDistTags.some((distTag) => distTag.trim().length > 0) &&
+    !params.hasAuth
+  );
 }
