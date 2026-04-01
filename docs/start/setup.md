@@ -97,6 +97,14 @@ pnpm gateway:watch
 `gateway:watch` runs the gateway in watch mode and reloads on relevant source,
 config, and bundled-plugin metadata changes.
 
+> If `pnpm gateway:watch` fails with `ERR_INVALID_PACKAGE_CONFIG` or points to a file under `node_modules`, one of your local dependency files may be corrupted or truncated. A common recovery path is:
+>
+> ```bash
+> rm -rf node_modules
+> pnpm store prune
+> pnpm install
+> ```
+
 ### 2) Point the macOS app at your running Gateway
 
 In **OpenClaw.app**:
