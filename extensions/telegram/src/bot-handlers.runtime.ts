@@ -59,6 +59,8 @@ import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
   type TelegramUpdateKeyContext,
+  createTelegramUpdateDedupe,
+  buildTelegramUpdateKey,
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
@@ -117,6 +119,7 @@ export const registerTelegramHandlers = ({
   logger,
   telegramDeps = defaultTelegramBotDeps,
 }: RegisterTelegramHandlerParams) => {
+  const updateDedupe = createTelegramUpdateDedupe();
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -1676,9 +1679,16 @@ export const registerTelegramHandlers = ({
     oversizeLogMessage: string;
     errorMessage: string;
   };
-
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
     try {
+      // === Telegram inbound deduplication ===
+      const dedupeKey = buildTelegramUpdateKey(event.ctxForDedupe);
+      if (dedupeKey && updateDedupe.check(dedupeKey)) {
+        logVerbose(`[telegram] Duplicate update detected (${dedupeKey}), skipping`);
+        return;
+      }
+      // ======================================
+
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
