@@ -57,6 +57,31 @@ describe("telegram native approval adapter", () => {
     });
   });
 
+  it("parses topic-scoped turn-source targets in the extension", async () => {
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-topic-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1003841603622:topic:928",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "-1003841603622",
+      threadId: 928,
+    });
+  });
+
   it("falls back to the session-bound origin target for plugin approvals", async () => {
     writeStore({
       "agent:main:telegram:group:-1003841603622:topic:928": {

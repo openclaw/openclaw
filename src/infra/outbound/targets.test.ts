@@ -798,6 +798,25 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.threadId).toBe(1122);
   });
 
+  it("keeps Telegram topic thread routing when turnSourceTo uses the plugin-owned topic target", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-forum-topic-scoped",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "telegram:-1001234567890:topic:1122",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:-1001234567890:topic:1122",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("telegram:-1001234567890:topic:1122");
+    expect(resolved.threadId).toBe(1122);
+  });
+
   it("does not fall back to session lastThreadId when turnSourceChannel differs from session channel", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {
