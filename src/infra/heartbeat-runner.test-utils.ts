@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -48,7 +47,7 @@ export async function withTempHeartbeatSandbox<T>(
   fn: (ctx: {
     tmpDir: string;
     storePath: string;
-    replySpy: ReturnType<typeof vi.spyOn>;
+    replySpy: ReturnType<typeof vi.fn>;
   }) => Promise<T>,
   options?: {
     prefix?: string;
@@ -58,7 +57,7 @@ export async function withTempHeartbeatSandbox<T>(
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
   await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
   const storePath = path.join(tmpDir, "sessions.json");
-  const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+  const replySpy = vi.fn().mockResolvedValue({ text: "ok" });
   const previousEnv = new Map<string, string | undefined>();
   for (const envName of options?.unsetEnvVars ?? []) {
     previousEnv.set(envName, process.env[envName]);
@@ -67,7 +66,7 @@ export async function withTempHeartbeatSandbox<T>(
   try {
     return await fn({ tmpDir, storePath, replySpy });
   } finally {
-    replySpy.mockRestore();
+    replySpy.mockReset();
     for (const [envName, previousValue] of previousEnv.entries()) {
       if (previousValue === undefined) {
         delete process.env[envName];
@@ -83,7 +82,7 @@ export async function withTempTelegramHeartbeatSandbox<T>(
   fn: (ctx: {
     tmpDir: string;
     storePath: string;
-    replySpy: ReturnType<typeof vi.spyOn>;
+    replySpy: ReturnType<typeof vi.fn>;
   }) => Promise<T>,
   options?: {
     prefix?: string;
