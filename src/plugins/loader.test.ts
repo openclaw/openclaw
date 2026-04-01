@@ -1056,6 +1056,22 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      name: "loads bundled channel plugins when channels.<id>.enabled=true even under restrictive plugins.allow",
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          allow: ["browser"],
+        },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        expectTelegramLoaded(registry);
+      },
+    },
+    {
       name: "still respects explicit disable via plugins.entries for bundled channels",
       config: {
         channels: {
