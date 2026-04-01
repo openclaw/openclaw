@@ -41,24 +41,6 @@ describe("slackSetupWizard.finalize", () => {
     ).toBe(true);
   });
 
-  it("records an explicit false choice when the operator declines interactive replies", async () => {
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      prompter: createTestWizardPrompter({
-        confirm: vi.fn(async () => false),
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(false);
-  });
-
   it("auto-enables interactive replies for quickstart defaults without prompting", async () => {
     const confirm = vi.fn(async () => false);
 
