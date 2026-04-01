@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Bug Fixes
+
+- Agents/announce: gate session-entry-derived `threadId` on `isThreadSessionKey()` in `resolveAnnounceOrigin()` so non-thread sessions (DMs, channels) cannot leak stale `threadId` into subagent announce routing. This fixes subagent announce delivery for Slack assistant app threads (topic sessions) where the announce routed to the base DM instead of the originating thread. (#17731)
+
 ### Changes
 
 - Agents/compaction: resolve `agents.defaults.compaction.model` consistently for manual `/compact` and other context-engine compaction paths, so engine-owned compaction uses the configured override model across runtime entrypoints. (#56710) Thanks @oliviareid-svg

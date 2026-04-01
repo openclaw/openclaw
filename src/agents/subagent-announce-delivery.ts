@@ -14,6 +14,7 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { isThreadSessionKey } from "../config/sessions/reset.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
@@ -183,6 +184,7 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
 export function resolveAnnounceOrigin(
   entry?: DeliveryContextSource,
   requesterOrigin?: DeliveryContext,
+  requesterSessionKey?: string,
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
@@ -195,15 +197,31 @@ export function resolveAnnounceOrigin(
       normalizedEntry,
     );
   }
-  const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
+  // Non-thread sessions (DMs, channels) can accumulate a stale threadId
+  // from previous thread interactions. Prevent that threadId from leaking
+  // into announce routing — only thread/topic sessions may contribute
+  // threadId from their session store entry. The requesterOrigin threadId
+  // (captured at spawn time) is always preserved regardless.
+  // See: https://github.com/openclaw/openclaw/issues/17731
+  const entryThreadIdAllowed = requesterSessionKey
+    ? isThreadSessionKey(requesterSessionKey)
+    : true; // preserve existing behavior when session key is not available
+  const sanitizedEntry =
+    normalizedEntry && !entryThreadIdAllowed && normalizedEntry.threadId != null
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;
         })()
       : normalizedEntry;
+  const entryForMerge =
+    normalizedRequester?.to &&
+    normalizedRequester.threadId == null &&
+    sanitizedEntry?.threadId != null
+      ? (() => {
+          const { threadId: _ignore, ...rest } = sanitizedEntry;
+          return rest;
+        })()
+      : sanitizedEntry;
   return mergeDeliveryContext(normalizedRequester, entryForMerge);
 }
 
@@ -421,7 +439,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin, canonicalKey);
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
