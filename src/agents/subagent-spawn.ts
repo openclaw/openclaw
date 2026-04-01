@@ -28,7 +28,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { buildSubagentSystemPrompt, buildChildMessage } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -38,6 +38,10 @@ import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
+import {
+  FORK_SUBAGENT_FEATURE,
+  FORK_BOILERPLATE_TAG,
+} from "./fork-constants.js";
 import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
@@ -86,6 +90,31 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /**
+   * Fork 模式参数
+   * 当启用时，子代理继承父代理的完整上下文并共享 prompt cache
+   */
+  fork?: boolean;
+  /**
+   * Fork 模式下的子代理指令
+   * 仅当 fork=true 时使用
+   */
+  forkDirective?: string;
+  /**
+   * 继承父消息历史（Phase 2）
+   * 默认 true（fork 模式下）
+   */
+  inheritContext?: boolean;
+  /**
+   * 权限冒泡模式（Phase 3）
+   * 子代理权限请求冒泡到父会话确认
+   */
+  permissionBubble?: boolean;
+  /**
+   * 工具继承（Phase 4）
+   * 继承父代理的完整工具集
+   */
+  inheritTools?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -340,6 +369,18 @@ export async function spawnSubagentDirect(
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestedAgentId = params.agentId?.trim();
+
+  // ========== Fork 模式检查（Phase 3）==========
+  const forkRequested = params.fork === true;
+  const forkEnabled = forkRequested && isForkSubagentEnabled();
+
+  // 如果请求 fork 但功能未启用
+  if (forkRequested && !isForkSubagentEnabled()) {
+    return {
+      status: "error",
+      error: "Fork mode requires OPENCLAW_FORK_SUBAGENT=1 or agents.defaults.forkSubagent=true in config",
+    };
+  }
 
   // Reject malformed agentId before normalizeAgentId can mangle it.
   // Without this gate, error-message strings like "Agent not found: xyz" pass
@@ -653,12 +694,34 @@ export async function spawnSubagentDirect(
     childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
   }
 
+  // ========== Fork 消息构建（Phase 3）==========
+  // Fork 模式使用 buildForkedMessages 构建优化消息
+  // 传统模式使用 childTaskMessage
+  
+  let finalTaskMessage: string = task;
+  
+  if (forkEnabled && params.forkDirective) {
+    // Fork 模式：使用 buildChildMessage 构建指令
+    // 注意：完整的 fork 消息构建需要父代理的 assistant message
+    // 当前实现使用简化版本，仅注入 fork 指令格式
+    
+    finalTaskMessage = buildChildMessage(params.forkDirective);
+    
+    // Fork 模式下的系统提示调整
+    // 子代理继承父系统提示，不需要额外的 subagent 上下文提示
+    childSystemPrompt = ""; // 清空，让 fork 子代理使用继承的系统提示
+  }
+
   const childTaskMessage = [
-    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
-    spawnMode === "session"
+    forkEnabled 
+      ? undefined // Fork 模式不添加 subagent 上下文提示
+      : `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
+    spawnMode === "session" && !forkEnabled
       ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
       : undefined,
-    `[Subagent Task]: ${task}`,
+    forkEnabled 
+      ? finalTaskMessage // Fork 模式使用 buildChildMessage 输出
+      : `[Subagent Task]: ${task}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n\n");
@@ -910,3 +973,53 @@ export const __testing = {
       : defaultSubagentSpawnDeps;
   },
 };
+
+/**
+ * 检查是否启用了 Fork 子代理功能
+ *
+ * 当启用时：
+ * - 省略 subagent_type 会触发隐式 fork
+ * - 子代理继承父代理的完整对话上下文和系统提示
+ * - 所有子代理在后台异步运行
+ */
+export function isForkSubagentEnabled(): boolean {
+  // 检查 Feature Flag 是否启用
+  if (process.env.OPENCLAW_FORK_SUBAGENT === "1") {
+    return true;
+  }
+  // 检查配置
+  const cfg = loadConfig();
+  if (cfg?.agents?.defaults?.forkSubagent === true) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 检查是否在 Fork 子代理中
+ * 通过检测对话历史中是否存在 fork boilerplate tag
+ */
+export function isInForkChild(messages: Array<{ type?: string; message?: { content?: unknown } }>): boolean {
+  return messages.some((m) => {
+    if (m.type !== "user") return false;
+    const content = m.message?.content;
+    if (!Array.isArray(content)) return false;
+    return content.some(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        "type" in block &&
+        block.type === "text" &&
+        "text" in block &&
+        typeof block.text === "string" &&
+        block.text.includes(`<${FORK_BOILERPLATE_TAG}>`),
+    );
+  });
+}
+
+/**
+ * 检查消息中是否包含 fork 相关的 boilerplate
+ */
+export function hasForkBoilerplate(text: string): boolean {
+  return text.includes(`<${FORK_BOILERPLATE_TAG}>`);
+}

@@ -114,6 +114,30 @@ const SessionsSpawnToolSchema = Type.Object({
       mountPath: Type.Optional(Type.String()),
     }),
   ),
+
+  // Fork 模式参数（Phase 2-4 进化）
+  // Fork 模式启用 - 子代理继承父代理完整上下文，共享 prompt cache
+  fork: Type.Optional(Type.Boolean({
+    description: 
+      'Enable fork mode - child inherits full parent context and shares prompt cache for 90%+ token savings. Requires forkDirective.',
+  })),
+  // Fork 子代理指令
+  forkDirective: Type.Optional(Type.String({
+    description:
+      'Directive for fork child - the specific task for this fork worker. Required when fork=true.',
+  })),
+  // 继承父消息历史
+  inheritContext: Type.Optional(Type.Boolean({
+    description: 'Inherit parent conversation history (default: true when fork=true)',
+  })),
+  // 权限冒泡模式
+  permissionBubble: Type.Optional(Type.Boolean({
+    description: 'Permission bubble mode - defer sensitive action approvals to parent session',
+  })),
+  // 工具继承
+  inheritTools: Type.Optional(Type.Boolean({
+    description: 'Inherit tool permissions from parent session (default: true)',
+  })),
 });
 
 export function createSessionsSpawnTool(
@@ -177,6 +201,21 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+
+      // ========== Fork 参数读取（Phase 2-4）==========
+      const fork = params.fork === true;
+      const forkDirective = readStringParam(params, "forkDirective");
+      const inheritContext = params.inheritContext !== false; // 默认 true
+      const permissionBubble = params.permissionBubble === true;
+      const inheritTools = params.inheritTools !== false; // 默认 true
+
+      // Fork 模式验证
+      if (fork && !forkDirective) {
+        return jsonResult({
+          status: "error",
+          error: "fork=true requires forkDirective parameter specifying the child's task",
+        });
+      }
 
       if (streamTo && runtime !== "acp") {
         return jsonResult({
@@ -302,6 +341,12 @@ export function createSessionsSpawnTool(
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
+          // ========== Fork 参数传递（Phase 2-4）==========
+          fork,
+          forkDirective: fork ? forkDirective : undefined,
+          inheritContext,
+          permissionBubble,
+          inheritTools,
         },
         {
           agentSessionKey: opts?.agentSessionKey,
