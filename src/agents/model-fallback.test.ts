@@ -9,6 +9,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -261,6 +262,50 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("something weird");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats LiveSessionModelSwitchError as failover on last candidate (#58466)", async () => {
+    const cfg = makeCfg();
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    // With no fallbacks, the single candidate is also the last one.
+    // Previously this would re-throw LiveSessionModelSwitchError, causing
+    // the outer retry loop to restart with the overloaded model indefinitely.
+    // Now it should surface as a FailoverError instead.
+    const err = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+      fallbacksOverride: [],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    // Should NOT be a LiveSessionModelSwitchError — the outer retry loop must
+    // not restart with the conflicting model.
+    expect(err).not.toBeInstanceOf(LiveSessionModelSwitchError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58466)", async () => {
+    const cfg = makeCfg();
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("falls back on auth errors", async () => {

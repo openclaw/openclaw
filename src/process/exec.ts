@@ -173,8 +173,31 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
 };
 
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+/** GitHub Actions Windows runners sometimes emit `close` before `exit` code is observable; allow extra settle time. */
+const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 2_000;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+
+export function resolveProcessExitCode(params: {
+  explicitCode: number | null | undefined;
+  childExitCode: number | null | undefined;
+  resolvedSignal: NodeJS.Signals | null;
+  usesWindowsExitCodeShim: boolean;
+  timedOut: boolean;
+  noOutputTimedOut: boolean;
+  killIssuedByTimeout: boolean;
+}): number | null {
+  return (
+    params.explicitCode ??
+    params.childExitCode ??
+    (params.usesWindowsExitCodeShim &&
+    params.resolvedSignal == null &&
+    !params.timedOut &&
+    !params.noOutputTimedOut &&
+    !params.killIssuedByTimeout
+      ? 0
+      : null)
+  );
+}
 
 export function resolveCommandEnv(params: {
   argv: string[];
@@ -229,6 +252,7 @@ export async function runCommandWithTimeout(
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
   const usesWindowsExitCodeShim =
     process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
+
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
@@ -251,6 +275,7 @@ export async function runCommandWithTimeout(
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
+    let killIssuedByTimeout = false;
     let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
@@ -286,6 +311,7 @@ export async function runCommandWithTimeout(
         }
         noOutputTimedOut = true;
         if (typeof child.kill === "function") {
+          killIssuedByTimeout = true;
           child.kill("SIGKILL");
         }
       }, Math.floor(noOutputTimeoutMs));
@@ -294,6 +320,7 @@ export async function runCommandWithTimeout(
     const timer = setTimeout(() => {
       timedOut = true;
       if (typeof child.kill === "function") {
+        killIssuedByTimeout = true;
         child.kill("SIGKILL");
       }
     }, timeoutMs);
@@ -344,17 +371,15 @@ export async function runCommandWithTimeout(
       clearNoOutputTimer();
       clearCloseFallbackTimer();
       const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
-      const resolvedCode =
-        childExitState?.code ??
-        code ??
-        child.exitCode ??
-        (usesWindowsExitCodeShim &&
-        resolvedSignal == null &&
-        !timedOut &&
-        !noOutputTimedOut &&
-        !child.killed
-          ? 0
-          : null);
+      const resolvedCode = resolveProcessExitCode({
+        explicitCode: childExitState?.code ?? code,
+        childExitCode: child.exitCode,
+        resolvedSignal,
+        usesWindowsExitCodeShim,
+        timedOut,
+        noOutputTimedOut,
+        killIssuedByTimeout,
+      });
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut
@@ -362,12 +387,25 @@ export async function runCommandWithTimeout(
           : resolvedSignal != null
             ? "signal"
             : "exit";
-      const normalizedCode =
+      let normalizedCode =
         termination === "timeout" || termination === "no-output-timeout"
           ? resolvedCode === 0
             ? 124
             : resolvedCode
           : resolvedCode;
+      // Windows: npm/node shims and cmd.exe wrappers occasionally leave `exitCode` unset while
+      // still closing cleanly (and `killed` may be true if libuv already tore down handles).
+      if (
+        process.platform === "win32" &&
+        usesWindowsExitCodeShim &&
+        normalizedCode === null &&
+        termination === "exit" &&
+        !timedOut &&
+        !noOutputTimedOut &&
+        resolvedSignal == null
+      ) {
+        normalizedCode = 0;
+      }
       resolve({
         pid: child.pid ?? undefined,
         stdout,
