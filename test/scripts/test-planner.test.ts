@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadTestCatalog } from "../../scripts/test-planner/catalog.mjs";
 import {
   createExecutionArtifacts,
   createTempArtifactWriteStream,
@@ -12,7 +13,31 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import {
+  loadChannelTimingManifest,
+  selectTimedHeavyFiles,
+} from "../../scripts/test-runner-manifest.mjs";
 import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
+
+const resolveTimedHeavyChannelFixture = () => {
+  const catalog = loadTestCatalog();
+  const timings = loadChannelTimingManifest();
+  const candidates = catalog.allKnownTestFiles.filter(
+    (file) =>
+      catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix)) &&
+      !catalog.channelIsolatedFileSet.has(file),
+  );
+  const [file] = selectTimedHeavyFiles({
+    candidates,
+    limit: 1,
+    minDurationMs: 12_000,
+    timings,
+  });
+  if (!file) {
+    throw new Error("No timed-heavy channel fixture found");
+  }
+  return file;
+};
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -173,8 +198,9 @@ describe("test planner", () => {
       },
     );
 
+    const timedHeavyFile = resolveTimedHeavyChannelFixture();
     const hotspotUnit = plan.selectedUnits.find(
-      (unit) => unit.id === "channels-bot-native-commands.plugin-auth-isolated",
+      (unit) => unit.id === `channels-${path.basename(timedHeavyFile, ".test.ts")}-isolated`,
     );
 
     expect(hotspotUnit).toBeTruthy();
@@ -469,16 +495,18 @@ describe("test planner", () => {
   });
 
   it("explains timed-heavy channel suites as isolated", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+    };
+    const timedHeavyFile = resolveTimedHeavyChannelFixture();
     const explanation = explainExecutionTarget(
       {
         mode: "ci",
-        fileFilters: ["extensions/telegram/src/bot-native-commands.plugin-auth.test.ts"],
+        fileFilters: [timedHeavyFile],
       },
       {
-        env: {
-          CI: "true",
-          GITHUB_ACTIONS: "true",
-        },
+        env,
       },
     );
 
