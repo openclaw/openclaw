@@ -81,6 +81,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
   </Card>
+  <Card title="SearXNG" icon="server" href="/tools/searxng-search">
+    Self-hosted meta-search. No API key needed. Aggregates Google, Bing, DuckDuckGo, and more.
+  </Card>
   <Card title="Tavily" icon="globe" href="/tools/tavily">
     Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
   </Card>
@@ -98,6 +101,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
 | [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [SearXNG](/tools/searxng-search)       | Structured snippets        | Categories, language                             | None (self-hosted)                          |
 | [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
 
 ## Auto-detection
@@ -153,8 +157,13 @@ the first one found:
 6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
 7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
-If no keys are found, it falls back to Brave (you will get a missing-key error
-prompting you to configure one).
+Key-free providers are checked after API-backed providers:
+
+8. **DuckDuckGo** -- no key needed (auto-detect order 100)
+9. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (auto-detect order 200)
+
+If no provider is detected, it falls back to Brave (you will get a missing-key
+error prompting you to configure one).
 
 <Note>
   All provider key fields support SecretRef objects. In auto-detect mode,

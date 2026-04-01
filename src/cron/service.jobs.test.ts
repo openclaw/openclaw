@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch, createJob } from "./service/jobs.js";
+import { applyJobPatch, createJob, recomputeNextRuns } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
@@ -536,5 +536,35 @@ describe("createJob delivery defaults", () => {
       payload: { kind: "systemEvent", text: "ping" },
     });
     expect(job.delivery).toBeUndefined();
+  });
+});
+
+describe("recomputeNextRuns", () => {
+  it("backfills missing every anchorMs for legacy loaded jobs", () => {
+    const now = Date.parse("2026-03-01T12:00:00.000Z");
+    const createdAtMs = now - 120_000;
+    const job: CronJob = {
+      id: "legacy-every",
+      name: "legacy-every",
+      enabled: true,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRuns(state)).toBe(true);
+    expect(job.schedule.kind).toBe("every");
+    if (job.schedule.kind === "every") {
+      expect(job.schedule.anchorMs).toBe(createdAtMs);
+    }
+    expect(job.state.nextRunAtMs).toBe(now);
   });
 });
