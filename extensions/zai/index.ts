@@ -25,6 +25,7 @@ import { buildZaiModelDefinition } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
+const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 
 function resolveGlm5ForwardCompatModel(
@@ -36,7 +37,12 @@ function resolveGlm5ForwardCompatModel(
   }
 
   const def = buildZaiModelDefinition({ id: trimmedModelId });
+  const template = ctx.modelRegistry.find(
+    PROVIDER_ID,
+    GLM5_TEMPLATE_MODEL_ID,
+  ) as ProviderRuntimeModel | null;
   return normalizeModelCompat({
+    ...template,
     id: def.id,
     name: def.name,
     api: "openai-completions",

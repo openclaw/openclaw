@@ -5,6 +5,18 @@ import plugin from "./index.js";
 describe("zai provider plugin", () => {
   it("resolves persisted GLM-5 family models with provider-owned metadata", () => {
     const provider = registerSingleProviderPlugin(plugin);
+    const template = {
+      id: "glm-4.7",
+      name: "GLM-4.7",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+      contextWindow: 204800,
+      maxTokens: 131072,
+    };
 
     const cases = [
       {
@@ -32,11 +44,12 @@ describe("zai provider plugin", () => {
         provider.resolveDynamicModel?.({
           provider: "zai",
           modelId: testCase.modelId,
-          modelRegistry: { find: () => null },
+          modelRegistry: { find: () => template },
         } as never),
       ).toMatchObject({
         provider: "zai",
         api: "openai-completions",
+        baseUrl: "https://api.z.ai/api/paas/v4",
         id: testCase.modelId,
         ...testCase.expected,
       });
