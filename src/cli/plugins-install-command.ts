@@ -309,12 +309,22 @@ export async function runPluginInstallCommand(params: {
 
   const resolved = request.resolvedPath ?? request.normalizedSpec;
 
+  // When dangerouslyForceUnsafeInstall is set, don't attempt hook pack fallback
+  // because the user has explicitly opted to bypass security restrictions.
+  // The hook pack fallback path would fail without the safety flag support.
+  const forceUnsafeInstall = opts.dangerouslyForceUnsafeInstall === true;
+
   if (fs.existsSync(resolved)) {
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
       const merged = Array.from(new Set([...existing, resolved]));
       const probe = await installPluginFromPath({ path: resolved, dryRun: true });
       if (!probe.ok) {
+        // Skip hook pack fallback when dangerouslyForceUnsafeInstall is set
+        if (forceUnsafeInstall) {
+          defaultRuntime.error(probe.error);
+          return defaultRuntime.exit(1);
+        }
         const hookFallback = await tryInstallHookPackFromLocalPath({
           config: cfg,
           resolvedPath: resolved,
@@ -358,6 +368,11 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
+      // Skip hook pack fallback when dangerouslyForceUnsafeInstall is set
+      if (forceUnsafeInstall) {
+        defaultRuntime.error(result.error);
+        return defaultRuntime.exit(1);
+      }
       const hookFallback = await tryInstallHookPackFromLocalPath({
         config: cfg,
         resolvedPath: resolved,
@@ -504,6 +519,11 @@ export async function runPluginInstallCommand(params: {
       findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
     });
     if (!bundledFallbackPlan) {
+      // Skip hook pack fallback when dangerouslyForceUnsafeInstall is set
+      if (forceUnsafeInstall) {
+        defaultRuntime.error(result.error);
+        return defaultRuntime.exit(1);
+      }
       const hookFallback = await tryInstallHookPackFromNpmSpec({
         config: cfg,
         spec: raw,
