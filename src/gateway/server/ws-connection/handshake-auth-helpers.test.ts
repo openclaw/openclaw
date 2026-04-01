@@ -65,7 +65,7 @@ describe("handshake auth helpers", () => {
     });
   });
 
-  it("allows silent local pairing only when a fresh local request has no operator scopes", () => {
+  it("allows silent local pairing only for not-paired or scope-upgrade requests without operator scopes", () => {
     expect(
       shouldAllowSilentLocalPairing({
         isLocalClient: true,
@@ -84,6 +84,26 @@ describe("handshake auth helpers", () => {
         isWebchat: false,
         hasRequestedOperatorScopes: true,
         reason: "not-paired",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        hasRequestedOperatorScopes: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        hasRequestedOperatorScopes: true,
+        reason: "scope-upgrade",
       }),
     ).toBe(false);
     expect(

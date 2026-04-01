@@ -33,7 +33,7 @@ describe("gateway silent local not-paired admin", () => {
       const firstConnect = await connectReq(freshWs, {
         token: "secret",
         deviceIdentityPath: loaded.identityPath,
-        scopes: ["operator.admin"],
+        scopes: [" operator.admin "],
       });
 
       expect(firstConnect.ok).toBe(false);
@@ -41,6 +41,7 @@ describe("gateway silent local not-paired admin", () => {
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toHaveLength(1);
+      expect(pending.pending[0]?.silent).toBe(false);
       expect(
         (firstConnect.error?.details as { requestId?: unknown; code?: string } | undefined)
           ?.requestId,

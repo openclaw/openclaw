@@ -31,6 +31,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { normalizeDeviceAuthScopes } from "../../../shared/device-auth.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -757,6 +758,9 @@ export function attachGatewayWsMessageHandler(params: {
             reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
             existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
           ) => {
+            const hasRequestedOperatorScopes = normalizeDeviceAuthScopes(scopes).some((scope) =>
+              scope.startsWith("operator."),
+            );
             const pairingStateAllowsRequestedAccess = (
               pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
             ): boolean => {
@@ -788,7 +792,7 @@ export function attachGatewayWsMessageHandler(params: {
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,
-              hasRequestedOperatorScopes: scopes.some((scope) => scope.startsWith("operator.")),
+              hasRequestedOperatorScopes,
               reason,
             });
             // QR bootstrap onboarding is node-only and single-use. When a fresh device presents
