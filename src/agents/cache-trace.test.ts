@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
@@ -226,5 +226,36 @@ describe("createCacheTrace", () => {
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
     expect(event.messageCount).toBe(1);
     expect(event.messageFingerprints).toHaveLength(1);
+  });
+
+  it("wrapStreamFn records systemPrompt into stream:context", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const innerFn = vi.fn().mockResolvedValue(undefined);
+    const wrapped = trace!.wrapStreamFn(innerFn);
+
+    void wrapped(
+      { id: "gpt-4o", provider: "openai", api: null } as never,
+      { systemPrompt: "You are helpful.", messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    expect(lines.length).toBe(1);
+    const event = JSON.parse(lines[0].trim()) as Record<string, unknown>;
+    expect(event.system).toBe("You are helpful.");
   });
 });
