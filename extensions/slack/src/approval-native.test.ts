@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
 import { slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -19,6 +23,13 @@ function buildConfig(
       },
     },
   } as OpenClawConfig;
+}
+
+const STORE_PATH = path.join(os.tmpdir(), "openclaw-slack-approval-native-test.json");
+
+function writeStore(store: Record<string, unknown>) {
+  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  clearSessionStoreCacheForTest();
 }
 
 describe("slack native approval adapter", () => {
@@ -120,6 +131,45 @@ describe("slack native approval adapter", () => {
     expect(targets).toEqual([{ to: "user:U123APPROVER" }]);
   });
 
+  it("falls back to the session-bound origin target for plugin approvals", async () => {
+    writeStore({
+      "agent:main:slack:channel:c123": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "default",
+          threadId: "1712345678.123456",
+        },
+      },
+    });
+
+    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: {
+        ...buildConfig(),
+        session: { store: STORE_PATH },
+      },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey: "agent:main:slack:channel:c123",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "channel:C123",
+      threadId: "1712345678",
+    });
+  });
+
   it("skips native delivery when agent filters do not match", async () => {
     const cfg = buildConfig({
       execApprovals: {
@@ -158,6 +208,45 @@ describe("slack native approval adapter", () => {
           command: "echo hi",
           agentId: "other-agent",
           sessionKey: "agent:other-agent:slack:channel:c123",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(originTarget).toBeNull();
+    expect(dmTargets).toEqual([]);
+  });
+
+  it("skips native delivery when the request is bound to another Slack account", async () => {
+    const originTarget = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "other",
+          sessionKey: "agent:main:missing",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+    const dmTargets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "other",
+          sessionKey: "agent:main:missing",
         },
         createdAtMs: 0,
         expiresAtMs: 1000,

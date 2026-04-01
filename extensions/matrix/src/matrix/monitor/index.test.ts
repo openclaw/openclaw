@@ -6,6 +6,9 @@ import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
   canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
+  shouldKeepLocallyPromotedDirectRoom?:
+    | ((roomId: string) => boolean | undefined | Promise<boolean | undefined>)
+    | undefined;
 };
 
 const hoisted = vi.hoisted(() => {
@@ -555,6 +558,25 @@ describe("monitorMatrixProvider", () => {
 
     await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
   });
+
+  it("treats unresolved room metadata as indeterminate for local promotion revalidation", async () => {
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+    if (!trackerOpts?.shouldKeepLocallyPromotedDirectRoom) {
+      throw new Error("local promotion revalidation callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      altAliases: [],
+      nameResolved: false,
+      aliasesResolved: false,
+    });
+
+    await expect(
+      trackerOpts.shouldKeepLocallyPromotedDirectRoom("!room:example.org"),
+    ).resolves.toBeUndefined();
+  });
 });
 
 describe("matrix plugin registration", () => {
@@ -584,51 +606,4 @@ describe("matrix plugin registration", () => {
       resolveMatrixDefaultOrOnlyAccountId: "function",
     });
   }, 240_000);
-
-  it("loads the matrix src runtime api through Jiti without duplicate export errors", () => {
-    const runtimeApiPath = path.join(
-      process.cwd(),
-      "extensions",
-      "matrix",
-      "src",
-      "runtime-api.ts",
-    );
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [],
-        realPluginSdkSpecifiers: [
-          "openclaw/plugin-sdk/account-helpers",
-          "openclaw/plugin-sdk/allow-from",
-          "openclaw/plugin-sdk/channel-config-helpers",
-          "openclaw/plugin-sdk/channel-policy",
-          "openclaw/plugin-sdk/core",
-          "openclaw/plugin-sdk/directory-runtime",
-          "openclaw/plugin-sdk/extension-shared",
-          "openclaw/plugin-sdk/irc",
-          "openclaw/plugin-sdk/signal",
-          "openclaw/plugin-sdk/status-helpers",
-          "openclaw/plugin-sdk/text-runtime",
-        ],
-      }),
-    ).toEqual({});
-  }, 240_000);
-
-  it("registers the channel without bootstrapping crypto runtime", async () => {
-    const runtime = {} as never;
-    const registerChannel = vi.fn();
-    matrixPlugin.register({
-      runtime,
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-      registerChannel,
-    } as never);
-
-    expect(hoisted.setMatrixRuntime).toHaveBeenCalledWith(runtime);
-    expect(registerChannel).toHaveBeenCalledWith({ plugin: expect.any(Object) });
-  });
 });

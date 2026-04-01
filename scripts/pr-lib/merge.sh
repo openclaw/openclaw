@@ -227,13 +227,41 @@ Co-authored-by: $reviewer <$reviewer_coauthor_email>
 Reviewed-by: @$reviewer
 EOF_BODY
 
+  delete_remote_pr_head_branch_after_merge() {
+    local head_json
+    head_json=$(gh pr view "$pr" --json headRefName,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify)
+
+    local head_ref
+    head_ref=$(printf '%s\n' "$head_json" | jq -r '.headRefName // ""')
+    if [ -z "$head_ref" ]; then
+      return 0
+    fi
+
+    local repo_owner
+    repo_owner=$(printf '%s\n' "$head_json" | jq -r '.headRepositoryOwner.login // ""')
+    local repo_name
+    repo_name=$(printf '%s\n' "$head_json" | jq -r '.headRepository.name // ""')
+    if [ -z "$repo_owner" ] || [ -z "$repo_name" ]; then
+      echo "Warning: unable to resolve head repository for remote branch cleanup"
+      return 0
+    fi
+
+    local encoded_ref
+    encoded_ref=$(jq -rn --arg value "heads/$head_ref" '$value|@uri')
+    if gh api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    echo "Warning: failed to delete remote branch $repo_owner/$repo_name:$head_ref"
+    return 0
+  }
+
   run_merge_with_email() {
     local email="$1"
     local merge_output_file
     merge_output_file=$(mktemp)
     if gh pr merge "$pr" \
       --squash \
-      --delete-branch \
       --match-head-commit "$PREP_HEAD_SHA" \
       --author-email "$email" \
       --subject "$pr_title (#$pr_number)" \
@@ -351,10 +379,11 @@ EOF_COMMENT
   local root
   root=$(repo_root)
   cd "$root"
-  git worktree remove ".worktrees/pr-$pr" --force
-  git branch -D "temp/pr-$pr" 2>/dev/null || true
-  git branch -D "pr-$pr" 2>/dev/null || true
-  git branch -D "pr-$pr-prep" 2>/dev/null || true
+  delete_remote_pr_head_branch_after_merge
+  remove_worktree_if_present ".worktrees/pr-$pr"
+  delete_local_branch_if_safe "temp/pr-$pr"
+  delete_local_branch_if_safe "pr-$pr"
+  delete_local_branch_if_safe "pr-$pr-prep"
 
   local pr_url
   pr_url=$(gh pr view "$pr" --json url --jq .url)

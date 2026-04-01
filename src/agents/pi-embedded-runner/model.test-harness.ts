@@ -67,8 +67,10 @@ export function buildOpenAICodexForwardCompatExpectation(
     input: isSpark ? ["text"] : ["text", "image"],
     cost: isSpark
       ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-      : OPENAI_CODEX_TEMPLATE_MODEL.cost,
-    contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
+      : isGpt54
+        ? { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }
+        : OPENAI_CODEX_TEMPLATE_MODEL.cost,
+    contextWindow: isGpt54 ? 272_000 : isSpark ? 128_000 : 272000,
     maxTokens: 128000,
   };
 }

@@ -749,7 +749,10 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const globIdx = args.indexOf("--glob");
+        const maskIdx = args.indexOf("--mask");
+        const pattern =
+          (globIdx !== -1 ? args[globIdx + 1] : maskIdx !== -1 ? args[maskIdx + 1] : "") ?? "";
         const hasConflict = [...legacyCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.pattern === pattern,
@@ -827,7 +830,10 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const globIdx = args.indexOf("--glob");
+        const maskIdx = args.indexOf("--mask");
+        const pattern =
+          (globIdx !== -1 ? args[globIdx + 1] : maskIdx !== -1 ? args[maskIdx + 1] : "") ?? "";
         const hasConflict = [...listedCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.pattern === pattern,
@@ -887,7 +893,7 @@ describe("QmdMemoryManager", () => {
     );
   });
 
-  it("falls back to --mask when qmd collection add rejects --glob", async () => {
+  it("prefers --mask for collection add and falls back to --glob when --mask is rejected", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -909,10 +915,10 @@ describe("QmdMemoryManager", () => {
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
-        const flag = args.includes("--glob") ? "--glob" : args.includes("--mask") ? "--mask" : "";
+        const flag = args.includes("--mask") ? "--mask" : args.includes("--glob") ? "--glob" : "";
         addFlagCalls.push(flag);
-        if (flag === "--glob") {
-          emitAndClose(child, "stderr", "unknown flag: --glob", 1);
+        if (flag === "--mask") {
+          emitAndClose(child, "stderr", "unknown flag: --mask", 1);
           return child;
         }
         queueMicrotask(() => child.closeWith(0));
@@ -924,7 +930,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
-    expect(addFlagCalls).toEqual(["--glob", "--mask", "--mask", "--mask"]);
+    expect(addFlagCalls).toEqual(["--mask", "--glob", "--glob", "--glob"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("retrying with legacy compatibility flag"),
     );
@@ -4029,6 +4035,56 @@ describe("QmdMemoryManager", () => {
       | undefined;
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
     expect(busyTimeout).toBe(1000);
+    await manager.close();
+  });
+
+  it("reports vector availability as unavailable when qmd status shows zero vectors", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "status") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "Documents: 12\nVectors: 0\n");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
+      ok: false,
+      error: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
+    });
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: false,
+      loadError: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
+    });
+    await manager.close();
+  });
+
+  it("reports vector availability as ready when qmd status shows vectors", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "status") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "Documents: 12\nVectors: 42\n");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
+      ok: true,
+      error: undefined,
+    });
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: true,
+      loadError: undefined,
+    });
     await manager.close();
   });
 
