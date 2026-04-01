@@ -1,14 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
   loadImageFromRef,
+  mergePromptAttachmentImages,
   modelSupportsImages,
+  splitPromptAndAttachmentRefs,
 } from "./images.js";
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
@@ -190,6 +192,22 @@ what is this?`);
     // Only 1 ref - the local path (example.com URLs are skipped)
     expect(ref?.resolved).toContain("ChatGPT Image Apr 21, 2025.png");
   });
+
+  it("ignores remote-host file URLs", () => {
+    expectNoImageReferences("See file://attacker/share/evil.png");
+  });
+
+  it("ignores Windows network paths from attachment-style references", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      expectNoImageReferences(
+        "[media attached: \\\\attacker\\share\\photo.png (image/png)] what is this?",
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });
 
 describe("modelSupportsImages", () => {
@@ -271,6 +289,47 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expectNoPromptImages(result);
+  });
+
+  it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
+    const merged = mergePromptAttachmentImages({
+      imageOrder: ["offloaded", "inline"],
+      existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
+      offloadedImages: [{ type: "image", data: "large-a", mimeType: "image/jpeg" }],
+    });
+
+    expect(merged).toEqual([
+      { type: "image", data: "large-a", mimeType: "image/jpeg" },
+      { type: "image", data: "small-b", mimeType: "image/png" },
+    ]);
+  });
+
+  it("classifies trailing offloaded refs separately from prompt refs", () => {
+    const prompt =
+      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.png]";
+    const refs = detectImageReferences(prompt);
+
+    const split = splitPromptAndAttachmentRefs({
+      prompt,
+      refs,
+      imageOrder: ["inline", "offloaded"],
+    });
+
+    expect(split.promptRefs).toEqual([
+      {
+        raw: "media://inbound/prompt-ref.png",
+        type: "media-uri",
+        resolved: "media://inbound/prompt-ref.png",
+      },
+      { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
+    ]);
+    expect(split.attachmentRefs).toEqual([
+      {
+        raw: "media://inbound/att-b.png",
+        type: "media-uri",
+        resolved: "media://inbound/att-b.png",
+      },
+    ]);
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {

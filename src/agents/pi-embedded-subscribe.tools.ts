@@ -158,12 +158,31 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "tts",
   "web_fetch",
   "web_search",
+  "x_search",
   "write",
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isToolResultMediaTrusted(toolName?: string): boolean {
-  if (!toolName) {
+function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
+    ? (record.details as Record<string, unknown>)
+    : undefined;
+}
+
+function isExternalToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  if (!details) {
+    return false;
+  }
+  return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
+}
+
+export function isToolResultMediaTrusted(toolName?: string, result?: unknown): boolean {
+  if (!toolName || isExternalToolResult(result)) {
     return false;
   }
   const normalized = normalizeToolName(toolName);
@@ -173,11 +192,12 @@ export function isToolResultMediaTrusted(toolName?: string): boolean {
 export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
+  result?: unknown,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  if (isToolResultMediaTrusted(toolName)) {
+  if (isToolResultMediaTrusted(toolName, result)) {
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
@@ -203,10 +223,7 @@ export type ToolResultMediaArtifact = {
 function readToolResultDetailsMedia(
   result: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const details =
-    result.details && typeof result.details === "object" && !Array.isArray(result.details)
-      ? (result.details as Record<string, unknown>)
-      : undefined;
+  const details = readToolResultDetails(result);
   const media =
     details?.media && typeof details.media === "object" && !Array.isArray(details.media)
       ? (details.media as Record<string, unknown>)

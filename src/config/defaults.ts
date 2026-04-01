@@ -3,7 +3,7 @@ import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import {
-  DEFAULT_TALK_PROVIDER,
+  LEGACY_TALK_PROVIDER_ID,
   normalizeTalkConfig,
   resolveActiveTalkProviderConfig,
   resolveTalkApiKey,
@@ -41,6 +41,14 @@ const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
 };
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
 const DEFAULT_MODEL_MAX_TOKENS = 8192;
+const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
+  "devstral-medium-latest": 32_768,
+  "magistral-small": 40_000,
+  "mistral-large-latest": 16_384,
+  "mistral-medium-2508": 8_192,
+  "mistral-small-latest": 16_384,
+  "pixtral-large-latest": 32_768,
+} as const;
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
@@ -69,6 +77,24 @@ function resolveModelCost(
     cacheWrite:
       typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
   };
+}
+
+export function resolveNormalizedProviderModelMaxTokens(params: {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+  rawMaxTokens: number;
+}): number {
+  const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
+  if (normalizeProviderId(params.providerId) !== "mistral" || clamped < params.contextWindow) {
+    return clamped;
+  }
+
+  const safeMaxTokens =
+    MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
+      params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
+    ] ?? DEFAULT_MODEL_MAX_TOKENS;
+  return Math.min(safeMaxTokens, params.contextWindow);
 }
 
 function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefaultsMode | null {
@@ -178,7 +204,7 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
 
   const talk = normalized.talk;
   const active = resolveActiveTalkProviderConfig(talk);
-  if (active?.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
+  if (!active || active.provider !== LEGACY_TALK_PROVIDER_ID) {
     return normalized;
   }
 
@@ -188,7 +214,7 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
     return normalized;
   }
 
-  const providerId = active?.provider ?? DEFAULT_TALK_PROVIDER;
+  const providerId = active.provider;
   const providers = { ...talk?.providers };
   const providerConfig = { ...providers[providerId], apiKey: resolved };
   providers[providerId] = providerConfig;
@@ -196,7 +222,6 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   const nextTalk = {
     ...talk,
     apiKey: resolved,
-    provider: talk?.provider ?? providerId,
     providers,
   };
 
@@ -263,7 +288,12 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
 
         const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
         const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
-        const maxTokens = Math.min(rawMaxTokens, contextWindow);
+        const maxTokens = resolveNormalizedProviderModelMaxTokens({
+          providerId,
+          modelId: raw.id,
+          contextWindow,
+          rawMaxTokens,
+        });
         if (raw.maxTokens !== maxTokens) {
           modelMutated = true;
         }

@@ -9,6 +9,10 @@ import {
   collectTelegramEmptyAllowlistExtraWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "../providers/telegram.js";
+import {
+  collectBundledPluginLoadPathWarnings,
+  scanBundledPluginLoadPathMigrations,
+} from "./bundled-plugin-load-paths.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 import {
   collectExecSafeBinCoverageWarnings,
@@ -24,6 +28,11 @@ import {
   collectOpenPolicyAllowFromWarnings,
   maybeRepairOpenPolicyAllowFrom,
 } from "./open-policy-allowfrom.js";
+import {
+  collectStalePluginConfigWarnings,
+  isStalePluginAutoRepairBlocked,
+  scanStalePluginConfig,
+} from "./stale-plugin-config.js";
 
 export function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
@@ -56,6 +65,27 @@ export function collectDoctorPreviewWarnings(params: {
     warnings.push(
       collectOpenPolicyAllowFromWarnings({
         changes: allowFromScan.changes,
+        doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
+  }
+
+  const stalePluginHits = scanStalePluginConfig(params.cfg, process.env);
+  if (stalePluginHits.length > 0) {
+    warnings.push(
+      collectStalePluginConfigWarnings({
+        hits: stalePluginHits,
+        doctorFixCommand: params.doctorFixCommand,
+        autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, process.env),
+      }).join("\n"),
+    );
+  }
+
+  const bundledPluginLoadPathHits = scanBundledPluginLoadPathMigrations(params.cfg, process.env);
+  if (bundledPluginLoadPathHits.length > 0) {
+    warnings.push(
+      collectBundledPluginLoadPathWarnings({
+        hits: bundledPluginLoadPathHits,
         doctorFixCommand: params.doctorFixCommand,
       }).join("\n"),
     );

@@ -1,5 +1,6 @@
 import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
@@ -91,8 +92,12 @@ type CronAgentTurnPayloadFields = {
   thinking?: string;
   timeoutSeconds?: number;
   allowUnsafeExternalContent?: boolean;
+  /** Immutable external hook provenance for async dispatch. */
+  externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
   deliver?: boolean;
   channel?: CronMessageChannel;
   to?: string;

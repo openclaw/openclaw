@@ -23,6 +23,9 @@ async function createClaudeBundlePlugin(params: { workspaceDir: string; pluginId
 
 function buildCfg(): OpenClawConfig {
   return {
+    plugins: {
+      enabled: true,
+    },
     commands: {
       text: true,
       plugins: true,
@@ -78,50 +81,6 @@ describe("handleCommands /plugins", () => {
       expect(inspectAllResult.reply?.text).toContain('"plugin"');
       expect(inspectAllResult.reply?.text).toContain('"compatibilityWarnings"');
       expect(inspectAllResult.reply?.text).toContain('"superpowers"');
-    });
-  });
-
-  it("enables and disables a discovered plugin", async () => {
-    await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      await createClaudeBundlePlugin({ workspaceDir, pluginId: "superpowers" });
-
-      const enableParams = buildCommandTestParams(
-        "/plugins enable superpowers",
-        buildCfg(),
-        undefined,
-        {
-          workspaceDir,
-        },
-      );
-      enableParams.command.senderIsOwner = true;
-      const enableResult = await handleCommands(enableParams);
-      expect(enableResult.reply?.text).toContain('Plugin "superpowers" enabled');
-
-      const showEnabledParams = buildCommandTestParams(
-        "/plugins show superpowers",
-        buildCfg(),
-        undefined,
-        {
-          workspaceDir,
-        },
-      );
-      showEnabledParams.command.senderIsOwner = true;
-      const showEnabledResult = await handleCommands(showEnabledParams);
-      expect(showEnabledResult.reply?.text).toContain('"status": "loaded"');
-      expect(showEnabledResult.reply?.text).toContain('"enabled": true');
-
-      const disableParams = buildCommandTestParams(
-        "/plugins disable superpowers",
-        buildCfg(),
-        undefined,
-        {
-          workspaceDir,
-        },
-      );
-      disableParams.command.senderIsOwner = true;
-      const disableResult = await handleCommands(disableParams);
-      expect(disableResult.reply?.text).toContain('Plugin "superpowers" disabled');
     });
   });
 

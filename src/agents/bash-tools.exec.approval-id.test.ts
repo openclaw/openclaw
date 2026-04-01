@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache } from "../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -28,6 +28,15 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
+
+async function loadExecApprovalModules() {
+  vi.resetModules();
+  ({ callGatewayTool } = await import("./tools/gateway.js"));
+  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+  ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
+}
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -185,29 +194,9 @@ function mockPendingApprovalRegistration() {
   });
 }
 
-function expectApprovalUnavailableText(result: {
-  details: { status?: string };
-  content: Array<{ type?: string; text?: string }>;
-}) {
-  expect(result.details.status).toBe("approval-unavailable");
-  const text = result.content.find((part) => part.type === "text")?.text ?? "";
-  expect(text).not.toContain("/approve");
-  expect(text).not.toContain("npm view diver name version description");
-  expect(text).not.toContain("Pending command:");
-  expect(text).not.toContain("Host:");
-  expect(text).not.toContain("CWD:");
-  return text;
-}
-
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
-
-  beforeAll(async () => {
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
-  });
 
   beforeEach(async () => {
     previousHome = process.env.HOME;
@@ -216,10 +205,12 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
+    await loadExecApprovalModules();
   });
 
   afterEach(() => {
     vi.resetAllMocks();
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (previousHome === undefined) {
       delete process.env.HOME;
@@ -335,6 +326,40 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
+  it("preserves explicit workdir for node exec", async () => {
+    const remoteWorkdir = "/Users/vv";
+    let prepareCwd: string | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: { cwd?: string } };
+        if (invoke.command === "system.run.prepare") {
+          prepareCwd = invoke.params?.cwd;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-cwd", {
+      command: "/bin/pwd",
+      workdir: remoteWorkdir,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(prepareCwd).toBe(remoteWorkdir);
+  });
+
   it("honors ask=off for elevated gateway exec without prompting", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
@@ -408,7 +433,7 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.waitDecision");
   });
 
-  it("starts a direct agent follow-up after approved gateway exec completes", async () => {
+  it("starts an internal agent follow-up after approved gateway exec completes without an external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -437,12 +462,106 @@ describe("exec approvals", () => {
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        deliver: true,
+        deliver: false,
         idempotencyKey: expect.stringContaining("exec-approval-followup:"),
       }),
     );
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
+      "An async command the user already approved has completed.",
+    );
+  });
+
+  it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-sidefx-"));
+    const markerPath = path.join(tempDir, "marker.txt");
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup-webchat", {
+      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
+      workdir: tempDir,
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(agentCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliver: false,
+      }),
+    );
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            return await fs.readFile(markerPath, "utf8");
+          } catch {
+            return "";
+          }
+        },
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBe("ok");
+  });
+
+  it("uses a deny-specific followup prompt so prior output is not reused", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      if (method === "agent") {
+        agentCalls.push(params as Record<string, unknown>);
+        return { status: "ok" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup-deny", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain("An async command did not run.");
+    expect(agentCalls[0]?.message).toContain(
+      "Do not mention, summarize, or reuse output from any earlier run in this session.",
+    );
+    expect(agentCalls[0]?.message).not.toContain(
       "An async command the user already approved has completed.",
     );
   });
@@ -518,6 +637,55 @@ describe("exec approvals", () => {
 
     expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
     expect(calls).toContain("exec.approval.request");
+  });
+
+  it("runs a skill wrapper chain without prompting when the wrapper is allowlisted", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-wrapper-"));
+    try {
+      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const binDir = path.join(tempDir, "bin");
+      const wrapperPath = path.join(binDir, "gog-wrapper");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(skillPath, "# gog skill\n");
+      await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
+      await fs.chmod(wrapperPath, 0o755);
+
+      await writeExecApprovalsConfig({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist: [{ pattern: wrapperPath }],
+          },
+        },
+      });
+
+      const calls: string[] = [];
+      mockGatewayOkCalls(calls);
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "off",
+        security: "allowlist",
+        approvalRunningNoticeMs: 0,
+      });
+
+      const result = await tool.execute("call-skill-wrapper", {
+        command: `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
+        workdir: tempDir,
+      });
+
+      expect(result.details.status).toBe("completed");
+      expect(getResultText(result)).toContain('{"events":[]}');
+      expect(calls).not.toContain("exec.approval.request");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("shows full chained node commands in approval-pending message", async () => {
@@ -610,7 +778,7 @@ describe("exec approvals", () => {
     );
   });
 
-  it("returns an unavailable approval message instead of a local /approve prompt when discord exec approvals are disabled", async () => {
+  it("shows a local /approve prompt when discord exec approvals are disabled", async () => {
     await writeOpenClawConfig({
       channels: {
         discord: {
@@ -635,12 +803,13 @@ describe("exec approvals", () => {
       command: "npm view diver name version description",
     });
 
-    const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("chat exec approvals are not enabled on Discord");
-    expect(text).toContain("Web UI or terminal UI");
+    expectPendingApprovalText(result, {
+      command: "npm view diver name version description",
+      host: "gateway",
+    });
   });
 
-  it("tells Telegram users that allowed approvers were DMed when Telegram approvals are disabled but Discord DM approvals are enabled", async () => {
+  it("keeps Telegram approvals in the initiating chat even when Discord DM approvals are also enabled", async () => {
     await writeOpenClawConfig(
       {
         channels: {
@@ -672,8 +841,12 @@ describe("exec approvals", () => {
       command: "npm view diver name version description",
     });
 
-    const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
+    const details = expectPendingApprovalText(result, {
+      command: "npm view diver name version description",
+      host: "gateway",
+    });
+    expect(getResultText(result)).toContain(`/approve ${details.approvalSlug} allow-once`);
+    expect(getResultText(result)).not.toContain(getExecApprovalApproverDmNoticeText());
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

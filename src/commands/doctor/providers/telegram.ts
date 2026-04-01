@@ -1,17 +1,14 @@
-import {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-} from "../../../../extensions/telegram/allow-from.js";
+import { getChannelPlugin } from "../../../channels/plugins/registry.js";
 import {
   inspectTelegramAccount,
+  isNumericTelegramUserId,
   listTelegramAccountIds,
-  lookupTelegramChatId,
-} from "../../../../extensions/telegram/api.js";
+  normalizeTelegramAllowFromEntry,
+} from "../../../channels/read-only-account-inspect.telegram.js";
 import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
-import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
@@ -25,11 +22,6 @@ type TelegramAllowFromListRef = {
   pathLabel: string;
   holder: Record<string, unknown>;
   key: "allowFrom" | "groupAllowFrom";
-};
-
-type ResolvedTelegramLookupAccount = {
-  token: string;
-  network?: TelegramNetworkConfig;
 };
 
 export function collectTelegramAccountScopes(
@@ -163,43 +155,45 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
   });
   const tokenResolutionWarnings: string[] = [];
-  const lookupAccounts: ResolvedTelegramLookupAccount[] = [];
-  const seenLookupAccounts = new Set<string>();
+  const resolverAccountIds: string[] = [];
   for (const accountId of listTelegramAccountIds(resolvedConfig)) {
-    let account: NonNullable<ReturnType<typeof resolveTelegramAccount>>;
+    let inspected: ReturnType<typeof inspectTelegramAccount>;
     try {
-      account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
+      inspected = inspectTelegramAccount({ cfg: resolvedConfig, accountId });
     } catch (error) {
       tokenResolutionWarnings.push(
         `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
       );
       continue;
     }
-    const token = account.tokenSource === "none" ? "" : account.token.trim();
+    if (inspected.tokenStatus === "configured_unavailable") {
+      tokenResolutionWarnings.push(
+        `- Telegram account ${accountId}: failed to inspect bot token (configured but unavailable in this command path).`,
+      );
+    }
+    const token = inspected.tokenSource === "none" ? "" : inspected.token.trim();
     if (!token) {
       continue;
     }
-    const network = account.config.network;
-    const cacheKey = `${token}::${JSON.stringify(network ?? {})}`;
-    if (seenLookupAccounts.has(cacheKey)) {
-      continue;
-    }
-    seenLookupAccounts.add(cacheKey);
-    lookupAccounts.push({ token, network });
+    resolverAccountIds.push(accountId);
   }
 
-  if (lookupAccounts.length === 0) {
+  const telegramResolver = getChannelPlugin("telegram")?.resolver?.resolveTargets;
+  if (resolverAccountIds.length === 0 || !telegramResolver) {
     return {
       config: cfg,
       changes: [
         ...tokenResolutionWarnings,
         hasConfiguredUnavailableToken
           ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
+          : !telegramResolver
+            ? `- Telegram allowFrom contains @username entries, but the Telegram channel resolver is unavailable; cannot auto-resolve in this command path.`
+            : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
       ],
     };
   }
 
+  const resolverRuntime = createNonExitingRuntime();
   const resolveUserId = async (raw: string): Promise<string | null> => {
     const trimmed = raw.trim();
     if (!trimmed) {
@@ -216,23 +210,20 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    for (const account of lookupAccounts) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
+    for (const accountId of resolverAccountIds) {
       try {
-        const id = await lookupTelegramChatId({
-          token: account.token,
-          chatId: username,
-          signal: controller.signal,
-          network: account.network,
+        const [resolved] = await telegramResolver({
+          cfg: resolvedConfig,
+          accountId,
+          inputs: [username],
+          kind: "user",
+          runtime: resolverRuntime,
         });
-        if (id) {
-          return id;
+        if (resolved?.resolved && resolved.id) {
+          return resolved.id;
         }
       } catch {
-        // ignore and try next token
-      } finally {
-        clearTimeout(timeout);
+        // ignore and try next configured account
       }
     }
     return null;

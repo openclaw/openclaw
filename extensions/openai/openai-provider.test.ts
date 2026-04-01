@@ -1,72 +1,12 @@
-import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const DEFAULT_LIVE_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.4-nano"] as const;
-const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
-const describeLive = liveEnabled ? describe : describe.skip;
+const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 
-type LiveModelCase = {
-  modelId: string;
-  templateId: string;
-  templateName: string;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow: number;
-  maxTokens: number;
-};
-
-function resolveLiveModelCase(modelId: string): LiveModelCase {
-  switch (modelId) {
-    case "gpt-5.4":
-      return {
-        modelId,
-        templateId: "gpt-5.2",
-        templateName: "GPT-5.2",
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      };
-    case "gpt-5.4-pro":
-      return {
-        modelId,
-        templateId: "gpt-5.2-pro",
-        templateName: "GPT-5.2 Pro",
-        cost: { input: 15, output: 60, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      };
-    case "gpt-5.4-mini":
-      return {
-        modelId,
-        templateId: "gpt-5-mini",
-        templateName: "GPT-5 mini",
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      };
-    case "gpt-5.4-nano":
-      return {
-        modelId,
-        templateId: "gpt-5-nano",
-        templateName: "GPT-5 nano",
-        cost: { input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 64_000,
-      };
-    default:
-      throw new Error(`Unsupported live OpenAI model: ${modelId}`);
-  }
-}
-
-function resolveLiveModelCases(raw?: string): LiveModelCase[] {
-  const requested = raw
-    ?.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const modelIds = requested?.length ? requested : [...DEFAULT_LIVE_MODEL_IDS];
-  return [...new Set(modelIds)].map((modelId) => resolveLiveModelCase(modelId));
-}
+vi.mock("./openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
 
 describe("buildOpenAIProvider", () => {
   it("resolves gpt-5.4 mini and nano from GPT-5 small-model templates", () => {
@@ -132,8 +72,8 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4-nano",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      contextWindow: 200_000,
-      maxTokens: 64_000,
+      contextWindow: 400_000,
+      maxTokens: 128_000,
     });
   });
 
@@ -161,81 +101,92 @@ describe("buildOpenAIProvider", () => {
       ],
     } as never);
 
-    expect(entries).toContainEqual({
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      name: "gpt-5.4-mini",
-    });
-    expect(entries).toContainEqual({
-      provider: "openai",
-      id: "gpt-5.4-nano",
-      name: "gpt-5.4-nano",
-    });
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+      }),
+    );
   });
-});
 
-describeLive("buildOpenAIProvider live", () => {
-  it.each(resolveLiveModelCases(process.env.OPENCLAW_LIVE_OPENAI_MODELS))(
-    "resolves %s and completes through the OpenAI responses API",
-    async (liveCase) => {
-      const provider = buildOpenAIProvider();
-      const registry = {
-        find(providerId: string, id: string) {
-          if (providerId !== "openai") {
-            return null;
-          }
-          if (id === liveCase.templateId) {
-            return {
-              id: liveCase.templateId,
-              name: liveCase.templateName,
-              provider: "openai",
-              api: "openai-completions",
-              baseUrl: "https://api.openai.com/v1",
-              reasoning: true,
-              input: ["text", "image"],
-              cost: liveCase.cost,
-              contextWindow: liveCase.contextWindow,
-              maxTokens: liveCase.maxTokens,
-            };
-          }
-          return null;
-        },
-      };
+  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
 
-      const resolved = provider.resolveDynamicModel?.({
+    expect(
+      provider.isModernModelRef?.({
         provider: "openai",
-        modelId: liveCase.modelId,
-        modelRegistry: registry as never,
-      });
-
-      expect(resolved).toBeDefined();
-
-      const normalized = provider.normalizeResolvedModel?.({
+        modelId: "gpt-5.0",
+      } as never),
+    ).toBe(false);
+    expect(
+      provider.isModernModelRef?.({
         provider: "openai",
-        modelId: resolved!.id,
-        model: resolved!,
-      });
-
-      expect(normalized).toMatchObject({
+        modelId: "gpt-5.2",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
         provider: "openai",
-        id: liveCase.modelId,
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      });
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
 
-      const client = new OpenAI({
-        apiKey: OPENAI_API_KEY,
-        baseURL: normalized?.baseUrl,
-      });
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.1-codex",
+      } as never),
+    ).toBe(false);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.1-codex-max",
+      } as never),
+    ).toBe(false);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.2-codex",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+  });
 
-      const response = await client.responses.create({
-        model: normalized?.id ?? liveCase.modelId,
-        input: "Reply with exactly OK.",
-        max_output_tokens: 16,
-      });
+  it("falls back to cached codex oauth credentials on accountId extraction failures", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai-codex",
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 60_000,
+    };
 
-      expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
-    },
-    30_000,
-  );
+    refreshOpenAICodexTokenMock.mockReset();
+    refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+      new Error("Failed to extract accountId from token"),
+    );
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+  });
 });

@@ -83,7 +83,7 @@ async function requestAllowOnceApproval(
     systemRunPlan: {
       argv: commandArgv,
       cwd: null,
-      rawCommand: command,
+      commandText: command,
       agentId: null,
       sessionKey: null,
     },
@@ -117,7 +117,9 @@ describe("node.invoke approval bypass", () => {
     const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
     const list = await listDevicePairing();
     for (const pending of list.pending) {
-      await approveDevicePairing(pending.requestId);
+      await approveDevicePairing(pending.requestId, {
+        callerScopes: pending.scopes ?? ["operator.admin"],
+      });
     }
   };
 
@@ -216,7 +218,7 @@ describe("node.invoke approval bypass", () => {
       url: `ws://127.0.0.1:${port}`,
       // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
       // trigger reconnect backoff loops under load.
-      connectDelayMs: 2_000,
+      connectChallengeTimeoutMs: 2_000,
       token: "secret",
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,

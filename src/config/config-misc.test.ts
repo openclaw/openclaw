@@ -29,6 +29,14 @@ describe("$schema key in config (#14998)", () => {
     const result = OpenClawSchema.safeParse({ $schema: 123 });
     expect(result.success).toBe(false);
   });
+
+  it("accepts $schema during full config validation", () => {
+    const result = validateConfigObject({
+      $schema: "./schema.json",
+      gateway: { port: 18789 },
+    });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("plugins.slots.contextEngine", () => {
@@ -465,17 +473,91 @@ describe("config strict validation", () => {
     }
   });
 
-  it("flags legacy config entries without auto-migrating", async () => {
+  it("rejects removed legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        agents: { list: [{ id: "pi" }] },
-        routing: { allowFrom: ["+15555550123"] },
+        memorySearch: { provider: "local", fallback: "none" },
       });
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues).not.toHaveLength(0);
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+    });
+  });
+
+  it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        messages: {
+          tts: {
+            provider: "elevenlabs",
+            elevenlabs: {
+              apiKey: "test-key",
+              voiceId: "voice-1",
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
+      expect(snap.sourceConfig.messages?.tts?.providers?.elevenlabs).toEqual({
+        apiKey: "test-key",
+        voiceId: "voice-1",
+      });
+      expect(
+        (snap.sourceConfig.messages?.tts as Record<string, unknown> | undefined)?.elevenlabs,
+      ).toBeUndefined();
+    });
+  });
+
+  it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: {
+                tts: {
+                  provider: "openai",
+                  openai: {
+                    model: "gpt-4o-mini-tts",
+                    voice: "alloy",
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
+      const voiceCallTts = (
+        snap.sourceConfig.plugins?.entries as
+          | Record<
+              string,
+              {
+                config?: {
+                  tts?: {
+                    providers?: Record<string, unknown>;
+                    openai?: unknown;
+                  };
+                };
+              }
+            >
+          | undefined
+      )?.["voice-call"]?.config?.tts;
+      expect(voiceCallTts?.providers?.openai).toEqual({
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+      });
+      expect(voiceCallTts?.openai).toBeUndefined();
     });
   });
 
@@ -509,7 +591,7 @@ describe("config strict validation", () => {
       });
 
       const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });

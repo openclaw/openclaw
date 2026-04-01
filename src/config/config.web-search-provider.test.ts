@@ -1,139 +1,88 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../plugins/web-search-providers.js", () => {
-  const getScoped = (key: string) => (search?: Record<string, unknown>) =>
-    (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
-  const getConfigured = (pluginId: string) => (config?: Record<string, unknown>) =>
+const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
+  (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
+const getConfiguredPluginWebSearchCredential =
+  (pluginId: string) => (config?: Record<string, unknown>) =>
     (
       config?.plugins as
         | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
         | undefined
     )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
+
+const mockWebSearchProviders = [
+  {
+    id: "brave",
+    envVars: ["BRAVE_API_KEY"],
+    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+    getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("brave"),
+  },
+  {
+    id: "firecrawl",
+    envVars: ["FIRECRAWL_API_KEY"],
+    credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("firecrawl"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("firecrawl"),
+  },
+  {
+    id: "gemini",
+    envVars: ["GEMINI_API_KEY"],
+    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("gemini"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("google"),
+  },
+  {
+    id: "grok",
+    envVars: ["XAI_API_KEY"],
+    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("grok"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("xai"),
+  },
+  {
+    id: "kimi",
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("kimi"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("moonshot"),
+  },
+  {
+    id: "perplexity",
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("perplexity"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
+  },
+  {
+    id: "tavily",
+    envVars: ["TAVILY_API_KEY"],
+    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("tavily"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("tavily"),
+  },
+] as const;
+
+vi.mock("../plugins/web-search-providers.js", () => {
   return {
-    resolveBundledPluginWebSearchProviders: () => [
-      {
-        id: "brave",
-        envVars: ["BRAVE_API_KEY"],
-        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
-        getConfiguredCredentialValue: getConfigured("brave"),
-      },
-      {
-        id: "firecrawl",
-        envVars: ["FIRECRAWL_API_KEY"],
-        credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-        getCredentialValue: getScoped("firecrawl"),
-        getConfiguredCredentialValue: getConfigured("firecrawl"),
-      },
-      {
-        id: "gemini",
-        envVars: ["GEMINI_API_KEY"],
-        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        getCredentialValue: getScoped("gemini"),
-        getConfiguredCredentialValue: getConfigured("google"),
-      },
-      {
-        id: "grok",
-        envVars: ["XAI_API_KEY"],
-        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-        getCredentialValue: getScoped("grok"),
-        getConfiguredCredentialValue: getConfigured("xai"),
-      },
-      {
-        id: "kimi",
-        envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-        credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-        getCredentialValue: getScoped("kimi"),
-        getConfiguredCredentialValue: getConfigured("moonshot"),
-      },
-      {
-        id: "perplexity",
-        envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-        credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-        getCredentialValue: getScoped("perplexity"),
-        getConfiguredCredentialValue: getConfigured("perplexity"),
-      },
-      {
-        id: "tavily",
-        envVars: ["TAVILY_API_KEY"],
-        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-        getCredentialValue: getScoped("tavily"),
-        getConfiguredCredentialValue: getConfigured("tavily"),
-      },
-    ],
-    resolvePluginWebSearchProviders: () => [
-      {
-        id: "brave",
-        envVars: ["BRAVE_API_KEY"],
-        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
-        getConfiguredCredentialValue: getConfigured("brave"),
-      },
-      {
-        id: "firecrawl",
-        envVars: ["FIRECRAWL_API_KEY"],
-        credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-        getCredentialValue: getScoped("firecrawl"),
-        getConfiguredCredentialValue: getConfigured("firecrawl"),
-      },
-      {
-        id: "gemini",
-        envVars: ["GEMINI_API_KEY"],
-        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        getCredentialValue: getScoped("gemini"),
-        getConfiguredCredentialValue: getConfigured("google"),
-      },
-      {
-        id: "grok",
-        envVars: ["XAI_API_KEY"],
-        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-        getCredentialValue: getScoped("grok"),
-        getConfiguredCredentialValue: getConfigured("xai"),
-      },
-      {
-        id: "kimi",
-        envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-        credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-        getCredentialValue: getScoped("kimi"),
-        getConfiguredCredentialValue: getConfigured("moonshot"),
-      },
-      {
-        id: "perplexity",
-        envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-        credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-        getCredentialValue: getScoped("perplexity"),
-        getConfiguredCredentialValue: getConfigured("perplexity"),
-      },
-      {
-        id: "tavily",
-        envVars: ["TAVILY_API_KEY"],
-        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-        getCredentialValue: getScoped("tavily"),
-        getConfiguredCredentialValue: getConfigured("tavily"),
-      },
-    ],
+    resolveBundledPluginWebSearchProviders: () => mockWebSearchProviders,
+    resolvePluginWebSearchProviders: () => mockWebSearchProviders,
   };
 });
 
-const { __testing } = await import("../agents/tools/web-search.js");
-const { resolveSearchProvider } = __testing;
+let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
+let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
-function pluginWebSearchApiKey(
-  config: Record<string, unknown> | undefined,
-  pluginId: string,
-): unknown {
-  return (
-    config?.plugins as
-      | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
-      | undefined
-  )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
-}
+beforeAll(async () => {
+  ({ validateConfigObjectWithPlugins } = await import("./config.js"));
+  ({
+    __testing: { resolveSearchProvider },
+  } = await import("../agents/tools/web-search.js"));
+});
 
 describe("web search provider config", () => {
   it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
@@ -230,7 +179,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("does not migrate the nonexistent legacy Tavily scoped config", () => {
+  it("rejects legacy scoped Tavily config", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -244,15 +193,24 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.config.tools?.web?.search?.provider).toBe("tavily");
-    expect((res.config.tools?.web?.search as Record<string, unknown> | undefined)?.tavily).toBe(
-      undefined,
-    );
-    expect(pluginWebSearchApiKey(res.config as Record<string, unknown>, "tavily")).toBe(undefined);
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects legacy scoped provider config for bundled providers", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            gemini: {
+              apiKey: "legacy-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("accepts gemini provider with no extra config", () => {

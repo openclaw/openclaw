@@ -8,6 +8,7 @@ export type AuthProfileConfig = {
    */
   mode: "api_key" | "oauth" | "token";
   email?: string;
+  displayName?: string;
 };
 
 export type AuthConfig = {
@@ -25,5 +26,15 @@ export type AuthConfig = {
      * this window, counters reset. Default: 24.
      */
     failureWindowHours?: number;
+    /**
+     * Maximum same-provider auth-profile rotations to allow for overloaded
+     * errors before escalating to cross-provider model fallback. Default: 1.
+     */
+    overloadedProfileRotations?: number;
+    /**
+     * Fixed delay before retrying an overloaded provider/profile rotation.
+     * Default: 0.
+     */
+    overloadedBackoffMs?: number;
   };
 };

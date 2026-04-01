@@ -6,16 +6,28 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
-vi.mock("../config.js", () => ({
+vi.mock("../config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config.js")>()),
   loadConfig: vi.fn().mockReturnValue({}),
 }));
 
-import { loadConfig } from "../config.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+let loadConfig: typeof import("../config.js").loadConfig;
+let clearSessionStoreCacheForTest: typeof import("./store.js").clearSessionStoreCacheForTest;
+let loadSessionStore: typeof import("./store.js").loadSessionStore;
+let saveSessionStore: typeof import("./store.js").saveSessionStore;
 
 let mockLoadConfig: ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ENFORCED_MAINTENANCE_OVERRIDE = {
+  mode: "enforce" as const,
+  pruneAfterMs: 7 * DAY_MS,
+  maxEntries: 500,
+  rotateBytes: 10_485_760,
+  resetArchiveRetentionMs: 7 * DAY_MS,
+  maxDiskBytes: null,
+  highWaterBytes: null,
+};
 
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
 
@@ -79,6 +91,10 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   beforeEach(async () => {
+    vi.resetModules();
+    ({ loadConfig } = await import("../config.js"));
+    ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
+      await import("./store.js"));
     mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
     testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");
@@ -103,9 +119,11 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const store = createStaleAndFreshStore();
 
-    await saveSessionStore(storePath, store);
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: ENFORCED_MAINTENANCE_OVERRIDE,
+    });
 
-    const loaded = loadSessionStore(storePath);
+    const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.stale).toBeUndefined();
     expect(loaded.fresh).toBeDefined();
   });

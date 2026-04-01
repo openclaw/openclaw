@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
 import { resolveUserPath } from "../utils.js";
 
 export function ensureRuntimePluginsLoaded(params: {
@@ -11,8 +11,7 @@ export function ensureRuntimePluginsLoaded(params: {
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-
-  loadOpenClawPlugins({
+  const loadOptions = {
     config: params.config,
     workspaceDir,
     runtimeOptions: params.allowGatewaySubagentBinding
@@ -20,5 +19,6 @@ export function ensureRuntimePluginsLoaded(params: {
           allowGatewaySubagentBinding: true,
         }
       : undefined,
-  });
+  };
+  resolveRuntimePluginRegistry(loadOptions);
 }

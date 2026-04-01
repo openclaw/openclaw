@@ -6,7 +6,7 @@ import {
   formatCliCommand,
   mergeScopedSearchConfig,
   normalizeFreshness,
-  normalizeToIsoDate,
+  parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -29,6 +29,47 @@ import {
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
+// Mirror Brave's documented country enum so unsupported locale guesses can collapse to ALL.
+const BRAVE_COUNTRY_CODES = new Set([
+  "AR",
+  "AU",
+  "AT",
+  "BE",
+  "BR",
+  "CA",
+  "CL",
+  "DK",
+  "FI",
+  "FR",
+  "DE",
+  "GR",
+  "HK",
+  "IN",
+  "ID",
+  "IT",
+  "JP",
+  "KR",
+  "MY",
+  "MX",
+  "NL",
+  "NZ",
+  "NO",
+  "CN",
+  "PL",
+  "PT",
+  "PH",
+  "RU",
+  "SA",
+  "ZA",
+  "ES",
+  "SE",
+  "CH",
+  "TW",
+  "TR",
+  "GB",
+  "US",
+  "ALL",
+]);
 const BRAVE_SEARCH_LANG_CODES = new Set([
   "ar",
   "eu",
@@ -144,6 +185,18 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
     return undefined;
   }
   return canonical;
+}
+
+function normalizeBraveCountry(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const canonical = trimmed.toUpperCase();
+  return BRAVE_COUNTRY_CODES.has(canonical) ? canonical : "ALL";
 }
 
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
@@ -410,7 +463,7 @@ function createBraveToolDefinition(
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??
         undefined;
-      const country = readStringParam(params, "country");
+      const country = normalizeBraveCountry(readStringParam(params, "country"));
       const language = readStringParam(params, "language");
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
@@ -478,29 +531,17 @@ function createBraveToolDefinition(
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
-      const dateAfter = rawDateAfter ? normalizeToIsoDate(rawDateAfter) : undefined;
-      if (rawDateAfter && !dateAfter) {
-        return {
-          error: "invalid_date",
-          message: "date_after must be YYYY-MM-DD format.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
+      const parsedDateRange = parseIsoDateRange({
+        rawDateAfter,
+        rawDateBefore,
+        invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+        invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+        invalidDateRangeMessage: "date_after must be before date_before.",
+      });
+      if ("error" in parsedDateRange) {
+        return parsedDateRange;
       }
-      const dateBefore = rawDateBefore ? normalizeToIsoDate(rawDateBefore) : undefined;
-      if (rawDateBefore && !dateBefore) {
-        return {
-          error: "invalid_date",
-          message: "date_before must be YYYY-MM-DD format.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
-      if (dateAfter && dateBefore && dateAfter > dateBefore) {
-        return {
-          error: "invalid_date_range",
-          message: "date_after must be before date_before.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
+      const { dateAfter, dateBefore } = parsedDateRange;
 
       const cacheKey = buildSearchCacheKey([
         "brave",
@@ -592,6 +633,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     id: "brave",
     label: "Brave Search",
     hint: "Structured results · country/language/time filters",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "Brave Search API key",
     envVars: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
@@ -621,6 +663,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
 
 export const __testing = {
   normalizeFreshness,
+  normalizeBraveCountry,
   normalizeBraveLanguageParams,
   resolveBraveMode,
   mapBraveLlmContextResults,

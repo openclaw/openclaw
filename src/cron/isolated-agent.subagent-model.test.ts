@@ -95,12 +95,16 @@ async function runSubagentModelCase(params: {
   home: string;
   cfgOverrides?: Partial<OpenClawConfig>;
   jobModelOverride?: string;
+  agentId?: string;
 }) {
   const storePath = await writeSessionStore(params.home);
   mockEmbeddedAgent();
   const job = makeJob();
   if (params.jobModelOverride) {
     job.payload = { kind: "agentTurn", message: "do work", model: params.jobModelOverride };
+  }
+  if (params.agentId) {
+    job.agentId = params.agentId;
   }
 
   await runCronIsolatedAgentTurn({
@@ -190,6 +194,27 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       });
       expect(call?.provider).toBe("openai");
       expect(call?.model).toBe("gpt-4o");
+    });
+  });
+
+  it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    await withTempHome(async (home) => {
+      const call = await runSubagentModelCase({
+        home,
+        agentId: "research",
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-sonnet-4-5",
+              workspace: path.join(home, "openclaw"),
+              subagents: { model: "ollama/llama3.2:3b" },
+            },
+            list: [{ id: "research", model: { primary: "anthropic/claude-opus-4-6" } }],
+          },
+        },
+      });
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toBe("claude-opus-4-6");
     });
   });
 });

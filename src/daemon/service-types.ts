@@ -1,3 +1,5 @@
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+
 export type GatewayServiceEnv = Record<string, string | undefined>;
 
 export type GatewayServiceInstallArgs = {
@@ -8,6 +10,8 @@ export type GatewayServiceInstallArgs = {
   environment?: GatewayServiceEnv;
   description?: string;
 };
+
+export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
 
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
@@ -32,6 +36,20 @@ export type GatewayServiceCommandConfig = {
   environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 };
+
+export type GatewayServiceState = {
+  installed: boolean;
+  loaded: boolean;
+  running: boolean;
+  env: GatewayServiceEnv;
+  command: GatewayServiceCommandConfig | null;
+  runtime?: GatewayServiceRuntime;
+};
+
+export type GatewayServiceStartResult =
+  | { outcome: "started"; state: GatewayServiceState }
+  | { outcome: "scheduled"; state: GatewayServiceState }
+  | { outcome: "missing-install"; state: GatewayServiceState };
 
 export type GatewayServiceRenderArgs = {
   description?: string;

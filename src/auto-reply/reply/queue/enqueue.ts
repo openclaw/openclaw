@@ -1,7 +1,6 @@
-import { createDedupeCache } from "../../../infra/dedupe.js";
-import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -11,12 +10,10 @@ import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
  */
 const RECENT_QUEUE_MESSAGE_IDS_KEY = Symbol.for("openclaw.recentQueueMessageIds");
 
-const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalSingleton(RECENT_QUEUE_MESSAGE_IDS_KEY, () =>
-  createDedupeCache({
-    ttlMs: 5 * 60 * 1000,
-    maxSize: 10_000,
-  }),
-);
+const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_IDS_KEY, {
+  ttlMs: 5 * 60 * 1000,
+  maxSize: 10_000,
+});
 
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
   const messageId = run.messageId?.trim();
@@ -62,6 +59,8 @@ export function enqueueFollowupRun(
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -95,10 +94,13 @@ export function enqueueFollowupRun(
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
+  }
   // If drain finished and deleted the queue before this item arrived, a new queue
   // object was created (draining: false) but nobody scheduled a drain for it.
   // Use the cached callback to restart the drain now.
-  if (!queue.draining) {
+  if (restartIfIdle && !queue.draining) {
     kickFollowupDrainIfIdle(key);
   }
   return true;

@@ -85,3 +85,37 @@ export function clearFollowupQueue(key: string): number {
   FOLLOWUP_QUEUES.delete(cleaned);
   return cleared;
 }
+
+export function refreshQueuedFollowupSession(params: {
+  key: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+}): void {
+  const cleaned = params.key.trim();
+  if (!cleaned || !params.previousSessionId || !params.nextSessionId) {
+    return;
+  }
+  if (params.previousSessionId === params.nextSessionId) {
+    return;
+  }
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return;
+  }
+
+  const rewriteRun = (run?: FollowupRun["run"]) => {
+    if (!run || run.sessionId !== params.previousSessionId) {
+      return;
+    }
+    run.sessionId = params.nextSessionId!;
+    if (params.nextSessionFile?.trim()) {
+      run.sessionFile = params.nextSessionFile;
+    }
+  };
+
+  rewriteRun(queue.lastRun);
+  for (const item of queue.items) {
+    rewriteRun(item.run);
+  }
+}
