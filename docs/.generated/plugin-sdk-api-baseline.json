@@ -91,7 +91,7 @@
           "exportName": "ChannelConfigSchema",
           "kind": "type",
           "source": {
-            "line": 69,
+            "line": 70,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -100,7 +100,7 @@
           "exportName": "ChannelConfigUiHint",
           "kind": "type",
           "source": {
-            "line": 38,
+            "line": 39,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -109,7 +109,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 653,
+            "line": 658,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -118,7 +118,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 658,
+            "line": 663,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 674,
+            "line": 679,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -181,7 +181,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 77,
+            "line": 78,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -253,7 +253,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1636,
+            "line": 1640,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1684,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1202,11 +1202,29 @@
           }
         },
         {
+          "declaration": "export type ChannelApprovalAdapter = ChannelApprovalAdapter;",
+          "exportName": "ChannelApprovalAdapter",
+          "kind": "type",
+          "source": {
+            "line": 596,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelApprovalCapability = ChannelApprovalCapability;",
+          "exportName": "ChannelApprovalCapability",
+          "kind": "type",
+          "source": {
+            "line": 591,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelCommandConversationContext = ChannelCommandConversationContext;",
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 662,
+            "line": 667,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1824,13 +1842,22 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 597,
+            "line": 602,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
         {
           "declaration": "export type ChannelApprovalAdapter = ChannelApprovalAdapter;",
           "exportName": "ChannelApprovalAdapter",
+          "kind": "type",
+          "source": {
+            "line": 596,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelApprovalCapability = ChannelApprovalCapability;",
+          "exportName": "ChannelApprovalCapability",
           "kind": "type",
           "source": {
             "line": 591,
@@ -1914,7 +1941,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 662,
+            "line": 667,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1932,7 +1959,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 653,
+            "line": 658,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1941,7 +1968,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 658,
+            "line": 663,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1950,7 +1977,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 674,
+            "line": 679,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1959,7 +1986,7 @@
           "exportName": "ChannelConversationBindingSupport",
           "kind": "type",
           "source": {
-            "line": 690,
+            "line": 695,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2265,7 +2292,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 77,
+            "line": 78,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -2319,7 +2346,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 721,
+            "line": 726,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3729,7 +3756,7 @@
           "exportName": "ChannelConfigUiHint",
           "kind": "type",
           "source": {
-            "line": 38,
+            "line": 39,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -3774,7 +3801,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 77,
+            "line": 78,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -3819,7 +3846,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1684,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3828,7 +3855,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1398,
+            "line": 1402,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3846,7 +3873,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1662,
+            "line": 1666,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3855,7 +3882,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1629,
+            "line": 1633,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3864,7 +3891,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1621,
+            "line": 1625,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3900,7 +3927,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1427,
+            "line": 1431,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4334,7 +4361,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1684,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4343,7 +4370,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1398,
+            "line": 1402,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4361,7 +4388,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1662,
+            "line": 1666,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4370,7 +4397,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1629,
+            "line": 1633,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4379,7 +4406,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1621,
+            "line": 1625,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4415,7 +4442,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1427,
+            "line": 1431,
             "path": "src/plugins/types.ts"
           }
         },
