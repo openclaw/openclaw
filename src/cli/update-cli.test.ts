@@ -443,7 +443,7 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
-  it("falls back to in-process post-update work when the fresh process exits non-zero", async () => {
+  it("fails the update when the fresh process exits non-zero", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce(() => {
       const child = new EventEmitter() as EventEmitter & {
@@ -455,10 +455,12 @@ describe("update-cli", () => {
       return child;
     });
 
-    await updateCommand({ yes: true });
+    await expect(updateCommand({ yes: true })).rejects.toThrow(
+      "post-update process exited with code 2",
+    );
 
     expect(defaultRuntime.exit).toHaveBeenCalledWith(2);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
   it("post-core resume mode skips the core update and only runs post-update tasks", async () => {

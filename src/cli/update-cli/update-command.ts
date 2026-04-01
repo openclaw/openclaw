@@ -806,7 +806,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
 
   if (exitCode !== 0) {
     defaultRuntime.exit(exitCode);
-    return false;
+    throw new Error(`post-update process exited with code ${exitCode}`);
   }
   return true;
 }
