@@ -14962,6 +14962,62 @@
       "hasChildren": false
     },
     {
+      "path": "models.copilotDiscovery",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Copilot Model Discovery",
+      "help": "GitHub Copilot implicit discovery settings. Controls whether OpenClaw probes for Copilot API access when GH_TOKEN or GITHUB_TOKEN is present.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.copilotDiscovery.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Copilot Discovery Enabled",
+      "help": "Set to false to prevent Copilot discovery from running even when GitHub tokens are detected. Useful when GH_TOKEN is set for other tools and you do not want Copilot provider auto-registration.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.huggingfaceDiscovery",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "HuggingFace Model Discovery",
+      "help": "HuggingFace implicit discovery settings. Controls whether OpenClaw fetches the HuggingFace model catalog when HF_TOKEN is present.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.huggingfaceDiscovery.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "HuggingFace Discovery Enabled",
+      "help": "Set to false to prevent HuggingFace model discovery from running even when HF_TOKEN is detected. Useful when the token is set for other tools like transformers-cli.",
+      "hasChildren": false
+    },
+    {
       "path": "models.mode",
       "kind": "core",
       "type": "string",
@@ -14973,6 +15029,34 @@
       ],
       "label": "Model Catalog Mode",
       "help": "Controls provider catalog behavior: \"merge\" keeps built-ins and overlays your custom providers, while \"replace\" uses only your configured providers. In \"merge\", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.ollamaDiscovery",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Ollama Model Discovery",
+      "help": "Ollama implicit discovery settings. Controls whether OpenClaw probes the local Ollama server for available models on startup.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.ollamaDiscovery.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Ollama Discovery Enabled",
+      "help": "Set to false to prevent Ollama discovery from probing localhost:11434 on startup. Useful when Ollama is not intended for OpenClaw or the local probe causes startup delays.",
       "hasChildren": false
     },
     {

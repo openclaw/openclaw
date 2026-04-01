@@ -2470,6 +2470,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          copilotDiscovery: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
+          huggingfaceDiscovery: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
+          ollamaDiscovery: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -22556,6 +22583,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Bedrock Default Max Tokens",
       help: "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
       tags: ["security", "auth", "performance", "models"],
+    },
+    "models.copilotDiscovery": {
+      label: "Copilot Model Discovery",
+      help: "GitHub Copilot implicit discovery settings. Controls whether OpenClaw probes for Copilot API access when GH_TOKEN or GITHUB_TOKEN is present.",
+      tags: ["models"],
+    },
+    "models.copilotDiscovery.enabled": {
+      label: "Copilot Discovery Enabled",
+      help: "Set to false to prevent Copilot discovery from running even when GitHub tokens are detected. Useful when GH_TOKEN is set for other tools and you do not want Copilot provider auto-registration.",
+      tags: ["models"],
+    },
+    "models.huggingfaceDiscovery": {
+      label: "HuggingFace Model Discovery",
+      help: "HuggingFace implicit discovery settings. Controls whether OpenClaw fetches the HuggingFace model catalog when HF_TOKEN is present.",
+      tags: ["models"],
+    },
+    "models.huggingfaceDiscovery.enabled": {
+      label: "HuggingFace Discovery Enabled",
+      help: "Set to false to prevent HuggingFace model discovery from running even when HF_TOKEN is detected. Useful when the token is set for other tools like transformers-cli.",
+      tags: ["models"],
+    },
+    "models.ollamaDiscovery": {
+      label: "Ollama Model Discovery",
+      help: "Ollama implicit discovery settings. Controls whether OpenClaw probes the local Ollama server for available models on startup.",
+      tags: ["models"],
+    },
+    "models.ollamaDiscovery.enabled": {
+      label: "Ollama Discovery Enabled",
+      help: "Set to false to prevent Ollama discovery from probing localhost:11434 on startup. Useful when Ollama is not intended for OpenClaw or the local probe causes startup delays.",
+      tags: ["models"],
     },
     "auth.cooldowns.billingBackoffHours": {
       label: "Billing Backoff (hours)",
