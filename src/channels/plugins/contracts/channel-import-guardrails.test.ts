@@ -6,10 +6,10 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
   bundledPluginFile,
-} from "../../test/helpers/bundled-plugin-paths.js";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../plugins/public-artifacts.js";
+} from "../../../../test/helpers/bundled-plugin-paths.js";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugins/public-artifacts.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");

@@ -55,7 +55,7 @@ describe("plugin-sdk bundled exports", () => {
         neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
       },
       // Full plugin-sdk coverage belongs to `pnpm build`, package contract
-      // guardrails, and `subpaths.test.ts`. This file only keeps the expensive
+      // guardrails, and `plugin-sdk-subpaths.test.ts`. This file only keeps the expensive
       // bundler path honest across representative entrypoint families plus the
       // Matrix SDK runtime import surface that historically crashed plugin
       // loading when bare and deep SDK entrypoints mixed.
@@ -90,7 +90,7 @@ describe("plugin-sdk bundled exports", () => {
     expect(filesWithBareMatrixSdkImports).toEqual([]);
 
     // Export list and package-specifier coverage already live in
-    // package-contract-guardrails.test.ts and subpaths.test.ts. Keep this file
+    // plugin-sdk-package-contract-guardrails.test.ts and plugin-sdk-subpaths.test.ts. Keep this file
     // focused on the expensive part: can tsdown emit working bundle artifacts?
     const importResults = await Promise.all(
       bundledRepresentativeEntrypoints.map(async (entry) => [

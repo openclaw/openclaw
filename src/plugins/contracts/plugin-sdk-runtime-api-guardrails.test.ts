@@ -3,9 +3,9 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { bundledPluginFile } from "../../../test/helpers/bundled-plugin-paths.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   [bundledPluginFile("discord", "runtime-api.ts")]: [

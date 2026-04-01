@@ -12,7 +12,7 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
-  "src/plugin-sdk/subpaths.test.ts",
+  "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
