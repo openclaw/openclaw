@@ -20,8 +20,13 @@ import type {
   ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderNormalizeToolSchemasContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeModelIdContext,
+  ProviderReasoningOutputMode,
+  ProviderReasoningOutputModeContext,
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
   ProviderNormalizeResolvedModelContext,
   ProviderNormalizeTransportContext,
   ProviderModernModelPolicyContext,
@@ -29,11 +34,13 @@ import type {
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderResolveConfigApiKeyContext,
+  ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
+  ProviderValidateReplayTurnsContext,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -433,6 +440,57 @@ export function resolveProviderCapabilitiesWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return resolveProviderRuntimePlugin(params)?.capabilities;
+}
+
+export function resolveProviderReplayPolicyWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderReplayPolicyContext;
+}): ProviderReplayPolicy | undefined {
+  return resolveProviderHookPlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
+}
+
+export async function sanitizeProviderReplayHistoryWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderSanitizeReplayHistoryContext;
+}) {
+  return await resolveProviderHookPlugin(params)?.sanitizeReplayHistory?.(params.context);
+}
+
+export async function validateProviderReplayTurnsWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderValidateReplayTurnsContext;
+}) {
+  return await resolveProviderHookPlugin(params)?.validateReplayTurns?.(params.context);
+}
+
+export function normalizeProviderToolSchemasWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeToolSchemasContext;
+}) {
+  return resolveProviderHookPlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
+}
+
+export function resolveProviderReasoningOutputModeWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderReasoningOutputModeContext;
+}): ProviderReasoningOutputMode | undefined {
+  const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
+  return mode === "native" || mode === "tagged" ? mode : undefined;
 }
 
 export function prepareProviderExtraParams(params: {
