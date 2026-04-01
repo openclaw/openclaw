@@ -186,6 +186,12 @@ function hashExecApprovalsRaw(raw: string | null): string {
 }
 
 export function resolveExecApprovalsPath(): string {
+  // Allow environment override for testing and operator escape hatch.
+  // This is intentionally unconditional to support operators who need to
+  // relocate the approvals file without modifying the home directory.
+  if (process.env.OPENCLAW_EXEC_APPROVALS_FILE) {
+    return process.env.OPENCLAW_EXEC_APPROVALS_FILE;
+  }
   return expandHomePrefix(DEFAULT_FILE);
 }
 
@@ -431,7 +437,13 @@ export function loadExecApprovals(): ExecApprovalsFile {
     if (parsed?.version !== 1) {
       return normalizeExecApprovals({ version: 1, agents: {} });
     }
-    return normalizeExecApprovals(parsed);
+    const normalized = normalizeExecApprovals(parsed);
+    // Preserve loaded defaults to avoid losing allow-always allowlist entries
+    // when normalizeExecApprovals drops undefined fields.
+    return {
+      ...normalized,
+      defaults: parsed.defaults ?? normalized.defaults,
+    };
   } catch {
     return normalizeExecApprovals({ version: 1, agents: {} });
   }
@@ -453,8 +465,13 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   const next = normalizeExecApprovals(loaded);
   const socketPath = next.socket?.path?.trim();
   const token = next.socket?.token?.trim();
+  // Preserve loaded defaults to avoid losing allow-always allowlist entries
+  // when normalizeExecApprovals drops undefined fields.
+  // Note: loadExecApprovals() always returns a defaults object, so we always
+  // use loaded.defaults rather than next.defaults (which has explicit undefined values).
   const updated: ExecApprovalsFile = {
     ...next,
+    defaults: loaded.defaults,
     socket: {
       path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
       token: token && token.length > 0 ? token : generateToken(),
@@ -623,7 +640,11 @@ export function resolveExecApprovalsFromFile(params: {
 }): ExecApprovalsResolved {
   const rawFile = params.file;
   const file = normalizeExecApprovals(params.file);
-  const defaults = file.defaults ?? {};
+  // Preserve original defaults to avoid losing allow-always allowlist entries
+  // when normalizeExecApprovals drops undefined fields.
+  // Note: params.file.defaults takes precedence because normalizeExecApprovals
+  // always produces a defaults object (with undefined values for unset fields).
+  const defaults = params.file.defaults ?? file.defaults ?? {};
   const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
@@ -683,6 +704,12 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  // Preserve original defaults in the returned file object to prevent
+  // allow-always allowlist entries from being lost on subsequent saves.
+  const fileWithDefaults = {
+    ...file,
+    defaults: params.file.defaults ?? file.defaults,
+  };
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -697,7 +724,7 @@ export function resolveExecApprovalsFromFile(params: {
       askFallback: resolvedAgentAskFallback.source,
     },
     allowlist,
-    file,
+    file: fileWithDefaults,
   };
 }
 
