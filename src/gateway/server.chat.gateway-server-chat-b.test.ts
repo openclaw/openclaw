@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import { clearConfigCache } from "../config/config.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import {
   connectOk,
@@ -54,6 +55,7 @@ async function withGatewayChatHarness(
     await run({ ws, createSessionDir });
   } finally {
     __setMaxChatHistoryMessagesBytesForTest();
+    clearConfigCache();
     testState.sessionStorePath = undefined;
     ws.close();
     await server.close();
@@ -76,6 +78,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  clearConfigCache();
 }
 
 async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
@@ -544,6 +547,24 @@ describe("gateway server chat", () => {
       expect((tooLargeRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
         /invalid chat\.history params/i,
       );
+    });
+  });
+
+  test("chat.history still drops assistant NO_REPLY entries before truncation", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 3 });
+      expect(messages).toEqual([]);
     });
   });
 

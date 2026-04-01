@@ -42,7 +42,12 @@ has_native_swift_changes() {
     fi
   fi
 
-  git diff --name-only --relative -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
+  if git rev-parse --verify --quiet HEAD^ >/dev/null; then
+    git diff --name-only --relative HEAD^..HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
+    return $?
+  fi
+
+  git show --name-only --relative --pretty='' HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
 }
 
 run_linux_ci_mirror() {

@@ -102,7 +102,7 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 64_000;
+const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -719,14 +719,14 @@ function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unk
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    const res = sanitizeChatHistoryMessage(message, maxChars);
-    changed ||= res.changed;
     // Drop assistant messages whose entire visible text is the silent reply token.
-    const text = extractAssistantTextForSilentCheck(res.message);
+    const text = extractAssistantTextForSilentCheck(message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       changed = true;
       continue;
     }
+    const res = sanitizeChatHistoryMessage(message, maxChars);
+    changed ||= res.changed;
     next.push(res.message);
   }
   return changed ? next : messages;
