@@ -1,4 +1,4 @@
-import { resolveConfiguredIrcSenderAgentIdsByNick, type ResolvedIrcAccount } from "./accounts.js";
+import { type ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
   resolveIrcMentionGate,
@@ -105,9 +105,6 @@ export async function handleIrcInbound(params: {
   const senderDisplay = message.senderHost
     ? `${message.senderNick}!${message.senderUser ?? "?"}@${message.senderHost}`
     : message.senderNick;
-  const senderAgentId = resolveConfiguredIrcSenderAgentIdsByNick(config).get(
-    message.senderNick.trim().toLowerCase(),
-  );
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -316,7 +313,6 @@ export async function handleIrcInbound(params: {
     ConversationLabel: fromLabel,
     SenderName: message.senderNick || undefined,
     SenderId: senderDisplay,
-    SenderAgentId: senderAgentId,
     GroupSubject: message.isGroup ? message.target : undefined,
     GroupSystemPrompt: message.isGroup ? groupSystemPrompt : undefined,
     Provider: CHANNEL_ID,

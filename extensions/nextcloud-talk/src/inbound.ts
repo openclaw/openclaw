@@ -13,10 +13,7 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import {
-  resolveConfiguredNextcloudTalkSenderAgentIds,
-  type ResolvedNextcloudTalkAccount,
-} from "./accounts.js";
+import { type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkAllowlistMatch,
@@ -56,6 +53,7 @@ export async function handleNextcloudTalkInbound(params: {
   account: ResolvedNextcloudTalkAccount;
   config: CoreConfig;
   runtime: RuntimeEnv;
+  identityAgentIds?: ReadonlyMap<string, string>;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
@@ -234,7 +232,7 @@ export async function handleNextcloudTalkInbound(params: {
       id: isGroup ? roomToken : senderId,
     },
   });
-  const senderAgentId = resolveConfiguredNextcloudTalkSenderAgentIds(config).get(senderId);
+  const senderAgentId = params.identityAgentIds?.get(senderId);
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
   const storePath = core.channel.session.resolveStorePath(

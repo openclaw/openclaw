@@ -14,6 +14,7 @@ import {
   requestBodyErrorToText,
 } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
+import { resolveConfiguredNextcloudTalkSenderAgentIds } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
@@ -357,6 +358,7 @@ export async function monitorNextcloudTalkProvider(
     opts.runtime,
     core.logging.getChildLogger(),
   );
+  const identityAgentIds = resolveConfiguredNextcloudTalkSenderAgentIds(cfg);
 
   if (!account.secret) {
     throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);
@@ -421,6 +423,7 @@ export async function monitorNextcloudTalkProvider(
         account,
         config: cfg,
         runtime,
+        identityAgentIds,
         statusSink: opts.statusSink,
       });
     },

@@ -74,6 +74,22 @@ function installRuntime(params?: {
         buildMentionRegexes: params?.buildMentionRegexes ?? vi.fn(() => []),
         matchesMentionPatterns: params?.matchesMentionPatterns ?? vi.fn(() => false),
       },
+      routing: {
+        resolveAgentRoute: vi.fn(() => ({
+          agentId: "ops-agent",
+          accountId: "default",
+          sessionKey: "nextcloud-talk:default:user-1",
+        })),
+      },
+      session: {
+        resolveStorePath: vi.fn(() => ".openclaw/store"),
+        readSessionUpdatedAt: vi.fn(() => undefined),
+      },
+      reply: {
+        resolveEnvelopeFormatOptions: vi.fn(() => ({})),
+        formatAgentEnvelope: vi.fn(({ body }: { body: string }) => body),
+        finalizeInboundContext: vi.fn((ctx) => ctx),
+      },
     },
   } as unknown as PluginRuntime);
 }
@@ -198,5 +214,34 @@ describe("nextcloud-talk inbound behavior", () => {
 
     expect(dispatchInboundReplyWithBaseMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
+  });
+
+  it("threads precomputed senderAgentId into the inbound context", async () => {
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(),
+      issueChallenge: vi.fn(),
+    });
+    resolveDmGroupAccessWithCommandGateMock.mockReturnValue({
+      decision: "allow",
+      reason: "allow",
+      commandAuthorized: false,
+      effectiveGroupAllowFrom: [],
+    });
+
+    await handleNextcloudTalkInbound({
+      message: createMessage(),
+      account: createAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      identityAgentIds: new Map([["user-1", "ops-agent"]]),
+    });
+
+    expect(dispatchInboundReplyWithBaseMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          SenderAgentId: "ops-agent",
+        }),
+      }),
+    );
   });
 });

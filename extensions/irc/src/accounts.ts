@@ -3,7 +3,6 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
-import { resolveOwningAgentIdForChannelAccount } from "openclaw/plugin-sdk/routing";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
@@ -223,16 +222,4 @@ export function listEnabledIrcAccounts(cfg: CoreConfig): ResolvedIrcAccount[] {
   return listIrcAccountIds(cfg)
     .map((accountId) => resolveIrcAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
-}
-
-export function resolveConfiguredIrcSenderAgentIdsByNick(cfg: CoreConfig): Map<string, string> {
-  const ids = new Map<string, string>();
-  for (const account of listEnabledIrcAccounts(cfg)) {
-    const senderAgentId = resolveOwningAgentIdForChannelAccount(cfg, "irc", account.accountId);
-    const nick = account.nick.trim().toLowerCase();
-    if (senderAgentId && nick) {
-      ids.set(nick, senderAgentId);
-    }
-  }
-  return ids;
 }
