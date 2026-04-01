@@ -465,7 +465,7 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
-  it("maps oversized local absolute path reads to max_bytes MediaFetchError", async () => {
+  it("maps oversized local absolute path reads to recoverable MediaFetchError instances", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
     readLocalFileSafely.mockRejectedValueOnce(
       Object.assign(new Error("file exceeds limit"), { code: "too-large" }),
@@ -480,8 +480,8 @@ describe("resolveMedia getFile retry", () => {
     ).rejects.toEqual(
       expect.objectContaining({
         name: "MediaFetchError",
-        code: "max_bytes",
-        message: expect.stringContaining(`payload exceeds maxBytes ${MAX_MEDIA_BYTES}`),
+        code: "fetch_failed",
+        message: expect.stringContaining("file exceeds limit"),
       }),
     );
   });

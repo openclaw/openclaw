@@ -161,15 +161,6 @@ function resolveOptionalTelegramTransport(transport?: TelegramTransport): Telegr
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
-function isTooLargeLocalReadError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "too-large"
-  );
-}
-
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
@@ -190,13 +181,9 @@ async function downloadAndSaveTelegramFile(params: {
         maxBytes: params.maxBytes,
       });
     } catch (err) {
-      const code = isTooLargeLocalReadError(err) ? "max_bytes" : "fetch_failed";
-      const detail = isTooLargeLocalReadError(err)
-        ? `payload exceeds maxBytes ${params.maxBytes}`
-        : formatErrorMessage(err);
       throw new MediaFetchError(
-        code,
-        `Failed to read local Telegram Bot API media from ${params.filePath}: ${detail}`,
+        "fetch_failed",
+        `Failed to read local Telegram Bot API media from ${params.filePath}: ${formatErrorMessage(err)}`,
         { cause: err },
       );
     }
