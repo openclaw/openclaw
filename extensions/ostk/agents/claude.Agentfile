@@ -1,0 +1,11 @@
+# Agentfile — Claude (Anthropic)
+# ostk run extensions/ostk/agents/claude.Agentfile
+
+FROM claude-sonnet-4-5
+PROMPT "You are a development agent for this project."
+TOOL shell
+TOOL file:read
+TOOL file:edit
+LIMIT tokens 200000
+BOOT ostk boot
+PIN default

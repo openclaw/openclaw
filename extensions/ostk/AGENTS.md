@@ -4,9 +4,8 @@ This plugin registers the ostk kernel as a CLI backend for OpenClaw.
 
 ## What it does
 
-Replaces `claude -p` / `codex exec` / `gemini --prompt` subprocess spawns
-with `ostk agent run` — kernel-managed sessions with compiled context,
-session journals, and pin-enforced capabilities.
+Runs agent sessions through `ostk run <Agentfile>` — kernel-managed sessions
+with compiled context, session journals, and pin-enforced capabilities.
 
 ## Prerequisites
 
@@ -31,6 +30,19 @@ ostk init
 
 This creates `.ostk/` with compiled context, session state, and default pin
 capabilities. See [ostk.ai](https://ostk.ai) for full documentation.
+
+## Bundled Agentfiles
+
+Ready-to-use agent definitions for each supported model provider:
+
+| File | Model | Run command |
+|---|---|---|
+| `agents/claude.Agentfile` | `claude-sonnet-4-5` | `ostk run extensions/ostk/agents/claude.Agentfile` |
+| `agents/codex.Agentfile` | `o4-mini` | `ostk run extensions/ostk/agents/codex.Agentfile` |
+| `agents/gemini.Agentfile` | `gemini-2.5-pro` | `ostk run extensions/ostk/agents/gemini.Agentfile` |
+
+Each Agentfile grants `shell`, `file:read`, and `file:edit` tools under the
+`default` pin. Customize by copying to your project root and editing.
 
 ## Boundary rules
 
@@ -57,7 +69,10 @@ agents:
 
 ## Files
 
-- `cli-backend.ts` — CliBackendPlugin definition (command, args, session config)
+- `cli-backend.ts` — CliBackendPlugin definition (`ostk run Agentfile`)
 - `index.ts` — plugin registration via `api.registerCliBackend()`
 - `openclaw.plugin.json` — plugin manifest
 - `package.json` — package metadata
+- `agents/claude.Agentfile` — default Claude agent
+- `agents/codex.Agentfile` — default Codex agent
+- `agents/gemini.Agentfile` — default Gemini agent

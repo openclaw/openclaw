@@ -1,0 +1,11 @@
+# Agentfile — Gemini (Google)
+# ostk run extensions/ostk/agents/gemini.Agentfile
+
+FROM gemini-2.5-pro
+PROMPT "You are a development agent for this project."
+TOOL shell
+TOOL file:read
+TOOL file:edit
+LIMIT tokens 200000
+BOOT ostk boot
+PIN default

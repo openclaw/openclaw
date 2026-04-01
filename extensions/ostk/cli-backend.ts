@@ -14,31 +14,13 @@ export function buildOstkCliBackend(): CliBackendPlugin {
     config: {
       command: "ostk",
       args: [
-        "agent",
         "run",
-        "--output-format",
-        "stream-json",
-        "--pin",
-        "default",
-      ],
-      resumeArgs: [
-        "agent",
-        "resume",
-        "--output-format",
-        "stream-json",
-        "--session",
-        "{sessionId}",
+        "Agentfile",
       ],
       output: "jsonl",
       input: "stdin",
       modelArg: "--model",
       modelAliases: OSTK_MODEL_ALIASES,
-      sessionArg: "--session",
-      sessionMode: "always",
-      sessionIdFields: ["session_id", "sessionId"],
-      systemPromptArg: "--append-system-prompt",
-      systemPromptMode: "append",
-      systemPromptWhen: "first",
       serialize: true,
       reliability: {
         watchdog: {
