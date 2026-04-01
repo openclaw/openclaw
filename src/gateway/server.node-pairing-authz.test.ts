@@ -1,11 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import {
-  approveNodePairing,
-  getPairedNode,
-  listNodePairing,
-  requestNodePairing,
-} from "../infra/node-pairing.js";
+import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   issueOperatorToken,
@@ -77,7 +72,9 @@ describe("gateway node pairing authorization", () => {
       expect(approve.ok).toBe(false);
       expect(approve.error?.message).toBe("missing scope: operator.write");
 
-      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
+      await expect(
+        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+      ).resolves.toBeNull();
     } finally {
       pairingWs?.close();
       started.ws.close();
@@ -118,7 +115,9 @@ describe("gateway node pairing authorization", () => {
       expect(approve.ok).toBe(false);
       expect(approve.error?.message).toBe("missing scope: operator.admin");
 
-      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
+      await expect(
+        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+      ).resolves.toBeNull();
     } finally {
       pairingWs?.close();
       started.ws.close();
@@ -127,7 +126,7 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("pins connected node commands to the approved pairing record", async () => {
+  test("does not pin connected node commands to the approved pairing record", async () => {
     const started = await startServerWithClient("secret");
     const pairedNode = await pairDeviceIdentity({
       name: "node-command-pin",
@@ -175,27 +174,19 @@ describe("gateway node pairing authorization", () => {
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
         if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify(["canvas.snapshot"])
+          JSON.stringify(node?.commands?.toSorted() ?? []) ===
+          JSON.stringify(["canvas.snapshot", "system.run"])
         ) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      const connectedNode = lastNodes.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-      );
-      expect(connectedNode?.commands?.toSorted(), JSON.stringify(lastNodes)).toEqual([
-        "canvas.snapshot",
-      ]);
-
-      const invoke = await rpcReq(controlWs, "node.invoke", {
-        nodeId: pairedNode.identity.deviceId,
-        command: "system.run",
-        params: { command: "echo blocked" },
-        idempotencyKey: "node-command-pin",
-      });
-      expect(invoke.ok).toBe(false);
-      expect(invoke.error?.message ?? "").toContain("node command not allowed");
+      expect(
+        lastNodes
+          .find((entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected)
+          ?.commands?.toSorted(),
+        JSON.stringify(lastNodes),
+      ).toEqual(["canvas.snapshot", "system.run"]);
     } finally {
       controlWs?.close();
       await firstClient?.stopAndWait();
@@ -206,7 +197,7 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("requests repair pairing and restores approved commands after reconnect", async () => {
+  test("does not request repair pairing when a paired node reconnects with more commands", async () => {
     const started = await startServerWithClient("secret");
     const pairedNode = await pairDeviceIdentity({
       name: "node-command-empty",
@@ -244,51 +235,6 @@ describe("gateway node pairing authorization", () => {
         const node = lastNodes.find(
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
-        if ((node?.commands?.length ?? 0) === 0) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      const connectedNode = lastNodes.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-      );
-      expect(connectedNode?.commands ?? [], JSON.stringify(lastNodes)).toEqual([]);
-
-      const repairDeadline = Date.now() + 2_000;
-      let repairRequestId = "";
-      while (Date.now() < repairDeadline) {
-        const pairing = await listNodePairing();
-        const repair = pairing.pending.find(
-          (entry) => entry.nodeId === pairedNode.identity.deviceId,
-        );
-        if (repair) {
-          repairRequestId = repair.requestId;
-          expect(repair.isRepair).toBe(true);
-          expect(repair.repairReason).toBe("approved-command-drift");
-          expect(repair.commands).toEqual(["canvas.snapshot", "system.run"]);
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      expect(repairRequestId).toBeTruthy();
-
-      await approveNodePairing(repairRequestId);
-      await nodeClient.stopAndWait();
-      nodeClient = await connectNodeClient({
-        port: started.port,
-        deviceIdentity: pairedNode.identity,
-        commands: ["canvas.snapshot", "system.run"],
-      });
-
-      const restoredDeadline = Date.now() + 2_000;
-      while (Date.now() < restoredDeadline) {
-        const list = await rpcReq<{
-          nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-        }>(controlWs, "node.list", {});
-        lastNodes = list.payload?.nodes ?? [];
-        const node = lastNodes.find(
-          (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-        );
         if (
           JSON.stringify(node?.commands?.toSorted() ?? []) ===
           JSON.stringify(["canvas.snapshot", "system.run"])
@@ -297,7 +243,6 @@ describe("gateway node pairing authorization", () => {
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-
       const repairedNode = lastNodes.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
       );
@@ -306,9 +251,9 @@ describe("gateway node pairing authorization", () => {
         "system.run",
       ]);
 
-      await expect(getPairedNode(pairedNode.identity.deviceId)).resolves.toEqual(
+      await expect(listNodePairing()).resolves.toEqual(
         expect.objectContaining({
-          commands: ["canvas.snapshot", "system.run"],
+          pending: [],
         }),
       );
     } finally {
