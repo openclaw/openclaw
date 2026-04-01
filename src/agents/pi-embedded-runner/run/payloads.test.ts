@@ -106,6 +106,27 @@ describe("buildEmbeddedRunPayloads reasoning-on fallback", () => {
     expect(answerTexts).toEqual(["Part 1", "Part 2", "Completely different final answer"]);
   });
 
+  it("does not duplicate when multi-chunk hard-split covers a long unbroken answer", () => {
+    const lastAssistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      // A long line with no whitespace — chunker hard-splits at maxChars
+      content: [{ type: "text", text: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" }],
+    });
+
+    // Block-reply chunker hard-split the unbroken text; no separator between chunks
+    const payloads = buildPayloads({
+      assistantTexts: ["ABCDEFGHIJ", "KLMNOPQRSTUVWXYZ"],
+      lastAssistant,
+      reasoningLevel: "on",
+    });
+
+    const answerPayloads = payloads.filter((p) => !p.isReasoning);
+    const answerTexts = answerPayloads.map((p) => p.text).filter(Boolean);
+    // Chunks preserved; fallback must NOT be appended
+    expect(answerTexts).toEqual(["ABCDEFGHIJ", "KLMNOPQRSTUVWXYZ"]);
+  });
+
   it("does not duplicate when assistantTexts contains earlier messages plus current message chunks", () => {
     const lastAssistant = makeAssistantMessageFixture({
       stopReason: "stop",

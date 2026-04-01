@@ -272,7 +272,12 @@ export function buildEmbeddedRunPayloads(params: {
     (currentMessageSources.some((t) => normalizeTextForComparison(t) === normalizedFallback) ||
       // ... then check whether concatenating all chunks reproduces the fallback,
       // which handles multi-chunk block replies that split a single answer.
-      normalizeTextForComparison(currentMessageSources.join("\n")) === normalizedFallback),
+      // EmbeddedBlockChunker may strip whitespace at split boundaries, so we
+      // check both no-separator (hard splits) and single-space (soft splits).
+      // normalizeTextForComparison collapses all whitespace to single spaces,
+      // so join(" ") matches when original had whitespace that chunker ate.
+      normalizeTextForComparison(currentMessageSources.join("")) === normalizedFallback ||
+      normalizeTextForComparison(currentMessageSources.join(" ")) === normalizedFallback),
   );
   const needsFallbackAppend =
     !suppressAssistantArtifacts &&
