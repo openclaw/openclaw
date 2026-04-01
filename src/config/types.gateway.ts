@@ -390,7 +390,6 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
-<<<<<<< HEAD
 export type GatewaySessionsListConfig = {
   /**
    * Maximum number of entries in the in-memory usage cache for transcript reads.
