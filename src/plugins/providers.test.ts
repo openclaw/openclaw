@@ -1,9 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
@@ -265,10 +260,14 @@ function expectProviderRuntimeRegistryLoad(params?: { config?: unknown; env?: No
 
 describe("resolvePluginProviders", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
+    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
+    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
+  });
+
+  beforeEach(() => {
+    loadOpenClawPluginsMock.mockReset();
+    loadOpenClawPluginsMock.mockReturnValue({
+      providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
     });
     vi.doMock("./loader.js", () => ({
       loadOpenClawPlugins: (...args: Parameters<LoadOpenClawPlugins>) =>

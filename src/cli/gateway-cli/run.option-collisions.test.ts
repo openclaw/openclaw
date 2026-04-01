@@ -23,7 +23,7 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
-  snapshot: { valid: true, exists: false, issues: [] } as Record<string, unknown>,
+  snapshot: { valid: true, exists: false, issues: [], config: {} } as Record<string, unknown>,
 }));
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,
@@ -146,7 +146,7 @@ describe("gateway run option collisions", () => {
   beforeEach(() => {
     resetRuntimeCapture();
     configState.cfg = {};
-    configState.snapshot = { valid: true, exists: false, issues: [] };
+    configState.snapshot = { valid: true, exists: false, issues: [], config: {} };
     controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     startGatewayServer.mockClear();
