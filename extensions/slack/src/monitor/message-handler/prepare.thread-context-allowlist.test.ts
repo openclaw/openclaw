@@ -111,4 +111,66 @@ describe("prepareSlackMessage thread context allowlists", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
+
+  it("does not apply the owner allowlist to open-room thread context", async () => {
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter from open room", user: "U2", ts: "200.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter from open room", user: "U2", ts: "200.000" },
+          { text: "assistant reply", bot_id: "B1", ts: "200.500" },
+          { text: "open-room follow-up", user: "U2", ts: "200.800" },
+          { text: "current message", user: "U2", ts: "201.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const storePath = makeTmpStorePath();
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+      channelsConfig: {
+        C124: {
+          requireMention: false,
+        },
+      },
+    });
+    ctx.allowFrom = ["u-owner"];
+    ctx.resolveUserName = async (id: string) => ({
+      name: id === "U2" ? "Bob" : "Owner",
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount({
+        replyToMode: "all",
+        thread: { initialHistoryLimit: 20 },
+      }),
+      message: {
+        channel: "C124",
+        channel_type: "channel",
+        user: "U2",
+        text: "current message",
+        ts: "201.000",
+        thread_ts: "200.000",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from open room");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from open room");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("open-room follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
 });

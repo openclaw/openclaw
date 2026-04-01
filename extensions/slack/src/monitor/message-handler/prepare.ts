@@ -437,8 +437,10 @@ export async function prepareSlackMessage(params: {
   }).allowed;
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
-  const threadContextAllowFromLower = channelUsersAllowlistConfigured
-    ? normalizeAllowListLower(channelConfig?.users)
+  const threadContextAllowFromLower = isRoom
+    ? channelUsersAllowlistConfigured
+      ? normalizeAllowListLower(channelConfig?.users)
+      : []
     : allowFromLower;
   const channelCommandAuthorized =
     isRoom && channelUsersAllowlistConfigured
