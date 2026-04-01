@@ -116,19 +116,18 @@ export function createSlackThreadTsResolver(params: {
       setCached(cacheKey, resolved ?? null, Date.now());
 
       if (resolved) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
-          );
-        }
+        logVerbose(
+          `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
+        );
         return { ...message, thread_ts: resolved };
       }
 
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
-        );
-      }
+      // Log at all verbosity levels: unresolved thread_ts with parent_user_id
+      // means this message will be treated as a root message instead of a
+      // thread reply.  This is a silent degradation that should be visible.
+      logVerbose(
+        `slack inbound: WARN thread_ts resolution failed channel=${message.channel} ts=${message.ts} parent_user_id=${message.parent_user_id} — message will be treated as root`,
+      );
       return message;
     },
   };

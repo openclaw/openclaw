@@ -1341,6 +1341,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
     });
+    ctx.logger.info(
+      {
+        channel: message.channel,
+        threadTs: participationThreadTs,
+        agentId: route.agentId,
+      },
+      "slack thread participation recorded",
+    );
   }
 
   if (!anyReplyDelivered) {
