@@ -3,6 +3,7 @@ import { normalizeChatChannelId } from "../channels/registry.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
+import { pickFirstExistingAgentId } from "./agent-lookup.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
 function normalizeBindingChannelId(raw?: string | null): string | null {
@@ -142,14 +143,14 @@ export function resolveOwningAgentIdForChannelAccount(
       continue;
     }
     if (resolved.isWildcard) {
-      wildcardAgentId ??= resolved.agentId;
+      wildcardAgentId ??= pickFirstExistingAgentId(cfg, resolved.agentId);
       continue;
     }
     if (resolved.accountId === normalizedAccountId) {
-      return resolved.agentId;
+      return pickFirstExistingAgentId(cfg, resolved.agentId);
     }
   }
-  return wildcardAgentId ?? normalizeAgentId(resolveDefaultAgentId(cfg));
+  return wildcardAgentId ?? pickFirstExistingAgentId(cfg, resolveDefaultAgentId(cfg));
 }
 
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {

@@ -209,8 +209,15 @@ export async function buildSlackSenderAgentIdByUserId(params: {
   client: App["client"];
   currentAccountId: string;
   currentBotUserId?: string;
+  currentBotId?: string;
 }): Promise<ReadonlyMap<string, string>> {
   const ids = new Map<string, string>();
+  const rememberIdentity = (senderAgentId: string, identity?: string) => {
+    const normalized = identity?.trim();
+    if (normalized) {
+      ids.set(normalized, senderAgentId);
+    }
+  };
   for (const account of listEnabledSlackAccounts(params.cfg)) {
     const senderAgentId = resolveOwningAgentIdForChannelAccount(
       params.cfg,
@@ -222,17 +229,20 @@ export async function buildSlackSenderAgentIdByUserId(params: {
     }
     let botUserId =
       account.accountId === params.currentAccountId ? params.currentBotUserId?.trim() : "";
-    if (!botUserId && account.botToken) {
+    let botId = account.accountId === params.currentAccountId ? params.currentBotId?.trim() : "";
+    if ((!botUserId || !botId) && account.botToken) {
       try {
         const auth = await params.client.auth.test({ token: account.botToken });
-        botUserId = auth.user_id?.trim() ?? "";
+        const resolved = auth as { user_id?: string; bot_id?: string };
+        botUserId ||= resolved.user_id?.trim() ?? "";
+        botId ||= resolved.bot_id?.trim() ?? "";
       } catch {
         botUserId = "";
+        botId = "";
       }
     }
-    if (botUserId) {
-      ids.set(botUserId, senderAgentId);
-    }
+    rememberIdentity(senderAgentId, botUserId);
+    rememberIdentity(senderAgentId, botId);
   }
   return ids;
 }
@@ -378,12 +388,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let unregisterHttpHandler: (() => void) | null = null;
 
   let botUserId = "";
+  let botId = "";
   let teamId = "";
   let apiAppId = "";
   const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
   try {
     const auth = await app.client.auth.test({ token: botToken });
     botUserId = auth.user_id ?? "";
+    botId = (auth as { bot_id?: string }).bot_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
   } catch {
@@ -401,6 +413,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     client: app.client,
     currentAccountId: account.accountId,
     currentBotUserId: botUserId,
+    currentBotId: botId,
   });
 
   const ctx = createSlackMonitorContext({
