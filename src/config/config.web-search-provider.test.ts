@@ -67,13 +67,6 @@ const mockWebSearchProviders = [
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
   },
   {
-    id: "tavily",
-    envVars: ["TAVILY_API_KEY"],
-    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("tavily"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("tavily"),
-  },
-  {
     id: "searxng",
     envVars: ["SEARXNG_BASE_URL"],
     credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
@@ -81,6 +74,13 @@ const mockWebSearchProviders = [
       (search?.searxng as { baseUrl?: unknown } | undefined)?.baseUrl,
     getConfiguredCredentialValue: (config?: Record<string, unknown>) =>
       getConfiguredPluginWebSearchConfig("searxng")(config)?.baseUrl,
+  },
+  {
+    id: "tavily",
+    envVars: ["TAVILY_API_KEY"],
+    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("tavily"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("tavily"),
   },
 ] as const;
 
