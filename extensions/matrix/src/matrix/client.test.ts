@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
@@ -591,9 +591,12 @@ describe("resolveMatrixConfig", () => {
 });
 
 describe("resolveMatrixAuth", () => {
-  beforeEach(async () => {
-    credentialsReadModule ??= await import("./credentials-read.js");
-    sdkModule ??= await import("./sdk.js");
+  beforeAll(async () => {
+    credentialsReadModule = await import("./credentials-read.js");
+    sdkModule = await import("./sdk.js");
+  });
+
+  beforeEach(() => {
     vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReset();
     vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue(null);
     vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReset();
