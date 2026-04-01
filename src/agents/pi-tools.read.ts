@@ -12,7 +12,8 @@ import {
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { checkPathGuardStrict } from "../security/path-guard.js";
+import { checkPathGuardStrict, PathGuardError } from "../security/path-guard.js";
+import { pathGuardDeniedToolResult } from "./tools/policy-denial.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
@@ -577,7 +578,18 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         });
 
         if (options?.policy) {
-          await checkPathGuardStrict(sandboxPath, options.policy, root);
+          try {
+            await checkPathGuardStrict(sandboxPath, options.policy, root);
+          } catch (error: unknown) {
+            if (error instanceof PathGuardError) {
+              return pathGuardDeniedToolResult({
+                attemptedAction: tool.name,
+                whatIWasTryingToDo: `Access a file path for tool "${tool.name}".`, 
+                err: error,
+              });
+            }
+            throw error;
+          }
         } else {
           await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
         }

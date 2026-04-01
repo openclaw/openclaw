@@ -2,10 +2,31 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { minimatch, Minimatch } from "minimatch";
 
+export type PathGuardViolationRule = "workspaceOnly" | "denyPaths" | "allowedPaths";
+
 export class PathGuardError extends Error {
-  constructor(message: string) {
-    super(message);
+  code = "PATH_GUARD_DENIED" as const;
+  requestedPath: string;
+  resolvedPath?: string;
+  workspaceRoot?: string;
+  violatedRule: PathGuardViolationRule;
+  matchedEntry?: string;
+
+  constructor(args: {
+    message: string;
+    requestedPath: string;
+    resolvedPath?: string;
+    workspaceRoot?: string;
+    violatedRule: PathGuardViolationRule;
+    matchedEntry?: string;
+  }) {
+    super(args.message);
     this.name = "PathGuardError";
+    this.requestedPath = args.requestedPath;
+    this.resolvedPath = args.resolvedPath;
+    this.workspaceRoot = args.workspaceRoot;
+    this.violatedRule = args.violatedRule;
+    this.matchedEntry = args.matchedEntry;
   }
 }
 
@@ -63,9 +84,13 @@ export async function checkPathGuardStrict(
 
   // 1) Workspace lock
   if (policy.workspaceOnly && !isPathInside(realWorkspaceRoot, realPath)) {
-    throw new PathGuardError(
-      `PathGuard security violation: Access to path "${requestedPath}" (resolved to "${realPath}") is outside the workspace root "${realWorkspaceRoot}".`,
-    );
+    throw new PathGuardError({
+      message: `PathGuard security violation: Access to path "${requestedPath}" (resolved to "${realPath}") is outside the workspace root "${realWorkspaceRoot}".`,
+      requestedPath,
+      resolvedPath: realPath,
+      workspaceRoot: realWorkspaceRoot,
+      violatedRule: "workspaceOnly",
+    });
   }
 
   // Helper to check if a path matches a policy entry (literal path or glob).
@@ -123,9 +148,14 @@ export async function checkPathGuardStrict(
   if (policy.denyPaths && policy.denyPaths.length > 0) {
     for (const denyEntry of policy.denyPaths) {
       if (await matchesEntry(denyEntry)) {
-        throw new PathGuardError(
-          `PathGuard security violation: Access to path "${requestedPath}" is explicitly denied by pattern "${denyEntry}".`,
-        );
+        throw new PathGuardError({
+          message: `PathGuard security violation: Access to path "${requestedPath}" is explicitly denied by pattern "${denyEntry}".`,
+          requestedPath,
+          resolvedPath: realPath,
+          workspaceRoot: realWorkspaceRoot,
+          violatedRule: "denyPaths",
+          matchedEntry: denyEntry,
+        });
       }
     }
   }
@@ -140,9 +170,13 @@ export async function checkPathGuardStrict(
       }
     }
     if (!allowed) {
-      throw new PathGuardError(
-        `PathGuard security violation: Access to path "${requestedPath}" is not in the allowedPaths list.`,
-      );
+      throw new PathGuardError({
+        message: `PathGuard security violation: Access to path "${requestedPath}" is not in the allowedPaths list.`,
+        requestedPath,
+        resolvedPath: realPath,
+        workspaceRoot: realWorkspaceRoot,
+        violatedRule: "allowedPaths",
+      });
     }
   }
 
