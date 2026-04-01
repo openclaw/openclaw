@@ -71,4 +71,61 @@ describe("runEmbeddedPiAgent API error notices", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply.mock.calls[0]?.[0]?.text).toContain("temporary error");
   });
+
+  it("still notifies the user when a visible partial reply fails to deliver", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      const typed = params as {
+        onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      };
+      await Promise.resolve(typed.onPartialReply?.({ text: "partial reply" })).catch(() => {});
+      return makeAttemptResult({
+        promptError: new Error("overloaded_error"),
+        assistantTexts: [],
+      });
+    });
+
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn(async () => {
+      throw new Error("downstream delivery failed");
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/test-model",
+            fallbacks: ["anthropic/test-fallback"],
+          },
+        },
+        list: [
+          {
+            id: "support",
+            tools: {
+              notifyUserOnApiError: true,
+            },
+          },
+        ],
+      },
+    };
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "test-session",
+        sessionKey: "agent:support:api-notice-delivery-failure",
+        sessionFile: "/tmp/session.json",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        timeoutMs: 30_000,
+        runId: "run-api-notice-delivery-failure",
+        config,
+        onPartialReply,
+        onBlockReply,
+        agentId: "support",
+      }),
+    ).rejects.toThrow("overloaded_error");
+
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toContain("temporary error");
+  });
 });

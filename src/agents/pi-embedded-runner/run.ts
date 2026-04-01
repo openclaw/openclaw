@@ -148,19 +148,19 @@ export async function runEmbeddedPiAgent(
       const started = Date.now();
       let hasUserVisibleReply = false;
       const emitPartialReply = params.onPartialReply
-        ? (payload: PartialReplyPayload) => {
+        ? async (payload: PartialReplyPayload) => {
+            await params.onPartialReply?.(payload);
             if (hasVisiblePartialReplyPayload(payload)) {
               hasUserVisibleReply = true;
             }
-            return params.onPartialReply?.(payload);
           }
         : undefined;
       const emitBlockReply = params.onBlockReply
-        ? (payload: BlockReplyStreamPayload) => {
+        ? async (payload: BlockReplyStreamPayload) => {
+            await params.onBlockReply?.(payload);
             if (hasVisibleBlockReplyPayload(payload)) {
               hasUserVisibleReply = true;
             }
-            return params.onBlockReply?.(payload);
           }
         : undefined;
       const workspaceResolution = resolveRunWorkspaceDir({
