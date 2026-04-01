@@ -49,11 +49,15 @@
 .usage-empty-state,
 .usage-overview-card,
 .usage-mosaic,
-.usage-left-card,
 .sessions-card,
 .session-detail-panel {
   position: relative;
   overflow: clip;
+}
+
+.usage-left-card {
+  position: relative;
+  overflow: visible;
 }
 
 .usage-header {
