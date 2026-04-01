@@ -1124,7 +1124,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhookAllowPrivateNetwork`: allow cron webhook delivery to loopback and private-network URLs (default: `false`). Enable only when the webhook endpoint is intentionally on a private network.
+- `webhookAllowPrivateNetwork`: allow cron webhook delivery to loopback and private-network URLs (default: `false`). Enable only when the webhook endpoint is intentionally on a private network. Applies to all cron webhook paths: per-job delivery, failure destination, failure alert, and the deprecated legacy `cron.webhook` fallback.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
 ### `cron.retry`

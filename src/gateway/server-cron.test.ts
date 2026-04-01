@@ -457,6 +457,64 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("passes allowPrivateNetwork policy for failure destination webhook when webhookAllowPrivateNetwork is true", async () => {
+    const cfg = createCronConfig("server-cron-failure-dest-allowed");
+    const cfgWithAllowPrivate = {
+      ...cfg,
+      cron: {
+        ...cfg.cron,
+        webhookAllowPrivateNetwork: true,
+        // Global failure destination configured as webhook to a loopback URL
+        failureDestination: {
+          mode: "webhook" as const,
+          to: "http://127.0.0.1:8080/failure-dest",
+        },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfgWithAllowPrivate);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
+    // Make the job fail so the failure destination fires
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "error" as const,
+      summary: undefined,
+      error: "test error",
+    });
+
+    const state = buildGatewayCronService({
+      cfg: cfgWithAllowPrivate,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "failure-dest-webhook-allowed",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      // The failure destination webhook is fired via void async; fetchWithSsrFGuard
+      // is called synchronously before the first await in postCronWebhook.
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://127.0.0.1:8080/failure-dest",
+          policy: { allowPrivateNetwork: true },
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  // Note: the failure alert webhook path (sendCronFailureAlert) uses the same
+  // resolveCronWebhookPolicy helper as delivery and failure destination, so policy
+  // consistency is guaranteed by the shared helper rather than a redundant third test.
+
   it("passes custom session targets through to isolated cron runs", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
     const cfg = {
