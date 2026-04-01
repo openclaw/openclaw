@@ -728,6 +728,32 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
   cron delivery accepts them and still parses topic IDs correctly.
 
+### Output language does not match configuration
+
+When a cron job outputs in the wrong language (e.g., English instead of expected Chinese):
+
+1. **Add explicit language instruction in the prompt** — The most reliable solution is to include language instructions directly in `--message`:
+   ```bash
+   openclaw cron edit <jobId> --message "Summarize the updates. 输出使用中文，技术术语保留英文。"
+   ```
+
+2. **Check the prompt template** — If using a template file, verify it doesn't have hardcoded language output. Templates should respect the language instruction in the message.
+
+3. **Be specific about language rules** — To avoid mixed output, specify clear rules:
+   - "Use Chinese for narrative, keep technical terms in English"
+   - "Do not translate URLs, code, or proper names"
+
+4. **Verify template variable substitution** — If using a template with language variables, ensure placeholders like `{{language}}` are correctly substituted, not hardcoded text.
+
+**Common pitfalls:**
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Output in wrong language | No language instruction in prompt | Add explicit instruction: "Respond in Chinese" |
+| Mixed language output | Unclear instruction | Specify: "叙述用中文，技术术语保留英文" |
+| URL or proper names translated | Over-aggressive translation | Add: "Do not translate URLs, code, or proper names" |
+
+
 ### Subagent announce delivery retries
 
 - When a subagent run completes, the gateway announces the result to the requester session.
