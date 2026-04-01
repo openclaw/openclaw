@@ -3,15 +3,45 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  normalizePluginsConfig,
+  normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
-} from "../../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+} from "../../plugins/config-policy.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../../plugins/manifest-registry.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
 const log = createSubsystemLogger("skills");
+
+function buildRegistryPluginIdAliases(
+  registry: PluginManifestRegistry,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    registry.plugins
+      .flatMap((record) => [
+        ...record.providers
+          .filter((providerId) => providerId !== record.id)
+          .map((providerId) => [providerId, record.id] as const),
+        ...(record.legacyPluginIds ?? []).map(
+          (legacyPluginId) => [legacyPluginId, record.id] as const,
+        ),
+      ])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function createRegistryPluginIdNormalizer(
+  registry: PluginManifestRegistry,
+): (id: string) => string {
+  const aliases = buildRegistryPluginIdAliases(registry);
+  return (id: string) => {
+    const trimmed = id.trim();
+    return aliases[trimmed] ?? trimmed;
+  };
+}
 
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
@@ -28,7 +58,10 @@ export function resolvePluginSkillDirs(params: {
   if (registry.plugins.length === 0) {
     return [];
   }
-  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
+  const normalizedPlugins = normalizePluginsConfigWithResolver(
+    params.config?.plugins,
+    createRegistryPluginIdNormalizer(registry),
+  );
   const acpEnabled = params.config?.acp?.enabled !== false;
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;

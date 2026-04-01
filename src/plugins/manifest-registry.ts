@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
-import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizedPluginsConfig,
+} from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
   loadPluginManifest,
@@ -46,6 +49,7 @@ export type PluginManifestRecord = {
   version?: string;
   enabledByDefault?: boolean;
   autoEnableWhenConfiguredProviders?: string[];
+  legacyPluginIds?: string[];
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
@@ -206,6 +210,7 @@ function buildRecord(params: {
     version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
+    legacyPluginIds: params.manifest.legacyPluginIds,
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
@@ -356,7 +361,7 @@ export function loadPluginManifestRegistry(
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
-  const normalized = normalizePluginsConfig(config.plugins);
+  const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
   const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
   const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
