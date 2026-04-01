@@ -268,7 +268,7 @@ describeLive("openai plugin live", () => {
       expect(generated.model).toBe(LIVE_IMAGE_MODEL);
       expect(generated.images.length).toBeGreaterThan(0);
       expect(generated.images[0]?.mimeType).toBe("image/png");
-      expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
+      expect(generated.images[0]?.buffer?.byteLength).toBeGreaterThan(1_000);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
