@@ -20,11 +20,22 @@ PROVIDER_ENV_VAR_MAP = {
     'openai': 'OPENAI_API_KEY',
     'anthropic': 'ANTHROPIC_API_KEY',
     'nvidia': 'NVIDIA_API_KEY',
+    'nim': 'NVIDIA_API_KEY',
+    'gpu-runtime': 'NVIDIA_API_KEY',
     'openrouter': 'OPENROUTER_API_KEY',
     'ollama': 'OLLAMA_API_KEY',
 }
+PROVIDER_REQUIRED_API_KEY_MAP = {
+    'openai': 'OPENAI_API_KEY',
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'nvidia': 'NVIDIA_API_KEY',
+    'nim': 'NVIDIA_API_KEY',
+    'gpu-runtime': 'NVIDIA_API_KEY',
+    'openrouter': 'OPENROUTER_API_KEY',
+}
 
 PRIORITIZED_REQUIREMENT_STEPS = [
+    ('API key missing:', 'check_api_key_config'),
     ('API key missing', 'check_api_key_config'),
     ('API key may be required', 'check_api_key_config'),
     ('provider configuration missing', 'check_provider_config'),
@@ -219,8 +230,21 @@ def merge_provider_model_sources(runtime_signals: dict, config: dict) -> dict:
 def infer_required_api_key_names(provider_status: dict, start_result: dict | None) -> list[str]:
     provider = str(provider_status.get('provider') or 'unknown').lower()
     required: list[str] = []
-    if provider in PROVIDER_ENV_VAR_MAP:
-        required.append(PROVIDER_ENV_VAR_MAP[provider])
+    provider_hints = {provider}
+    runtime_name = str(provider_status.get('runtime_name') or '').lower()
+    nim_status = str(provider_status.get('nim_status') or '').lower()
+    policy_names = provider_status.get('policy_names') if isinstance(provider_status.get('policy_names'), list) else []
+    if runtime_name:
+        provider_hints.add(runtime_name)
+    if nim_status in {'running', 'not running'}:
+        provider_hints.add('nim')
+    if 'nvidia' in [str(item).lower() for item in policy_names]:
+        provider_hints.add('nvidia')
+
+    for hint in provider_hints:
+        mapped = PROVIDER_REQUIRED_API_KEY_MAP.get(hint)
+        if mapped and mapped not in required:
+            required.append(mapped)
 
     haystacks: list[str] = []
     if isinstance(start_result, dict):
@@ -251,13 +275,14 @@ def infer_required_api_key_names(provider_status: dict, start_result: dict | Non
 
 def check_api_key_presence(config: dict, provider_status: dict, start_result: dict | None) -> dict:
     checked_sources = ['env']
-    detected_keys: list[str] = []
+    present_keys: list[str] = []
     required_key_names = infer_required_api_key_names(provider_status, start_result)
-    keys_to_check = list(required_key_names) if required_key_names else list(KNOWN_API_KEY_ENV_VARS)
+    keys_to_check = list(KNOWN_API_KEY_ENV_VARS)
+    unknown_required_api_keys = len(required_key_names) == 0
 
     for env_name in keys_to_check:
         if bool(os.environ.get(env_name)):
-            detected_keys.append(env_name)
+            present_keys.append(env_name)
 
     providers_cfg = {}
     models_cfg = config.get('models') if isinstance(config.get('models'), dict) else {}
@@ -270,18 +295,24 @@ def check_api_key_presence(config: dict, provider_status: dict, start_result: di
             continue
         env_name = PROVIDER_ENV_VAR_MAP.get(str(provider_name).lower())
         if env_name and env_name in keys_to_check and provider_cfg.get('apiKey'):
-            detected_keys.append(env_name)
+            present_keys.append(env_name)
 
     deduped_keys: list[str] = []
-    for item in detected_keys:
+    for item in present_keys:
         if item not in deduped_keys:
             deduped_keys.append(item)
 
+    missing_api_keys = [key for key in required_key_names if key not in deduped_keys]
     api_key_required = bool(required_key_names)
-    api_key_present = len(deduped_keys) > 0
+    api_key_present = len(missing_api_keys) == 0 if api_key_required else len(deduped_keys) > 0
     return {
         'api_key_required': api_key_required,
         'api_key_present': api_key_present,
+        'api_key_check_mode': 'provider-specific',
+        'required_api_keys': required_key_names,
+        'present_keys': deduped_keys,
+        'missing_api_keys': missing_api_keys,
+        'unknown_required_api_keys': unknown_required_api_keys,
         'checked_sources': checked_sources,
         'detected_keys': deduped_keys,
     }
@@ -315,10 +346,15 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
     if model in {'', 'unknown'}:
         missing.append('model configuration missing')
 
-    api_key_names = infer_required_api_key_names(provider_status, start_result)
+    api_key_names = provider_status.get('required_api_keys')
+    if not isinstance(api_key_names, list):
+        api_key_names = infer_required_api_key_names(provider_status, start_result)
     if api_key_names:
         missing.append('API key may be required')
-    if provider_status.get('api_key_required') and provider_status.get('api_key_present') is False:
+    missing_api_keys = provider_status.get('missing_api_keys') if isinstance(provider_status.get('missing_api_keys'), list) else []
+    for key_name in missing_api_keys:
+        missing.append(f'API key missing: {key_name}')
+    if provider_status.get('api_key_required') and provider_status.get('api_key_present') is False and not missing_api_keys:
         missing.append('API key missing')
 
     deduped: list[str] = []
@@ -433,8 +469,12 @@ def resolve_missing_requirements_next_step(missing_requirements: list[str] | Non
     if not isinstance(missing_requirements, list):
         return None
     for requirement, next_step in PRIORITIZED_REQUIREMENT_STEPS:
-        if requirement in missing_requirements:
-            return next_step
+        for missing in missing_requirements:
+            if requirement.endswith(':'):
+                if isinstance(missing, str) and missing.startswith(requirement):
+                    return next_step
+            elif requirement == missing:
+                return next_step
     return None
 
 

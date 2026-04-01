@@ -217,6 +217,7 @@ This is intentionally conservative. It can improve readiness when runtime start 
 
 Missing-requirements routing priority:
 
+- `API key missing: ...` -> `check_api_key_config`
 - `API key missing` -> `check_api_key_config`
 - `API key may be required` -> `check_api_key_config`
 - `provider configuration missing` -> `check_provider_config`
@@ -255,6 +256,10 @@ Provider remediation notes:
   - `model`
   - `api_key_required`
   - `api_key_present`
+  - `required_api_keys`
+  - `present_keys`
+  - `missing_api_keys`
+  - `api_key_check_mode`
   - `checked_sources`
   - `detected_keys`
   - `provider_config_present`
@@ -266,6 +271,7 @@ Provider remediation notes:
 
 Current provider priority order is:
 
+- `API key missing: ...` -> `check_api_key_config`
 - `API key missing` -> `check_api_key_config`
 - `API key may be required` -> `check_api_key_config`
 - `provider configuration missing` -> `check_provider_config`
@@ -277,6 +283,15 @@ The current signals are inferred conservatively from:
 - start result summary and key points
 - `~/.openclaw/openclaw.json`
 - environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`)
+
+Provider-specific API key mapping is intentionally minimal:
+
+- `openai` -> `OPENAI_API_KEY`
+- `anthropic` -> `ANTHROPIC_API_KEY`
+- `nvidia` / `nim` / GPU-runtime hints -> `NVIDIA_API_KEY`
+- `ollama` -> no mandatory key by itself, unless runtime/start output indicates a stronger provider-specific key requirement
+
+Only key presence is returned. Values are never logged or returned.
 
 Routing loop behavior change:
 
