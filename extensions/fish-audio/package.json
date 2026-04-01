@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/fish-audio-speech",
-  "version": "2026.3.30",
+  "version": "2026.4.1",
   "private": true,
   "description": "OpenClaw Fish Audio speech plugin",
   "type": "module",
