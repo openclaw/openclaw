@@ -223,6 +223,14 @@ describe("isTelegramRateLimitError", () => {
     expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
   });
 
+  it("detects wrapped 429 retry_after errors without error_code", () => {
+    const wrapped = {
+      message: "429 Too Many Requests",
+      response: { parameters: { retry_after: 1 } },
+    };
+    expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  });
+
   it("detects error_code in nested cause", () => {
     const inner = Object.assign(new Error("Too Many Requests"), { error_code: 429 });
     const outer = Object.assign(new Error("wrapped"), { cause: inner });

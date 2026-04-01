@@ -1921,8 +1921,7 @@ describe("sendStickerTelegram", () => {
     const sendSticker = vi
       .fn()
       .mockRejectedValueOnce({
-        error_code: 429,
-        description: "Too Many Requests",
+        message: "429 Too Many Requests",
         response: { parameters: { retry_after: 1 } },
       })
       .mockResolvedValueOnce({
