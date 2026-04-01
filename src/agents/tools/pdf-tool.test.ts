@@ -100,6 +100,7 @@ function makeGeminiAnalyzeParams(
     prompt: string;
     pdfs: Array<{ base64: string; filename: string }>;
     baseUrl: string;
+    timeoutMs: number;
   }> = {},
 ) {
   return {
@@ -555,6 +556,7 @@ describe("native PDF provider API calls", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
+    vi.useRealTimers();
   });
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
@@ -657,6 +659,35 @@ describe("native PDF provider API calls", () => {
     await expect(geminiAnalyzePdf(makeGeminiAnalyzeParams())).rejects.toThrow(
       "Gemini PDF request failed",
     );
+  });
+
+  it("geminiAnalyzePdf times out hung requests", async () => {
+    vi.useFakeTimers();
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+    });
+    global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+
+    const promise = geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        timeoutMs: 25,
+      }),
+    );
+    const expectation = expect(promise).rejects.toThrow("Gemini PDF request timed out");
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await expectation;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("geminiAnalyzePdf throws when no candidates returned", async () => {
