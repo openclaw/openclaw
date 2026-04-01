@@ -186,6 +186,36 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "ok",
+          },
+        },
+        agents: {
+          list: [{ id: "pi" }],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config).toEqual({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "ok",
+        },
+      },
+      agents: {
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(result.changes).toEqual([]);
+  });
+
   it("ignores channels.modelByChannel for plugin auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -490,6 +520,24 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
+  });
+
+  it("auto-enables minimax when minimax API key auth is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax:default": {
+              provider: "minimax",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
   });
 
   it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {

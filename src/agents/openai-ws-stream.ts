@@ -41,6 +41,7 @@ import {
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -441,6 +442,8 @@ export function createOpenAIWebSocketStreamFn(
             maxTokens?: number;
             topP?: number;
             toolChoice?: unknown;
+            textVerbosity?: string;
+            text_verbosity?: string;
           })
         | undefined;
       const extraParams: Record<string, unknown> = {};
@@ -456,7 +459,10 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.toolChoice !== undefined) {
         extraParams.tool_choice = streamOpts.toolChoice;
       }
-      if (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary) {
+      if (
+        streamOpts?.reasoningEffort !== "none" &&
+        (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary)
+      ) {
         const reasoning: { effort?: string; summary?: string } = {};
         if (streamOpts.reasoningEffort !== undefined) {
           reasoning.effort = streamOpts.reasoningEffort as string;
@@ -465,6 +471,16 @@ export function createOpenAIWebSocketStreamFn(
           reasoning.summary = streamOpts.reasoningSummary as string;
         }
         extraParams.reasoning = reasoning;
+      }
+      const textVerbosity = resolveOpenAITextVerbosity(
+        streamOpts as Record<string, unknown> | undefined,
+      );
+      if (textVerbosity !== undefined) {
+        const existingText =
+          extraParams.text && typeof extraParams.text === "object"
+            ? (extraParams.text as Record<string, unknown>)
+            : {};
+        extraParams.text = { ...existingText, verbosity: textVerbosity };
       }
 
       // Respect compat.supportsStore — providers like Gemini reject unknown

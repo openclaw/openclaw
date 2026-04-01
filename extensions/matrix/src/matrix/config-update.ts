@@ -10,6 +10,7 @@ export type MatrixAccountPatch = {
   enabled?: boolean;
   homeserver?: string | null;
   allowPrivateNetwork?: boolean | null;
+  proxy?: string | null;
   userId?: string | null;
   accessToken?: MatrixConfig["accessToken"] | null;
   password?: MatrixConfig["password"] | null;
@@ -171,6 +172,7 @@ export function updateMatrixAccountConfig(
   }
 
   applyNullableStringField(nextAccount, "homeserver", patch.homeserver);
+  applyNullableStringField(nextAccount, "proxy", patch.proxy);
   applyNullableStringField(nextAccount, "userId", patch.userId);
   applyNullableSecretInputField(
     nextAccount,

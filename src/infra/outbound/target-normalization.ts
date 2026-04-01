@@ -14,6 +14,14 @@ type TargetNormalizerCacheEntry = {
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
 
+function resetTargetNormalizerCacheForTests(): void {
+  targetNormalizerCacheByChannelId.clear();
+}
+
+export const __testing = {
+  resetTargetNormalizerCacheForTests,
+} as const;
+
 function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   const version = getActivePluginChannelRegistryVersion();
   const cached = targetNormalizerCacheByChannelId.get(channelId);

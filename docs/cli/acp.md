@@ -100,8 +100,9 @@ Permission model (client debug mode):
 
 - Auto-approval is allowlist-based and only applies to trusted core tool IDs.
 - `read` auto-approval is scoped to the current working directory (`--cwd` when set).
-- Unknown/non-core tool names, out-of-scope reads, and dangerous tools always require explicit prompt approval.
+- ACP only auto-approves narrow readonly classes: scoped `read` calls under the active cwd plus readonly search tools (`search`, `web_search`, `memory_search`). Unknown/non-core tools, out-of-scope reads, exec-capable tools, control-plane tools, mutating tools, and interactive flows always require explicit prompt approval.
 - Server-provided `toolCall.kind` is treated as untrusted metadata (not an authorization source).
+- This ACP bridge policy is separate from ACPX harness permissions. If you run OpenClaw through the `acpx` backend, `plugins.entries.acpx.config.permissionMode=approve-all` is the break-glass “yolo” switch for that harness session.
 
 ## How to use this
 
@@ -146,6 +147,10 @@ the key or label.
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
+
+If you want ACPX-backed sessions to see OpenClaw plugin tools, enable the
+gateway-side ACPX plugin bridge instead of trying to pass per-session
+`mcpServers`. See [ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge).
 
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 

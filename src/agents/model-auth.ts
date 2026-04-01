@@ -33,29 +33,12 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "./xai-auth-trace.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 const log = createSubsystemLogger("model-auth");
-
-function logProviderAuthDecision(params: {
-  provider: string;
-  stage: string;
-  source?: string;
-  mode?: string;
-  profileId?: string;
-  apiKey?: string;
-}): void {
-  if (!shouldTraceProviderAuth(params.provider)) {
-    return;
-  }
-  log.info(
-    `[xai-auth] ${params.stage}: source=${params.source ?? "unknown"} mode=${params.mode ?? "unknown"} profile=${params.profileId ?? "none"} key=${summarizeProviderAuthKey(params.apiKey)}`,
-  );
-}
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -380,14 +363,6 @@ export async function resolveApiKeyForProvider(params: {
           source: `profile:${candidate}`,
           mode: resolvedMode,
         };
-        logProviderAuthDecision({
-          provider,
-          stage: "resolved from profile",
-          source: result.source,
-          mode: result.mode,
-          profileId: result.profileId,
-          apiKey: result.apiKey,
-        });
         return result;
       }
     } catch (err) {
@@ -405,38 +380,17 @@ export async function resolveApiKeyForProvider(params: {
       source: envResolved.source,
       mode: resolvedMode,
     };
-    logProviderAuthDecision({
-      provider,
-      stage: "resolved from env",
-      source: result.source,
-      mode: result.mode,
-      apiKey: result.apiKey,
-    });
     return result;
   }
 
   const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
     const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
-    logProviderAuthDecision({
-      provider,
-      stage: "resolved from models.providers",
-      source: result.source,
-      mode: result.mode,
-      apiKey: result.apiKey,
-    });
     return result;
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
-    logProviderAuthDecision({
-      provider,
-      stage: "resolved synthetic auth",
-      source: syntheticLocalAuth.source,
-      mode: syntheticLocalAuth.mode,
-      apiKey: syntheticLocalAuth.apiKey,
-    });
     return syntheticLocalAuth;
   }
 
@@ -467,22 +421,12 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      logProviderAuthDecision({
-        provider,
-        stage: "plugin missing auth message",
-        source: pluginMissingAuthMessage,
-      });
       throw new Error(pluginMissingAuthMessage);
     }
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  logProviderAuthDecision({
-    provider,
-    stage: "missing auth",
-    source: "no profiles/env/config fallback",
-  });
   throw new Error(
     [
       `No API key found for provider "${provider}".`,

@@ -1689,7 +1689,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
       "hasChildren": false
     },
     {
@@ -1873,6 +1873,26 @@
       ],
       "label": "Image Model",
       "help": "Optional image model (provider/model) used when the primary model lacks image input.",
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.llm",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.llm.idleTimeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -2209,6 +2229,74 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.memorySearch.qmd",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Memory Search QMD Collections",
+      "help": "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "QMD Extra Collections",
+      "help": "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.name",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.path",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.pattern",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.memorySearch.query",
       "kind": "core",
       "type": "object",
@@ -2454,7 +2542,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Remote Embedding Base URL",
       "help": "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
@@ -2919,6 +3008,25 @@
       "path": "agents.defaults.models.*.streaming",
       "kind": "core",
       "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.params",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.params.*",
+      "kind": "core",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -3984,6 +4092,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.subagents.requireAgentId",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.subagents.runTimeoutSeconds",
       "kind": "core",
       "type": "integer",
@@ -4365,7 +4483,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
       "hasChildren": false
     },
     {
@@ -4723,6 +4841,66 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.memorySearch.qmd",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.name",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.path",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.pattern",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.memorySearch.query",
       "kind": "core",
       "type": "object",
@@ -4925,7 +5103,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -6351,6 +6532,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.subagents.requireAgentId",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.subagents.thinking",
       "kind": "core",
       "type": "string",
@@ -6715,6 +6906,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -7680,6 +7872,56 @@
       ],
       "label": "Failover Window (hours)",
       "help": "Failure window (hours) for backoff counters (default: 24).",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.overloadedBackoffMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "reliability",
+        "storage"
+      ],
+      "label": "Overloaded Backoff (ms)",
+      "help": "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.overloadedProfileRotations",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "storage"
+      ],
+      "label": "Overloaded Profile Rotations",
+      "help": "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.rateLimitedProfileRotations",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "performance",
+        "storage"
+      ],
+      "label": "Rate-Limited Profile Rotations",
+      "help": "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
       "hasChildren": false
     },
     {
@@ -8929,7 +9171,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -9481,7 +9724,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -11286,7 +11530,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -13831,7 +14076,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -18724,7 +18970,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -19399,7 +19646,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20035,7 +20283,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20772,7 +21021,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22118,6 +22368,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.dm.threadReplies",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "inbound",
+        "always"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -22372,6 +22637,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.historyLimit",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.homeserver",
       "kind": "channel",
       "type": "string",
@@ -22409,7 +22684,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22479,6 +22755,16 @@
       "kind": "channel",
       "type": "string",
       "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -23350,7 +23636,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -23902,7 +24189,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -24427,7 +24715,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -25398,7 +25687,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -26022,7 +26312,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -26361,7 +26652,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -26381,8 +26673,45 @@
     {
       "path": "channels.nostr.privateKey",
       "kind": "channel",
-      "type": "string",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.nostr.privateKey.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nostr.privateKey.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nostr.privateKey.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -26490,6 +26819,739 @@
     },
     {
       "path": "channels.nostr.relays.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "QQ Bot",
+      "help": "connect to QQ via official QQ Bot API with group chat and direct message support.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.allowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.allowFrom.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.appId",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.audioFormatPolicy",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.audioFormatPolicy.sttDirectFormats",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.audioFormatPolicy.sttDirectFormats.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.audioFormatPolicy.transcodeEnabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.audioFormatPolicy.uploadDirectFormats",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.audioFormatPolicy.uploadDirectFormats.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.clientSecret",
+      "kind": "channel",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.clientSecret.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.clientSecret.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.clientSecret.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.clientSecretFile",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.markdownSupport",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.name",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.upgradeMode",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "doc",
+        "hot-reload"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.upgradeUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.urlDirectUpload",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.accounts.*.voiceDirectUploadFormats",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.accounts.*.voiceDirectUploadFormats.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.allowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.allowFrom.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.appId",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.audioFormatPolicy",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.audioFormatPolicy.sttDirectFormats",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.audioFormatPolicy.sttDirectFormats.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.audioFormatPolicy.transcodeEnabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.audioFormatPolicy.uploadDirectFormats",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.audioFormatPolicy.uploadDirectFormats.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.clientSecret",
+      "kind": "channel",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.clientSecret.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.clientSecret.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.clientSecret.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.clientSecretFile",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security",
+        "storage"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.defaultAccount",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.markdownSupport",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.name",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.stt.apiKey",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "media",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.baseUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.model",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.stt.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.tts.apiKey",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "media",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.authStyle",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "bearer",
+        "api-key"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.baseUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.model",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.queryParams",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.tts.queryParams.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.speed",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.tts.voice",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.upgradeMode",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "doc",
+        "hot-reload"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.upgradeUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.urlDirectUpload",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.qqbot.voiceDirectUploadFormats",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.qqbot.voiceDirectUploadFormats.*",
       "kind": "channel",
       "type": "string",
       "required": false,
@@ -27159,7 +28221,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -27913,7 +28976,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -28904,6 +29968,104 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.accounts.*.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.accounts.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -29006,7 +30168,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -30307,6 +31470,135 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approvals",
+      "help": "Slack-native exec approval routing and approver authorization. Enable this only when Slack should act as an explicit exec-approval client for the selected workspace account.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Agent Filter",
+      "help": "Optional allowlist of agent IDs eligible for Slack exec approvals, for example `[\"main\", \"ops-agent\"]`. Use this to keep approval prompts scoped to the agents you actually operate from Slack.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Approvers",
+      "help": "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to commands.ownerAllowFrom when possible.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approvals Enabled",
+      "help": "Enable Slack exec approvals for this account. When false or unset, Slack messages/buttons cannot approve exec requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network",
+        "storage"
+      ],
+      "label": "Slack Exec Approval Session Filter",
+      "help": "Optional session-key filters matched as substring or regex-style patterns before Slack approval routing is used. Use narrow patterns so Slack approvals only appear for intended sessions.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Target",
+      "help": "Controls where Slack approval prompts are sent: \"dm\" sends to approver DMs (default), \"channel\" sends to the originating Slack chat/thread, and \"both\" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted channels.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -30410,7 +31702,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -31476,6 +32769,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.requireTopic",
       "kind": "channel",
       "type": "boolean",
@@ -31739,6 +33057,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.topics.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -31895,6 +33238,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -32095,6 +33463,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -32379,6 +33772,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.groups.*.topics.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -32531,7 +33949,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -33512,6 +34931,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.requireTopic",
       "kind": "channel",
       "type": "boolean",
@@ -33775,6 +35219,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.topics.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -33943,6 +35412,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.execApprovals",
       "kind": "channel",
       "type": "object",
@@ -33994,7 +35488,7 @@
         "network"
       ],
       "label": "Telegram Exec Approval Approvers",
-      "help": "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
+      "help": "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from channels.telegram.allowFrom and direct-message defaultTo when possible.",
       "hasChildren": true
     },
     {
@@ -34168,6 +35662,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -34452,6 +35971,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.groups.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.groups.*.topics.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -34604,7 +36148,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -35845,6 +37390,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "block",
         "bullets",
         "code",
         "off"
@@ -36512,7 +38058,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -36544,6 +38091,22 @@
       "kind": "channel",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.accounts.*.reactionLevel",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "ack",
+        "minimal",
+        "extensive"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -37209,7 +38772,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37232,6 +38796,22 @@
       "kind": "channel",
       "type": "string",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.reactionLevel",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "ack",
+        "minimal",
+        "extensive"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -37470,7 +39050,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -37758,7 +39339,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -38164,7 +39746,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -38467,7 +40050,8 @@
       "enumValues": [
         "off",
         "bullets",
-        "code"
+        "code",
+        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -40934,7 +42518,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "network"
+        "network",
+        "url-secret"
       ],
       "label": "Gateway APNs Relay Base URL",
       "help": "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
@@ -41416,6 +43001,31 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "gateway.webchat",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "gateway.webchat.chatHistoryMaxChars",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network",
+        "performance"
+      ],
+      "label": "WebChat History Max Chars",
+      "help": "Max characters per text field in chat.history responses before truncation (default: 12000).",
       "hasChildren": false
     },
     {
@@ -42851,13 +44461,42 @@
       "hasChildren": false
     },
     {
+      "path": "mcp.servers.*.headers",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*.headers.*",
+      "kind": "core",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
       "path": "mcp.servers.*.url",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -43288,6 +44927,20 @@
       ],
       "label": "QMD Search Mode",
       "help": "Selects the QMD retrieval path: \"query\" uses standard query flow, \"search\" uses search-oriented retrieval, and \"vsearch\" emphasizes vector retrieval. Keep default unless tuning relevance quality.",
+      "hasChildren": false
+    },
+    {
+      "path": "memory.qmd.searchTool",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "QMD Search Tool Override",
+      "help": "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
       "hasChildren": false
     },
     {
@@ -44601,7 +46254,8 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama"
+        "ollama",
+        "azure-openai-responses"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -44697,7 +46351,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "models"
+        "models",
+        "url-secret"
       ],
       "label": "Model Provider Base URL",
       "help": "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
@@ -44814,7 +46469,8 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama"
+        "ollama",
+        "azure-openai-responses"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -45618,6 +47274,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.acpx.config.pluginToolsMcpBridge",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into ACPX sessions so ACP agents can call plugin-registered tools.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.acpx.config.queueOwnerTtlSeconds",
       "kind": "plugin",
       "type": "number",
@@ -45780,6 +47450,65 @@
       ],
       "label": "@openclaw/amazon-bedrock-provider Config",
       "help": "Plugin-defined config payload for amazon-bedrock.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.guardrailIdentifier",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.guardrailVersion",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.streamProcessingMode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "sync",
+        "async"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config.guardrail.trace",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "enabled",
+        "disabled",
+        "enabled_full"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -45888,6 +47617,127 @@
       "label": "@openclaw/anthropic-provider",
       "help": "OpenClaw Anthropic provider plugin (plugin: anthropic)",
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-vertex-provider",
+      "help": "OpenClaw Anthropic Vertex provider plugin (plugin: anthropic-vertex)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-vertex-provider Config",
+      "help": "Plugin-defined config payload for anthropic-vertex.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/anthropic-vertex-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.anthropic.config",
@@ -47484,7 +49334,6 @@
       "kind": "plugin",
       "type": "number",
       "required": false,
-      "defaultValue": 960,
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -47520,7 +49369,6 @@
       "kind": "plugin",
       "type": "number",
       "required": false,
-      "defaultValue": 2,
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -48706,7 +50554,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Firecrawl Search Base URL",
       "help": "Firecrawl Search base URL override.",
@@ -50974,7 +52823,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "storage"
+        "storage",
+        "url-secret"
       ],
       "label": "Base URL",
       "help": "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
@@ -51772,7 +53622,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Kimi Search Base URL",
       "help": "Kimi base URL override.",
@@ -53465,7 +55316,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Perplexity Base URL",
       "help": "Optional Perplexity/OpenRouter chat-completions base URL override.",
@@ -53808,6 +55660,510 @@
     },
     {
       "path": "plugins.entries.qianfan.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/qqbot",
+      "help": "OpenClaw QQ Bot channel plugin (plugin: qqbot)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/qqbot Config",
+      "help": "Plugin-defined config payload for qqbot.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.config.accounts",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.config.accounts.*",
+      "kind": "plugin",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.allowFrom",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.config.allowFrom.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.appId",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.audioFormatPolicy",
+      "kind": "plugin",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.clientSecret",
+      "kind": "plugin",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.clientSecretFile",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "storage"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.defaultAccount",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.markdownSupport",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.name",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.stt",
+      "kind": "plugin",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.systemPrompt",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.tts",
+      "kind": "plugin",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.upgradeMode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "doc",
+        "hot-reload"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.upgradeUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.urlDirectUpload",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.config.voiceDirectUploadFormats",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.config.voiceDirectUploadFormats.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/qqbot",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qqbot.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qqbot.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/searxng-plugin",
+      "help": "OpenClaw SearXNG plugin (plugin: searxng)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.searxng.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/searxng-plugin Config",
+      "help": "Plugin-defined config payload for searxng.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.searxng.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.searxng.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "SearXNG Base URL",
+      "help": "Base URL of your SearXNG instance, such as http://localhost:8080 or https://search.example.com/searxng.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng.config.webSearch.categories",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "SearXNG Categories",
+      "help": "Optional comma-separated categories such as general, news, or science.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng.config.webSearch.language",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "SearXNG Language",
+      "help": "Optional language code for results such as en, de, or fr.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/searxng-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.searxng.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.searxng.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.searxng.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.searxng.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -54610,7 +56966,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Tavily Base URL",
       "help": "Tavily API base URL override.",
@@ -56407,280 +58764,6 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.voice-call.config.tts.edge",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.enabled",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.lang",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.outputFormat",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.pitch",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.proxy",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.rate",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.saveSubtitles",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.timeoutMs",
-      "kind": "plugin",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.voice",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.edge.volume",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.apiKey",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "advanced",
-        "auth",
-        "media",
-        "security"
-      ],
-      "label": "ElevenLabs API Key",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.applyTextNormalization",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "auto",
-        "on",
-        "off"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.baseUrl",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced",
-        "media"
-      ],
-      "label": "ElevenLabs Base URL",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.languageCode",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.modelId",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced",
-        "media",
-        "models"
-      ],
-      "label": "ElevenLabs Model ID",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.seed",
-      "kind": "plugin",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceId",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced",
-        "media"
-      ],
-      "label": "ElevenLabs Voice ID",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceSettings",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceSettings.similarityBoost",
-      "kind": "plugin",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceSettings.speed",
-      "kind": "plugin",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceSettings.stability",
-      "kind": "plugin",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceSettings.style",
-      "kind": "plugin",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.elevenlabs.voiceSettings.useSpeakerBoost",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "plugins.entries.voice-call.config.tts.enabled",
       "kind": "plugin",
       "type": "boolean",
@@ -56805,91 +58888,6 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.voice-call.config.tts.openai",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.openai.apiKey",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "advanced",
-        "auth",
-        "media",
-        "security"
-      ],
-      "label": "OpenAI API Key",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.openai.baseUrl",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.openai.instructions",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.openai.model",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced",
-        "media",
-        "models"
-      ],
-      "label": "OpenAI TTS Model",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.openai.speed",
-      "kind": "plugin",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.tts.openai.voice",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced",
-        "media"
-      ],
-      "label": "OpenAI TTS Voice",
-      "hasChildren": false
-    },
-    {
       "path": "plugins.entries.voice-call.config.tts.prefsPath",
       "kind": "plugin",
       "type": "string",
@@ -56912,6 +58910,513 @@
       ],
       "label": "TTS Provider Override",
       "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.*",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.*.apiKey",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "media",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.lang",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.outputFormat",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.pitch",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.proxy",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.rate",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.saveSubtitles",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.timeoutMs",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.voice",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.edge.volume",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "advanced",
+        "auth",
+        "media",
+        "security"
+      ],
+      "label": "ElevenLabs API Key",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.applyTextNormalization",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "media",
+        "url-secret"
+      ],
+      "label": "ElevenLabs Base URL",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.languageCode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.modelId",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "media",
+        "models"
+      ],
+      "label": "ElevenLabs Model ID",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.seed",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceId",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "media"
+      ],
+      "label": "ElevenLabs Voice ID",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceSettings",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceSettings.similarityBoost",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceSettings.speed",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceSettings.stability",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceSettings.style",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.elevenlabs.voiceSettings.useSpeakerBoost",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.lang",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.outputFormat",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.pitch",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.proxy",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.rate",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.saveSubtitles",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.timeoutMs",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.voice",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.microsoft.volume",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "advanced",
+        "auth",
+        "media",
+        "security"
+      ],
+      "label": "OpenAI API Key",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai.instructions",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "media",
+        "models"
+      ],
+      "label": "OpenAI TTS Model",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai.speed",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.tts.providers.openai.voice",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "media"
+      ],
+      "label": "OpenAI TTS Voice",
       "hasChildren": false
     },
     {
@@ -58253,7 +60758,7 @@
         "storage"
       ],
       "label": "Plugin Install Path",
-      "help": "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      "help": "Resolved install directory for the installed plugin bundle.",
       "hasChildren": false
     },
     {
@@ -60751,6 +63256,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -60760,8 +63266,8 @@
       "tags": [
         "tools"
       ],
-      "label": "Exec Host",
-      "help": "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+      "label": "Exec Target",
+      "help": "Selects execution target strategy for shell commands. Use \"auto\" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.",
       "hasChildren": false
     },
     {
@@ -61470,7 +63976,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -61678,7 +64188,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62153,7 +64667,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62346,7 +64864,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62796,7 +65318,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -63085,7 +65611,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -63278,7 +65808,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64231,7 +66765,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "tools"
+        "tools",
+        "url-secret"
       ],
       "label": "Firecrawl Base URL",
       "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
@@ -64457,93 +66992,6 @@
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.brave",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.brave.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.brave.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.brave.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.brave.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.brave.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.brave.mode",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.brave.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "tools.web.search.cacheTtlMinutes",
       "kind": "core",
       "type": "number",
@@ -64570,325 +67018,7 @@
         "tools"
       ],
       "label": "Enable Web Search Tool",
-      "help": "Enable the web_search tool (requires a provider API key).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.firecrawl",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.firecrawl.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.firecrawl.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.firecrawl.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.firecrawl.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.firecrawl.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.firecrawl.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.gemini",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.gemini.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.gemini.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.gemini.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.gemini.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.gemini.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.gemini.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.grok",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.grok.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.grok.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.grok.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.grok.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.grok.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.grok.inlineCitations",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.grok.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.kimi",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.kimi.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.kimi.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.kimi.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.kimi.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.kimi.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.kimi.model",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "help": "Enable managed web_search and optional Codex-native search for eligible models.",
       "hasChildren": false
     },
     {
@@ -64907,7 +67037,7 @@
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.perplexity",
+      "path": "tools.web.search.openaiCodex",
       "kind": "core",
       "type": "object",
       "required": false,
@@ -64917,66 +67047,64 @@
       "hasChildren": true
     },
     {
-      "path": "tools.web.search.perplexity.apiKey",
+      "path": "tools.web.search.openaiCodex.allowedDomains",
       "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
       "required": false,
       "deprecated": false,
-      "sensitive": true,
+      "sensitive": false,
       "tags": [
-        "auth",
-        "security",
+        "access",
         "tools"
       ],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.search.perplexity.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
+      "label": "Codex Allowed Domains",
+      "help": "Optional domain allowlist passed to the native Codex web_search tool.",
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.perplexity.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.perplexity.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.perplexity.baseUrl",
+      "path": "tools.web.search.openaiCodex.contextSize",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools"
+      ],
+      "label": "Codex Search Context Size",
+      "help": "Native Codex search context size hint: \"low\", \"medium\", or \"high\".",
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.perplexity.model",
+      "path": "tools.web.search.openaiCodex.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable Native Codex Web Search",
+      "help": "Enable native Codex web search for Codex-capable models.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex.mode",
       "kind": "core",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Codex Web Search Mode",
+      "help": "Native Codex web search mode: \"cached\" (default) or \"live\".",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.openaiCodex.userLocation",
+      "kind": "core",
       "required": false,
       "deprecated": false,
       "sensitive": false,

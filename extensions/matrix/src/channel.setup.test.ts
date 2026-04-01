@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 
 const verificationMocks = vi.hoisted(() => ({
@@ -123,9 +123,11 @@ describe("matrix setup post-write bootstrap", () => {
     }
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js"));
+  });
+
+  beforeEach(() => {
     verificationMocks.bootstrapMatrixVerification.mockReset();
     log.mockClear();
     error.mockClear();
@@ -240,13 +242,14 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
+  it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
     const updated = matrixPlugin.config.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
             allowPrivateNetwork: true,
+            proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {
                 enabled: true,

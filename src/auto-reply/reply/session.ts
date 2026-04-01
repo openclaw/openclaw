@@ -3,9 +3,11 @@ import path from "node:path";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -24,7 +26,6 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
-import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
@@ -382,8 +383,16 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
+  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session resets.
+  // These are automated system events, not user interactions that should affect
+  // session continuity. Forcing freshEntry=true prevents accidental data loss.
+  // See #58409 for details on silent session reset bug.
+  const isSystemEvent =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? isSystemEvent
+      ? true
+      : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
@@ -639,6 +648,14 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
+    });
+    await disposeSessionMcpRuntime(previousSessionEntry.sessionId).catch((error) => {
+      log.warn(
+        `failed to dispose bundle MCP runtime for session ${previousSessionEntry.sessionId}`,
+        {
+          error: String(error),
+        },
+      );
     });
   }
 

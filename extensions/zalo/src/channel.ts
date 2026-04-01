@@ -30,6 +30,7 @@ import {
   type ResolvedZaloAccount,
 } from "./accounts.js";
 import { zaloMessageActions } from "./actions.js";
+import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import {
@@ -181,6 +182,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             },
           }),
       },
+      auth: zaloApprovalAuth,
       groups: {
         resolveRequireMention: () => true,
       },
