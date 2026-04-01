@@ -127,14 +127,6 @@ export function createAcpxRuntimeService(
             if (currentRevision !== lifecycleRevision) {
               return;
             }
-            if (doctorReport?.ok) {
-              ctx.logger.info(
-                attempt === 0
-                  ? "acpx runtime backend ready"
-                  : `acpx runtime backend ready after ${attempt + 1} probe attempts`,
-              );
-              return;
-            }
             if (doctorReport) {
               lastFailureMessage = formatDoctorFailureMessage(doctorReport);
             } else {
