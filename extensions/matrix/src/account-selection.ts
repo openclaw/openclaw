@@ -11,23 +11,106 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { listMatrixEnvAccountIds } from "./env-vars.js";
+import {
+  resolveMatrixAccountStringValues,
+  type MatrixResolvedStringField,
+} from "./auth-precedence.js";
+import { getMatrixScopedEnvVarNames, listMatrixEnvAccountIds } from "./env-vars.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasConfiguredDefaultMatrixAccountSource(channel: Record<string, unknown> | null): boolean {
-  if (!channel) {
-    return false;
+type MatrixTopologyStringSources = Partial<Record<MatrixResolvedStringField, string>>;
+
+function readConfiguredMatrixString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readConfiguredMatrixSecretSource(value: unknown): string {
+  return hasConfiguredSecretInput(value) ? "configured" : "";
+}
+
+function resolveMatrixChannelStringSources(
+  entry: Record<string, unknown> | null,
+): MatrixTopologyStringSources {
+  if (!entry) {
+    return {};
   }
-  // Top-level Matrix config can provide shared defaults for named accounts. Only
-  // count fields that are actually default-account-specific auth/identity input.
-  return (
-    typeof channel.userId === "string" ||
-    hasConfiguredSecretInput(channel.accessToken) ||
-    hasConfiguredSecretInput(channel.password)
-  );
+  return {
+    homeserver: readConfiguredMatrixString(entry.homeserver),
+    userId: readConfiguredMatrixString(entry.userId),
+    accessToken: readConfiguredMatrixSecretSource(entry.accessToken),
+    password: readConfiguredMatrixSecretSource(entry.password),
+    deviceId: readConfiguredMatrixString(entry.deviceId),
+    deviceName: readConfiguredMatrixString(entry.deviceName),
+  };
+}
+
+function readEnvMatrixString(env: NodeJS.ProcessEnv, key: string): string {
+  const value = env[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveScopedMatrixEnvStringSources(
+  accountId: string,
+  env: NodeJS.ProcessEnv,
+): MatrixTopologyStringSources {
+  const keys = getMatrixScopedEnvVarNames(accountId);
+  return {
+    homeserver: readEnvMatrixString(env, keys.homeserver),
+    userId: readEnvMatrixString(env, keys.userId),
+    accessToken: readEnvMatrixString(env, keys.accessToken),
+    password: readEnvMatrixString(env, keys.password),
+    deviceId: readEnvMatrixString(env, keys.deviceId),
+    deviceName: readEnvMatrixString(env, keys.deviceName),
+  };
+}
+
+function resolveGlobalMatrixEnvStringSources(env: NodeJS.ProcessEnv): MatrixTopologyStringSources {
+  return {
+    homeserver: readEnvMatrixString(env, "MATRIX_HOMESERVER"),
+    userId: readEnvMatrixString(env, "MATRIX_USER_ID"),
+    accessToken: readEnvMatrixString(env, "MATRIX_ACCESS_TOKEN"),
+    password: readEnvMatrixString(env, "MATRIX_PASSWORD"),
+    deviceId: readEnvMatrixString(env, "MATRIX_DEVICE_ID"),
+    deviceName: readEnvMatrixString(env, "MATRIX_DEVICE_NAME"),
+  };
+}
+
+function hasReadyResolvedMatrixAuth(values: {
+  homeserver: string;
+  userId: string;
+  accessToken: string;
+  password: string;
+}): boolean {
+  return Boolean(values.homeserver && (values.accessToken || (values.userId && values.password)));
+}
+
+function hasReadyEffectiveMatrixAccountSource(params: {
+  channel: Record<string, unknown> | null;
+  accountId: string;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const resolved = resolveMatrixAccountStringValues({
+    accountId: normalizedAccountId,
+    scopedEnv: resolveScopedMatrixEnvStringSources(normalizedAccountId, params.env),
+    channel: resolveMatrixChannelStringSources(params.channel),
+    globalEnv: resolveGlobalMatrixEnvStringSources(params.env),
+  });
+  return hasReadyResolvedMatrixAuth(resolved);
+}
+
+function hasConfiguredDefaultMatrixAccountSource(params: {
+  channel: Record<string, unknown> | null;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  return hasReadyEffectiveMatrixAccountSource({
+    channel: params.channel,
+    accountId: DEFAULT_ACCOUNT_ID,
+    env: params.env,
+  });
 }
 
 export function resolveMatrixChannelConfig(cfg: OpenClawConfig): Record<string, unknown> | null {
@@ -60,12 +143,15 @@ export function resolveConfiguredMatrixAccountIds(
     accounts: channel && isRecord(channel.accounts) ? channel.accounts : undefined,
     normalizeAccountId,
   });
-  if (hasConfiguredDefaultMatrixAccountSource(channel)) {
+  if (hasConfiguredDefaultMatrixAccountSource({ channel, env })) {
     configuredAccountIds.push(DEFAULT_ACCOUNT_ID);
   }
+  const readyEnvAccountIds = listMatrixEnvAccountIds(env).filter((accountId) =>
+    hasReadyEffectiveMatrixAccountSource({ channel, accountId, env }),
+  );
   return listCombinedAccountIds({
     configuredAccountIds,
-    additionalAccountIds: listMatrixEnvAccountIds(env),
+    additionalAccountIds: readyEnvAccountIds,
     fallbackAccountIdWhenEmpty: channel ? DEFAULT_ACCOUNT_ID : undefined,
   });
 }

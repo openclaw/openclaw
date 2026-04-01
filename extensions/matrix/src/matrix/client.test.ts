@@ -397,6 +397,25 @@ describe("resolveMatrixConfig", () => {
     expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
   });
 
+  it("does not materialize a default account from partial top-level auth defaults", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "shared-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveImplicitMatrixAccountId(cfg, {} as NodeJS.ProcessEnv)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
+  });
+
   it("honors injected env when implicit Matrix account selection becomes ambiguous", () => {
     const cfg = {
       channels: {
@@ -414,6 +433,22 @@ describe("resolveMatrixConfig", () => {
     expect(() => resolveMatrixAuthContext({ cfg, env })).toThrow(
       /channels\.matrix\.defaultAccount.*--account <id>/i,
     );
+  });
+
+  it("does not materialize a default env account from partial global auth fields", () => {
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_ACCESS_TOKEN: "shared-token",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
   });
 
   it("rejects explicit non-default account ids that are neither configured nor scoped in env", () => {
