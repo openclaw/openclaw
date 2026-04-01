@@ -101,9 +101,30 @@ vi.mock("../agents/openclaw-tools.js", () => {
       }),
     },
     {
+      name: "context_probe",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        ok: true,
+        route: {
+          agentTo: lastCreateOpenClawToolsContext?.agentTo,
+          agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
+        },
+      }),
+    },
+    {
       name: "sessions_send",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true }),
+    },
+    {
+      name: "atlas_inspect",
+      parameters: { type: "object", properties: { action: { type: "string" } } },
+      execute: async () => ({ ok: true, action: "file", result: { content: "snapshot" } }),
+    },
+    {
+      name: "atlas_execution",
+      parameters: { type: "object", properties: { action: { type: "string" } } },
+      execute: async () => ({ ok: true, action: "submit", result: { taskId: "atlas-task-1" } }),
     },
     {
       name: "gateway",
@@ -568,13 +589,12 @@ describe("POST /tools/invoke", () => {
     expect(body.error.type).toBe("not_found");
   });
 
-  it("propagates message target/thread headers into tools context for sessions_spawn", async () => {
+  it("propagates message target/thread headers into tools context for allowed tools", async () => {
     cfg = {
       ...cfg,
       agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+        list: [{ id: "main", default: true, tools: { allow: ["context_probe"] } }],
       },
-      gateway: { tools: { allow: ["sessions_spawn"] } },
     };
 
     const res = await invokeTool({
@@ -584,7 +604,7 @@ describe("POST /tools/invoke", () => {
         "x-openclaw-message-to": "channel:24514",
         "x-openclaw-thread-id": "thread-24514",
       },
-      tool: "sessions_spawn",
+      tool: "context_probe",
       sessionKey: "main",
     });
 
@@ -606,6 +626,23 @@ describe("POST /tools/invoke", () => {
     expect(res.status).toBe(404);
   });
 
+  it("keeps sessions_send denied via HTTP even when gateway.tools.allow includes it", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_send"] } }],
+      },
+      gateway: { tools: { allow: ["sessions_send"] } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "sessions_send",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
   it("denies gateway tool via HTTP", async () => {
     setMainAllowedTools({ allow: ["gateway"] });
 
@@ -615,6 +652,48 @@ describe("POST /tools/invoke", () => {
     });
 
     expect(res.status).toBe(404);
+  });
+
+  it("allows atlas_inspect via HTTP when agent policy allows it", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["atlas_inspect"] } }],
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "atlas_inspect",
+      args: { action: "file", repo: "homio/core", path: "src/button.tsx" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.result?.action).toBe("file");
+    expect(body.result?.result?.content).toBe("snapshot");
+  });
+
+  it("keeps atlas_execution denied via HTTP even when explicitly allowed in gateway config", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["atlas_execution"] } }],
+      },
+      gateway: { tools: { allow: ["atlas_execution"] } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "atlas_execution",
+      args: { action: "submit", taskId: "atlas-task-1" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("not_found");
   });
 
   it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
@@ -736,10 +815,14 @@ describe("POST /tools/invoke", () => {
 
   it("requires operator.write scope for HTTP tool invocation", async () => {
     allowAgentsListForMain();
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "trusted-proxy",
+    });
 
     const res = await invokeTool({
       port: sharedPort,
-      headers: {},
+      headers: { "x-openclaw-scopes": "operator.read" },
       tool: "agents_list",
       sessionKey: "main",
     });

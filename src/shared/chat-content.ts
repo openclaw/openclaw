@@ -15,20 +15,18 @@ export function extractTextFromChatContent(
     if (value == null) {
       return "";
     }
-    if (
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      typeof value === "bigint" ||
-      typeof value === "symbol"
-    ) {
-      return String(value);
-    }
     if (typeof value === "object") {
       try {
         return JSON.stringify(value) ?? "";
       } catch {
         return "";
       }
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      return `${value}`;
+    }
+    if (typeof value === "symbol") {
+      return value.description ? `Symbol(${value.description})` : "Symbol()";
     }
     return "";
   };

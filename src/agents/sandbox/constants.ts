@@ -18,6 +18,8 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "image",
+  "atlas_inspect",
+  "atlas_execution",
   "sessions_list",
   "sessions_history",
   "sessions_send",

@@ -53,8 +53,22 @@ export async function resolveAnnounceTarget(params: {
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
       (typeof origin?.accountId === "string" ? origin.accountId : undefined);
+    const threadIdRaw =
+      (typeof deliveryContext?.threadId === "string" ||
+      typeof deliveryContext?.threadId === "number"
+        ? deliveryContext.threadId
+        : undefined) ??
+      ((match as { lastThreadId?: unknown } | undefined)?.lastThreadId as
+        | string
+        | number
+        | undefined) ??
+      fallback?.threadId;
+    const threadId =
+      threadIdRaw == null || String(threadIdRaw).trim() === ""
+        ? undefined
+        : String(threadIdRaw).trim();
     if (channel && to) {
-      return { channel, to, accountId };
+      return { channel, to, accountId, threadId };
     }
   } catch {
     // ignore

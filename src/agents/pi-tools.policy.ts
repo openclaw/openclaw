@@ -28,6 +28,9 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
+  // Atlas execution must stay coordinator-owned; subagents can inspect context but must not
+  // independently submit code-changing work into Atlas.
+  "atlas_execution",
   // Interactive setup - not a task
   "whatsapp_login",
   // Status/scheduling - main agent coordinates

@@ -394,6 +394,17 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("hardens Atlas delivery defaults for Homio and blocks local bypass advice", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["atlas_inspect", "atlas_execution"],
+    });
+
+    expect(prompt).toContain("default to repo `homio/core`");
+    expect(prompt).toContain("Do not ask the user which repo or branch to use");
+    expect(prompt).toContain("do not offer a local/manual bypass flow");
+  });
+
   it("includes workspace notes when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

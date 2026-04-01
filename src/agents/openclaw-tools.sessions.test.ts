@@ -779,8 +779,8 @@ describe("sessions tools", () => {
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
-    const targetKey = "discord:group:target";
-    let sendParams: { to?: string; channel?: string; message?: string } = {};
+    const targetKey = "discord:group:target:thread:42";
+    let sendParams: { to?: string; channel?: string; message?: string; threadId?: string } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -827,12 +827,13 @@ describe("sessions tools", () => {
       }
       if (request.method === "send") {
         const params = request.params as
-          | { to?: string; channel?: string; message?: string }
+          | { to?: string; channel?: string; message?: string; threadId?: string }
           | undefined;
         sendParams = {
           to: params?.to,
           channel: params?.channel,
           message: params?.message,
+          threadId: params?.threadId,
         };
         return { messageId: "m-announce" };
       }
@@ -887,6 +888,7 @@ describe("sessions tools", () => {
       to: "group:target",
       channel: "discord",
       message: "announce now",
+      threadId: "42",
     });
   });
 

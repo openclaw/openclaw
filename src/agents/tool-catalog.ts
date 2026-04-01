@@ -33,6 +33,7 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "ui", label: "UI" },
   { id: "messaging", label: "Messaging" },
   { id: "automation", label: "Automation" },
+  { id: "atlas", label: "Atlas" },
   { id: "nodes", label: "Nodes" },
   { id: "agents", label: "Agents" },
   { id: "media", label: "Media" },
@@ -226,6 +227,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "atlas_inspect",
+    label: "atlas_inspect",
+    description: "Inspect Atlas-managed repo snapshots",
+    sectionId: "atlas",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "atlas_execution",
+    label: "atlas_execution",
+    description: "Submit and track Atlas execution tasks",
+    sectionId: "atlas",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "nodes",
     label: "nodes",
     description: "Nodes + devices",
@@ -303,6 +320,9 @@ function buildCoreToolGroupMap() {
   );
   return {
     "group:openclaw": openclawTools,
+    "group:atlas": CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === "atlas").map(
+      (tool) => tool.id,
+    ),
     ...Object.fromEntries(sectionToolMap.entries()),
   };
 }

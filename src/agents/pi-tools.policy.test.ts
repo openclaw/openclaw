@@ -145,9 +145,10 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(true);
   });
 
-  it("depth-1 orchestrator still denies gateway and cron but allows memory tools", () => {
+  it("depth-1 orchestrator still denies gateway, atlas_execution, and cron but allows memory tools", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);
     expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("atlas_execution", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
@@ -187,6 +188,11 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   it("depth-1 leaf (maxSpawnDepth=1) denies sessions_list", () => {
     const policy = resolveSubagentToolPolicy(leafCfg, 1);
     expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
+  });
+
+  it("leaf subagents also deny atlas_execution", () => {
+    const policy = resolveSubagentToolPolicy(leafCfg, 1);
+    expect(isToolAllowedByPolicyName("atlas_execution", policy)).toBe(false);
   });
 
   it("uses stored leaf role for flat depth-1 session keys", () => {

@@ -144,6 +144,49 @@ function buildMessagingSection(params: {
   ];
 }
 
+function buildAtlasSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  const hasInspect = params.availableTools.has("atlas_inspect");
+  const hasExecution = params.availableTools.has("atlas_execution");
+  if (!hasInspect && !hasExecution) {
+    return [];
+  }
+  const lines = ["## Atlas Delivery"];
+  if (hasInspect) {
+    lines.push(
+      "- For Atlas-managed implementation work, inspect repo state through atlas_inspect before proposing changes.",
+    );
+  }
+  if (hasExecution) {
+    lines.push("- Always produce a short execution brief before Atlas work starts.");
+    lines.push(
+      "- For Homio implementation work, default to repo `homio/core` unless the user explicitly names a different repo.",
+    );
+    lines.push(
+      "- Do not ask the user which repo or branch to use unless there is real evidence the default `homio/core` flow is wrong or multiple repos are genuinely plausible.",
+    );
+    lines.push(
+      "- If the request is vague, first break it into something like MVP -> verify -> polish and clarify the goal until the brief is actionable.",
+    );
+    lines.push(
+      "- Once the goal is clear and no critical unknowns remain, submit the brief to Atlas via atlas_execution without waiting for an extra OK.",
+    );
+    lines.push(
+      "- Treat `no_files_changed` as an unclear brief/spec problem: clarify the goal instead of blind retries.",
+    );
+    lines.push(
+      "- If Atlas is unavailable or returns infrastructure errors (for example 503), do not offer a local/manual bypass flow. Report Atlas as blocked and keep the execution path Atlas-owned.",
+    );
+    lines.push(
+      "- Hide Atlas internal ids from the user. Explain work as human stages: understood, preparing, executing, verifying, preview ready.",
+    );
+  }
+  lines.push("");
+  return lines;
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -248,6 +291,10 @@ export function buildAgentSystemPrompt(params: {
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    atlas_inspect:
+      "Inspect Atlas-managed repositories through a commit-pinned readonly view (context, tree, file, search, diff, changed files, git status)",
+    atlas_execution:
+      "Submit execution briefs to Atlas and inspect Atlas task status, events, and artifacts",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -283,6 +330,8 @@ export function buildAgentSystemPrompt(params: {
     "canvas",
     "nodes",
     "cron",
+    "atlas_inspect",
+    "atlas_execution",
     "message",
     "gateway",
     "agents_list",
@@ -477,6 +526,10 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...skillsSection,
     ...memorySection,
+    ...buildAtlasSection({
+      isMinimal,
+      availableTools,
+    }),
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
     hasGateway && !isMinimal

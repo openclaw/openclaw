@@ -14,15 +14,11 @@ const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
       [] as Array<Record<string, unknown>>,
   ),
 );
-const resolveEnvApiKeyMock = vi.hoisted(
-  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
+const resolveEnvApiKeyMock = vi.hoisted(() =>
+  vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
 );
-const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
-  () =>
-    vi.fn(
-      (_params?: { provider?: string }) =>
-        null as { apiKey: string; source: string } | null,
-    ),
+const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
+  vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
 
 const createMockConfig = () => ({

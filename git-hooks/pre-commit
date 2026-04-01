@@ -46,7 +46,10 @@ if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
 fi
 
-git add -- "${files[@]}"
+# Some upstream-tracked paths are intentionally matched by broad ignore rules
+# (for example generated screenshots, vendored files, or bundled binaries).
+# Re-stage them forcefully after fixers so merges don't fail at commit time.
+git add -f -- "${files[@]}"
 
 # This hook is also exercised from lightweight temp repos in tests, where the
 # staged-file safety behavior matters but the full OpenClaw workspace does not

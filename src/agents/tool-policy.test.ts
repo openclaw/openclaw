@@ -224,4 +224,14 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     expect(resolved.allow).toEqual(["read"]);
     expect(resolved.deny).toEqual(["image"]);
   });
+
+  it("defaults include Atlas inspect and execution tools for sandboxed coordinator flows", () => {
+    const resolved = resolveSandboxToolPolicyForAgent(undefined, undefined);
+    expect(resolved.allow).toContain("atlas_inspect");
+    expect(resolved.allow).toContain("atlas_execution");
+
+    const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
+    expect(isToolAllowed(policy, "atlas_inspect")).toBe(true);
+    expect(isToolAllowed(policy, "atlas_execution")).toBe(true);
+  });
 });

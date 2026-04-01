@@ -12,6 +12,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "canvas",
   "nodes",
   "session_status",
+  "atlas_execution",
 ]);
 
 const READ_ONLY_ACTIONS = new Set([
@@ -135,6 +136,10 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       );
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
+    case "atlas_inspect":
+      return false;
+    case "atlas_execution":
+      return action == null || !READ_ONLY_ACTIONS.has(action);
     default: {
       if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);
