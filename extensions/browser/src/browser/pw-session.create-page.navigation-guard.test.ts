@@ -255,6 +255,58 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     }
   });
 
+  it("does not quarantine a tab on transient post-navigation check errors", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const assertNavigationAllowedSpy = vi.spyOn(
+      navigationGuardModule,
+      "assertBrowserNavigationAllowed",
+    );
+    assertNavigationAllowedSpy.mockImplementation(async (opts: { url: string }) => {
+      if (opts.url === "https://postcheck.example/hop") {
+        throw new Error("getaddrinfo EAI_AGAIN postcheck.example");
+      }
+    });
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      return {
+        request: () => ({
+          url: () => "https://93.184.216.34/final",
+          redirectedFrom: () => ({
+            url: () => "https://postcheck.example/hop",
+            redirectedFrom: () => null,
+          }),
+        }),
+      };
+    });
+
+    try {
+      await expect(
+        createPageViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          url: "https://93.184.216.34/start",
+        }),
+      ).rejects.toThrow("getaddrinfo EAI_AGAIN postcheck.example");
+
+      const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
+      expect(pages).toHaveLength(1);
+      expect(pages[0]?.targetId).toBe("TARGET_1");
+      expect(pageClose).not.toHaveBeenCalled();
+    } finally {
+      assertNavigationAllowedSpy.mockRestore();
+    }
+  });
+
   it("keeps blocked tab manageable if close fails", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));

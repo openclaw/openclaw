@@ -613,11 +613,13 @@ export async function assertPageNavigationCompletedSafely(opts: {
       ...navigationPolicy,
     });
   } catch (err) {
-    await closeBlockedNavigationTarget({
-      cdpUrl: opts.cdpUrl,
-      page: opts.page,
-      targetId: opts.targetId,
-    });
+    if (isPolicyDenyNavigationError(err)) {
+      await closeBlockedNavigationTarget({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        targetId: opts.targetId,
+      });
+    }
     throw err;
   }
 }
