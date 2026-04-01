@@ -69,7 +69,13 @@ function getKnownConfigPaths(): string[] {
   if (cachedKnownPaths) {
     return cachedKnownPaths;
   }
-  cachedKnownPaths = Object.keys(FIELD_HELP);
+  // Filter out template/wildcard keys (e.g. "plugins.entries.*.apiKey",
+  // "session.sendPolicy.rules[].match.keyPrefix") that are not concrete
+  // CLI paths. Users cannot pass these to config get/unset and parsePath
+  // would reject the "[]" form with an error.
+  cachedKnownPaths = Object.keys(FIELD_HELP).filter(
+    (key) => !key.includes("*") && !key.includes("[]"),
+  );
   return cachedKnownPaths;
 }
 
