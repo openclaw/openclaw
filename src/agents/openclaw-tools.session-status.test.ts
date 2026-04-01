@@ -14,15 +14,11 @@ const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
       [] as Array<Record<string, unknown>>,
   ),
 );
-const resolveEnvApiKeyMock = vi.hoisted(
-  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
+const resolveEnvApiKeyMock = vi.hoisted(() =>
+  vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
 );
-const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
-  () =>
-    vi.fn(
-      (_params?: { provider?: string }) =>
-        null as { apiKey: string; source: string } | null,
-    ),
+const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
+  vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
 
 const createMockConfig = () => ({
@@ -210,6 +206,32 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
       relatedSessionKey: string;
       callerOwnerKey: string;
     }) => listTasksForRelatedSessionKeyForOwnerMock(params),
+    buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
+      relatedSessionKey: string;
+      callerOwnerKey: string;
+    }) => {
+      const tasks = listTasksForRelatedSessionKeyForOwnerMock(params) as Array<
+        {
+          status?: string;
+        } & Record<string, unknown>
+      >;
+      const active = tasks.filter((task) => task.status === "queued" || task.status === "running");
+      const recentTerminal = active.length > 0 ? [] : tasks;
+      const recentFailureCount = recentTerminal.filter(
+        (task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost",
+      ).length;
+      const visible = active.length > 0 ? active : recentTerminal;
+      const latest = visible[0] as Record<string, unknown> | undefined;
+      return {
+        latest,
+        visible,
+        active,
+        recentTerminal,
+        activeCount: active.length,
+        totalCount: visible.length,
+        recentFailureCount,
+      };
+    },
   }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
@@ -433,6 +455,80 @@ describe("session_status tool", () => {
     expect(text).toContain("acp");
     expect(text).toContain("Summarize inbox backlog");
     expect(text).toContain("Indexing the latest threads");
+  });
+
+  it("hides stale completed task rows from session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-stale",
+        runtime: "cron",
+        requesterSessionKey: "agent:main:main",
+        task: "stale completed task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 15 * 60_000,
+        terminalSummary: "finished long ago",
+      },
+      {
+        taskId: "task-live",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        task: "live task",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        progressSummary: "still working",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-stale", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 active");
+    expect(text).toContain("live task");
+    expect(text).not.toContain("stale completed task");
+    expect(text).not.toContain("finished long ago");
+  });
+
+  it("shows recent failure context in session_status output when no task is active", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-failed",
+        runtime: "cron",
+        requesterSessionKey: "agent:main:main",
+        task: "failing task",
+        status: "failed",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        error: "permission denied",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-failed", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 recent failure");
+    expect(text).toContain("failing task");
+    expect(text).toContain("permission denied");
   });
 
   it("resolves a literal current sessionId in session_status", async () => {
