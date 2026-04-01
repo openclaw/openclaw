@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -158,17 +158,10 @@ function createPollForwardingPlugin(params: {
 
 async function executePluginAction(params: {
   action: "send" | "poll";
-  ctx: {
-    channel: string;
-    cfg: OpenClawConfig;
-    params: Record<string, unknown>;
-    mediaAccess?: {
-      localRoots?: string[];
-      readFile?: unknown;
-    };
-    accountId?: string | null;
-    gateway?: unknown;
-    toolContext?: unknown;
+  ctx: Pick<
+    ChannelMessageActionContext,
+    "channel" | "cfg" | "params" | "mediaAccess" | "accountId" | "gateway" | "toolContext"
+  > & {
     dryRun: boolean;
     agentId?: string;
   };
