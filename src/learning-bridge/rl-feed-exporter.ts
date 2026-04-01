@@ -10,9 +10,13 @@ import type { TrajectorTurn, TrajectoryPackage } from "./types.js";
 export async function resolveRlFeedRoot(cfg?: OpenClawConfig): Promise<string> {
   const configured = cfg?.research?.learningBridge?.outputDir?.trim();
   const stateDir = resolveConfigDir();
-  const root = configured ? resolveUserPath(configured) : path.join(stateDir, "rl-feed");
+  const stateDirAbs = path.resolve(stateDir);
+  // Canonicalize state first so default rl-feed path matches realState. On Windows,
+  // OPENCLAW_STATE_DIR may be an 8.3 path while realpath() returns the long form;
+  // mixing the two makes isPathInside() reject a valid rl-feed subdirectory.
+  const realState = await fs.realpath(stateDirAbs).catch(() => stateDirAbs);
+  const root = configured ? resolveUserPath(configured) : path.join(realState, "rl-feed");
   const absRoot = path.resolve(root);
-  const realState = await fs.realpath(stateDir).catch(() => path.resolve(stateDir));
 
   const containErr = (got: string) =>
     new Error(
