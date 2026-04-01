@@ -15,6 +15,7 @@ type MockGateway = {
   disconnect: Mock<() => void>;
   connect: Mock<(resume?: boolean) => void>;
   emitter: EventEmitter;
+  ws?: EventEmitter & { terminate?: Mock<() => void> };
 };
 
 const {
@@ -69,7 +70,9 @@ describe("runDiscordGatewayLifecycle", () => {
     stopGatewayLoggingMock.mockClear();
   });
 
-  function createGatewayHarness(): { emitter: EventEmitter; gateway: MockGateway } {
+  function createGatewayHarness(params?: {
+    ws?: EventEmitter & { terminate?: Mock<() => void> };
+  }): { emitter: EventEmitter; gateway: MockGateway } {
     const emitter = new EventEmitter();
     return {
       emitter,
@@ -79,6 +82,7 @@ describe("runDiscordGatewayLifecycle", () => {
         disconnect: vi.fn(),
         connect: vi.fn(),
         emitter,
+        ...(params?.ws ? { ws: params.ws } : {}),
       },
     };
   }
@@ -241,7 +245,7 @@ describe("runDiscordGatewayLifecycle", () => {
         }, 1_000);
       });
 
-      const { lifecycleParams, runtimeError } = createLifecycleHarness({ gateway });
+      const { lifecycleParams, runtimeError, statusSink } = createLifecycleHarness({ gateway });
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
 
       await vi.advanceTimersByTimeAsync(16_500);
@@ -253,6 +257,48 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.disconnect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledWith(false);
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connected: true,
+          lastDisconnect: null,
+          lastError: null,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for the stale startup socket to close before reconnecting", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      gateway.disconnect.mockImplementation(() => {
+        setTimeout(() => {
+          socket.emit("close", 1000, "Client disconnect");
+        }, 1_000);
+      });
+      gateway.connect.mockImplementation(() => {
+        setTimeout(() => {
+          gateway.isConnected = true;
+        }, 1_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+      await vi.advanceTimersByTimeAsync(15_100);
+      expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledWith(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
