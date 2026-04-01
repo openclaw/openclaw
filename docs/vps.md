@@ -18,15 +18,15 @@ tuning that applies everywhere.
 
 <CardGroup cols={2}>
   <Card title="Agent Computer" href="/install/agentcomputer">Managed worker + published port</Card>
-  <Card title="Azure" href="/install/azure">Linux VM</Card>
-  <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
-  <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
-  <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
-  <Card title="GCP" href="/install/gcp">Compute Engine</Card>
-  <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
-  <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
-  <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
+  <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
+  <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
+  <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
+  <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
+  <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
+  <Card title="GCP" href="/install/gcp">Compute Engine</Card>
+  <Card title="Azure" href="/install/azure">Linux VM</Card>
+  <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
   <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
 </CardGroup>
 

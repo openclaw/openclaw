@@ -27,11 +27,11 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 
 - VPS hub: [VPS hosting](/vps)
 - Agent Computer (managed worker + published port): [Agent Computer](/install/agentcomputer)
+- Fly.io: [Fly.io](/install/fly)
+- Hetzner (Docker): [Hetzner](/install/hetzner)
+- GCP (Compute Engine): [GCP](/install/gcp)
 - Azure (Linux VM): [Azure](/install/azure)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
-- Fly.io: [Fly.io](/install/fly)
-- GCP (Compute Engine): [GCP](/install/gcp)
-- Hetzner (Docker): [Hetzner](/install/hetzner)
 
 ## Common links
 
