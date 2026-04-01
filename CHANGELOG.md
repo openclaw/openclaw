@@ -6,6 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+### Fixes
+
+## 2026.4.1-beta.1
+
+### Changes
+
 - Tasks/chat: add `/tasks` as a chat-native background task board for the current session, with recent task details and agent-local fallback counts when no linked tasks are visible. Related #54226. Thanks @vincentkoc.
 - Web search/SearXNG: add the bundled SearXNG provider plugin for `web_search` with configurable host support. (#57317) Thanks @cgdusek.
 - Amazon Bedrock/Guardrails: add Bedrock Guardrails support to the bundled provider. (#58588) Thanks @MikeORed.
