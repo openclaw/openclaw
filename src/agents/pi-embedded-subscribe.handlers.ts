@@ -35,7 +35,11 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         // Async handler - best-effort typing indicator, avoids blocking tool summaries.
         // Catch rejections to avoid unhandled promise rejection crashes.
         handleToolExecutionStart(ctx, evt as never).catch((err) => {
-          ctx.log.debug(`tool_execution_start handler failed: ${String(err)}`);
+          ctx.log.warn(`tool_execution_start handler failed: ${String(err)}`, {
+            toolName: (evt as { toolName?: string }).toolName,
+            toolCallId: (evt as { toolCallId?: string }).toolCallId,
+            runId: ctx.params.runId,
+          });
         });
         return;
       case "tool_execution_update":
@@ -44,7 +48,11 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
       case "tool_execution_end":
         // Async handler - best-effort, non-blocking
         handleToolExecutionEnd(ctx, evt as never).catch((err) => {
-          ctx.log.debug(`tool_execution_end handler failed: ${String(err)}`);
+          ctx.log.warn(`tool_execution_end handler failed: ${String(err)}`, {
+            toolName: (evt as { toolName?: string }).toolName,
+            toolCallId: (evt as { toolCallId?: string }).toolCallId,
+            runId: ctx.params.runId,
+          });
         });
         return;
       case "agent_start":
