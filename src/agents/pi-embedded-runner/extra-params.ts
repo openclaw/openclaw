@@ -20,6 +20,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createGeminiToolCallThoughtSignatureWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -538,6 +539,7 @@ function applyPostPluginStreamWrappers(
   }
   ctx.agent.streamFn = createOpenAICompletionsStoreCompatWrapper(ctx.agent.streamFn);
 
+  ctx.agent.streamFn = createGeminiToolCallThoughtSignatureWrapper(ctx.agent.streamFn);
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
     "parallel_tool_calls",

@@ -1517,6 +1517,133 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("adds OpenRouter attribution headers to stream options", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
+      "X-Custom": "1",
+    });
+  });
+
+  it("injects Gemini 3 tool call thought_signature into OpenAI-compatible payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai",
+      applyModelId: "gemini-3.1-pro-preview",
+      model: {
+        api: "openai-completions",
+        provider: "custom-openai",
+        id: "gemini-3.1-pro-preview",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_read_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: "{\"path\":\"README.md\"}",
+                },
+              },
+            ],
+            reasoning_details: [
+              {
+                type: "reasoning.encrypted",
+                id: "call_read_1",
+                data: "AQID",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const assistantMessage = (payload.messages as Array<Record<string, unknown>>)[0];
+    const toolCall = (assistantMessage.tool_calls as Array<Record<string, unknown>>)[0] ?? {};
+    expect(toolCall.extra_content).toEqual({
+      google: {
+        thought_signature: "AQID",
+      },
+    });
+    expect(assistantMessage.reasoning_details).toEqual([
+      {
+        type: "reasoning.encrypted",
+        id: "call_read_1",
+        data: "AQID",
+      },
+    ]);
+  });
+
+  it("does not overwrite existing Gemini tool call thought_signature payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai",
+      applyModelId: "gemini-3.1-pro-preview",
+      model: {
+        api: "openai-completions",
+        provider: "custom-openai",
+        id: "gemini-3.1-pro-preview",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_read_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: "{\"path\":\"README.md\"}",
+                },
+                extra_content: {
+                  google: {
+                    thought_signature: "existing-signature",
+                  },
+                },
+              },
+            ],
+            reasoning_details: [
+              {
+                type: "reasoning.encrypted",
+                id: "call_read_1",
+                data: "AQID",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const assistantMessage = (payload.messages as Array<Record<string, unknown>>)[0];
+    const toolCall = (assistantMessage.tool_calls as Array<Record<string, unknown>>)[0] ?? {};
+    expect(toolCall.extra_content).toEqual({
+      google: {
+        thought_signature: "existing-signature",
+      },
+    });
+  });
+
   it("preserves Gemma 4 thinking off instead of rewriting thinkingBudget=0 to MINIMAL", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -1581,6 +1708,48 @@ describe("applyExtraParamsToAgent", () => {
         thinkingLevel: "HIGH",
       },
     });
+  });
+
+  it("does not inject Gemini tool call thought_signature for non-Gemini models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai",
+      applyModelId: "gpt-4.1",
+      model: {
+        api: "openai-completions",
+        provider: "custom-openai",
+        id: "gpt-4.1",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_read_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: "{\"path\":\"README.md\"}",
+                },
+              },
+            ],
+            reasoning_details: [
+              {
+                type: "reasoning.encrypted",
+                id: "call_read_1",
+                data: "AQID",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const assistantMessage = (payload.messages as Array<Record<string, unknown>>)[0];
+    const toolCall = (assistantMessage.tool_calls as Array<Record<string, unknown>>)[0] ?? {};
+    expect(toolCall).not.toHaveProperty("extra_content");
   });
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();

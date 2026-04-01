@@ -21,6 +21,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 export { resolveOpenAITextVerbosity };
+const GEMINI_3_MODEL_ID_PATTERN = /\bgemini-3(?:$|[._-])/i;
 
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
@@ -83,6 +84,93 @@ function shouldFlattenOpenAICompletionMessages(model: {
       ? (model.compat as { requiresStringContent?: unknown })
       : undefined;
   return model.api === "openai-completions" && compat?.requiresStringContent === true;
+}
+
+function shouldApplyGeminiToolCallThoughtSignatureCompat(model: {
+  api?: unknown;
+  id?: unknown;
+}): boolean {
+  if (model.api !== "openai-completions") {
+    return false;
+  }
+  return typeof model.id === "string" && GEMINI_3_MODEL_ID_PATTERN.test(model.id);
+}
+
+function patchGeminiToolCallThoughtSignatures(payloadObj: Record<string, unknown>): void {
+  const messages = payloadObj.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const message = entry as {
+      role?: unknown;
+      tool_calls?: unknown;
+      reasoning_details?: unknown;
+    };
+    if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) {
+      continue;
+    }
+    if (!Array.isArray(message.reasoning_details) || message.reasoning_details.length === 0) {
+      continue;
+    }
+
+    const thoughtSignatures = new Map<string, string>();
+    for (const detail of message.reasoning_details as Array<{
+      type?: unknown;
+      id?: unknown;
+      data?: unknown;
+    }>) {
+      if (
+        detail?.type !== "reasoning.encrypted" ||
+        typeof detail.id !== "string" ||
+        typeof detail.data !== "string"
+      ) {
+        continue;
+      }
+      const thoughtSignature = detail.data.trim();
+      if (thoughtSignature) {
+        thoughtSignatures.set(detail.id, thoughtSignature);
+      }
+    }
+
+    if (thoughtSignatures.size === 0) {
+      continue;
+    }
+
+    for (const toolCallEntry of message.tool_calls as Array<{
+      id?: unknown;
+      extra_content?: unknown;
+    }>) {
+      if (!toolCallEntry || typeof toolCallEntry !== "object" || typeof toolCallEntry.id !== "string") {
+        continue;
+      }
+
+      const thoughtSignature = thoughtSignatures.get(toolCallEntry.id);
+      if (!thoughtSignature) {
+        continue;
+      }
+
+      const extraContent =
+        toolCallEntry.extra_content && typeof toolCallEntry.extra_content === "object"
+          ? { ...(toolCallEntry.extra_content as Record<string, unknown>) }
+          : {};
+      const googleContent =
+        extraContent.google && typeof extraContent.google === "object"
+          ? { ...(extraContent.google as Record<string, unknown>) }
+          : {};
+      if (typeof googleContent.thought_signature === "string" && googleContent.thought_signature.trim()) {
+        continue;
+      }
+      googleContent.thought_signature = thoughtSignature;
+      extraContent.google = googleContent;
+      toolCallEntry.extra_content = extraContent;
+    }
+  }
 }
 
 function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
@@ -267,6 +355,20 @@ export function createOpenAIThinkingLevelWrapper(
   };
 }
 
+export function createGeminiToolCallThoughtSignatureWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldApplyGeminiToolCallThoughtSignatureCompat(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      patchGeminiToolCallThoughtSignatures(payloadObj);
+    });
+  };
+}
+
 export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -340,6 +442,7 @@ export function createOpenAITextVerbosityWrapper(
     });
   };
 }
+
 export function createCodexNativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
   params: { config?: OpenClawConfig; agentDir?: string },
