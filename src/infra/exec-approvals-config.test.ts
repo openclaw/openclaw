@@ -268,3 +268,157 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
     }
   });
 });
+
+describe("normalizeExecApprovals strips invalid security/ask enum values (#59006)", () => {
+  it("drops invalid defaults.security values like 'none'", () => {
+    const file = {
+      version: 1,
+      defaults: { security: "none" },
+      agents: {},
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.security).toBeUndefined();
+  });
+
+  it("drops invalid defaults.ask values like 'never'", () => {
+    const file = {
+      version: 1,
+      defaults: { ask: "never" },
+      agents: {},
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.ask).toBeUndefined();
+  });
+
+  it("drops invalid defaults.askFallback values", () => {
+    const file = {
+      version: 1,
+      defaults: { askFallback: "none" },
+      agents: {},
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.askFallback).toBeUndefined();
+  });
+
+  it("preserves valid defaults.security and defaults.ask values", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: {},
+    };
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.security).toBe("full");
+    expect(normalized.defaults?.ask).toBe("off");
+    expect(normalized.defaults?.askFallback).toBe("deny");
+  });
+
+  it("drops invalid agent-level security/ask values", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: { security: "none", ask: "never", askFallback: "open" },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.agents?.main?.security).toBeUndefined();
+    expect(normalized.agents?.main?.ask).toBeUndefined();
+    expect(normalized.agents?.main?.askFallback).toBeUndefined();
+  });
+
+  it("drops invalid wildcard agent security/ask values", () => {
+    const file = {
+      version: 1,
+      agents: {
+        "*": { security: "none", ask: "off" },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.agents?.["*"]?.security).toBeUndefined();
+    expect(normalized.agents?.["*"]?.ask).toBe("off");
+  });
+
+  it("resolves to built-in defaults when invalid values are stripped", () => {
+    const file = {
+      version: 1,
+      defaults: { security: "none", ask: "never" },
+      agents: {
+        "*": { security: "none", ask: "off" },
+      },
+    } as unknown as ExecApprovalsFile;
+    const resolved = resolveExecApprovalsFromFile({ file });
+    // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("deny")
+    expect(resolved.defaults.security).toBe("deny");
+    // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("on-miss")
+    expect(resolved.defaults.ask).toBe("on-miss");
+    // Wildcard agent "none" is stripped, so agent inherits resolved defaults
+    expect(resolved.agent.security).toBe("deny");
+    // Wildcard agent ask="off" is valid and preserved
+    expect(resolved.agent.ask).toBe("off");
+  });
+
+  it("strips non-string policy values (e.g. numbers, booleans) without throwing", () => {
+    const file = {
+      version: 1,
+      defaults: { security: 1, ask: true, askFallback: ["deny"] },
+      agents: {
+        main: { security: 42, ask: false },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.security).toBeUndefined();
+    expect(normalized.defaults?.ask).toBeUndefined();
+    expect(normalized.defaults?.askFallback).toBeUndefined();
+    expect(normalized.agents?.main?.security).toBeUndefined();
+    expect(normalized.agents?.main?.ask).toBeUndefined();
+  });
+
+  it("does not rebuild agent objects when only allowlist-unrelated fields are absent", () => {
+    const originalAllowlist = [{ pattern: "/usr/bin/ls", id: "test-id" }];
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: { allowlist: originalAllowlist },
+      },
+    };
+    const normalized = normalizeExecApprovals(file);
+    // The agent should not gain explicit security/ask/askFallback keys
+    // when those fields were not present in the original.
+    const mainAgent = normalized.agents?.main;
+    expect(mainAgent).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(mainAgent, "security")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(mainAgent, "ask")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(mainAgent, "askFallback")).toBe(false);
+  });
+
+  it("silently drops __proto__ agent keys to prevent prototype pollution", () => {
+    const file = {
+      version: 1,
+      agents: {
+        __proto__: { security: "full", allowlist: [{ pattern: "/bin/evil" }] },
+        main: { allowlist: [{ pattern: "/usr/bin/ls" }] },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    // __proto__ key must be silently dropped
+    expect(Object.keys(normalized.agents ?? {}).includes("__proto__")).toBe(false);
+    // Legitimate agents are preserved
+    expect(normalized.agents?.main).toBeDefined();
+    // Object.prototype must not be polluted
+    expect(({} as Record<string, unknown>).security).toBeUndefined();
+  });
+
+  it("silently drops constructor and prototype agent keys", () => {
+    const file = {
+      version: 1,
+      agents: {
+        constructor: { allowlist: [{ pattern: "/bin/ctor" }] },
+        prototype: { allowlist: [{ pattern: "/bin/proto" }] },
+        main: { allowlist: [{ pattern: "/usr/bin/ls" }] },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(Object.keys(normalized.agents ?? {}).includes("constructor")).toBe(false);
+    expect(Object.keys(normalized.agents ?? {}).includes("prototype")).toBe(false);
+    expect(normalized.agents?.main).toBeDefined();
+  });
+});

@@ -28,6 +28,15 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   return normalizeExecHost(normalized);
 }
 
+/** Coerce a raw JSON field to string, returning undefined for non-string types. */
+function toStringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Keys that must never be used as agent identifiers to prevent prototype
+ *  pollution when assigning into a plain object (CWE-1321). */
+const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
@@ -288,7 +297,15 @@ function stripAllowlistCommandText(
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
-  const agents = { ...file.agents };
+  // Build agents on a null-prototype object to prevent prototype pollution
+  // when agent keys come from untrusted JSON input (CWE-1321).
+  const agents: Record<string, ExecApprovalsAgent> = Object.create(null);
+  for (const [k, v] of Object.entries(file.agents ?? {})) {
+    if (UNSAFE_OBJECT_KEYS.has(k)) {
+      continue;
+    }
+    agents[k] = v;
+  }
   const legacyDefault = agents.default;
   if (legacyDefault) {
     const main = agents[DEFAULT_AGENT_ID];
@@ -299,10 +316,44 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     const coerced = coerceAllowlistEntries(agent.allowlist);
     const withIds = ensureAllowlistIds(coerced);
     const allowlist = stripAllowlistCommandText(withIds);
-    if (allowlist !== agent.allowlist) {
-      agents[key] = { ...agent, allowlist };
+    // Validate security/ask/askFallback enum values on each agent entry.
+    // Invalid values (e.g. "none") are discarded so downstream fallback
+    // chains resolve correctly instead of silently propagating bad strings.
+    // toStringOrUndefined guards against non-string JSON values (e.g. numbers)
+    // that would cause .trim() to throw inside the normalizers.
+    const validatedSecurity = normalizeExecSecurity(toStringOrUndefined(agent.security));
+    const validatedAsk = normalizeExecAsk(toStringOrUndefined(agent.ask));
+    const validatedAskFallback = normalizeExecSecurity(toStringOrUndefined(agent.askFallback));
+    // Use `?? undefined` so that null (returned by normalizers for absent/
+    // invalid input) compares equal to an originally-absent field (undefined),
+    // avoiding false-positive change detection for agents without explicit
+    // security/ask/askFallback settings.
+    const agentChanged =
+      allowlist !== agent.allowlist ||
+      (validatedSecurity ?? undefined) !== agent.security ||
+      (validatedAsk ?? undefined) !== agent.ask ||
+      (validatedAskFallback ?? undefined) !== agent.askFallback;
+    if (agentChanged) {
+      agents[key] = {
+        ...agent,
+        allowlist,
+        security: validatedSecurity ?? undefined,
+        ask: validatedAsk ?? undefined,
+        askFallback: validatedAskFallback ?? undefined,
+      };
     }
   }
+  // Validate defaults-level security/ask/askFallback enum values.
+  // Invalid values are dropped (set to undefined) so that the resolution
+  // layer falls through to the correct built-in defaults instead of
+  // silently treating an unrecognized string as a valid policy.
+  const validatedDefaultSecurity = normalizeExecSecurity(
+    toStringOrUndefined(file.defaults?.security),
+  );
+  const validatedDefaultAsk = normalizeExecAsk(toStringOrUndefined(file.defaults?.ask));
+  const validatedDefaultAskFallback = normalizeExecSecurity(
+    toStringOrUndefined(file.defaults?.askFallback),
+  );
   const normalized: ExecApprovalsFile = {
     version: 1,
     socket: {
@@ -310,9 +361,9 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       token: token && token.length > 0 ? token : undefined,
     },
     defaults: {
-      security: file.defaults?.security,
-      ask: file.defaults?.ask,
-      askFallback: file.defaults?.askFallback,
+      security: validatedDefaultSecurity ?? undefined,
+      ask: validatedDefaultAsk ?? undefined,
+      askFallback: validatedDefaultAskFallback ?? undefined,
       autoAllowSkills: file.defaults?.autoAllowSkills,
     },
     agents,
