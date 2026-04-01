@@ -317,6 +317,16 @@ function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcport
   return parsed;
 }
 
+function isCaseInsensitivePath(p: string): boolean {
+  try {
+    // On macOS (APFS/HFS+), realpath normalizes case.
+    // If the canonical path differs in case, the filesystem is case-insensitive.
+    return path.resolve(p) !== fs.realpathSync.native(path.resolve(p));
+  } catch {
+    return false;
+  }
+}
+
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -326,9 +336,15 @@ function resolveDefaultCollections(
   if (!include) {
     return [];
   }
+  const caseInsensitive = isCaseInsensitivePath(workspaceDir);
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    // On case-insensitive filesystems (macOS), "memory.md" resolves to the same
+    // file as "MEMORY.md", causing QMD to reject the duplicate collection.
+    // Skip the lower-case variant to avoid the conflict.
+    ...(caseInsensitive
+      ? []
+      : [{ path: workspaceDir, pattern: "memory.md", base: "memory-alt" }]),
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
