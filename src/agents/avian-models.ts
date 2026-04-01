@@ -7,6 +7,8 @@ const log = createSubsystemLogger("avian-models");
 export const AVIAN_BASE_URL = "https://api.avian.io/v1";
 export const AVIAN_DEFAULT_MODEL_ID = "deepseek/deepseek-v3.2";
 export const AVIAN_DEFAULT_MODEL_REF = `avian/${AVIAN_DEFAULT_MODEL_ID}`;
+export const AVIAN_DEFAULT_CONTEXT_WINDOW = 164000;
+export const AVIAN_DEFAULT_MAX_TOKENS = 65536;
 
 export const AVIAN_DEFAULT_COST = {
   input: 0.26,
@@ -23,13 +25,13 @@ const AVIAN_DISCOVERY_RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 
  */
 export const AVIAN_MODEL_CATALOG = [
   {
-    id: "deepseek/deepseek-v3.2",
+    id: AVIAN_DEFAULT_MODEL_ID,
     name: "DeepSeek V3.2",
     reasoning: false,
     input: ["text"] as const,
     cost: { input: 0.26, output: 0.38, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 164000,
-    maxTokens: 65536,
+    contextWindow: AVIAN_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: AVIAN_DEFAULT_MAX_TOKENS,
   },
   {
     id: "moonshotai/kimi-k2.5",
@@ -198,8 +200,8 @@ export async function discoverAvianModels(): Promise<ModelDefinitionConfig[]> {
           reasoning: isReasoning,
           input: ["text"],
           cost,
-          contextWindow: apiModel.context_length || 128000,
-          maxTokens: apiModel.max_output || 8192,
+          contextWindow: apiModel.context_length || AVIAN_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: apiModel.max_output || AVIAN_DEFAULT_MAX_TOKENS,
         });
       }
     }
