@@ -4,15 +4,18 @@ import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.
 
 type CodexUsageResponse = {
   rate_limit?: {
+    limit_reached?: boolean;
     primary_window?: {
       limit_window_seconds?: number;
       used_percent?: number;
       reset_at?: number;
+      reset_after_seconds?: number;
     };
     secondary_window?: {
       limit_window_seconds?: number;
       used_percent?: number;
       reset_at?: number;
+      reset_after_seconds?: number;
     };
   };
   plan_type?: string;
