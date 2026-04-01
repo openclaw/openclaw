@@ -3031,6 +3031,7 @@ Notes:
       failureWindowHours: 24,
       overloadedProfileRotations: 1,
       overloadedBackoffMs: 0,
+      rateLimitedProfileRotations: 1,
     },
   },
 }
@@ -3042,6 +3043,7 @@ Notes:
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
 - `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
+- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`).
 
 ---
 
