@@ -535,6 +535,92 @@ export type ProviderPrepareExtraParamsContext = {
   thinkingLevel?: ThinkLevel;
 };
 
+export type ProviderReplaySanitizeMode = "full" | "images-only";
+
+export type ProviderReplayToolCallIdMode = "strict" | "strict9";
+
+export type ProviderReasoningOutputMode = "native" | "tagged";
+
+/**
+ * Provider-owned replay/compaction transcript policy.
+ *
+ * These values are consumed by shared history replay and compaction logic.
+ * Return only the fields the provider wants to override; core fills the rest
+ * with its default policy.
+ */
+export type ProviderReplayPolicy = {
+  sanitizeMode?: ProviderReplaySanitizeMode;
+  sanitizeToolCallIds?: boolean;
+  toolCallIdMode?: ProviderReplayToolCallIdMode;
+  preserveSignatures?: boolean;
+  sanitizeThoughtSignatures?: {
+    allowBase64Only?: boolean;
+    includeCamelCase?: boolean;
+  };
+  dropThinkingBlocks?: boolean;
+  repairToolUseResultPairing?: boolean;
+  applyAssistantFirstOrderingFix?: boolean;
+  allowSyntheticToolResults?: boolean;
+};
+
+/**
+ * Provider-owned replay/compaction policy input.
+ *
+ * Use this when transcript replay rules depend on provider/model transport
+ * behavior and should stay with the provider plugin instead of core tables.
+ */
+export type ProviderReplayPolicyContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+};
+
+/**
+ * Provider-owned replay-history sanitization input.
+ *
+ * Runs after core applies generic transcript cleanup so plugins can make
+ * provider-specific replay rewrites without owning the whole compaction flow.
+ */
+export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
+  sessionId: string;
+  messages: AgentMessage[];
+  allowedToolNames?: Iterable<string>;
+};
+
+/**
+ * Provider-owned final replay-turn validation input.
+ *
+ * Use this for providers that require strict turn ordering or additional
+ * replay-time transcript validation beyond generic sanitation.
+ */
+export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
+  sessionId?: string;
+  messages: AgentMessage[];
+};
+
+/**
+ * Provider-owned tool-schema normalization input.
+ *
+ * Runs before tool registration for replay/compaction/inference so providers
+ * can rewrite schema keywords that their transport family does not support.
+ */
+export type ProviderNormalizeToolSchemasContext = ProviderReplayPolicyContext & {
+  tools: AnyAgentTool[];
+};
+
+/**
+ * Provider-owned reasoning output mode input.
+ *
+ * Use this when a provider requires a specific reasoning-output contract, such
+ * as text tags instead of native structured reasoning fields.
+ */
+export type ProviderReasoningOutputModeContext = ProviderReplayPolicyContext;
+
 /**
  * Provider-owned transport creation.
  *
@@ -946,6 +1032,51 @@ export type ProviderPlugin = {
    */
   capabilities?: Partial<ProviderCapabilities>;
   /**
+   * Provider-owned replay/compaction policy override.
+   *
+   * Use this when transcript replay or compaction should follow provider-owned
+   * rules that are more expressive than the static `capabilities` bag.
+   */
+  buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
+  /**
+   * Provider-owned replay-history sanitization.
+   *
+   * Runs after OpenClaw performs generic transcript cleanup. Use this for
+   * provider-specific replay rewrites that should stay with the provider
+   * plugin rather than in shared core compaction helpers.
+   */
+  sanitizeReplayHistory?: (
+    ctx: ProviderSanitizeReplayHistoryContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /**
+   * Provider-owned final replay-turn validation.
+   *
+   * Use this when provider transports need stricter replay-time validation or
+   * turn reshaping after generic sanitation. Returning a non-null value
+   * replaces the built-in replay validators rather than composing with them.
+   */
+  validateReplayTurns?: (
+    ctx: ProviderValidateReplayTurnsContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /**
+   * Provider-owned tool-schema normalization.
+   *
+   * Use this for transport-family schema cleanup before OpenClaw registers
+   * tools with the embedded runner.
+   */
+  normalizeToolSchemas?: (
+    ctx: ProviderNormalizeToolSchemasContext,
+  ) => AnyAgentTool[] | null | undefined;
+  /**
+   * Provider-owned reasoning output mode.
+   *
+   * Use this when a provider requires tagged reasoning/final output instead of
+   * native structured reasoning fields.
+   */
+  resolveReasoningOutputMode?: (
+    ctx: ProviderReasoningOutputModeContext,
+  ) => ProviderReasoningOutputMode | null | undefined;
+  /**
    * Provider-owned extra-param normalization before generic stream option
    * wrapping.
    *
@@ -1302,6 +1433,10 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Stable host session key for the active conversation when available. */
+  sessionKey?: string;
+  /** Ephemeral host session id for the active conversation when available. */
+  sessionId?: string;
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -1797,6 +1932,7 @@ export type PluginHookName =
   | "before_model_resolve"
   | "before_prompt_build"
   | "before_agent_start"
+  | "before_agent_reply"
   | "llm_input"
   | "llm_output"
   | "agent_end"
@@ -1825,6 +1961,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "before_prompt_build",
   "before_agent_start",
+  "before_agent_reply",
   "llm_input",
   "llm_output",
   "agent_end",
@@ -1966,6 +2103,21 @@ export const stripPromptMutationFieldsFromLegacyHookResult = (
   return Object.keys(remaining).length > 0
     ? (remaining as PluginHookBeforeAgentStartOverrideResult)
     : undefined;
+};
+
+// before_agent_reply hook
+export type PluginHookBeforeAgentReplyEvent = {
+  /** The final user message text heading to the LLM (after commands/directives). */
+  cleanedBody: string;
+};
+
+export type PluginHookBeforeAgentReplyResult = {
+  /** Whether the plugin is claiming this message (short-circuits the LLM agent). */
+  handled: boolean;
+  /** Synthetic reply that short-circuits the LLM agent. */
+  reply?: ReplyPayload;
+  /** Reason for interception (for logging/debugging). */
+  reason?: string;
 };
 
 // llm_input hook
@@ -2377,6 +2529,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  before_agent_reply: (
+    event: PluginHookBeforeAgentReplyEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
