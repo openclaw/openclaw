@@ -12,8 +12,8 @@
  * @see https://github.com/anthropics/claude-code - Reference implementation
  */
 
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 
 /**
  * Dangerous files that should be protected from auto-editing.
@@ -115,12 +115,21 @@ export type SensitivePathCheckResult =
     };
 
 /**
+ * Normalize path separators to forward slashes for consistent comparison.
+ * This ensures paths work correctly on both Windows and Unix.
+ */
+function normalizePathSeparators(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+/**
  * Normalize path for case-insensitive comparison.
  * This prevents bypassing security checks using mixed-case paths
  * on case-insensitive filesystems (macOS/Windows).
+ * Also normalizes path separators for cross-platform compatibility.
  */
 export function normalizeCaseForComparison(filePath: string): string {
-  return filePath.toLowerCase();
+  return normalizePathSeparators(filePath).toLowerCase();
 }
 
 /**
@@ -136,7 +145,10 @@ function matchesDangerousFile(filePath: string): string | null {
       return dangerousFile;
     }
     // Also check if path ends with the dangerous file pattern (e.g., .ssh/config)
-    if (dangerousFile.includes("/") && normalizedPath.endsWith(normalizeCaseForComparison(dangerousFile))) {
+    if (
+      dangerousFile.includes("/") &&
+      normalizedPath.endsWith(normalizeCaseForComparison(dangerousFile))
+    ) {
       return dangerousFile;
     }
   }
@@ -149,7 +161,8 @@ function matchesDangerousFile(filePath: string): string | null {
  */
 function matchesDangerousDirectory(filePath: string): string | null {
   const normalizedPath = normalizeCaseForComparison(filePath);
-  const segments = normalizedPath.split(path.sep);
+  // Split on forward slash (normalizeCaseForComparison already converts backslashes)
+  const segments = normalizedPath.split("/");
 
   for (const dangerousDir of DANGEROUS_DIRECTORIES) {
     const normalizedDir = normalizeCaseForComparison(dangerousDir);
@@ -176,7 +189,9 @@ function matchesDangerousDirectory(filePath: string): string | null {
  * Check if a path contains suspicious Windows path patterns.
  * These patterns can be used to bypass security checks.
  */
-function hasSuspiciousWindowsPattern(filePath: string): { suspicious: true; reason: string } | { suspicious: false } {
+function hasSuspiciousWindowsPattern(
+  filePath: string,
+): { suspicious: true; reason: string } | { suspicious: false } {
   // NTFS Alternate Data Streams (e.g., file.txt::$DATA, file.txt:stream)
   // Only check on Windows-like paths (has drive letter or starts with \\)
   const isWindowsPath = /^[a-zA-Z]:/.test(filePath) || filePath.startsWith("\\\\");
@@ -290,12 +305,12 @@ export function checkSensitivePath(
     };
   }
 
-  // Check custom dangerous directories
+  // Check custom dangerous directories (use forward slashes - normalizeCaseForComparison handles conversion)
   if (options?.additionalDangerousDirectories) {
     const normalizedPath = normalizeCaseForComparison(filePath);
     for (const customDir of options.additionalDangerousDirectories) {
       const normalizedDir = normalizeCaseForComparison(customDir);
-      if (normalizedPath.includes(`${path.sep}${normalizedDir}${path.sep}`)) {
+      if (normalizedPath.includes(`/${normalizedDir}/`)) {
         return {
           sensitive: true,
           reason: `Custom sensitive directory pattern: ${customDir}`,
@@ -315,16 +330,16 @@ export function checkSensitivePath(
 export function isSettingsPath(filePath: string): boolean {
   const normalizedPath = normalizeCaseForComparison(filePath);
 
-  // Check for settings.json patterns
+  // Check for settings.json patterns (use forward slashes - normalizeCaseForComparison handles conversion)
   const settingsPatterns = [
-    `${path.sep}.openclaw${path.sep}settings.json`,
-    `${path.sep}.openclaw${path.sep}settings.local.json`,
-    `${path.sep}.claude${path.sep}settings.json`,
-    `${path.sep}.claude${path.sep}settings.local.json`,
+    "/.openclaw/settings.json",
+    "/.openclaw/settings.local.json",
+    "/.claude/settings.json",
+    "/.claude/settings.local.json",
   ];
 
   for (const pattern of settingsPatterns) {
-    if (normalizedPath.endsWith(normalizeCaseForComparison(pattern))) {
+    if (normalizedPath.endsWith(pattern)) {
       return true;
     }
   }
@@ -346,12 +361,12 @@ export function isHomeSensitivePath(filePath: string): boolean {
 
   const relativePath = normalizedPath.slice(normalizedHome.length);
 
-  // Check for sensitive home subdirectories
+  // Check for sensitive home subdirectories (use forward slashes - normalizeCaseForComparison handles conversion)
   const sensitiveDirs = [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".config/gcloud"];
 
   for (const dir of sensitiveDirs) {
     const normalizedDir = normalizeCaseForComparison(dir);
-    if (relativePath.startsWith(`${path.sep}${normalizedDir}${path.sep}`) || relativePath === `${path.sep}${normalizedDir}`) {
+    if (relativePath.startsWith(`/${normalizedDir}/`) || relativePath === `/${normalizedDir}`) {
       return true;
     }
   }

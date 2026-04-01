@@ -582,10 +582,12 @@ export function interpretClassifierResult(
     };
   }
 
-  // Handle normal classification result
+  // Handle normal classification result - cast to ClassifierResult after narrowing
+  const classifierResult = result as ClassifierResult;
   return {
-    shouldBlock: result.shouldBlock,
-    reason: result.reason,
-    requiresUserApproval: result.shouldBlock && (result.userOverridable ?? true),
+    shouldBlock: classifierResult.shouldBlock,
+    reason: classifierResult.reason,
+    requiresUserApproval:
+      classifierResult.shouldBlock && (classifierResult.userOverridable ?? true),
   };
 }

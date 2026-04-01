@@ -294,7 +294,8 @@ export function isDangerousAllowlistPattern(pattern: string): {
   const normalized = pattern.trim().toLowerCase();
 
   // Wildcard patterns are more dangerous
-  const isWildcard = normalized.endsWith(":*") || normalized.endsWith("*") || normalized.endsWith(" *");
+  const isWildcard =
+    normalized.endsWith(":*") || normalized.endsWith("*") || normalized.endsWith(" *");
 
   // Extract the base command from patterns like "python:*" or "npm run:*"
   let baseCommand = normalized;
@@ -379,7 +380,7 @@ export function hasShellInjectionPattern(command: string): {
   }
 
   // Subshell/command substitution
-  if (/\$\(|\`/.test(command)) {
+  if (/\$\(|`/.test(command)) {
     dangerousPatterns.push("command_substitution");
   }
 
@@ -428,9 +429,9 @@ export function analyzeCommandSecurity(command: string): {
   if (dangerousPattern) {
     if (dangerousPattern.severity === "critical") {
       riskLevel = "critical";
-    } else if (dangerousPattern.severity === "high" && riskLevel !== "critical") {
+    } else if (dangerousPattern.severity === "high") {
       riskLevel = "high";
-    } else if (dangerousPattern.severity === "medium" && riskLevel === "low") {
+    } else if (dangerousPattern.severity === "medium") {
       riskLevel = "medium";
     }
     risks.push(dangerousPattern.reason);
