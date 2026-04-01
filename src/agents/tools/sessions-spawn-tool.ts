@@ -156,7 +156,7 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      let streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      let streamTo: "parent" | undefined = params.streamTo === "parent" ? "parent" : undefined;
       if (runtime !== "acp") {
         resumeSessionId = undefined;
         streamTo = undefined;
