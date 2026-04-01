@@ -143,6 +143,13 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
   }
 
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const retryAfterDateMatch = message.match(/retry[- ]after[^A-Za-z0-9]*([A-Z][a-z]{2},\s*\d{2}\s+[A-Z][a-z]{2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/i);
+  if (retryAfterDateMatch) {
+    const parsed = parseRetryAfterHeaderValue(retryAfterDateMatch[1]);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
   const retryAfterMatch = RATE_LIMIT_RETRY_AFTER_RE.exec(message);
   if (retryAfterMatch) {
     const amount = Number(retryAfterMatch[2]);
@@ -154,13 +161,6 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
       if (unit === "ms" || unit.startsWith("msec") || unit.startsWith("millisecond")) {
         return Math.max(0, Math.round(amount));
       }
-    }
-  }
-  const retryAfterDateMatch = message.match(/retry[- ]after[^A-Za-z0-9]*([A-Z][a-z]{2},\s*\d{2}\s+[A-Z][a-z]{2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/i);
-  if (retryAfterDateMatch) {
-    const parsed = parseRetryAfterHeaderValue(retryAfterDateMatch[1]);
-    if (parsed !== undefined) {
-      return parsed;
     }
   }
   return undefined;

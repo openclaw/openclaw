@@ -296,7 +296,7 @@ describe("retryAsync", () => {
     const delays = await runRetryAfterCase({
       minDelayMs: 0,
       maxDelayMs: 5000,
-      error: new Error(`rate limited, retry-after ${future}`),
+      error: new Error(`rate limited, Retry-After: ${future}`),
     });
     expect(delays[0]).toBeGreaterThanOrEqual(0);
     expect(delays[0]).toBeLessThanOrEqual(5000);
