@@ -100,6 +100,18 @@ struct GeneralSettings: View {
                 self.applyDiscoveredGatewayTask = nil
             }
         }
+        .onChange(of: self.state.remoteTransport) { _, _ in
+            self.applyDiscoveredGatewayTask?.cancel()
+            self.applyDiscoveredGatewayTask = nil
+        }
+        .onChange(of: self.state.remoteTarget) { _, _ in
+            self.applyDiscoveredGatewayTask?.cancel()
+            self.applyDiscoveredGatewayTask = nil
+        }
+        .onChange(of: self.state.remoteUrl) { _, _ in
+            self.applyDiscoveredGatewayTask?.cancel()
+            self.applyDiscoveredGatewayTask = nil
+        }
     }
 
     private var activeBinding: Binding<Bool> {

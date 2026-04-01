@@ -123,12 +123,18 @@ extension OnboardingView {
             self.resetRemoteProbeFeedback()
         }
         .onChange(of: self.state.remoteTransport) { _, _ in
+            self.remoteSelectionTask?.cancel()
+            self.remoteSelectionTask = nil
             self.resetRemoteProbeFeedback()
         }
         .onChange(of: self.state.remoteTarget) { _, _ in
+            self.remoteSelectionTask?.cancel()
+            self.remoteSelectionTask = nil
             self.resetRemoteProbeFeedback()
         }
         .onChange(of: self.state.remoteUrl) { _, _ in
+            self.remoteSelectionTask?.cancel()
+            self.remoteSelectionTask = nil
             self.resetRemoteProbeFeedback()
         }
     }
