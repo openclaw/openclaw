@@ -201,10 +201,11 @@ if (command === "status") {
   }
   const status = process.env.MOCK_ACPX_STATUS_STATUS || (sessionFromOption ? "alive" : "no-session");
   const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
+  const omitStatusIds = process.env.MOCK_ACPX_STATUS_NO_IDS === "1";
   emitJson({
-    acpxRecordId: sessionFromOption ? "rec-" + sessionFromOption : null,
-    acpxSessionId: sessionFromOption ? "sid-" + sessionFromOption : null,
-    agentSessionId: sessionFromOption ? "inner-" + sessionFromOption : null,
+    acpxRecordId: sessionFromOption && !omitStatusIds ? "rec-" + sessionFromOption : null,
+    acpxSessionId: sessionFromOption && !omitStatusIds ? "sid-" + sessionFromOption : null,
+    agentSessionId: sessionFromOption && !omitStatusIds ? "inner-" + sessionFromOption : null,
     status,
     ...(summary ? { summary } : {}),
     pid: 4242,
@@ -426,6 +427,7 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_ENSURE_STDERR;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
+  delete process.env.MOCK_ACPX_STATUS_NO_IDS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
