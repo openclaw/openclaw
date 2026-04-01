@@ -63,6 +63,26 @@ describe("getBlockedBindReason", () => {
       }),
     );
   });
+
+  it("blocks canonical OS-home aliases for credential paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const aliasHome = join(dir, "alias-home");
+    mkdirSync(join(realHome, ".ssh"), { recursive: true });
+    symlinkSync(realHome, aliasHome);
+    vi.stubEnv("HOME", aliasHome);
+
+    expect(getBlockedBindReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`)).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: normalizePathForSnapshot(join(realHome, ".ssh")),
+      }),
+    );
+  });
 });
 
 describe("validateBindMounts", () => {
@@ -150,6 +170,23 @@ describe("validateBindMounts", () => {
       /blocked path/,
     );
     expect(() => validateBindMounts(["/home/tester/.netrc:/mnt/netrc:ro"])).toThrow(/blocked path/);
+  });
+
+  it("blocks credential binds through canonical home aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const aliasHome = join(dir, "alias-home");
+    mkdirSync(join(realHome, ".docker"), { recursive: true });
+    symlinkSync(realHome, aliasHome);
+    vi.stubEnv("HOME", aliasHome);
+
+    expect(() =>
+      validateBindMounts([`${join(realHome, ".docker", "config.json")}:/mnt/docker:ro`]),
+    ).toThrow(/credential paths/);
   });
 
   it("blocks symlink escapes into blocked directories", () => {
@@ -259,6 +296,10 @@ describe("validateBindMounts", () => {
     ).not.toThrow();
   });
 });
+
+function normalizePathForSnapshot(input: string): string {
+  return input.replaceAll("\\", "/");
+}
 
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {

@@ -114,14 +114,17 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   }
 
   const normalized = normalizeHostPath(sourceRaw);
-  return getBlockedReasonForSourcePath(normalized);
+  return getBlockedReasonForSourcePath(normalized, getBlockedHostPaths());
 }
 
-export function getBlockedReasonForSourcePath(sourceNormalized: string): BlockedBindReason | null {
+export function getBlockedReasonForSourcePath(
+  sourceNormalized: string,
+  blockedHostPaths: string[],
+): BlockedBindReason | null {
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  for (const blocked of getBlockedHostPaths()) {
+  for (const blocked of blockedHostPaths) {
     if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
     }
@@ -149,6 +152,10 @@ function getBlockedHomeRoots(): string[] {
     const normalized = normalizeHostPath(candidate);
     if (normalized !== "/") {
       roots.add(normalized);
+    }
+    const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+    if (canonical !== "/") {
+      roots.add(canonical);
     }
   }
   return [...roots];
@@ -221,9 +228,10 @@ function enforceSourcePathPolicy(params: {
   bind: string;
   sourcePath: string;
   allowedRoots: string[];
+  blockedHostPaths: string[];
   allowSourcesOutsideAllowedRoots: boolean;
 }): void {
-  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath);
+  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath, params.blockedHostPaths);
   if (blockedReason) {
     throw formatBindBlockedError({ bind: params.bind, reason: blockedReason });
   }
@@ -259,7 +267,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   const verb = params.reason.kind === "covers" ? "covers" : "targets";
   return new Error(
     `Sandbox security: bind mount "${params.bind}" ${verb} blocked path "${params.reason.blockedPath}". ` +
-      "Mounting system directories (or Docker socket paths) into sandbox containers is not allowed. " +
+      "Mounting system directories, credential paths, or Docker socket paths into sandbox containers is not allowed. " +
       "Use project-specific paths instead (e.g. /home/user/myproject).",
   );
 }
@@ -278,6 +286,7 @@ export function validateBindMounts(
   }
 
   const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
+  const blockedHostPaths = getBlockedHostPaths();
 
   for (const rawBind of binds) {
     const bind = rawBind.trim();
@@ -304,6 +313,7 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceNormalized,
       allowedRoots,
+      blockedHostPaths,
       allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
     });
 
@@ -313,6 +323,7 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceCanonical,
       allowedRoots,
+      blockedHostPaths,
       allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
     });
   }
