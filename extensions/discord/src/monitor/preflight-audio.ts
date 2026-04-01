@@ -12,7 +12,7 @@ function collectAudioAttachments(
   if (!Array.isArray(attachments)) {
     return [];
   }
-  return attachments.filter((att) => att.content_type?.startsWith("audio/"));
+  return attachments.filter((att) => att.url && att.content_type?.startsWith("audio/"));
 }
 
 export async function resolveDiscordPreflightAudioMentionContext(params: {
@@ -66,7 +66,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
             MediaUrls: audioUrls,
             MediaTypes: audioAttachments
               .map((att) => att.content_type)
-              .filter((contentType): contentType is string => Boolean(contentType)),
+              .filter((contentType): contentType is string => typeof contentType === "string" && contentType.length > 0),
           },
           cfg: params.cfg,
           agentDir: undefined,

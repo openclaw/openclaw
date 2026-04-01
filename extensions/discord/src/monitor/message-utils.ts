@@ -356,10 +356,15 @@ async function appendResolvedMediaFromAttachments(params: {
     return;
   }
   for (const attachment of attachments) {
+    // Guard: skip attachments with no resolvable URL (e.g. partial payloads).
+    const url = attachment.url;
+    if (!url) {
+      continue;
+    }
     try {
       const fetched = await fetchDiscordMedia({
-        url: attachment.url,
-        filePathHint: attachment.filename ?? attachment.url,
+        url,
+        filePathHint: attachment.filename ?? url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
         ssrfPolicy: params.ssrfPolicy,
@@ -379,11 +384,12 @@ async function appendResolvedMediaFromAttachments(params: {
         placeholder: inferPlaceholder(attachment),
       });
     } catch (err) {
-      const id = attachment.id ?? attachment.url;
+      const id = attachment.id ?? url;
       logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
       // Preserve attachment context even when remote fetch is blocked/fails.
+      // Only push if we have a usable URL to avoid empty-path entries.
       params.out.push({
-        path: attachment.url,
+        path: url,
         contentType: attachment.content_type,
         placeholder: inferPlaceholder(attachment),
       });
