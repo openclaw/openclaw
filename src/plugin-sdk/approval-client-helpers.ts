@@ -49,6 +49,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
 }): boolean {
   const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
   const normalizedSenderId = params.senderId ? normalizeSenderId(params.senderId) : undefined;
+  const normalizedChannel = params.channel.trim().toLowerCase();
   if (!normalizedSenderId || !isApprovalTargetsMode(params.cfg)) {
     return false;
   }
@@ -58,7 +59,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
   }
   const normalizedAccountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   return targets.some((target) => {
-    if (target.channel?.trim().toLowerCase() !== params.channel) {
+    if (target.channel?.trim().toLowerCase() !== normalizedChannel) {
       return false;
     }
     if (

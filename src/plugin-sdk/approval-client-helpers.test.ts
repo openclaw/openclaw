@@ -40,6 +40,27 @@ describe("isChannelExecApprovalTargetRecipient", () => {
       }),
     ).toBe(false);
   });
+
+  it("normalizes the requested channel id before matching targets", () => {
+    const cfg: OpenClawConfig = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "matrix", to: "user:@owner:example.org" }],
+        },
+      },
+    };
+
+    expect(
+      isChannelExecApprovalTargetRecipient({
+        cfg,
+        senderId: "@owner:example.org",
+        channel: " Matrix ",
+        matchTarget: ({ target, normalizedSenderId }) => target.to === `user:${normalizedSenderId}`,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("createChannelExecApprovalProfile", () => {
