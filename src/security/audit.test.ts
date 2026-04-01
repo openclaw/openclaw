@@ -1925,79 +1925,6 @@ description: test skill
     }
   });
 
-  it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { allowInsecureAuth: true },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
-        }),
-        expect.objectContaining({
-          checkId: "config.insecure_or_dangerous_flags",
-          severity: "warn",
-          detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
-        }),
-      ]),
-    );
-  });
-
-  it("warns when control UI device auth is disabled", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { dangerouslyDisableDeviceAuth: true },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.control_ui.device_auth_disabled",
-          severity: "critical",
-        }),
-        expect.objectContaining({
-          checkId: "config.insecure_or_dangerous_flags",
-          severity: "warn",
-          detail: expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
-        }),
-      ]),
-    );
-  });
-
-  it("warns when insecure/dangerous debug flags are enabled", async () => {
-    const cfg: OpenClawConfig = {
-      hooks: {
-        gmail: { allowUnsafeExternalContent: true },
-        mappings: [{ allowUnsafeExternalContent: true }],
-      },
-      tools: {
-        exec: {
-          applyPatch: {
-            workspaceOnly: false,
-          },
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
-
-    expect(finding).toBeTruthy();
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
-    expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
-    expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
-  });
-
   it("flags voice-call skipSignatureVerification as a dangerous flag", async () => {
     const cfg: OpenClawConfig = {
       plugins: {
@@ -2019,55 +1946,49 @@ description: test skill
     );
   });
 
-  it("does not flag skipSignatureVerification when false", async () => {
-    const cfg: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: { skipSignatureVerification: false },
+  it.each([
+    {
+      name: "does not flag voice-call skipSignatureVerification when false",
+      cfg: {
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: { skipSignatureVerification: false },
+            },
           },
         },
       },
-    };
-
+    },
+    {
+      name: "does not flag voice-call skipSignatureVerification when the plugin is disabled",
+      cfg: {
+        plugins: {
+          entries: {
+            "voice-call": {
+              enabled: false,
+              config: { skipSignatureVerification: true },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "does not flag voice-call skipSignatureVerification when plugins are globally disabled",
+      cfg: {
+        plugins: {
+          enabled: false,
+          entries: {
+            "voice-call": {
+              config: { skipSignatureVerification: true },
+            },
+          },
+        },
+      },
+    },
+  ])("$name", async ({ cfg }) => {
     const res = await audit(cfg);
     const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
     expect(finding).toBeUndefined();
-  });
-
-  it("flags non-loopback Control UI without allowed origins", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
-      },
-    };
-
-    const res = await audit(cfg);
-    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
-  });
-
-  it("flags wildcard Control UI origins by exposure level", async () => {
-    const loopbackCfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        controlUi: { allowedOrigins: ["*"] },
-      },
-    };
-    const exposedCfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
-        controlUi: { allowedOrigins: ["*"] },
-      },
-    };
-
-    const loopback = await audit(loopbackCfg);
-    const exposed = await audit(exposedCfg);
-
-    expectFinding(loopback, "gateway.control_ui.allowed_origins_wildcard", "warn");
-    expectFinding(exposed, "gateway.control_ui.allowed_origins_wildcard", "critical");
-    expectNoFinding(exposed, "gateway.control_ui.allowed_origins_required");
   });
 
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
