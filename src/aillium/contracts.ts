@@ -1,7 +1,7 @@
 /**
  * Thin adapter contracts for Aillium integration points.
  *
- * Keep OpenClaw runtime/orchestration behavior upstream-aligned and inject
+ * Keep operator runtime/orchestration behavior upstream-aligned and inject
  * enterprise control-plane concerns from Aillium Core via these boundaries.
  */
 
@@ -25,7 +25,7 @@ export interface RuntimeRegistrationResult {
 
 export interface RuntimeRegistrationAdapter {
   /**
-   * Registers this OpenClaw runtime in Aillium Core.
+   * Registers this operator runtime instance in Aillium Core.
    * Ownership and policy enforcement remain in Aillium Core.
    */
   register(input: RuntimeRegistrationInput): Promise<RuntimeRegistrationResult>;
@@ -33,12 +33,12 @@ export interface RuntimeRegistrationAdapter {
 
 export interface ContractAdapter {
   /**
-   * Maps OpenClaw command/request payloads to Aillium-facing contracts.
+   * Maps operator runtime command/request payloads to Aillium-facing contracts.
    */
   toExternalContract(input: JsonValue, metadata?: TenantSessionMetadata): Promise<JsonValue>;
 
   /**
-   * Maps Aillium callback payloads back into OpenClaw-compatible contract shape.
+   * Maps Aillium callback payloads back into operator runtime contract shape.
    */
   fromExternalContract(input: JsonValue, metadata?: TenantSessionMetadata): Promise<JsonValue>;
 }
@@ -58,7 +58,7 @@ export interface TenantSessionMetadataAdapter {
   /**
    * Pass-through metadata projection for tenant/session context.
    *
-   * Must not become tenancy ownership logic inside OpenClaw.
+   * Must not become tenancy ownership logic inside the operator runtime.
    */
   project(metadata: TenantSessionMetadata): Promise<TenantSessionMetadata>;
 }
@@ -66,9 +66,10 @@ export interface TenantSessionMetadataAdapter {
 /**
  * Lifecycle events from the context engine forwarded to Aillium Core.
  *
- * This bridges OpenClaw's ContextEngine lifecycle (afterTurn, compact, bootstrap)
- * into the Aillium control plane so the master agent's continuity layer can
- * react to compaction summaries, token budget changes, and session bootstraps.
+ * This bridges the Aillium Operator Runtime's context engine lifecycle
+ * (afterTurn, compact, bootstrap) into the Aillium control plane so the
+ * master agent's continuity layer can react to compaction summaries,
+ * token budget changes, and session bootstraps.
  */
 export interface ContextLifecycleEvent {
   kind: "after_turn" | "compact" | "bootstrap" | "dispose";
@@ -79,14 +80,14 @@ export interface ContextLifecycleEvent {
 
 export interface ContextLifecycleHook {
   /**
-   * Called by the OpenClaw runtime when a context engine lifecycle event occurs.
+   * Called by the operator runtime when a context engine lifecycle event occurs.
    * Best-effort delivery — must not block runtime execution.
    */
   onContextLifecycle(event: ContextLifecycleEvent): Promise<void>;
 }
 
 /**
- * Capsule lifecycle events forwarded from OpenClaw runtime to Aillium Core.
+ * Capsule lifecycle events forwarded from the operator runtime to Aillium Core.
  *
  * These allow the control plane to track execution capsule state transitions,
  * heartbeats, and workspace/artifact events in real time.
@@ -100,7 +101,7 @@ export interface CapsuleLifecycleEvent {
 
 export interface CapsuleLifecycleHook {
   /**
-   * Called by the OpenClaw runtime when a capsule lifecycle event occurs.
+   * Called by the operator runtime when a capsule lifecycle event occurs.
    * Best-effort delivery — must not block runtime execution.
    */
   onCapsuleLifecycle(event: CapsuleLifecycleEvent): Promise<void>;

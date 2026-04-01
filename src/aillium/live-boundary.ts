@@ -1,7 +1,7 @@
 /**
  * Live Aillium integration boundary adapters.
  *
- * These replace the noop defaults when an OpenClaw runtime instance is
+ * These replace the noop defaults when an Aillium Operator Runtime instance is
  * connected to an Aillium Core control plane. They forward runtime
  * registration, evidence events, and contract mapping through HTTP
  * to the Aillium Core API.
@@ -38,7 +38,7 @@ class LiveRuntimeRegistrationAdapter implements RuntimeRegistrationAdapter {
   async register(input: RuntimeRegistrationInput): Promise<RuntimeRegistrationResult> {
     try {
       const response = await fetch(
-        `${this.config.baseUrl}/master-agent/runtime/openclaw-sync`,
+        `${this.config.baseUrl}/master-agent/runtime/operator-sync`,
         {
           method: "POST",
           headers: {
@@ -46,7 +46,7 @@ class LiveRuntimeRegistrationAdapter implements RuntimeRegistrationAdapter {
             "x-aillium-runtime-token": this.config.syncToken,
           },
           body: JSON.stringify({
-            openclaw_session_key: input.runtimeId,
+            runtime_session_key: input.runtimeId,
             metadata: {
               registration: true,
               runtimeVersion: input.runtimeVersion,
@@ -101,12 +101,12 @@ class LiveEvidenceCallbackHook implements EvidenceCallbackHook {
     payload: JsonValue,
     metadata?: TenantSessionMetadata,
   ): Promise<void> {
-    const sessionKey = metadata?.openclawSessionKey as string | undefined;
+    const sessionKey = metadata?.runtimeSessionKey as string | undefined;
     if (!sessionKey) return;
 
     try {
       await fetch(
-        `${this.config.baseUrl}/master-agent/runtime/openclaw-sync`,
+        `${this.config.baseUrl}/master-agent/runtime/operator-sync`,
         {
           method: "POST",
           headers: {
@@ -114,7 +114,7 @@ class LiveEvidenceCallbackHook implements EvidenceCallbackHook {
             "x-aillium-runtime-token": this.config.syncToken,
           },
           body: JSON.stringify({
-            openclaw_session_key: sessionKey,
+            runtime_session_key: sessionKey,
             artifacts: [
               {
                 uri: `evidence://${eventName}/${Date.now()}`,
@@ -140,7 +140,7 @@ class LiveEvidenceCallbackHook implements EvidenceCallbackHook {
 class LiveTenantSessionMetadataAdapter implements TenantSessionMetadataAdapter {
   async project(metadata: TenantSessionMetadata): Promise<TenantSessionMetadata> {
     // Preserve all metadata — Aillium Core uses tenantId from its own session lookup,
-    // not from OpenClaw metadata, so no stripping needed.
+    // not from runtime metadata, so no stripping needed.
     return metadata;
   }
 }
@@ -159,8 +159,8 @@ class LiveContextLifecycleHook implements ContextLifecycleHook {
             "x-aillium-runtime-token": this.config.syncToken,
           },
           body: JSON.stringify({
-            openclaw_session_key: event.sessionKey,
-            openclaw_session_id: event.sessionId,
+            runtime_session_key: event.sessionKey,
+            runtime_session_id: event.sessionId,
             event_kind: event.kind,
             payload: event.payload,
           }),
