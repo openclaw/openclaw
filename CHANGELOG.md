@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/reactions: add `reactionLevel` guidance for agent reactions. Thanks @mcaxtr.
 - Feishu/comments: add a dedicated Drive comment-event flow with comment-thread context resolution, in-thread replies, and `feishu_drive` comment actions for document collaboration workflows. (#58497) thanks @wittam-01.
 - Tasks/flows: restore the core flow substrate with managed-vs-mirrored sync modes, durable flow state/revision tracking, and `openclaw flows` inspection/recovery primitives so background orchestration can persist and be operated separately from plugin authoring layers.
+- Tasks/flows: add managed-flow child task spawning plus sticky cancel intent, so external orchestrators can stop scheduling immediately and let parent flows settle to `cancelled` once active child tasks finish.
 
 ### Fixes
 

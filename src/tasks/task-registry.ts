@@ -9,7 +9,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { getFlowById, syncFlowFromTask } from "./flow-runtime-internal.js";
+import type { FlowRecord } from "./flow-registry.types.js";
+import {
+  getFlowById,
+  syncFlowFromTask,
+  updateFlowRecordByIdExpectedRevision,
+} from "./flow-runtime-internal.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -62,6 +67,16 @@ type TaskDeliveryOwner = {
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   flowId?: string;
 };
+
+function isActiveTaskStatus(status: TaskStatus): boolean {
+  return status === "queued" || status === "running";
+}
+
+function isTerminalFlowStatus(status: FlowRecord["status"]): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
+}
 
 function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind }) {
   const ownerKey = params.ownerKey.trim();
@@ -694,6 +709,55 @@ function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   };
 }
 
+function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return;
+  }
+  let flow = getFlowById(flowId);
+  if (
+    !flow ||
+    flow.syncMode !== "managed" ||
+    flow.cancelRequestedAt == null ||
+    isTerminalFlowStatus(flow.status)
+  ) {
+    return;
+  }
+  if (listTasksForFlowId(flowId).some((candidate) => isActiveTaskStatus(candidate.status))) {
+    return;
+  }
+  const endedAt = task.endedAt ?? task.lastEventAt ?? Date.now();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: "cancelled",
+        blockedTaskId: null,
+        blockedSummary: null,
+        waitJson: null,
+        endedAt,
+        updatedAt: endedAt,
+      },
+    });
+    if (result.applied || result.reason === "not_found") {
+      return;
+    }
+    flow = result.current;
+    if (
+      !flow ||
+      flow.syncMode !== "managed" ||
+      flow.cancelRequestedAt == null ||
+      isTerminalFlowStatus(flow.status)
+    ) {
+      return;
+    }
+    if (listTasksForFlowId(flowId).some((candidate) => isActiveTaskStatus(candidate.status))) {
+      return;
+    }
+  }
+}
+
 function restoreTaskRegistryOnce() {
   if (restoreAttempted) {
     return;
@@ -762,6 +826,15 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     syncFlowFromTask(next);
   } catch (error) {
     log.warn("Failed to sync parent flow from task update", {
+      taskId,
+      flowId: next.parentFlowId,
+      error,
+    });
+  }
+  try {
+    syncManagedFlowCancellationFromTask(next);
+  } catch (error) {
+    log.warn("Failed to finalize managed flow cancellation from task update", {
       taskId,
       flowId: next.parentFlowId,
       error,
