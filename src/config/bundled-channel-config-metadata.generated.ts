@@ -14357,6 +14357,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           required: ["direct", "group"],
           additionalProperties: false,
         },
+        reactionLevel: {
+          type: "string",
+          enum: ["off", "ack", "minimal", "extensive"],
+        },
         debounceMs: {
           default: 0,
           type: "integer",
@@ -14601,6 +14605,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 required: ["direct", "group"],
                 additionalProperties: false,
+              },
+              reactionLevel: {
+                type: "string",
+                enum: ["off", "ack", "minimal", "extensive"],
               },
               debounceMs: {
                 default: 0,

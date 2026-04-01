@@ -1551,6 +1551,17 @@ export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
 }
 
+export function listTasksForAgentId(agentId: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const lookup = agentId.trim();
+  if (!lookup) {
+    return [];
+  }
+  return snapshotTaskRecords(tasks)
+    .filter((task) => task.agentId?.trim() === lookup)
+    .toSorted(compareTasksNewestFirst);
+}
+
 export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
   const task = listTasksForOwnerKey(ownerKey)[0];
   return task ? cloneTaskRecord(task) : undefined;

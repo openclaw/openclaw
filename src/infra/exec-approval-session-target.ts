@@ -20,6 +20,16 @@ type ApprovalRequestSessionBinding = {
 };
 
 type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestOriginTargetResolver<TTarget> = {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+  accountId?: string | null;
+  resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
+  resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
+  targetsMatch: (a: TTarget, b: TTarget) => boolean;
+  resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
+};
 
 function normalizeOptionalString(value?: string | null): string | undefined {
   const normalized = value?.trim();
@@ -142,6 +152,17 @@ export function resolveApprovalRequestSessionTarget(params: {
   });
 }
 
+function resolveApprovalRequestStoredSessionTarget(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+}): ExecApprovalSessionTarget | null {
+  const execLikeRequest = toExecLikeApprovalRequest(params.request);
+  return resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: execLikeRequest,
+  });
+}
+
 export function resolveApprovalRequestAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -213,4 +234,39 @@ export function doesApprovalRequestMatchChannelAccount(params: {
   );
   const boundAccountId = sessionAccountId;
   return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
+}
+
+export function resolveApprovalRequestOriginTarget<TTarget>(
+  params: ApprovalRequestOriginTargetResolver<TTarget>,
+): TTarget | null {
+  if (
+    !doesApprovalRequestMatchChannelAccount({
+      cfg: params.cfg,
+      request: params.request,
+      channel: params.channel,
+      accountId: params.accountId,
+    })
+  ) {
+    return null;
+  }
+
+  const turnSourceTarget = params.resolveTurnSourceTarget(params.request);
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  const sessionTargetBinding = resolveApprovalRequestStoredSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
+  });
+  const sessionTarget =
+    sessionTargetBinding &&
+    normalizeOptionalChannel(sessionTargetBinding.channel) === expectedChannel
+      ? params.resolveSessionTarget(sessionTargetBinding)
+      : null;
+
+  if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
+    return null;
+  }
+
+  return (
+    turnSourceTarget ?? sessionTarget ?? params.resolveFallbackTarget?.(params.request) ?? null
+  );
 }

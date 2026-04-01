@@ -1,12 +1,9 @@
-import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  createApproverRestrictedNativeApprovalAdapter,
+  resolveApprovalRequestOriginTarget,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  ExecApprovalRequest,
-  ExecApprovalSessionTarget,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { resolveExecApprovalSessionTarget } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { listTelegramAccountIds } from "./accounts.js";
 import {
   getTelegramExecApprovalApprovers,
@@ -15,105 +12,46 @@ import {
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
 } from "./exec-approvals.js";
+import { normalizeTelegramChatId } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type TelegramOriginTarget = { to: string; threadId?: number; accountId?: string };
+type TelegramOriginTarget = { to: string; threadId?: number };
 
-function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
-  }
-  return {
-    id: request.id,
-    request: {
-      command: request.request.title,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
-  };
-}
-
-function resolveRequestSessionTarget(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequest;
-}): ExecApprovalSessionTarget | null {
-  const execLikeRequest = toExecLikeRequest(params.request);
-  return resolveExecApprovalSessionTarget({
-    cfg: params.cfg,
-    request: execLikeRequest,
-    turnSourceChannel: execLikeRequest.request.turnSourceChannel ?? undefined,
-    turnSourceTo: execLikeRequest.request.turnSourceTo ?? undefined,
-    turnSourceAccountId: execLikeRequest.request.turnSourceAccountId ?? undefined,
-    turnSourceThreadId: execLikeRequest.request.turnSourceThreadId ?? undefined,
-  });
-}
-
-function resolveTurnSourceTelegramOriginTarget(params: {
-  accountId: string;
-  request: ApprovalRequest;
-}): TelegramOriginTarget | null {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const turnSourceTo = params.request.request.turnSourceTo?.trim() || "";
-  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || "";
+function resolveTurnSourceTelegramOriginTarget(
+  request: ApprovalRequest,
+): TelegramOriginTarget | null {
+  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
+  const turnSourceTo = normalizeTelegramChatId(rawTurnSourceTo) ?? rawTurnSourceTo;
   if (turnSourceChannel !== "telegram" || !turnSourceTo) {
     return null;
   }
-  if (
-    turnSourceAccountId &&
-    normalizeAccountId(turnSourceAccountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return null;
-  }
   const threadId =
-    typeof params.request.request.turnSourceThreadId === "number"
-      ? params.request.request.turnSourceThreadId
-      : typeof params.request.request.turnSourceThreadId === "string"
-        ? Number.parseInt(params.request.request.turnSourceThreadId, 10)
+    typeof request.request.turnSourceThreadId === "number"
+      ? request.request.turnSourceThreadId
+      : typeof request.request.turnSourceThreadId === "string"
+        ? Number.parseInt(request.request.turnSourceThreadId, 10)
         : undefined;
   return {
     to: turnSourceTo,
     threadId: Number.isFinite(threadId) ? threadId : undefined,
-    accountId: turnSourceAccountId || undefined,
   };
 }
 
-function resolveSessionTelegramOriginTarget(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  request: ApprovalRequest;
-}): TelegramOriginTarget | null {
-  const sessionTarget = resolveRequestSessionTarget(params);
-  if (!sessionTarget || sessionTarget.channel !== "telegram") {
-    return null;
-  }
-  if (
-    sessionTarget.accountId &&
-    normalizeAccountId(sessionTarget.accountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return null;
-  }
+function resolveSessionTelegramOriginTarget(sessionTarget: {
+  to: string;
+  threadId?: number | null;
+}): TelegramOriginTarget {
   return {
-    to: sessionTarget.to,
-    threadId: sessionTarget.threadId,
-    accountId: sessionTarget.accountId,
+    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
+    threadId: sessionTarget.threadId ?? undefined,
   };
 }
 
 function telegramTargetsMatch(a: TelegramOriginTarget, b: TelegramOriginTarget): boolean {
-  const accountMatches =
-    !a.accountId ||
-    !b.accountId ||
-    normalizeAccountId(a.accountId) === normalizeAccountId(b.accountId);
-  return a.to === b.to && a.threadId === b.threadId && accountMatches;
+  const normalizedA = normalizeTelegramChatId(a.to) ?? a.to;
+  const normalizedB = normalizeTelegramChatId(b.to) ?? b.to;
+  return normalizedA === normalizedB && a.threadId === b.threadId;
 }
 
 function resolveTelegramOriginTarget(params: {
@@ -121,13 +59,15 @@ function resolveTelegramOriginTarget(params: {
   accountId: string;
   request: ApprovalRequest;
 }) {
-  const turnSourceTarget = resolveTurnSourceTelegramOriginTarget(params);
-  const sessionTarget = resolveSessionTelegramOriginTarget(params);
-  if (turnSourceTarget && sessionTarget && !telegramTargetsMatch(turnSourceTarget, sessionTarget)) {
-    return null;
-  }
-  const target = turnSourceTarget ?? sessionTarget;
-  return target ? { to: target.to, threadId: target.threadId } : null;
+  return resolveApprovalRequestOriginTarget({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "telegram",
+    accountId: params.accountId,
+    resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
+    resolveSessionTarget: resolveSessionTelegramOriginTarget,
+    targetsMatch: telegramTargetsMatch,
+  });
 }
 
 function resolveTelegramApproverDmTargets(params: {
