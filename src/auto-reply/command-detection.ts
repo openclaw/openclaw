@@ -6,6 +6,7 @@ import {
   normalizeCommandBody,
 } from "./commands-registry.js";
 import { isAbortTrigger } from "./reply/abort-primitives.js";
+import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 export function hasControlCommand(
   text?: string,
@@ -19,7 +20,11 @@ export function hasControlCommand(
   if (!trimmed) {
     return false;
   }
-  const normalizedBody = normalizeCommandBody(trimmed, options);
+  const stripped = stripInboundMetadata(trimmed);
+  if (!stripped) {
+    return false;
+  }
+  const normalizedBody = normalizeCommandBody(stripped, options);
   if (!normalizedBody) {
     return false;
   }
@@ -60,7 +65,8 @@ export function isControlCommandMessage(
   if (hasControlCommand(trimmed, cfg, options)) {
     return true;
   }
-  const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
+  const stripped = stripInboundMetadata(trimmed);
+  const normalized = normalizeCommandBody(stripped, options).trim().toLowerCase();
   return isAbortTrigger(normalized);
 }
 
