@@ -13,7 +13,7 @@ on:
         default: false
         type: boolean
       preflight_run_id:
-        description: Existing preflight workflow run id to promote without rebuilding
+        description: Existing successful preflight workflow run id to promote without rebuilding
         required: false
         type: string
 
@@ -41,6 +41,12 @@ jobs:
             echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi
+
+      - name: Forbid preflight artifact promotion on validation-only runs
+        if: ${{ inputs.preflight_only && inputs.preflight_run_id != '' }}
+        run: |
+          echo "preflight_run_id is only valid for real publish runs."
+          exit 1
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -124,7 +130,7 @@ jobs:
           path: ${{ steps.packed_tarball.outputs.path }}
           if-no-files-found: error
 
-  validate_publish_dispatch_ref:
+  validate_publish_request:
     if: ${{ !inputs.preflight_only }}
     runs-on: ubuntu-latest
     permissions:
@@ -140,9 +146,19 @@ jobs:
             exit 1
           fi
 
+      - name: Require preflight artifact promotion on real publish
+        env:
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PREFLIGHT_RUN_ID}" ]]; then
+            echo "Real publish requires preflight_run_id from a successful npm preflight run." >&2
+            exit 1
+          fi
+
   publish_openclaw_npm:
     # npm trusted publishing + provenance requires a GitHub-hosted runner.
-    needs: [preflight_openclaw_npm, validate_publish_dispatch_ref]
+    needs: [preflight_openclaw_npm, validate_publish_request]
     if: ${{ !inputs.preflight_only }}
     runs-on: ubuntu-latest
     environment: npm-release
@@ -188,7 +204,6 @@ jobs:
           echo "Publishing openclaw@${PACKAGE_VERSION}"
 
       - name: Download prepared npm tarball
-        if: ${{ inputs.preflight_run_id != '' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
@@ -196,14 +211,6 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.preflight_run_id }}
           github-token: ${{ github.token }}
-
-      - name: Build
-        if: ${{ inputs.preflight_run_id == '' }}
-        run: pnpm build
-
-      - name: Build Control UI
-        if: ${{ inputs.preflight_run_id == '' }}
-        run: pnpm ui:build
 
       - name: Validate release tag and package metadata
         if: ${{ inputs.preflight_run_id == '' }}
@@ -221,10 +228,9 @@ jobs:
 
       - name: Resolve publish tarball
         id: publish_tarball
-        if: ${{ inputs.preflight_run_id != '' }}
         run: |
           set -euo pipefail
-          TARBALL_PATH="$(find preflight-tarball -maxdepth 1 -type f -name '*.tgz' -print | sort | tail -n 1)"
+          TARBALL_PATH="$(find preflight-tarball -type f -name '*.tgz' -print | sort | tail -n 1)"
           if [[ -z "$TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball not found." >&2
             ls -la preflight-tarball >&2 || true
