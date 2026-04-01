@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
+  buildExecApprovalActionDescriptors,
+  buildExecApprovalCommandText,
+  buildExecApprovalInteractiveReply,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
 
 describe("exec approval reply helpers", () => {
@@ -48,6 +52,14 @@ describe("exec approval reply helpers", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
       "Approval required. I sent approval DMs to the approvers for this account.",
     );
+  });
+
+  it("mentions Slack in the fallback approval-client guidance", () => {
+    expect(
+      buildExecApprovalUnavailableReplyPayload({
+        reason: "no-approval-route",
+      }).text,
+    ).toContain("Discord, Slack, or Telegram exec approvals");
   });
 
   it.each(invalidReplyMetadataCases)(
@@ -164,6 +176,81 @@ describe("exec approval reply helpers", () => {
     });
 
     expect(payload.text).toContain("Expires in: 30m");
+  });
+
+  it("builds shared exec approval action descriptors and interactive replies", () => {
+    expect(
+      buildExecApprovalActionDescriptors({
+        approvalCommandId: "req-1",
+      }),
+    ).toEqual([
+      {
+        decision: "allow-once",
+        label: "Allow Once",
+        style: "success",
+        command: "/approve req-1 allow-once",
+      },
+      {
+        decision: "allow-always",
+        label: "Allow Always",
+        style: "primary",
+        command: "/approve req-1 always",
+      },
+      {
+        decision: "deny",
+        label: "Deny",
+        style: "danger",
+        command: "/approve req-1 deny",
+      },
+    ]);
+
+    expect(
+      buildExecApprovalInteractiveReply({
+        approvalCommandId: "req-1",
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
+            { label: "Allow Always", value: "/approve req-1 always", style: "primary" },
+            { label: "Deny", value: "/approve req-1 deny", style: "danger" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("builds and parses shared exec approval command text", () => {
+    expect(
+      buildExecApprovalCommandText({
+        approvalCommandId: "req-1",
+        decision: "allow-always",
+      }),
+    ).toBe("/approve req-1 always");
+
+    expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
+      approvalId: "req-1",
+      decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("approve req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("  /approve req-1 always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 allow-always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
   });
 
   it("builds unavailable payloads for approver DMs", () => {

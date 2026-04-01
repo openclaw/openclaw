@@ -1,10 +1,9 @@
 import type { Bot, Context } from "grammy";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveCommandAuthorization,
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -13,16 +12,16 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
   type CommandArgs,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
   TELEGRAM_COMMAND_NAME_PATTERN,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/telegram-command-config";
 import type {
   ReplyToMode,
   TelegramAccountConfig,
@@ -40,8 +39,10 @@ import {
   getPluginCommandSpecs,
   matchPluginCommand,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  finalizeInboundContext,
+  resolveChunkMode,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -56,11 +57,10 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
-  syncTelegramMenuCommands,
+  syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
-import { TelegramBotOptions } from "./bot.js";
-import { deliverReplies } from "./bot/delivery.js";
+import type { TelegramBotOptions } from "./bot.js";
 import {
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
@@ -101,6 +101,16 @@ type TelegramCommandAuthResult = {
   topicConfig?: TelegramTopicConfig;
   commandAuthorized: boolean;
 };
+
+let telegramNativeCommandDeliveryRuntimePromise:
+  | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
+  | undefined;
+
+async function loadTelegramNativeCommandDeliveryRuntime() {
+  telegramNativeCommandDeliveryRuntimePromise ??=
+    import("./bot-native-commands.delivery.runtime.js");
+  return await telegramNativeCommandDeliveryRuntimePromise;
+}
 
 export type RegisterTelegramHandlerParams = {
   cfg: OpenClawConfig;
@@ -501,6 +511,8 @@ export const registerTelegramNativeCommands = ({
         `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );
   }
+  const syncTelegramMenuCommands =
+    telegramDeps.syncTelegramMenuCommands ?? syncTelegramMenuCommandsRuntime;
   // Telegram only limits the setMyCommands payload (menu entries).
   // Keep hidden commands callable by registering handlers for the full catalog.
   syncTelegramMenuCommands({
@@ -810,6 +822,8 @@ export const registerTelegramNativeCommands = ({
           skippedNonSilent: 0,
         };
 
+        const { createChannelReplyPipeline, deliverReplies } =
+          await loadTelegramNativeCommandDeliveryRuntime();
         const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
           cfg: executionCfg,
           agentId: route.agentId,
@@ -934,6 +948,7 @@ export const registerTelegramNativeCommands = ({
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
+        const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
 
         const result = await executePluginCommand({
           command: match.command,

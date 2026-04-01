@@ -1,7 +1,6 @@
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
-  DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
@@ -33,6 +32,7 @@ const matrixThreadBindingsSchema = z
 
 const matrixRoomSchema = z
   .object({
+    account: z.string().optional(),
     enabled: z.boolean().optional(),
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -80,10 +80,13 @@ export const MatrixConfigSchema = z.object({
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
-  dm: buildNestedDmConfigSchema(),
+  dm: buildNestedDmConfigSchema({
+    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+  }),
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

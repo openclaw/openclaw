@@ -18,7 +18,9 @@ function buildSlackReplySelectActionId(selectIndex: number): string {
   return `${SLACK_REPLY_SELECT_ACTION_ID}:${String(selectIndex)}`;
 }
 
-function resolveSlackButtonStyle(style: "primary" | "secondary" | "success" | "danger" | undefined) {
+function resolveSlackButtonStyle(
+  style: "primary" | "secondary" | "success" | "danger" | undefined,
+) {
   if (style === "primary" || style === "danger") {
     return style;
   }

@@ -1,13 +1,13 @@
 {
   "name": "@openclaw/bluebubbles",
-  "version": "2026.3.30",
+  "version": "2026.4.1-beta.1",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
   "devDependencies": {
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.30"
+    "openclaw": ">=2026.4.1-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -39,7 +39,7 @@
     "install": {
       "npmSpec": "@openclaw/bluebubbles",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.30"
+      "minHostVersion": ">=2026.4.1"
     },
     "release": {
       "publishToNpm": true
