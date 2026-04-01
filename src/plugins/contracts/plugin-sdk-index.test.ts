@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildPluginSdkPackageExports } from "./entrypoints.js";
+import { buildPluginSdkPackageExports } from "../../plugin-sdk/entrypoints.js";
+
+const pluginSdkIndexPath = fileURLToPath(new URL("../../plugin-sdk/index.ts", import.meta.url));
 
 async function collectRuntimeExports(filePath: string, seen = new Set<string>()) {
   const normalizedPath = path.resolve(filePath);
@@ -43,7 +46,7 @@ async function collectRuntimeExports(filePath: string, seen = new Set<string>())
 }
 
 async function readIndexRuntimeExports() {
-  return await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+  return await collectRuntimeExports(pluginSdkIndexPath);
 }
 
 describe("plugin-sdk exports", () => {
