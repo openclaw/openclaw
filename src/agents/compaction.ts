@@ -7,6 +7,7 @@ import {
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { CompactionCircuitBreaker } from "./compaction-circuit-breaker.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
@@ -246,8 +247,15 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  circuitBreaker?: CompactionCircuitBreaker;
 }): Promise<string> {
   if (params.messages.length === 0) {
+    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
+  }
+
+  const { circuitBreaker } = params;
+  if (circuitBreaker && !circuitBreaker.canAttempt()) {
+    log.warn("Compaction skipped — circuit breaker is open");
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
@@ -259,28 +267,39 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
-  for (const chunk of chunks) {
-    summary = await retryAsync(
-      () =>
-        generateSummary(
-          chunk,
-          params.model,
-          params.reserveTokens,
-          params.apiKey,
-          params.headers,
-          params.signal,
-          effectiveInstructions,
-          summary,
-        ),
-      {
-        attempts: 3,
-        minDelayMs: 500,
-        maxDelayMs: 5000,
-        jitter: 0.2,
-        label: "compaction/generateSummary",
-        shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
-      },
-    );
+
+  try {
+    for (const chunk of chunks) {
+      summary = await retryAsync(
+        () =>
+          generateSummary(
+            chunk,
+            params.model,
+            params.reserveTokens,
+            params.apiKey,
+            params.headers,
+            params.signal,
+            effectiveInstructions,
+            summary,
+          ),
+        {
+          attempts: 3,
+          minDelayMs: 500,
+          maxDelayMs: 5000,
+          jitter: 0.2,
+          label: "compaction/generateSummary",
+          shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
+        },
+      );
+    }
+    circuitBreaker?.recordSuccess();
+  } catch (err) {
+    // AbortError is user-initiated cancellation, not a model failure —
+    // don't count it toward the circuit breaker's failure threshold.
+    if (!(err instanceof Error && err.name === "AbortError")) {
+      circuitBreaker?.recordFailure();
+    }
+    throw err;
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -335,6 +354,7 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  circuitBreaker?: CompactionCircuitBreaker;
 }): Promise<string> {
   const { messages, contextWindow } = params;
 
@@ -407,6 +427,7 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  circuitBreaker?: CompactionCircuitBreaker;
 }): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {
