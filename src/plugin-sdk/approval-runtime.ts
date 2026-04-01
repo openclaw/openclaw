@@ -19,6 +19,7 @@ export {
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 export {
   doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestOriginTarget,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
