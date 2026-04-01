@@ -224,8 +224,12 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   const tasks = listTaskRecords();
   let processed = 0;
   for (const task of tasks) {
-    if (shouldMarkLost(task, now)) {
-      const next = markTaskLost(task, now);
+    const current = getTaskById(task.taskId);
+    if (!current) {
+      continue;
+    }
+    if (shouldMarkLost(current, now)) {
+      const next = markTaskLost(current, now);
       if (next.status === "lost") {
         reconciled += 1;
       }
@@ -235,7 +239,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    if (shouldPruneTerminalTask(task, now) && deleteTaskRecordById(task.taskId)) {
+    if (shouldPruneTerminalTask(current, now) && deleteTaskRecordById(current.taskId)) {
       pruned += 1;
       processed += 1;
       if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
@@ -244,10 +248,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       continue;
     }
     if (
-      shouldStampCleanupAfter(task) &&
+      shouldStampCleanupAfter(current) &&
       setTaskCleanupAfterById({
-        taskId: task.taskId,
-        cleanupAfter: resolveCleanupAfter(task),
+        taskId: current.taskId,
+        cleanupAfter: resolveCleanupAfter(current),
       })
     ) {
       cleanupStamped += 1;

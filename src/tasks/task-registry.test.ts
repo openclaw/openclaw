@@ -84,6 +84,66 @@ async function loadFreshTaskRegistryModulesForControlTest() {
   return await import("./task-registry.js");
 }
 
+async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
+  currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
+  snapshotTasks: ReturnType<typeof createTaskRecord>[];
+}) {
+  vi.resetModules();
+  vi.doMock("../acp/runtime/session-meta.js", () => ({
+    readAcpSessionEntry: () => ({ entry: undefined, storeReadFailed: false }),
+  }));
+  vi.doMock("../config/sessions.js", () => ({
+    loadSessionStore: () => ({}),
+    resolveStorePath: () => "",
+  }));
+  vi.doMock("../routing/session-key.js", () => ({
+    parseAgentSessionKey: () => undefined,
+  }));
+  vi.doMock("./runtime-internal.js", () => ({
+    deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
+    ensureTaskRegistryReady: () => {},
+    getTaskById: (taskId: string) => params.currentTasks.get(taskId),
+    listTaskRecords: () => params.snapshotTasks,
+    markTaskLostById: (patch: {
+      taskId: string;
+      endedAt: number;
+      lastEventAt?: number;
+      error?: string;
+      cleanupAfter?: number;
+    }) => {
+      const current = params.currentTasks.get(patch.taskId);
+      if (!current) {
+        return null;
+      }
+      const next = {
+        ...current,
+        status: "lost" as const,
+        endedAt: patch.endedAt,
+        lastEventAt: patch.lastEventAt ?? patch.endedAt,
+        ...(patch.error !== undefined ? { error: patch.error } : {}),
+        ...(patch.cleanupAfter !== undefined ? { cleanupAfter: patch.cleanupAfter } : {}),
+      };
+      params.currentTasks.set(patch.taskId, next);
+      return next;
+    },
+    maybeDeliverTaskTerminalUpdate: () => false,
+    resolveTaskForLookupToken: () => undefined,
+    setTaskCleanupAfterById: (patch: { taskId: string; cleanupAfter: number }) => {
+      const current = params.currentTasks.get(patch.taskId);
+      if (!current) {
+        return null;
+      }
+      const next = {
+        ...current,
+        cleanupAfter: patch.cleanupAfter,
+      };
+      params.currentTasks.set(patch.taskId, next);
+      return next;
+    },
+  }));
+  return await import("./task-registry.maintenance.js");
+}
+
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
   const startedAt = Date.now();
   for (;;) {
@@ -1152,6 +1212,83 @@ describe("task-registry", () => {
       expect(getTaskById(task.taskId)).toMatchObject({
         status: "running",
       });
+    });
+  });
+
+  it("rechecks current task state before marking a task lost", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:acp:missing-stale",
+      runId: "run-lost-stale",
+      task: "Missing child",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const staleTask = {
+      ...snapshotTask,
+      lastEventAt: now - 10 * 60_000,
+    };
+    const currentTask = {
+      ...snapshotTask,
+      lastEventAt: now,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, currentTask]]);
+    const { runTaskRegistryMaintenance } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "running",
+      lastEventAt: now,
+    });
+  });
+
+  it("rechecks current task state before pruning a task", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:main",
+      runId: "run-prune-stale",
+      task: "Old completed task",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      startedAt: now - 9 * 24 * 60 * 60_000,
+    });
+    const staleTask = {
+      ...snapshotTask,
+      endedAt: now - 8 * 24 * 60 * 60_000,
+      lastEventAt: now - 8 * 24 * 60 * 60_000,
+      cleanupAfter: now - 1,
+    };
+    const currentTask = {
+      ...staleTask,
+      cleanupAfter: now + 60_000,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, currentTask]]);
+    const { sweepTaskRegistry } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await sweepTaskRegistry()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "succeeded",
+      cleanupAfter: now + 60_000,
     });
   });
 
