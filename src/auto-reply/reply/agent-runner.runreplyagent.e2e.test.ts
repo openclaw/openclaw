@@ -139,8 +139,8 @@ function createMinimalRun(params?: {
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
   const followupRun = {
-    prompt: "hello",
-    summaryLine: "hello",
+    execution: { visibility: "internal", agentPrompt: "hello" },
+    display: { visibility: "user-visible", summaryLine: "hello" },
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
@@ -228,8 +228,8 @@ function createBaseRun(params: {
   } as unknown as TemplateContext;
   const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
   const followupRun = {
-    prompt: "hello",
-    summaryLine: "hello",
+    execution: { visibility: "internal", agentPrompt: "hello" },
+    display: { visibility: "user-visible", summaryLine: "hello" },
     enqueuedAt: Date.now(),
     run: {
       agentId: "main",

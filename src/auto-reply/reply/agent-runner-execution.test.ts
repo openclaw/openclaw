@@ -140,8 +140,8 @@ function createMockTypingSignaler(): TypingSignaler {
 
 function createFollowupRun(): FollowupRun {
   return {
-    prompt: "hello",
-    summaryLine: "hello",
+    execution: { visibility: "internal", agentPrompt: "hello" },
+    display: { visibility: "user-visible", summaryLine: "hello" },
     enqueuedAt: Date.now(),
     run: {
       agentId: "agent",
