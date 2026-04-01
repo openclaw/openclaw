@@ -1,4 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -92,42 +93,15 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
-function stripTelegramAnnouncePrefix(to: string): string {
-  let trimmed = to.trim();
-  let strippedTelegramPrefix = false;
-  while (true) {
-    const next = (() => {
-      if (/^(telegram|tg):/i.test(trimmed)) {
-        strippedTelegramPrefix = true;
-        return trimmed.replace(/^(telegram|tg):/i, "").trim();
-      }
-      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-        return trimmed.replace(/^group:/i, "").trim();
-      }
-      return trimmed;
-    })();
-    if (next === trimmed) {
-      return trimmed;
-    }
-    trimmed = next;
-  }
-}
-
 function parseTelegramAnnounceTarget(to: string): {
   chatId: string;
   chatType: "direct" | "group" | "unknown";
 } {
-  const normalized = stripTelegramAnnouncePrefix(to);
-  const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
-  const colonMatch = /^(.+):(\d+)$/.exec(normalized);
-  const chatId = topicMatch?.[1] ?? colonMatch?.[1] ?? normalized;
-  const trimmedChatId = chatId.trim();
-  const chatType = /^-?\d+$/.test(trimmedChatId)
-    ? trimmedChatId.startsWith("-")
-      ? "group"
-      : "direct"
-    : "unknown";
-  return { chatId: trimmedChatId, chatType };
+  const parsed = parseExplicitTargetForChannel("telegram", to);
+  const chatId = parsed?.to?.trim() ?? to.trim();
+  const chatType =
+    parsed?.chatType === "direct" || parsed?.chatType === "group" ? parsed.chatType : "unknown";
+  return { chatId, chatType };
 }
 
 function shouldStripThreadFromAnnounceEntry(

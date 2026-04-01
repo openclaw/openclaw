@@ -394,6 +394,9 @@ Docs: https://docs.openclaw.ai
 - Telegram/splitting: replace proportional text estimate with verified HTML-length search so long messages split at word boundaries instead of mid-word; gracefully degrade when tag overhead exceeds the limit. (#56595)
 - Telegram/delivery: skip whitespace-only and hook-blanked text replies in bot delivery to prevent GrammyError 400 empty-text crashes. (#56620)
 - Telegram/send: validate `replyToMessageId` at all four API sinks with a shared normalizer that rejects non-numeric, NaN, and mixed-content strings. (#56587)
+- Telegram/cron topics: route announce target parsing through the Telegram extension seam and carry explicit `delivery.threadId` through cron delivery resolution, so legacy `group:` routes and topic-targeted cron sends keep their forum topic destination. (#58489) Thanks @cwmine.
+- Approvals/UI: keep the newest pending approval at the front of the Control UI queue so approving one request does not accidentally target an older expired id. Thanks @vincentkoc.
+- Plugin approvals: accept unique short approval-id prefixes on `plugin.approval.resolve`, matching exec approvals and restoring `/approve` fallback flows on chat approval surfaces. Thanks @vincentkoc.
 - Mistral: normalize OpenAI-compatible request flags so official Mistral API runs no longer fail with remaining `422 status code (no body)` chat errors.
 - Control UI/config: keep sensitive raw config hidden by default, replace the blank blocked editor with an explicit reveal-to-edit state, and restore raw JSON editing without auto-exposing secrets. Fixes #55322.
 - CLI/zsh: defer `compdef` registration until `compinit` is available so zsh completion loads cleanly with plugin managers and manual setups. (#56555)

@@ -712,10 +712,18 @@ function buildLegacyDeliveryPatch(
 ): CronDeliveryPatch | null {
   const deliver = payload.deliver;
   const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
+  const threadIdValue = (payload as { threadId?: unknown }).threadId;
+  const threadIdRaw =
+    typeof threadIdValue === "number" && Number.isFinite(threadIdValue)
+      ? threadIdValue
+      : typeof threadIdValue === "string" && threadIdValue.trim()
+        ? threadIdValue.trim()
+        : undefined;
   const hasLegacyHints =
     typeof deliver === "boolean" ||
     typeof payload.bestEffortDeliver === "boolean" ||
-    Boolean(toRaw);
+    Boolean(toRaw) ||
+    threadIdRaw != null;
   if (!hasLegacyHints) {
     return null;
   }
@@ -738,6 +746,10 @@ function buildLegacyDeliveryPatch(
   }
   if (typeof payload.to === "string") {
     patch.to = payload.to.trim();
+    hasPatch = true;
+  }
+  if (threadIdRaw != null) {
+    patch.threadId = threadIdRaw;
     hasPatch = true;
   }
   if (typeof payload.bestEffortDeliver === "boolean") {
@@ -780,6 +792,13 @@ function normalizeOptionalTrimmedString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeOptionalThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalTrimmedString(value);
+}
+
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
@@ -788,6 +807,7 @@ function mergeCronDelivery(
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
     to: existing?.to,
+    threadId: existing?.threadId,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
     failureDestination: existing?.failureDestination,
@@ -801,6 +821,9 @@ function mergeCronDelivery(
   }
   if ("to" in patch) {
     next.to = normalizeOptionalTrimmedString(patch.to);
+  }
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadId(patch.threadId);
   }
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalTrimmedString(patch.accountId);

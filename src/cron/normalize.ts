@@ -208,6 +208,18 @@ function coerceDelivery(delivery: UnknownRecord) {
       delete next.to;
     }
   }
+  if (typeof delivery.threadId === "number" && Number.isFinite(delivery.threadId)) {
+    next.threadId = delivery.threadId;
+  } else if (typeof delivery.threadId === "string") {
+    const trimmed = delivery.threadId.trim();
+    if (trimmed) {
+      next.threadId = trimmed;
+    } else {
+      delete next.threadId;
+    }
+  } else if ("threadId" in next) {
+    delete next.threadId;
+  }
   if (typeof delivery.accountId === "string") {
     const trimmed = delivery.accountId.trim();
     if (trimmed) {
@@ -300,6 +312,13 @@ function copyTopLevelLegacyDeliveryFields(next: UnknownRecord, payload: UnknownR
     payload.to = next.to.trim();
   }
   if (
+    !("threadId" in payload) &&
+    ((typeof next.threadId === "number" && Number.isFinite(next.threadId)) ||
+      (typeof next.threadId === "string" && next.threadId.trim()))
+  ) {
+    payload.threadId = typeof next.threadId === "string" ? next.threadId.trim() : next.threadId;
+  }
+  if (
     typeof payload.bestEffortDeliver !== "boolean" &&
     typeof next.bestEffortDeliver === "boolean"
   ) {
@@ -324,6 +343,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.deliver;
   delete next.channel;
   delete next.to;
+  delete next.threadId;
   delete next.bestEffortDeliver;
   delete next.provider;
 }
