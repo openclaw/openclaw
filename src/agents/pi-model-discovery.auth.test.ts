@@ -477,4 +477,96 @@ describe("discoverAuthStorage", () => {
       expect(model?.compat?.toolCallArgumentsEncoding).toBe("html-entities");
     });
   });
+
+  it("strips secretref-managed marker values from getApiKeyAndHeaders result", async () => {
+    await withAgentDir(async (agentDir) => {
+      await writeModelsJson(agentDir, {
+        providers: {
+          "custom-provider": {
+            api: "openai-completions",
+            baseUrl: "https://api.example.com/v1",
+            apiKey: "EXAMPLE_API_KEY",
+            headers: {
+              "x-custom-header": "secretref-managed",
+              "x-normal-header": "normal-value",
+            },
+            models: [
+              {
+                id: "test-model",
+                name: "Test Model",
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      });
+
+      process.env.EXAMPLE_API_KEY = "sk-test-key";
+      try {
+        const authStorage = discoverAuthStorage(agentDir);
+        const modelRegistry = discoverModels(authStorage, agentDir);
+        const model = modelRegistry.find("custom-provider", "test-model");
+        expect(model).toBeTruthy();
+        const auth = await modelRegistry.getApiKeyAndHeaders(model!);
+        expect(auth.ok).toBe(true);
+        if (auth.ok) {
+          // The "secretref-managed" marker should be stripped
+          expect(auth.headers?.["x-custom-header"]).toBeUndefined();
+          // Normal headers should be preserved
+          expect(auth.headers?.["x-normal-header"]).toBe("normal-value");
+        }
+      } finally {
+        delete process.env.EXAMPLE_API_KEY;
+      }
+    });
+  });
+
+  it("strips secretref-env header marker values from getApiKeyAndHeaders result", async () => {
+    await withAgentDir(async (agentDir) => {
+      await writeModelsJson(agentDir, {
+        providers: {
+          "custom-provider": {
+            api: "openai-completions",
+            baseUrl: "https://api.example.com/v1",
+            apiKey: "EXAMPLE_API_KEY",
+            headers: {
+              "x-env-header": "secretref-env:MY_SECRET_VAR",
+              "x-keep-header": "real-value",
+            },
+            models: [
+              {
+                id: "test-model",
+                name: "Test Model",
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      });
+
+      process.env.EXAMPLE_API_KEY = "sk-test-key";
+      try {
+        const authStorage = discoverAuthStorage(agentDir);
+        const modelRegistry = discoverModels(authStorage, agentDir);
+        const model = modelRegistry.find("custom-provider", "test-model");
+        expect(model).toBeTruthy();
+        const auth = await modelRegistry.getApiKeyAndHeaders(model!);
+        expect(auth.ok).toBe(true);
+        if (auth.ok) {
+          // The "secretref-env:" marker should be stripped
+          expect(auth.headers?.["x-env-header"]).toBeUndefined();
+          // Normal headers should be preserved
+          expect(auth.headers?.["x-keep-header"]).toBe("real-value");
+        }
+      } finally {
+        delete process.env.EXAMPLE_API_KEY;
+      }
+    });
+  });
 });

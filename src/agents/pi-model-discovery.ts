@@ -15,6 +15,7 @@ import {
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
@@ -134,6 +135,30 @@ function createOpenClawModelRegistry(
     getAvailable().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
   registry.find = (provider: string, modelId: string) =>
     normalizeRegistryModel(find(provider, modelId), agentDir);
+
+  // Sanitize headers returned by getApiKeyAndHeaders to strip SecretRef
+  // marker values (e.g. "secretref-managed") that the upstream registry
+  // may have stored from models.json provider/model header entries.
+  const getApiKeyAndHeaders = registry.getApiKeyAndHeaders.bind(registry);
+  registry.getApiKeyAndHeaders = async (model: Model<Api>) => {
+    const result = await getApiKeyAndHeaders(model);
+    if (!result.ok || !result.headers) {
+      return result;
+    }
+    const sanitized: Record<string, string> = {};
+    let kept = 0;
+    for (const [key, value] of Object.entries(result.headers)) {
+      if (typeof value === "string" && isSecretRefHeaderValueMarker(value)) {
+        continue;
+      }
+      sanitized[key] = value;
+      kept++;
+    }
+    return {
+      ...result,
+      headers: kept > 0 ? sanitized : undefined,
+    };
+  };
 
   return registry;
 }
