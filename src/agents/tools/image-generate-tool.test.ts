@@ -619,4 +619,59 @@ describe("createImageGenerateTool", () => {
     ).rejects.toThrow("fal edit does not support aspectRatio overrides");
     expect(generateImage).not.toHaveBeenCalled();
   });
+
+  it("skips resolution auto-inference for edit when provider declares supportsResolution: false (#58870)", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "minimax",
+        defaultModel: "minimax-image-01",
+        models: ["minimax-image-01"],
+        capabilities: {
+          generate: {
+            maxCount: 9,
+            supportsSize: false,
+            supportsAspectRatio: true,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 9,
+            maxInputImages: 1,
+            supportsSize: false,
+            supportsAspectRatio: true,
+            supportsResolution: false,
+          },
+          geometry: {
+            aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = stubEditedImageFlow({ width: 3200, height: 1800 });
+    const tool = createToolWithPrimaryImageModel("minimax/minimax-image-01", {
+      workspaceDir: process.cwd(),
+    });
+
+    await tool.execute("call-minimax-edit", {
+      prompt: "Edit the sky",
+      image: "./fixtures/reference.png",
+    });
+
+    // Resolution must NOT be auto-inferred because MiniMax edit declares
+    // supportsResolution: false — previously this caused a validation error.
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolution: undefined,
+        inputImages: [
+          expect.objectContaining({
+            buffer: Buffer.from("input-image"),
+            mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+  });
 });
