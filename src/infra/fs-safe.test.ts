@@ -336,6 +336,28 @@ describe("fs-safe", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rewrites existing locked-down files without broadening their mode",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const lockedPath = path.join(root, "nested", "locked.txt");
+      await fs.mkdir(path.dirname(lockedPath), { recursive: true });
+      await fs.writeFile(lockedPath, "seed", { mode: 0o000 });
+      await fs.chmod(lockedPath, 0o000);
+
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: "nested/locked.txt",
+        data: "updated",
+      });
+
+      const stat = await fs.stat(lockedPath);
+      expect(stat.mode & 0o777).toBe(0o000);
+      await fs.chmod(lockedPath, 0o600);
+      await expect(fs.readFile(lockedPath, "utf8")).resolves.toBe("updated");
+    },
+  );
+
   it("removes a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const targetPath = path.join(root, "nested", "out.txt");

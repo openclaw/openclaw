@@ -172,6 +172,43 @@ describe("archive-staging helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "can merge a mode-000 staged file repeatedly without failing on the existing target",
+    async () => {
+      await withTempDir("openclaw-archive-staging-", async (rootDir) => {
+        const sourceDir = path.join(rootDir, "source");
+        const destDir = path.join(rootDir, "dest");
+        const sourcePath = path.join(sourceDir, "locked.txt");
+        await fs.mkdir(sourceDir, { recursive: true });
+        await fs.mkdir(destDir, { recursive: true });
+        await fs.writeFile(sourcePath, "first", { mode: 0o600 });
+        await fs.chmod(sourcePath, 0o000);
+
+        const destinationRealDir = await prepareArchiveDestinationDir(destDir);
+        await mergeExtractedTreeIntoDestination({
+          sourceDir,
+          destinationDir: destDir,
+          destinationRealDir,
+        });
+        await expect(fs.stat(path.join(destDir, "locked.txt"))).resolves.toMatchObject({
+          mode: expect.any(Number),
+        });
+
+        await mergeExtractedTreeIntoDestination({
+          sourceDir,
+          destinationDir: destDir,
+          destinationRealDir,
+        });
+
+        const destPath = path.join(destDir, "locked.txt");
+        const stat = await fs.stat(destPath);
+        expect(stat.mode & 0o777).toBe(0o000);
+        await fs.chmod(destPath, 0o600);
+        await expect(fs.readFile(destPath, "utf8")).resolves.toBe("first");
+      });
+    },
+  );
+
   it("builds a typed archive symlink traversal error", () => {
     const error = createArchiveSymlinkTraversalError("nested/payload.txt");
     expect(error).toBeInstanceOf(ArchiveSecurityError);

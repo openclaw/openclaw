@@ -792,7 +792,33 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
       await opened.handle.close().catch(() => {});
     }
   } catch (err) {
-    if (!(err instanceof SafeOpenError) || err.code !== "not-found") {
+    if (err instanceof SafeOpenError && err.code === "not-found") {
+      // keep create-mode default for missing targets
+    } else if (hasNodeErrorCode(err, "EACCES") || hasNodeErrorCode(err, "EPERM")) {
+      const lstat = await fs.lstat(resolved);
+      if (lstat.isSymbolicLink() || !lstat.isFile()) {
+        throw new SafeOpenError("invalid-path", "path is not a regular file under root", {
+          cause: err,
+        });
+      }
+      if (lstat.nlink > 1) {
+        throw new SafeOpenError("invalid-path", "hardlinked path not allowed", { cause: err });
+      }
+      const realPath = await fs.realpath(resolved);
+      if (!isPathInside(rootWithSep, realPath)) {
+        throw new SafeOpenError("outside-workspace", "file is outside workspace root", {
+          cause: err,
+        });
+      }
+      const realStat = await fs.stat(realPath);
+      if (!realStat.isFile() || !sameFileIdentity(realStat, lstat)) {
+        throw new SafeOpenError("path-mismatch", "path changed during write", { cause: err });
+      }
+      if (realStat.nlink > 1) {
+        throw new SafeOpenError("invalid-path", "hardlinked path not allowed", { cause: err });
+      }
+      mode = realStat.mode & 0o777;
+    } else {
       throw err;
     }
   }
@@ -946,6 +972,7 @@ async function writeFileWithinRootLegacy(params: {
   data: string | Buffer;
   encoding?: BufferEncoding;
   mkdir?: boolean;
+  createMode?: number;
 }): Promise<void> {
   const target = await openWritableFileWithinRoot({
     rootDir: params.rootDir,
