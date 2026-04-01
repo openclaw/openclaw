@@ -109,7 +109,7 @@ const jiti = createJiti(import.meta.url, {
   extensions: JITI_EXTENSIONS,
 });
 
-const mod = jiti("./plugin-entry.runtime.ts");
+const mod = jiti("./plugin-entry.runtime");
 export const ensureMatrixCryptoRuntime = mod.ensureMatrixCryptoRuntime;
 export const handleVerifyRecoveryKey = mod.handleVerifyRecoveryKey;
 export const handleVerificationBootstrap = mod.handleVerificationBootstrap;
