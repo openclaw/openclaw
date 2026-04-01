@@ -32,7 +32,9 @@ function canUseNodeFs(): boolean {
 
 let logFdCleanupRegistered = false;
 
-// Cleanup handler: close file descriptor on graceful exit
+// Close the log fd synchronously when the process exits. Do not register SIGINT/SIGTERM
+// listeners here: Node disables default termination for those signals when listeners exist,
+// and we must not swallow Ctrl+C / SIGTERM without exiting.
 function setupLogFdCleanup(): void {
   if (logFdCleanupRegistered) {
     return;
@@ -43,9 +45,7 @@ function setupLogFdCleanup(): void {
     releaseCurrentLogFileFd();
   };
 
-  process.once("beforeExit", cleanup);
-  process.once("SIGTERM", cleanup);
-  process.once("SIGINT", cleanup);
+  process.once("exit", cleanup);
 }
 
 function resolveDefaultLogDir(): string {
