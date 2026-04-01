@@ -190,12 +190,18 @@ Best practices enforced:
     create_keys = create_keys == "yes"
 
     # Password
-    print("\n  Initial password:")
-    print("    A temporary password will be set. User must change on first login.")
-    print("    ⚠️  Store this securely and share via encrypted channel only.")
-    password = prompt("Temporary password (min 14 chars, mixed case + number + symbol)")
-    if len(password) < 14:
-        print(f"  ❌ Password must be at least 14 characters (got {len(password)})")
+    print("\n  Console password:")
+    print("    Terraform will auto-generate a secure password.")
+    print("    Retrieve after apply with: terraform output -raw password")
+    print("    User must change password on first login.")
+    pw_length = prompt("Password length (min 14)", default="20")
+    try:
+        pw_len_int = int(pw_length)
+        if pw_len_int < 14:
+            print(f"  \u274c Password length must be at least 14 (got {pw_len_int})")
+            sys.exit(1)
+    except ValueError:
+        print("  \u274c Password length must be a number")
         sys.exit(1)
 
     # Summary
@@ -207,7 +213,7 @@ Best practices enforced:
    Policies    : {len(policies)} attached
    MFA enforce : {'yes' if enforce_mfa else 'no'}
    Access keys : {'yes' if create_keys else 'no'}
-   Password    : forced reset on first login
+   Password    : auto-generated ({pw_length} chars), forced reset on first login
 """)
     confirm = prompt("Proceed?", default="yes", choices=["yes", "no"])
     if confirm != "yes":
@@ -374,7 +380,7 @@ resource "aws_iam_user" "this" {{
 
 resource "aws_iam_user_login_profile" "this" {{
   user                    = aws_iam_user.this.name
-  password_length         = {max(14, len(password))}
+  password_length         = {pw_length}
   password_reset_required = true
 }}
 {group_block}
@@ -385,6 +391,7 @@ resource "aws_iam_user_login_profile" "this" {{
 {mfa_block}
 {keys_block}
 output "username"    {{ value = aws_iam_user.this.name }}
+output "password"    {{ value = aws_iam_user_login_profile.this.password, sensitive = true }}
 output "console_url" {{ value = "https://${{data.aws_caller_identity.current.account_id}}.signin.aws.amazon.com/console" }}
 {keys_output}
 data "aws_caller_identity" "current" {{}}
@@ -395,7 +402,7 @@ data "aws_caller_identity" "current" {{}}
     print(f"   Permissions : {preset['name']}")
     print(f"   MFA enforce : {'yes — user must set up MFA before accessing resources' if enforce_mfa else 'no'}")
     print(f"   Access keys : {'yes — retrieve with: terraform output secret_access_key' if create_keys else 'no (console only)'}")
-    print(f"   Password    : forced reset on first login")
+    print(f"   Password    : auto-generated ({pw_length} chars), retrieve with: terraform output -raw password")
     print(f"   Self-manage : change password + manage MFA")
 
 
@@ -3256,7 +3263,7 @@ def cmd_generate(args):
   }}
 }}
 
-provider "aws" {{ region = "us-east-1" }}
+provider "aws" {{ region = "{region}" }}
 
 resource "aws_s3_bucket" "this" {{
   bucket = "{name}"
@@ -3282,6 +3289,12 @@ output "bucket_arn" {{ value = aws_s3_bucket.this.arn }}
 
     elif args.resource == "rg":
         name = args.name
+        errors = validate_azure_rg_name(name)
+        if errors:
+            print("\u274c Invalid Azure Resource Group name:")
+            for e in errors:
+                print(f"   - {e}")
+            sys.exit(1)
         location = args.region or "eastus"
         main_tf = f"""terraform {{
   required_providers {{
@@ -3395,20 +3408,28 @@ output "role_name" {{ value = aws_iam_role.this.name }}
 
 def cmd_plan(args):
     tf_init(args.dir)
+    plan_file = str(Path(args.dir).resolve() / "tfplan")
     print("\nRunning terraform plan...")
-    rc = run_tf(["plan", "-out=/tmp/tfplan"], cwd=args.dir)
+    rc = run_tf(["plan", f"-out={plan_file}"], cwd=args.dir)
     if rc != 0:
         print("ERROR: Plan failed")
         sys.exit(1)
-    print("\n✅ Plan complete. Review above and approve to apply.")
+    print(f"\n✅ Plan complete. Plan saved to {plan_file}")
+    print("Review above and approve to apply.")
 
 
 def cmd_apply(args):
+    plan_file = str(Path(args.dir).resolve() / "tfplan")
+    if not Path(plan_file).exists():
+        print(f"ERROR: No saved plan found at {plan_file}")
+        print("Run 'plan' first before apply.")
+        sys.exit(1)
     print("\nRunning terraform apply...")
-    rc = run_tf(["apply", "/tmp/tfplan"], cwd=args.dir)
+    rc = run_tf(["apply", plan_file], cwd=args.dir)
     if rc != 0:
         print("ERROR: Apply failed")
         sys.exit(1)
+    Path(plan_file).unlink(missing_ok=True)
     print("\n✅ Apply complete.")
 
 
