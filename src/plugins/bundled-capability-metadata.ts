@@ -1,4 +1,4 @@
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { listBundledPluginManifestSnapshots } from "./bundled-manifest-snapshots.js";
 
 export type BundledPluginContractSnapshot = {
   pluginId: string;
@@ -27,7 +27,7 @@ function uniqueStrings(values: readonly string[] | undefined): string[] {
 }
 
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  listBundledPluginMetadata()
+  listBundledPluginManifestSnapshots()
     .map(({ manifest }) => ({
       pluginId: manifest.id,
       cliBackendIds: uniqueStrings(manifest.cliBackends),
@@ -107,7 +107,7 @@ export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  listBundledPluginMetadata()
+  listBundledPluginManifestSnapshots()
     .flatMap(({ manifest }) =>
       (manifest.legacyPluginIds ?? []).map(
         (legacyPluginId) => [legacyPluginId, manifest.id] as const,
@@ -117,7 +117,7 @@ export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  listBundledPluginMetadata()
+  listBundledPluginManifestSnapshots()
     .flatMap(({ manifest }) =>
       (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
         providerId,
