@@ -258,7 +258,7 @@ describe("slack native approval adapter", () => {
   });
 
   it("suppresses generic slack fallback only for slack-originated approvals", () => {
-    const shouldSuppress = slackNativeApprovalAdapter.delivery.shouldSuppressForwardingFallback;
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -266,12 +266,16 @@ describe("slack native approval adapter", () => {
     expect(
       shouldSuppress({
         cfg: buildConfig(),
-        target: { channel: "slack", accountId: "default" },
+        target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
         request: {
+          id: "approval-1",
           request: {
+            command: "echo hi",
             turnSourceChannel: "slack",
             turnSourceAccountId: "default",
           },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
         },
       }),
     ).toBe(true);
@@ -279,12 +283,16 @@ describe("slack native approval adapter", () => {
     expect(
       shouldSuppress({
         cfg: buildConfig(),
-        target: { channel: "slack", accountId: "default" },
+        target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
         request: {
+          id: "approval-1",
           request: {
+            command: "echo hi",
             turnSourceChannel: "discord",
             turnSourceAccountId: "default",
           },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
         },
       }),
     ).toBe(false);
@@ -301,7 +309,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
-      slackNativeApprovalAdapter.auth.authorizeActorAction({
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
         cfg,
         accountId: "default",
         senderId: "U123OWNER",
@@ -311,7 +319,7 @@ describe("slack native approval adapter", () => {
     ).toEqual({ authorized: true });
 
     expect(
-      slackNativeApprovalAdapter.auth.authorizeActorAction({
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
         cfg,
         accountId: "default",
         senderId: "U999EXEC",
@@ -324,7 +332,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
-      slackNativeApprovalAdapter.auth.authorizeActorAction({
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
         cfg,
         accountId: "default",
         senderId: "U999EXEC",

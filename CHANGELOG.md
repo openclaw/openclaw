@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Cron/tool schemas: keep cron tool schemas strict-model-friendly while still preserving `failureAlert=false`, nullable `agentId`/`sessionKey`, and flattened add/update recovery for the newly exposed cron job fields. (#55043) Thanks @brunolorente.
 - BlueBubbles/config: accept `enrichGroupParticipantsFromContacts` in the core strict config schema so gateways no longer fail validation or startup when the BlueBubbles plugin writes that field. (#56889) Thanks @zqchris.
 - Agents/failover: classify AbortError and stream-abort messages as timeout so Ollama NDJSON stream aborts stop showing `reason=unknown` in model fallback logs. (#58324) Thanks @yelog
+- Exec approvals: route Slack, Discord, and Telegram approvals through the shared channel approval-capability path so native approval auth, delivery, and `/approve` handling stay aligned across channels while preserving Telegram session-key agent filtering. (#58634) thanks @gumadeiras
 
 ## 2026.4.2
 
@@ -85,6 +86,8 @@ Docs: https://docs.openclaw.ai
 - Auth/OpenAI Codex: persist plugin-refreshed OAuth credentials to `auth-profiles.json` before returning them, so rotated Codex refresh tokens survive restart and stop falling into `refresh_token_reused` loops. (#53082)
 - Discord/gateway: hand reconnect ownership back to Carbon, keep runtime status aligned with close/reconnect state, and force-stop sockets that open without reaching READY so Discord monitors recover promptly instead of waiting on stale health timeouts. (#59019) Thanks @obviyus
 - Config/Telegram: migrate removed `channels.telegram.groupMentionsOnly` into `channels.telegram.groups["*"].requireMention` on load so legacy configs no longer crash at startup. (#55336) thanks @jameslcowan.
+
+### Fixes
 
 ## 2026.3.31
 

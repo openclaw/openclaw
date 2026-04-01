@@ -11,7 +11,10 @@ import {
   buildLegacyDmAccountAllowlistAdapter,
 } from "../../plugin-sdk/allowlist-config-edit.js";
 import { resolveApprovalApprovers } from "../../plugin-sdk/approval-approvers.js";
-import { createApproverRestrictedNativeApprovalAdapter } from "../../plugin-sdk/approval-runtime.js";
+import {
+  createApproverRestrictedNativeApprovalAdapter,
+  createResolvedApproverActionAuthAdapter,
+} from "../../plugin-sdk/approval-runtime.js";
 import { createScopedChannelConfigAdapter } from "../../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -106,6 +109,42 @@ const slackCommandTestPlugin: ChannelPlugin = {
     resolveAccount: ({ cfg }) => cfg.channels?.slack ?? {},
     normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
     resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+    resolveGroupOverrides: () => undefined,
+  }),
+};
+
+const signalCommandTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "signal",
+    label: "Signal",
+    docsPath: "/channels/signal",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      reactions: true,
+      media: true,
+      nativeCommands: true,
+    },
+  }),
+  auth: createResolvedApproverActionAuthAdapter({
+    channelLabel: "Signal",
+    resolveApprovers: ({ cfg, accountId }) => {
+      const signal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : cfg.channels?.signal;
+      return resolveApprovalApprovers({
+        allowFrom: signal?.allowFrom,
+        defaultTo: signal?.defaultTo,
+        normalizeApprover: (value) => String(value).trim() || undefined,
+      });
+    },
+  }),
+  allowlist: buildLegacyDmAccountAllowlistAdapter({
+    channelId: "signal",
+    resolveAccount: ({ cfg, accountId }) =>
+      accountId
+        ? (cfg.channels?.signal?.accounts?.[accountId] ?? {})
+        : (cfg.channels?.signal ?? {}),
+    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupPolicy: (account) => account.groupPolicy,
     resolveGroupOverrides: () => undefined,
   }),
@@ -508,6 +547,11 @@ function setMinimalChannelPluginRegistryForTests(): void {
         source: "test",
       },
       {
+        pluginId: "signal",
+        plugin: signalCommandTestPlugin,
+        source: "test",
+      },
+      {
         pluginId: "telegram",
         plugin: telegramCommandTestPlugin,
         source: "test",
@@ -867,6 +911,35 @@ describe("/approve command", () => {
     );
   });
 
+  it("accepts Signal /approve from configured approvers even when chat access is otherwise blocked", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        signal: {
+          allowFrom: ["+15551230000"],
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "signal",
+      Surface: "signal",
+      SenderId: "+15551230000",
+    });
+    params.command.isAuthorizedSender = false;
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("does not treat implicit default approval auth as a bypass for unauthorized senders", async () => {
     const cfg = {
       commands: { text: true },
@@ -920,7 +993,7 @@ describe("/approve command", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("accepts Telegram /approve from exec target recipients even when native approvals are disabled", async () => {
+  it("ignores Telegram /approve from exec target recipients when native approvals are disabled", async () => {
     const cfg = {
       commands: { text: true },
       approvals: {
@@ -947,13 +1020,8 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expect(result.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {
@@ -1188,7 +1256,7 @@ describe("/approve command", () => {
         expectGatewayCalls: 2,
       },
       {
-        name: "telegram approvals disabled",
+        name: "telegram disabled native delivery reports the channel-disabled message",
         cfg: createTelegramApproveCfg(null),
         commandBody: "/approve abc12345 allow-once",
         ctx: {
