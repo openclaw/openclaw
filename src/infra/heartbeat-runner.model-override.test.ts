@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -19,11 +18,12 @@ async function withHeartbeatFixture(
   run: (ctx: {
     tmpDir: string;
     storePath: string;
+    replySpy: ReturnType<typeof vi.fn>;
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
   }) => Promise<unknown>,
 ): Promise<unknown> {
   return withTempHeartbeatSandbox(
-    async ({ tmpDir, storePath }) => {
+    async ({ tmpDir, storePath, replySpy }) => {
       const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
         await seedSessionStore(storePath, sessionKey, {
           updatedAt: input.updatedAt,
@@ -32,7 +32,7 @@ async function withHeartbeatFixture(
           lastTo: input.lastTo,
         });
       };
-      return run({ tmpDir, storePath, seedSession });
+      return run({ tmpDir, storePath, replySpy, seedSession });
     },
     { prefix: "openclaw-hb-model-" },
   );
@@ -47,27 +47,28 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
     cfg: OpenClawConfig;
     sessionKey: string;
+    replySpy: ReturnType<typeof vi.fn>;
     agentId?: string;
   }) {
     await params.seedSession(params.sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
 
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+    params.replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
     await runHeartbeatOnce({
       cfg: params.cfg,
       agentId: params.agentId,
       deps: {
+        getReplyFromConfig: params.replySpy,
         getQueueSize: () => 0,
         nowMs: () => 0,
       },
     });
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(params.replySpy).toHaveBeenCalledTimes(1);
     return {
-      ctx: replySpy.mock.calls[0]?.[0],
-      opts: replySpy.mock.calls[0]?.[1],
-      replySpy,
+      ctx: params.replySpy.mock.calls[0]?.[0],
+      opts: params.replySpy.mock.calls[0]?.[1],
+      replySpy: params.replySpy,
     };
   }
 
@@ -77,7 +78,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     lightContext?: boolean;
     isolatedSession?: boolean;
   }) {
-    return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+    return withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -100,6 +101,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         seedSession,
         cfg,
         sessionKey,
+        replySpy,
       });
       return result.opts;
     });
@@ -137,7 +139,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("uses isolated session key when isolatedSession is enabled", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -157,6 +159,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         seedSession,
         cfg,
         sessionKey,
+        replySpy,
       });
 
       // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
@@ -165,7 +168,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("uses main session key when isolatedSession is not set", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -184,6 +187,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         seedSession,
         cfg,
         sessionKey,
+        replySpy,
       });
 
       expect(result.ctx?.SessionKey).toBe(sessionKey);
@@ -191,7 +195,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("passes per-agent heartbeat model override (merged with defaults)", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -222,6 +226,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         cfg,
         agentId: "ops",
         sessionKey,
+        replySpy,
       });
 
       expect(result.replySpy).toHaveBeenCalledWith(
