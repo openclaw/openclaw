@@ -276,6 +276,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const feishuData = payload.channelData?.feishu as
       | { card?: Record<string, unknown> }
       | undefined;
+    const replyInThread = threadId != null && !replyToId;
     if (feishuData?.card) {
       const result = await sendCardFeishu({
         cfg,
@@ -283,6 +284,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         card: feishuData.card,
         accountId: accountId ?? undefined,
         replyToMessageId,
+        replyInThread,
       });
       return attachChannelToResult("feishu", result);
     }
