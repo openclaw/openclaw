@@ -38,6 +38,7 @@ sources = [
   'src/gateway_ws.c',
   'src/gateway_rpc.c',
   'src/gateway_data.c',
+  'src/gateway_mutations.c',
   'src/gateway_client.c',
   'src/state.c',
   'src/runtime_mode.c',
@@ -46,6 +47,11 @@ sources = [
   'src/diagnostics.c',
   'src/display_model.c',
   'src/app_window.c',
+  'src/section_channels.c',
+  'src/section_skills.c',
+  'src/section_sessions.c',
+  'src/section_cron.c',
+  'src/section_instances.c',
   'src/onboarding.c',
   'src/log.c'
 ]
@@ -116,6 +122,11 @@ test_gateway_rpc_exe = executable('test_gateway_rpc',
   ['tests/test_gateway_rpc.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('gateway_rpc', test_gateway_rpc_exe)
+
+test_rpc_mutations_exe = executable('test_rpc_mutations',
+  ['tests/test_rpc_mutations.c', 'src/gateway_mutations.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('rpc_mutations', test_rpc_mutations_exe)
 
 test_rpc_lifecycle_exe = executable('test_rpc_lifecycle',
   ['tests/test_rpc_lifecycle.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c',

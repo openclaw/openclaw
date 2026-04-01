@@ -333,10 +333,48 @@ static void test_lifecycle_channels_full_pipeline(void) {
     ASSERT(g_strcmp0(data->channels[0].channel_id, "telegram") == 0, "lc_pipeline_ch: telegram");
     ASSERT(data->channels[0].connected == TRUE, "lc_pipeline_ch: connected");
     ASSERT(data->channels[0].account_count == 2, "lc_pipeline_ch: 2 accounts");
+    ASSERT(data->channels[0].n_accounts == 2, "lc_pipeline_ch: n_accounts");
 
     gateway_channels_data_free(data);
     free_frame(frame);
     free_frame(frame2);
+    reset_section_record(&r);
+    g_free(id);
+}
+
+static void test_lifecycle_mutation_success(void) {
+    mock_reset();
+    SectionRecord r = {0};
+
+    gchar *id = gateway_rpc_request("skills.update", NULL, 5000, section_callback, &r);
+    ASSERT(id != NULL, "lc_mut_ok: request sent");
+
+    GatewayFrame *frame = make_success_frame(id, "{\"ok\":true}");
+    gboolean consumed = gateway_rpc_handle_response(frame);
+    ASSERT(consumed == TRUE, "lc_mut_ok: consumed");
+    ASSERT(r.called == TRUE, "lc_mut_ok: callback fired");
+    ASSERT(r.ok == TRUE, "lc_mut_ok: response ok");
+
+    free_frame(frame);
+    reset_section_record(&r);
+    g_free(id);
+}
+
+static void test_lifecycle_mutation_error(void) {
+    mock_reset();
+    SectionRecord r = {0};
+
+    gchar *id = gateway_rpc_request("cron.remove", NULL, 5000, section_callback, &r);
+    ASSERT(id != NULL, "lc_mut_err: request sent");
+
+    GatewayFrame *frame = make_error_frame(id, "NOT_FOUND", "Job does not exist");
+    gboolean consumed = gateway_rpc_handle_response(frame);
+    ASSERT(consumed == TRUE, "lc_mut_err: consumed");
+    ASSERT(r.called == TRUE, "lc_mut_err: callback fired");
+    ASSERT(r.ok == FALSE, "lc_mut_err: response not ok");
+    ASSERT(g_strcmp0(r.error_code, "NOT_FOUND") == 0, "lc_mut_err: error code");
+
+    free_frame(frame);
     reset_section_record(&r);
     g_free(id);
 }
@@ -526,6 +564,8 @@ int main(void) {
     test_lifecycle_timeout_recovery();
     test_lifecycle_reconnect_after_failure();
     test_lifecycle_channels_full_pipeline();
+    test_lifecycle_mutation_success();
+    test_lifecycle_mutation_error();
 
     /* WS↔RPC integration */
     test_ws_rpc_authenticated_dispatch();
