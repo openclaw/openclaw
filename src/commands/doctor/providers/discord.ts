@@ -127,25 +127,42 @@ export function collectDiscordNumericIdWarnings(params: {
     return [];
   }
   const lines: string[] = [];
-  const safeHits = params.hits.filter((h) => h.safe);
-  const unsafeHits = params.hits.filter((h) => !h.safe);
+  const hitsByListPath = new Map<string, DiscordNumericIdHit[]>();
+  for (const hit of params.hits) {
+    const listPath = hit.path.replace(/\[\d+\]$/, "");
+    const existing = hitsByListPath.get(listPath);
+    if (existing) {
+      existing.push(hit);
+      continue;
+    }
+    hitsByListPath.set(listPath, [hit]);
+  }
 
-  if (safeHits.length > 0) {
-    const sample = safeHits[0];
+  const repairableHits: DiscordNumericIdHit[] = [];
+  const blockedHits: DiscordNumericIdHit[] = [];
+  for (const hits of hitsByListPath.values()) {
+    if (hits.some((hit) => !hit.safe)) {
+      blockedHits.push(...hits);
+      continue;
+    }
+    repairableHits.push(...hits);
+  }
+
+  if (repairableHits.length > 0) {
+    const sample = repairableHits[0];
     const samplePath = sanitizeForLog(sample.path);
     const sampleEntry = sanitizeForLog(String(sample.entry));
     lines.push(
-      `- Discord allowlists contain ${safeHits.length} numeric ${safeHits.length === 1 ? "entry" : "entries"} (e.g. ${samplePath}=${sampleEntry}).`,
+      `- Discord allowlists contain ${repairableHits.length} numeric ${repairableHits.length === 1 ? "entry" : "entries"} (e.g. ${samplePath}=${sampleEntry}).`,
       `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
     );
   }
-  if (unsafeHits.length > 0) {
-    const sample = unsafeHits[0];
+  if (blockedHits.length > 0) {
+    const sample = blockedHits[0];
     const samplePath = sanitizeForLog(sample.path);
-    const sampleEntry = sanitizeForLog(String(sample.entry));
     lines.push(
-      `- Discord allowlists contain ${unsafeHits.length} numeric ${unsafeHits.length === 1 ? "entry" : "entries"} that cannot be auto-repaired (e.g. ${samplePath}=${sampleEntry}).`,
-      `- These IDs lost precision or are invalid; manually wrap the original value in quotes in your config file.`,
+      `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that cannot be auto-repaired (e.g. ${samplePath}).`,
+      `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
     );
   }
   return lines;

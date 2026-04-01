@@ -86,6 +86,12 @@ describe("config discord", () => {
       expect(res.config.channels?.discord?.dm?.groupChannels).toEqual(["789"]);
       expect(res.config.channels?.discord?.guilds?.["123"]?.users).toEqual(["111"]);
       expect(res.config.channels?.discord?.guilds?.["123"]?.roles).toEqual(["222"]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.channels?.general?.users).toEqual([
+        "333",
+      ]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.channels?.general?.roles).toEqual([
+        "444",
+      ]);
       expect(res.config.channels?.discord?.execApprovals?.approvers).toEqual(["555"]);
     }
   });
