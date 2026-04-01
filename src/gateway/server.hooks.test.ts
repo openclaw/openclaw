@@ -241,7 +241,7 @@ describe("gateway server hooks", () => {
       };
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
-      expect(call?.job?.payload?.systemPrompt).toBe("Summarize: Hello");
+      expect(call?.job?.payload?.systemPrompt).toBe("Summarize: {{messages[0].subject}}");
       drainSystemEvents(resolveMainKey());
     });
   });

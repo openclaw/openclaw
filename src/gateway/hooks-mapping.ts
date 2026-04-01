@@ -258,7 +258,9 @@ function buildActionFromMapping(
     };
   }
   const message = renderTemplate(mapping.messageTemplate ?? "", ctx);
-  const systemPrompt = renderOptional(mapping.systemPrompt, ctx);
+  // systemPrompt must stay operator-controlled literal text — do not run {{...}} expansion
+  // from webhook payload (would let attacker-controlled fields become system-role instructions).
+  const systemPrompt = literalHookSystemPrompt(mapping.systemPrompt);
   return {
     ok: true,
     action: {
@@ -444,6 +446,14 @@ function normalizeMatchPath(raw?: string): string | undefined {
     return undefined;
   }
   return trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function literalHookSystemPrompt(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function renderOptional(value: string | undefined, ctx: HookMappingContext) {

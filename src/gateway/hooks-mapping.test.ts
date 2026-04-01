@@ -130,7 +130,7 @@ describe("hooks mapping", () => {
     expectAgentMessage(result, "Subject: Hello");
   });
 
-  it("renders system prompt template from payload", async () => {
+  it("keeps system prompt literal (does not expand {{...}} from payload)", async () => {
     const result = await applyGmailMappings({
       mappings: [
         createGmailAgentMapping({
@@ -142,7 +142,8 @@ describe("hooks mapping", () => {
     });
     expect(result?.ok).toBe(true);
     if (result?.ok && result.action?.kind === "agent") {
-      expect(result.action.systemPrompt).toBe("Summarize email: Hello");
+      expect(result.action.systemPrompt).toBe("Summarize email: {{messages[0].subject}}");
+      expect(result.action.message).toBe("Subject: Hello");
     }
   });
 

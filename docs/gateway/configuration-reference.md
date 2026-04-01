@@ -2692,7 +2692,8 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 
 - `match.path` matches sub-path after `/hooks` (e.g. `/hooks/gmail` → `gmail`).
 - `match.source` matches a payload field for generic paths.
-- Templates like `{{messages[0].subject}}` read from the payload.
+- Templates like `{{messages[0].subject}}` read from the payload (`messageTemplate`, `sessionKey`, `textTemplate`, `name`, etc.).
+- `systemPrompt` is literal text only: `{{...}}` is not expanded. Put payload-driven content in `messageTemplate` so it stays on the user-message / external-content path.
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
