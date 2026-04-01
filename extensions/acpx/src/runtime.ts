@@ -260,6 +260,19 @@ function mergeHandleStateWithFallbackIdentifiers(
   };
 }
 
+function writeHandleState(handle: AcpRuntimeHandle, state: AcpxHandleState): void {
+  handle.runtimeSessionName = encodeAcpxRuntimeHandleState(state);
+  if (state.acpxRecordId) {
+    handle.acpxRecordId = state.acpxRecordId;
+  }
+  if (state.backendSessionId) {
+    handle.backendSessionId = state.backendSessionId;
+  }
+  if (state.agentSessionId) {
+    handle.agentSessionId = state.agentSessionId;
+  }
+}
+
 function resolveInteractiveSessionReference(state: AcpxHandleState): string {
   return state.agentSessionId ?? state.name;
 }
@@ -837,16 +850,7 @@ export class AcpxRuntime implements AcpRuntime {
         const promptIdentifiers = extractPromptSessionIdentifiers(line);
         if (hasSessionIdentifiers(promptIdentifiers)) {
           state = mergeHandleStateWithIdentifiers(state, promptIdentifiers);
-          input.handle.runtimeSessionName = encodeAcpxRuntimeHandleState(state);
-          if (state.acpxRecordId) {
-            input.handle.acpxRecordId = state.acpxRecordId;
-          }
-          if (state.backendSessionId) {
-            input.handle.backendSessionId = state.backendSessionId;
-          }
-          if (state.agentSessionId) {
-            input.handle.agentSessionId = state.agentSessionId;
-          }
+          writeHandleState(input.handle, state);
         }
         const parsed = parsePromptEventLine(line);
         if (!parsed) {
@@ -943,6 +947,14 @@ export class AcpxRuntime implements AcpRuntime {
     const acpxRecordId = asOptionalString(detail.acpxRecordId);
     const acpxSessionId = asOptionalString(detail.acpxSessionId);
     const agentSessionId = asOptionalString(detail.agentSessionId);
+    const refreshedIdentifiers: AcpxSessionIdentifiers = {
+      ...(acpxRecordId ? { acpxRecordId } : {}),
+      ...(acpxSessionId ? { backendSessionId: acpxSessionId } : {}),
+      ...(agentSessionId ? { agentSessionId } : {}),
+    };
+    if (hasSessionIdentifiers(refreshedIdentifiers)) {
+      writeHandleState(input.handle, mergeHandleStateWithIdentifiers(state, refreshedIdentifiers));
+    }
     const pid = typeof detail.pid === "number" && Number.isFinite(detail.pid) ? detail.pid : null;
     const summary = [
       `status=${status}`,

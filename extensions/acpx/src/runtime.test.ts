@@ -1130,6 +1130,63 @@ describe("AcpxRuntime", () => {
     expect(statusEntries.at(-1)?.sessionName).toBe("decoded-gemini-session");
   });
 
+  it("refreshes encoded runtime session identifiers after status learns a newer agent id", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const sessionKey = "agent:gemini:acp:status-refresh";
+    const handle = await runtime.ensureSession({
+      sessionKey,
+      agent: "gemini",
+      mode: "persistent",
+    });
+
+    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+    expect(decoded).not.toBeNull();
+
+    handle.runtimeSessionName = encodeAcpxRuntimeHandleState({
+      ...decoded!,
+      agentSessionId: "decoded-gemini-session",
+    });
+    handle.agentSessionId = "fresh-gemini-session";
+
+    const statePath = process.env.MOCK_ACPX_STATE;
+    expect(statePath).toBeTruthy();
+    fs.writeFileSync(
+      String(statePath),
+      JSON.stringify({
+        byName: {
+          [sessionKey]: {
+            acpxRecordId: `rec-${sessionKey}`,
+            acpxSessionId: `sid-${sessionKey}`,
+            agentSessionId: "fresh-gemini-session",
+          },
+        },
+        byAgentSessionId: {
+          "decoded-gemini-session": sessionKey,
+          "fresh-gemini-session": sessionKey,
+        },
+      }),
+      "utf8",
+    );
+
+    const status = await runtime.getStatus({ handle });
+    expect(status.agentSessionId).toBe("fresh-gemini-session");
+    expect(handle.agentSessionId).toBe("fresh-gemini-session");
+    expect(decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.agentSessionId).toBe(
+      "fresh-gemini-session",
+    );
+
+    await runtime.cancel({ handle, reason: "test-refresh" });
+
+    const statusEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+      (entry) => entry.kind === "status",
+    );
+    const cancelEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+      (entry) => entry.kind === "cancel",
+    );
+    expect(statusEntries.at(-1)?.sessionName).toBe("decoded-gemini-session");
+    expect(cancelEntries.at(-1)?.sessionName).toBe("fresh-gemini-session");
+  });
+
   it("does not promote session/update params.sessionId into the runtime handle", async () => {
     process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID = "1";
     process.env.MOCK_ACPX_PROMPT_OMIT_LOAD_RESULT = "1";
