@@ -33,6 +33,7 @@ import type {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordNativeApprovalAdapter } from "../approval-native.js";
+import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -454,8 +455,7 @@ export class DiscordExecApprovalHandler {
       cfg: this.opts.cfg,
       gatewayUrl: this.opts.gatewayUrl,
       eventKinds: ["exec", "plugin"],
-      isConfigured: () =>
-        Boolean(this.opts.config.enabled && (this.opts.config.approvers?.length ?? 0) > 0),
+      isConfigured: () => Boolean(this.opts.config.enabled && this.getApprovers().length > 0),
       shouldHandle: (request) => this.shouldHandle(request),
       deliverRequested: async (request) => await this.deliverRequested(request),
       finalizeResolved: async ({ request, resolved, entries }) => {
@@ -472,7 +472,7 @@ export class DiscordExecApprovalHandler {
     if (!config.enabled) {
       return false;
     }
-    if (!config.approvers || config.approvers.length === 0) {
+    if (this.getApprovers().length === 0) {
       return false;
     }
 
@@ -763,7 +763,11 @@ export class DiscordExecApprovalHandler {
 
   /** Return the list of configured approver IDs. */
   getApprovers(): string[] {
-    return this.opts.config.approvers ?? [];
+    return getDiscordExecApprovalApprovers({
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+      configOverride: this.opts.config,
+    });
   }
 }
 

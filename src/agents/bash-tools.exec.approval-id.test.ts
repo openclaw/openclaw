@@ -142,6 +142,7 @@ async function expectGatewayExecWithoutApproval(options: {
   config: Record<string, unknown>;
   command: string;
   ask?: "always" | "on-miss" | "off";
+  security?: "allowlist" | "full";
 }) {
   await writeExecApprovalsConfig(options.config);
   const calls: string[] = [];
@@ -150,7 +151,7 @@ async function expectGatewayExecWithoutApproval(options: {
   const tool = createExecTool({
     host: "gateway",
     ask: options.ask,
-    security: "full",
+    security: options.security,
     approvalRunningNoticeMs: 0,
   });
 
@@ -401,6 +402,18 @@ describe("exec approvals", () => {
         agents: {},
       },
       command: "echo ok",
+    });
+  });
+
+  it("inherits security=full from exec-approvals defaults when tool security is unset", async () => {
+    await expectGatewayExecWithoutApproval({
+      config: {
+        version: 1,
+        defaults: { security: "full", ask: "off", askFallback: "full" },
+        agents: {},
+      },
+      command: "echo ok",
+      security: undefined,
     });
   });
 

@@ -10,13 +10,18 @@ vi.mock("../send.js", () => ({
 
 let SlackExecApprovalHandler: typeof import("./exec-approvals.js").SlackExecApprovalHandler;
 
-function buildConfig(target: "dm" | "channel" | "both" = "dm"): OpenClawConfig {
+function buildConfig(
+  target: "dm" | "channel" | "both" = "dm",
+  slackOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
+): OpenClawConfig {
+  const configuredExecApprovals = slackOverrides?.execApprovals;
   return {
     channels: {
       slack: {
         botToken: "xoxb-test",
         appToken: "xapp-test",
-        execApprovals: {
+        ...slackOverrides,
+        execApprovals: configuredExecApprovals ?? {
           enabled: true,
           approvers: ["U123APPROVER"],
           target,
@@ -158,5 +163,21 @@ describe("SlackExecApprovalHandler", () => {
         blocks: expect.not.arrayContaining([expect.objectContaining({ type: "actions" })]),
       }),
     );
+  });
+
+  it("handles approvals when approvers are inferred from allowFrom", async () => {
+    const app = buildApp();
+    const cfg = buildConfig("dm", {
+      allowFrom: ["U123APPROVER"],
+      execApprovals: { enabled: true, target: "dm" },
+    });
+    const handler = new SlackExecApprovalHandler({
+      app,
+      accountId: "default",
+      config: cfg.channels!.slack!.execApprovals!,
+      cfg,
+    });
+
+    expect(handler.shouldHandle(buildRequest())).toBe(true);
   });
 });
