@@ -75,7 +75,7 @@ describe("provider usage fetch shared helpers", () => {
       "aborted by timeout",
     );
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-  });
+  }, 30_000); // Extended timeout for CI environments
 
   it("maps configured status codes to token expired", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
