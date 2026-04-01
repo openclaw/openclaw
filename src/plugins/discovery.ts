@@ -299,7 +299,7 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   if (normalized.endsWith(".bak")) {
     return true;
   }
-  if (normalized.includes(".backup-")) {
+  if (normalized.includes(".backup-") || normalized.includes(".backup.")) {
     return true;
   }
   if (normalized.includes(".disabled")) {

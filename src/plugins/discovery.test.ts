@@ -135,6 +135,10 @@ describe("discoverOpenClawPlugins", () => {
     mkdirSafe(backupDir);
     fs.writeFileSync(path.join(backupDir, "index.ts"), "export default function () {}", "utf-8");
 
+    const backupDotDir = path.join(globalExt, "openclaw-codex-app-server.backup.20260401-113050");
+    mkdirSafe(backupDotDir);
+    fs.writeFileSync(path.join(backupDotDir, "index.ts"), "export default function () {}", "utf-8");
+
     const disabledDir = path.join(globalExt, "telegram.disabled.20260222");
     mkdirSafe(disabledDir);
     fs.writeFileSync(path.join(disabledDir, "index.ts"), "export default function () {}", "utf-8");
@@ -152,6 +156,7 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((candidate) => candidate.idHint);
     expect(ids).toContain("live");
     expect(ids).not.toContain("feishu.backup-20260222");
+    expect(ids).not.toContain("openclaw-codex-app-server.backup.20260401-113050");
     expect(ids).not.toContain("telegram.disabled.20260222");
     expect(ids).not.toContain("discord.bak");
   });
