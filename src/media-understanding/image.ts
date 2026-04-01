@@ -59,8 +59,9 @@ async function resolveImageRuntime(params: {
       | undefined;
     const providers = providerConfig?.providers as Record<string, Record<string, unknown>> | undefined;
     const providerEntry = providers?.[resolvedRef.provider];
-    const inlineModels = Array.isArray(providerEntry?.models)
-      ? (providerEntry!.models as Array<Record<string, unknown>>)
+    const rawModels = providerEntry?.models;
+    const inlineModels: Array<Record<string, unknown>> = Array.isArray(rawModels)
+      ? rawModels
       : [];
     const inlineModel = inlineModels.find((m) => m.id === resolvedRef.model);
     if (
