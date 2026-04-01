@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1505,9 +1506,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             main: {
               allowlist: [
                 {
-                  pattern: "=command:test",
+                  pattern: `=command:${crypto
+                    .createHash("sha256")
+                    .update(prepared.plan.commandText)
+                    .digest("hex")
+                    .slice(0, 16)}`,
                   source: "allow-always",
-                  commandText: prepared.plan.commandText,
                 },
               ],
             },

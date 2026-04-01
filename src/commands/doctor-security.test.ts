@@ -269,7 +269,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
-  it('warns that durable allow-always trust bypasses ask="always"', async () => {
+  it('does not warn about durable allow-always trust when ask="always" is enforced', async () => {
     await withExecApprovalsFile(
       {
         version: 1,
@@ -299,9 +299,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     );
 
     const message = lastMessage();
-    expect(message).toContain('tools.exec: ask="always" still bypasses future prompts');
-    expect(message).toContain("allow-always entry");
-    expect(message).toContain('before ask="always" is evaluated');
+    expect(message).not.toContain('tools.exec: ask="always" still bypasses future prompts');
   });
 
   it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {

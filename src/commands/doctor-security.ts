@@ -13,7 +13,6 @@ import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
   type ExecAsk,
-  type ExecAllowlistEntry,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
@@ -190,60 +189,9 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   return warnings;
 }
 
-function countDurableExecAllowAlwaysEntries(
-  approvals: ExecApprovalsFile,
-  agentId?: string,
-): number {
-  return resolveExecApprovalsFromFile({ file: approvals, agentId }).allowlist.filter(
-    (entry): entry is ExecAllowlistEntry => entry.source === "allow-always",
-  ).length;
-}
-
 function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
-  const warnings: string[] = [];
-  const approvals = loadExecApprovals();
-
-  const maybeWarn = (params: {
-    scopeLabel: string;
-    execConfig: { ask?: ExecAsk } | undefined;
-    agentId?: string;
-  }) => {
-    const host = resolveHostExecPolicy({
-      approvals,
-      execConfig: params.execConfig,
-      agentId: params.agentId,
-    });
-    if (host.ask !== "always") {
-      return;
-    }
-    const durableCount = countDurableExecAllowAlwaysEntries(approvals, params.agentId);
-    if (durableCount === 0) {
-      return;
-    }
-    warnings.push(
-      [
-        `- ${params.scopeLabel}: ask="always" still bypasses future prompts for commands saved with allow-always.`,
-        `  Host durable trust: ${durableCount} allow-always entr${durableCount === 1 ? "y" : "ies"} in ~/.openclaw/exec-approvals.json.`,
-        '  Matching commands reuse that durable trust before ask="always" is evaluated.',
-        `  Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
-      ].join("\n"),
-    );
-  };
-
-  maybeWarn({
-    scopeLabel: "tools.exec",
-    execConfig: cfg.tools?.exec,
-  });
-
-  for (const agent of cfg.agents?.list ?? []) {
-    maybeWarn({
-      scopeLabel: `agents.list.${agent.id}.tools.exec`,
-      execConfig: agent.tools?.exec,
-      agentId: agent.id,
-    });
-  }
-
-  return warnings;
+  void cfg;
+  return [];
 }
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {

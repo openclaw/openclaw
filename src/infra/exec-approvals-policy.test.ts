@@ -89,7 +89,7 @@ describe("exec approvals policy helpers", () => {
       analysisOk: true,
       allowlistSatisfied: false,
       durableApprovalSatisfied: true,
-      expected: false,
+      expected: true,
     },
     {
       ask: "off" as const,
@@ -130,9 +130,8 @@ describe("exec approvals policy helpers", () => {
         segmentAllowlistEntries: [],
         allowlist: [
           {
-            pattern: "=command:test",
+            pattern: "=command:613b5a60181648fd",
             source: "allow-always",
-            commandText: 'powershell -NoProfile -Command "Write-Output hi"',
           },
         ],
         commandText: 'powershell -NoProfile -Command "Write-Output hi"',

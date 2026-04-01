@@ -27,21 +27,11 @@ export function getDiscordExecApprovalApprovers(params: {
   accountId?: string | null;
   configOverride?: DiscordExecApprovalConfig | null;
 }): string[] {
-  const account = resolveDiscordAccount(params).config;
   return resolveApprovalApprovers({
-    explicit: params.configOverride?.approvers ?? account.execApprovals?.approvers,
-    allowFrom: account.allowFrom,
-    extraAllowFrom: account.dm?.allowFrom,
-    defaultTo: account.defaultTo,
+    explicit:
+      params.configOverride?.approvers ??
+      resolveDiscordAccount(params).config.execApprovals?.approvers,
     normalizeApprover: (value) => normalizeDiscordApproverId(String(value)),
-    normalizeDefaultTo: (value) => {
-      try {
-        const target = parseDiscordTarget(value);
-        return target?.kind === "user" ? target.id : undefined;
-      } catch {
-        return undefined;
-      }
-    },
   });
 }
 

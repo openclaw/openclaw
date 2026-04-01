@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -429,21 +430,30 @@ describe("exec approvals", () => {
     });
   });
 
-  it("suppresses future gateway prompts when allow-always trust matches the command", async () => {
-    await expectGatewayExecWithoutApproval({
-      config: {
-        version: 1,
-        defaults: { security: "full", ask: "always", askFallback: "full" },
-        agents: {
-          main: {
-            allowlist: [{ pattern: process.execPath, source: "allow-always" }],
-          },
+  it("keeps ask=always prompts even when durable allow-always trust matches", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "full" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: process.execPath, source: "allow-always" }],
         },
       },
-      command: `${JSON.stringify(process.execPath)} --version`,
+    });
+    mockPendingApprovalRegistration();
+
+    const tool = createExecTool({
+      host: "gateway",
       ask: "always",
       security: "full",
+      approvalRunningNoticeMs: 0,
     });
+
+    const result = await tool.execute("call-gateway-durable-still-prompts", {
+      command: `${JSON.stringify(process.execPath)} --version`,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
   });
 
   it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
@@ -472,7 +482,7 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
   });
 
-  it("suppresses future node-host prompts when allow-always trust matches the command", async () => {
+  it("keeps ask=always prompts for node-host runs even with durable trust", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
@@ -511,10 +521,8 @@ describe("exec approvals", () => {
       command: `${JSON.stringify(process.execPath)} --version`,
     });
 
-    expect(result.details.status).toBe("completed");
-    expect(getResultText(result)).toContain("node-ok");
-    expect(calls).not.toContain("exec.approval.request");
-    expect(calls).not.toContain("exec.approval.waitDecision");
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
   });
 
   it("reuses exact-command durable trust for node shell-wrapper reruns", async () => {
@@ -525,6 +533,7 @@ describe("exec approvals", () => {
         const prepared = buildPreparedSystemRunPayload({
           params: { command: ["/bin/sh", "-lc", "cd ."], cwd: process.cwd() },
         }) as { payload?: { plan?: { commandText?: string } } };
+        const commandText = prepared.payload?.plan?.commandText ?? "";
         return {
           file: {
             version: 1,
@@ -532,9 +541,12 @@ describe("exec approvals", () => {
               main: {
                 allowlist: [
                   {
-                    pattern: "=command:test",
+                    pattern: `=command:${crypto
+                      .createHash("sha256")
+                      .update(commandText)
+                      .digest("hex")
+                      .slice(0, 16)}`,
                     source: "allow-always",
-                    commandText: prepared.payload?.plan?.commandText,
                   },
                 ],
               },
@@ -556,8 +568,8 @@ describe("exec approvals", () => {
 
     const tool = createExecTool({
       host: "node",
-      ask: "always",
-      security: "full",
+      ask: "on-miss",
+      security: "allowlist",
       approvalRunningNoticeMs: 0,
     });
 

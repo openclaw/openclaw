@@ -166,7 +166,6 @@ export async function processGatewayAllowlist(
     hostSecurity === "allowlist" &&
     analysisOk &&
     allowlistSatisfied &&
-    !durableApprovalSatisfied &&
     !enforcedCommand &&
     allowlistPlanUnavailableReason !== null;
   const requiresAsk =

@@ -61,14 +61,9 @@ export function getSlackExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  const account = resolveSlackAccount(params).config;
   return resolveApprovalApprovers({
-    explicit: account.execApprovals?.approvers,
-    allowFrom: account.allowFrom,
-    extraAllowFrom: account.dm?.allowFrom,
-    defaultTo: account.defaultTo,
+    explicit: resolveSlackAccount(params).config.execApprovals?.approvers,
     normalizeApprover: normalizeSlackApproverId,
-    normalizeDefaultTo: normalizeSlackApproverId,
   });
 }
 

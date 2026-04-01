@@ -165,7 +165,7 @@ describe("SlackExecApprovalHandler", () => {
     );
   });
 
-  it("handles approvals when approvers are inferred from allowFrom", async () => {
+  it("does not treat allowFrom senders as approvers", async () => {
     const app = buildApp();
     const cfg = buildConfig("dm", {
       allowFrom: ["U123APPROVER"],
@@ -178,6 +178,6 @@ describe("SlackExecApprovalHandler", () => {
       cfg,
     });
 
-    expect(handler.shouldHandle(buildRequest())).toBe(true);
+    expect(handler.shouldHandle(buildRequest())).toBe(false);
   });
 });

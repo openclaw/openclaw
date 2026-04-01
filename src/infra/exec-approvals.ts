@@ -267,6 +267,24 @@ function ensureAllowlistIds(
   return changed ? next : allowlist;
 }
 
+function stripAllowlistCommandText(
+  allowlist: ExecAllowlistEntry[] | undefined,
+): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) {
+    return allowlist;
+  }
+  let changed = false;
+  const next = allowlist.map((entry) => {
+    if (typeof entry.commandText !== "string") {
+      return entry;
+    }
+    changed = true;
+    const { commandText: _commandText, ...rest } = entry;
+    return rest;
+  });
+  return changed ? next : allowlist;
+}
+
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
@@ -279,7 +297,8 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
   }
   for (const [key, agent] of Object.entries(agents)) {
     const coerced = coerceAllowlistEntries(agent.allowlist);
-    const allowlist = ensureAllowlistIds(coerced);
+    const withIds = ensureAllowlistIds(coerced);
+    const allowlist = stripAllowlistCommandText(withIds);
     if (allowlist !== agent.allowlist) {
       agents[key] = { ...agent, allowlist };
     }
@@ -499,14 +518,16 @@ export function requiresExecApproval(params: {
   allowlistSatisfied: boolean;
   durableApprovalSatisfied?: boolean;
 }): boolean {
+  if (params.ask === "always") {
+    return true;
+  }
   if (params.durableApprovalSatisfied === true) {
     return false;
   }
   return (
-    params.ask === "always" ||
-    (params.ask === "on-miss" &&
-      params.security === "allowlist" &&
-      (!params.analysisOk || !params.allowlistSatisfied))
+    params.ask === "on-miss" &&
+    params.security === "allowlist" &&
+    (!params.analysisOk || !params.allowlistSatisfied)
   );
 }
 
@@ -517,12 +538,16 @@ export function hasDurableExecApproval(params: {
   commandText?: string | null;
 }): boolean {
   const normalizedCommand = params.commandText?.trim();
+  const commandPattern = normalizedCommand
+    ? buildDurableCommandApprovalPattern(normalizedCommand)
+    : null;
   const exactCommandMatch = normalizedCommand
     ? (params.allowlist ?? []).some(
         (entry) =>
           entry.source === "allow-always" &&
-          typeof entry.commandText === "string" &&
-          entry.commandText.trim() === normalizedCommand,
+          (entry.pattern === commandPattern ||
+            (typeof entry.commandText === "string" &&
+              entry.commandText.trim() === normalizedCommand)),
       )
     : false;
   const allowlistMatch =
@@ -570,7 +595,6 @@ export function addAllowlistEntry(
   pattern: string,
   options?: {
     source?: ExecAllowlistEntry["source"];
-    commandText?: string;
   },
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
@@ -592,7 +616,6 @@ export function addAllowlistEntry(
           ? {
               ...entry,
               source: options?.source ?? entry.source,
-              commandText: options?.commandText ?? entry.commandText,
               lastUsedAt: now,
             }
           : entry,
@@ -603,7 +626,6 @@ export function addAllowlistEntry(
           id: crypto.randomUUID(),
           pattern: trimmed,
           source: options?.source,
-          commandText: options?.commandText,
           lastUsedAt: now,
         },
       ];
@@ -623,7 +645,6 @@ export function addDurableCommandApproval(
   }
   addAllowlistEntry(approvals, agentId, buildDurableCommandApprovalPattern(normalized), {
     source: "allow-always",
-    commandText: normalized,
   });
 }
 

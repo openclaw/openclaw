@@ -22,12 +22,17 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("requires enablement and an explicit or inferred approver", () => {
+  it("requires enablement and explicit approvers", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+      }),
+    ).toBe(false);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: true, approvers: ["123"] }),
       }),
     ).toBe(true);
   });
@@ -43,7 +48,7 @@ describe("discord exec approvals", () => {
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "123" })).toBe(false);
   });
 
-  it("infers approvers from allowFrom, legacy dm.allowFrom, and explicit DM defaultTo", () => {
+  it("does not infer approvers from allowFrom or default DM routes", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
@@ -53,18 +58,7 @@ describe("discord exec approvals", () => {
       },
     );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789"]);
-    expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(true);
-  });
-
-  it("ignores non-user default targets when inferring approvers", () => {
-    const cfg = buildConfig(
-      { enabled: true },
-      {
-        defaultTo: "channel:123",
-      },
-    );
-
     expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
   });
 });

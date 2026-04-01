@@ -451,7 +451,7 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest())).toBe(false);
   });
 
-  it("uses inferred approvers from channel allowFrom", () => {
+  it("does not treat channel allowFrom as approval authority", () => {
     const handler = createHandler({ enabled: true }, "default", {
       channels: {
         discord: {
@@ -460,7 +460,7 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
         },
       },
     });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
+    expect(handler.shouldHandle(createRequest())).toBe(false);
   });
 
   it("returns true with minimal config", () => {
@@ -634,7 +634,7 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
         expected: [],
       },
       {
-        name: "inferred approvers",
+        name: "allowFrom does not grant approver rights",
         config: { enabled: true } as DiscordExecApprovalConfig,
         cfgOverrides: {
           channels: {
@@ -644,7 +644,7 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
             },
           },
         },
-        expected: ["123"],
+        expected: [],
       },
     ] as const;
 
