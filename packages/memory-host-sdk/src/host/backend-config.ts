@@ -328,8 +328,9 @@ function isCaseInsensitiveFilesystem(dir: string): boolean {
     const { ino: inoLower } = fs.statSync(lower);
     return inoUpper === inoLower;
   } catch {
-    // Fallback: macOS default filesystem is case-insensitive.
-    return process.platform === "darwin";
+    // Cannot stat the upper/lower paths — conservatively report case-sensitive
+    // so both collections are registered. QMD will deduplicate if needed.
+    return false;
   }
 }
 
