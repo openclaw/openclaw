@@ -324,6 +324,7 @@ export async function processMessage(params: {
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
     ChatType: params.msg.chatType,
+    Timestamp: params.msg.timestamp,
     ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
     GroupSubject: params.msg.groupSubject,
     GroupMembers: formatGroupMembers({
