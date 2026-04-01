@@ -154,10 +154,12 @@ function createBuildRequirementDeps(
     distRoot: path.join(tmp, "dist"),
     distEntry: path.join(tmp, DIST_ENTRY),
     buildStampPath: path.join(tmp, BUILD_STAMP),
-    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot())].map((sourceRoot) => ({
-      name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
-      path: sourceRoot,
-    })),
+    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot("demo"))].map(
+      (sourceRoot) => ({
+        name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
+        path: sourceRoot,
+      }),
+    ),
     configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
       path.join(tmp, filePath),
     ),

@@ -172,6 +172,16 @@ Surfaces operational issues. Findings also appear in `openclaw status` when issu
 | `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
 | `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
 
+## Chat task board (`/tasks`)
+
+Use `/tasks` in any chat session to see background tasks linked to that session. The board shows
+active and recently completed tasks with runtime, status, timing, and progress or error detail.
+
+When the current session has no visible linked tasks, `/tasks` falls back to agent-local task counts
+so you still get an overview without leaking other-session details.
+
+For the full operator ledger, use the CLI: `openclaw tasks list`.
+
 ## Status integration (task pressure)
 
 `openclaw status` includes an at-a-glance task summary:
@@ -185,6 +195,10 @@ The summary reports:
 - **active** — count of `queued` + `running`
 - **failures** — count of `failed` + `timed_out` + `lost`
 - **byRuntime** — breakdown by `acp`, `subagent`, `cron`, `cli`
+
+Both `/status` and the `session_status` tool use a cleanup-aware task snapshot: active tasks are
+preferred, stale completed rows are hidden, and recent failures only surface when no active work
+remains. This keeps the status card focused on what matters right now.
 
 ## Storage and maintenance
 

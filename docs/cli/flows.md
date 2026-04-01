@@ -37,7 +37,7 @@ openclaw flows show <lookup>
 openclaw flows show <lookup> --json
 ```
 
-The output includes the flow status, current step, blocked summary when present, and linked tasks.
+The output includes the flow status, current step, wait target, blocked summary when present, stored output keys, and linked tasks.
 
 ### `flows cancel`
 

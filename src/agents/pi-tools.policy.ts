@@ -1,10 +1,13 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import {
+  resolveSessionConversationRef,
+  resolveSessionParentSessionKey,
+} from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -136,7 +139,18 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!raw) {
     return {};
   }
-  const base = resolveThreadParentSessionKey(raw) ?? raw;
+  const resolvedConversation = resolveSessionConversationRef(raw);
+  if (resolvedConversation) {
+    const groupId = resolvedConversation.baseConversationId;
+    if (!groupId) {
+      return {};
+    }
+    return {
+      channel: resolvedConversation.channel,
+      groupId,
+    };
+  }
+  const base = resolveSessionParentSessionKey(raw) ?? raw;
   const parts = base.split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
