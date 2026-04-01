@@ -50,7 +50,8 @@ function applyFeishuSDKReconnectPatch(): void {
     | ((data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array }) => Promise<void>)
     | undefined;
   if (origHandleControlData) {
-    (proto as any).handleControlData = async function (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (proto as unknown as { handleControlData: typeof origHandleControlData }).handleControlData = async function (
       data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array },
     ) {
       const self = this as unknown as Record<string, unknown>;
@@ -74,7 +75,8 @@ function applyFeishuSDKReconnectPatch(): void {
   // --- Fix 2: Exponential backoff on reConnect ---
   const origReConnect = proto.reConnect as ((isStart?: boolean) => Promise<void>) | undefined;
   if (origReConnect) {
-    (proto as any).reConnect = async function (isStart = false) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (proto as unknown as { reConnect: typeof origReConnect }).reConnect = async function (isStart = false) {
       const self = this as unknown as Record<string, unknown>;
       if (isStart) {
         // Reset backoff counter on a fresh start
