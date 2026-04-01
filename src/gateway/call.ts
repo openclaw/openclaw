@@ -884,7 +884,10 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlOverrideSource: context.urlOverrideSource,
     explicitAuth: context.explicitAuth,
     resolvedAuth: resolvedCredentials,
-    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+    errorHint:
+      context.urlOverrideSource === "env"
+        ? "Fix: set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD."
+        : "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
   ensureRemoteModeUrlConfigured(context);
