@@ -1,10 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
 
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
   extraParamsOverride?: Parameters<typeof applyExtraParamsToAgent>[4];
+  model?: Parameters<typeof applyExtraParamsToAgent>[8];
   modelId: string;
   provider: string;
 }) {
@@ -16,6 +18,10 @@ function applyAndExpectWrapped(params: {
     params.provider,
     params.modelId,
     params.extraParamsOverride,
+    undefined, // thinkingLevel
+    undefined, // agentId
+    undefined, // workspaceDir
+    params.model,
   );
 
   expect(agent.streamFn).toBeDefined();
@@ -160,6 +166,11 @@ describe("cacheRetention default behavior", () => {
           },
         },
       },
+      model: {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
       modelId: "claude-sonnet-4-6",
       provider: "litellm",
     });
@@ -167,14 +178,26 @@ describe("cacheRetention default behavior", () => {
 
   it("does not default to caching for custom provider without explicit config", () => {
     const agent: { streamFn?: StreamFn } = {};
-    const cfg = undefined;
-    const provider = "litellm";
-    const modelId = "claude-sonnet-4-6";
 
-    applyExtraParamsToAgent(agent, cfg, provider, modelId);
+    applyExtraParamsToAgent(
+      agent,
+      undefined, // cfg
+      "litellm",
+      "claude-sonnet-4-6",
+      undefined, // extraParamsOverride
+      undefined, // thinkingLevel
+      undefined, // agentId
+      undefined, // workspaceDir
+      {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+    );
 
     // Without explicit cacheRetention config, custom providers should NOT
     // get caching — unlike direct Anthropic which defaults to "short".
+    expect(agent.streamFn).toBeUndefined();
   });
 
   it("respects cacheRetention 'short' for custom anthropic-messages provider", () => {
@@ -192,6 +215,11 @@ describe("cacheRetention default behavior", () => {
           },
         },
       },
+      model: {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-opus-4-6",
+      } as Model<"anthropic-messages">,
       modelId: "claude-opus-4-6",
       provider: "litellm",
     });
