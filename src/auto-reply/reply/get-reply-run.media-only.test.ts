@@ -224,6 +224,40 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
   });
 
+  it("injects the generic outbound media hint even without inbound media", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "send the result",
+          RawBody: "send the result",
+          CommandBody: "send the result",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "451740013",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "send the result",
+          BodyStripped: "send the result",
+          ThreadHistoryBody: "Earlier message in this thread",
+          Provider: "telegram",
+          ChatType: "direct",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "451740013",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain(
+      "When replying on channels that support attachments",
+    );
+    expect(call?.followupRun.prompt).toContain(
+      "send the actual media together with a short caption or text reply",
+    );
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({

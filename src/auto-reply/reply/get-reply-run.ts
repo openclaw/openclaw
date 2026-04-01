@@ -423,12 +423,13 @@ export async function runPreparedReply(
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
-  const mediaReplyHint = mediaNote
-    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
-    : undefined;
+  const mediaReplyHint =
+    ctx.Provider || sessionCtx.Provider
+      ? "When replying on channels that support attachments, if you already have a local image or other media file the user should see, send the actual media together with a short caption or text reply instead of only pasting file paths. Prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
+      : undefined;
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
-    : prefixedBody;
+    : [mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim();
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -478,7 +479,7 @@ export async function runPreparedReply(
   const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
-    : queueBodyBase;
+    : [mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim();
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
