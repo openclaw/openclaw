@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
   applyConfig,
@@ -12,6 +12,10 @@ import {
   updateConfigFormValue,
   type ConfigState,
 } from "./config.ts";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createState(): ConfigState {
   return {
@@ -380,7 +384,7 @@ describe("saveConfig", () => {
 });
 
 describe("runUpdate", () => {
-  it("sends update.run with session key", async () => {
+  it("sends update.run with session key and omits force by default", async () => {
     const request = vi.fn().mockResolvedValue({});
     const state = createState();
     state.connected = true;
@@ -391,7 +395,6 @@ describe("runUpdate", () => {
 
     expect(request).toHaveBeenCalledWith("update.run", {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
-      force: false,
     });
   });
 
@@ -408,6 +411,36 @@ describe("runUpdate", () => {
     await runUpdate(state);
 
     expect(state.lastError).toBe("Update error: network unavailable");
+  });
+
+  it("does not let a prior success timer clear a newer update progress state", async () => {
+    vi.useFakeTimers();
+
+    let callCount = 0;
+    const request = vi.fn().mockImplementation(async () => {
+      callCount += 1;
+      return callCount === 1 ? {} : new Promise<never>(() => {});
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+    expect(state.updateProgress).not.toBeNull();
+
+    const firstStartedAtMs = state.updateProgress?.startedAtMs;
+    await vi.advanceTimersByTimeAsync(1);
+    const secondRun = runUpdate(state);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.updateProgress).not.toBeNull();
+    expect(state.updateProgress?.startedAtMs).not.toBe(firstStartedAtMs);
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(state.updateProgress).not.toBeNull();
+
+    secondRun.catch(() => {});
   });
 });
 

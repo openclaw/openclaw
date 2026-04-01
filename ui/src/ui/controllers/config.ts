@@ -11,7 +11,9 @@ import {
 
 export type UpdateSkippedReason = "dirty" | "no-upstream" | "not-git-install" | null;
 
-const SKIPPED_REASON_MESSAGES: Record<string, { message: string; warning: string }> = {
+type KnownUpdateSkippedReason = Exclude<UpdateSkippedReason, null>;
+
+const SKIPPED_REASON_MESSAGES = {
   dirty: {
     message: "Repository has uncommitted changes.",
     warning:
@@ -27,16 +29,44 @@ const SKIPPED_REASON_MESSAGES: Record<string, { message: string; warning: string
     warning:
       "Force update will attempt to reinstall globally via npm. This may affect your current installation.",
   },
-};
+} satisfies Record<KnownUpdateSkippedReason, { message: string; warning: string }>;
+
+const updateProgressClearTimers = new WeakMap<
+  ConfigState,
+  ReturnType<typeof globalThis.setTimeout>
+>();
+
+function isKnownUpdateSkippedReason(reason: string | null): reason is KnownUpdateSkippedReason {
+  return reason === "dirty" || reason === "no-upstream" || reason === "not-git-install";
+}
+
+function clearUpdateProgressTimer(state: ConfigState) {
+  const timerId = updateProgressClearTimers.get(state);
+  if (timerId !== undefined) {
+    clearTimeout(timerId);
+    updateProgressClearTimers.delete(state);
+  }
+}
+
+function scheduleUpdateProgressClear(state: ConfigState, startedAtMs: number) {
+  clearUpdateProgressTimer(state);
+  const timerId = globalThis.setTimeout(() => {
+    if (state.updateProgress?.startedAtMs === startedAtMs && !state.updateRunning) {
+      state.updateProgress = null;
+    }
+    updateProgressClearTimers.delete(state);
+  }, 2000);
+  updateProgressClearTimers.set(state, timerId);
+}
 
 export function getSkippedReasonInfo(reason: string | null): {
   message: string;
   warning: string;
 } | null {
-  if (!reason) {
+  if (!isKnownUpdateSkippedReason(reason)) {
     return null;
   }
-  return SKIPPED_REASON_MESSAGES[reason] ?? null;
+  return SKIPPED_REASON_MESSAGES[reason];
 }
 
 export type ConfigState = {
@@ -236,20 +266,22 @@ export async function runUpdate(state: ConfigState, force = false) {
   if (!state.client || !state.connected) {
     return;
   }
+  clearUpdateProgressTimer(state);
   state.updateRunning = true;
   state.lastError = null;
   state.updateSkippedReason = null;
   state.updateConfirmPending = false;
-  state.updateProgress = { currentStep: null, completedSteps: [], startedAtMs: Date.now() };
+  const startedAtMs = Date.now();
+  state.updateProgress = { currentStep: null, completedSteps: [], startedAtMs };
   try {
     const res = await state.client.request<UpdateRunResponse>("update.run", {
       sessionKey: state.applySessionKey,
-      force,
+      ...(force ? { force: true } : {}),
     });
     if (res?.skipped) {
-      const reason = (res.result?.reason ?? "unknown") as UpdateSkippedReason;
+      const reason = res.result?.reason ?? null;
       const info = getSkippedReasonInfo(reason);
-      if (info) {
+      if (info && isKnownUpdateSkippedReason(reason)) {
         state.updateSkippedReason = reason;
         state.updateConfirmPending = true;
       } else {
@@ -265,11 +297,10 @@ export async function runUpdate(state: ConfigState, force = false) {
   } finally {
     state.updateRunning = false;
     if (state.lastError || state.updateConfirmPending) {
+      clearUpdateProgressTimer(state);
       state.updateProgress = null;
     } else {
-      setTimeout(() => {
-        state.updateProgress = null;
-      }, 2000);
+      scheduleUpdateProgressClear(state, startedAtMs);
     }
   }
 }

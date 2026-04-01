@@ -491,6 +491,9 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
           },
         ],
       };
+    } else if (p.kind === "finished") {
+      // Cleanup stays tied to the RPC lifecycle; keep the event explicit so
+      // future kinds do not get dropped by accident.
     }
     return;
   }

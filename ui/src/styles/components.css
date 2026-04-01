@@ -260,13 +260,6 @@
   opacity: 0.5;
 }
 
-.update-banner__status {
-  margin-left: 8px;
-  font-size: 13px;
-  font-style: italic;
-  opacity: 0.8;
-}
-
 .update-banner__progress {
   display: block;
   margin-top: 8px;
