@@ -67,7 +67,12 @@ describe("memory manager atomic reindex", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  const createCfg = (params?: { sources?: TestMemorySource[]; cacheEnabled?: boolean }) =>
+  const createCfg = (params?: {
+    sources?: TestMemorySource[];
+    cacheEnabled?: boolean;
+    cacheMaxEntries?: number;
+    vectorEnabled?: boolean;
+  }) =>
     ({
       agents: {
         defaults: {
@@ -75,8 +80,11 @@ describe("memory manager atomic reindex", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
-            cache: { enabled: params?.cacheEnabled ?? false },
+            store: { path: indexPath, vector: { enabled: params?.vectorEnabled ?? false } },
+            cache: {
+              enabled: params?.cacheEnabled ?? false,
+              ...(params?.cacheMaxEntries ? { maxEntries: params.cacheMaxEntries } : {}),
+            },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
@@ -95,6 +103,8 @@ describe("memory manager atomic reindex", () => {
   const createManager = async (params?: {
     sources?: TestMemorySource[];
     cacheEnabled?: boolean;
+    cacheMaxEntries?: number;
+    vectorEnabled?: boolean;
   }) => {
     manager = await getRequiredMemoryIndexManager({
       cfg: createCfg(params),
@@ -127,6 +137,52 @@ describe("memory manager atomic reindex", () => {
     expect(afterStatus.chunks).toBeGreaterThan(0);
   });
 
+  it("does not restore stale vector dims after an unsafe reindex rollback", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
+    manager = await createManager({ vectorEnabled: true });
+
+    const internal = manager as unknown as {
+      db: {
+        exec: (sql: string) => void;
+        prepare: (sql: string) => {
+          get: (tableName: string) => { name: string } | undefined;
+        };
+      };
+      vector: { dims?: number };
+      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
+    };
+    const hasVectorTable = () =>
+      internal.db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+        .get("chunks_vec")?.name === "chunks_vec";
+
+    internal.ensureVectorReady = async (dimensions?: number) => {
+      if (typeof dimensions === "number" && dimensions > 0 && internal.vector.dims !== dimensions) {
+        internal.db.exec(
+          "CREATE TABLE IF NOT EXISTS chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)",
+        );
+        internal.vector.dims = dimensions;
+      }
+      return true;
+    };
+
+    await manager.sync({ force: true });
+    expect(hasVectorTable()).toBe(true);
+    expect(internal.vector.dims).toBe(3);
+
+    shouldFail = true;
+    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
+
+    expect(hasVectorTable()).toBe(false);
+    expect(internal.vector.dims).toBeUndefined();
+
+    shouldFail = false;
+    await expect(manager.sync({ reason: "retry" })).resolves.toBeUndefined();
+
+    expect(hasVectorTable()).toBe(true);
+    expect(internal.vector.dims).toBe(3);
+  });
+
   it("preserves successful batch cache writes across atomic reindex rollback", async () => {
     manager = await createManager({ cacheEnabled: true });
     const line = "a".repeat(4200);
@@ -151,6 +207,42 @@ describe("memory manager atomic reindex", () => {
 
     await manager.sync({ force: true });
     expect(calls).toBe(3);
+  });
+
+  it("prunes mirrored cache entries during failed atomic reindexes", async () => {
+    manager = await createManager({ cacheEnabled: true, cacheMaxEntries: 1 });
+    const initialLine = "z".repeat(4200);
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), initialLine);
+    await manager.sync({ force: true });
+
+    const lines = ["a", "b"].map((char) => char.repeat(4200));
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), lines.join("\n"));
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error("embedding failure");
+      }
+      return texts.map((_, index) => [calls, index + 1, 0]);
+    });
+
+    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
+    expect(calls).toBe(2);
+
+    const cacheEntries =
+      (
+        manager as unknown as {
+          db: {
+            prepare: (sql: string) => {
+              get: () => { c: number } | undefined;
+            };
+          };
+        }
+      ).db
+        .prepare(`SELECT COUNT(*) as c FROM embedding_cache`)
+        .get()?.c ?? 0;
+    expect(cacheEntries).toBe(1);
   });
 
   it("allows enabling cache on an existing index created without the cache table", async () => {
@@ -232,6 +324,130 @@ describe("memory manager atomic reindex", () => {
 
       expect(getMemoryHash(brokenMemoryRelPath)).not.toBe(originalBrokenHash);
       expect(manager.status().dirty).toBe(false);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps preserved session delta baselines aligned after a rollback merge", async () => {
+    const stateDir = path.join(fixtureRoot, `state-rollback-deltas-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const sessionPath = path.join(sessionDir, "rollback-delta.jsonl");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      await fs.mkdir(sessionDir, { recursive: true });
+      await fs.writeFile(sessionPath, "a\n");
+
+      manager = await createManager({ sources: ["sessions"] });
+
+      const internal = manager as unknown as {
+        settings: {
+          sync: {
+            sessions?: {
+              deltaBytes?: number;
+              deltaMessages?: number;
+            };
+          };
+        };
+        sessionDeltas: Map<
+          string,
+          {
+            lastSize: number;
+            pendingBytes: number;
+            pendingMessages: number;
+          }
+        >;
+        restoreSyncState: (
+          snapshot: {
+            dirty: boolean;
+            sessionsDirty: boolean;
+            sessionFullRetryPending: boolean;
+            sessionsDirtyFiles: Set<string>;
+            sessionDeltas: Map<
+              string,
+              {
+                lastSize: number;
+                pendingBytes: number;
+                pendingMessages: number;
+              }
+            >;
+            lastMetaSerialized: string | null;
+            vectorDims: number | undefined;
+          },
+          liveState?: {
+            dirty: boolean;
+            sessionsDirty: boolean;
+            sessionFullRetryPending: boolean;
+            sessionsDirtyFiles: Set<string>;
+            sessionDeltas: Map<
+              string,
+              {
+                lastSize: number;
+                pendingBytes: number;
+                pendingMessages: number;
+              }
+            >;
+            lastMetaSerialized: string | null;
+            vectorDims: number | undefined;
+          },
+        ) => void;
+        updateSessionDelta: (
+          sessionFile: string,
+        ) => Promise<{ pendingBytes: number; pendingMessages: number } | null>;
+      };
+      internal.settings.sync.sessions = { deltaBytes: 100, deltaMessages: 100 };
+
+      const firstSize = (await fs.stat(sessionPath)).size;
+      await fs.appendFile(sessionPath, "b\n");
+      const secondSize = (await fs.stat(sessionPath)).size;
+      const firstDelta = secondSize - firstSize;
+
+      internal.restoreSyncState(
+        {
+          dirty: false,
+          sessionsDirty: false,
+          sessionFullRetryPending: false,
+          sessionsDirtyFiles: new Set(),
+          sessionDeltas: new Map([
+            [sessionPath, { lastSize: firstSize, pendingBytes: 0, pendingMessages: 0 }],
+          ]),
+          lastMetaSerialized: null,
+          vectorDims: undefined,
+        },
+        {
+          dirty: false,
+          sessionsDirty: false,
+          sessionFullRetryPending: false,
+          sessionsDirtyFiles: new Set(),
+          sessionDeltas: new Map([
+            [sessionPath, { lastSize: secondSize, pendingBytes: firstDelta, pendingMessages: 1 }],
+          ]),
+          lastMetaSerialized: null,
+          vectorDims: undefined,
+        },
+      );
+
+      expect(internal.sessionDeltas.get(sessionPath)).toEqual({
+        lastSize: secondSize,
+        pendingBytes: firstDelta,
+        pendingMessages: 1,
+      });
+
+      await fs.appendFile(sessionPath, "c\n");
+      const thirdSize = (await fs.stat(sessionPath)).size;
+      const delta = await internal.updateSessionDelta(sessionPath);
+
+      expect(delta).not.toBeNull();
+      expect(delta?.pendingBytes).toBe(thirdSize - firstSize);
+      expect(delta?.pendingMessages).toBe(2);
+      expect(internal.sessionDeltas.get(sessionPath)?.lastSize).toBe(thirdSize);
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

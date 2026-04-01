@@ -686,11 +686,20 @@ export abstract class MemoryManagerSyncOps {
         merged.set(sessionFile, { ...liveState });
         continue;
       }
+      const snapshotIndexedSize = Math.max(0, snapshotState.lastSize - snapshotState.pendingBytes);
+      const liveIndexedSize = Math.max(0, liveState.lastSize - liveState.pendingBytes);
+      const lastSize = liveState.lastSize;
+      const indexedSize = Math.max(0, Math.min(lastSize, snapshotIndexedSize, liveIndexedSize));
       merged.set(sessionFile, {
-        // Keep the earlier baseline so a rolled-back reindex cannot discard
-        // bytes or messages that arrived while the rebuild was running.
-        lastSize: Math.min(snapshotState.lastSize, liveState.lastSize),
-        pendingBytes: Math.max(snapshotState.pendingBytes, liveState.pendingBytes),
+        // Preserve the latest observed size, but infer the earliest unindexed
+        // byte baseline from both states so rollback cannot lose or recount
+        // delta ranges that raced with the failed rebuild.
+        lastSize,
+        pendingBytes: Math.max(
+          snapshotState.pendingBytes,
+          liveState.pendingBytes,
+          lastSize - indexedSize,
+        ),
         pendingMessages: Math.max(snapshotState.pendingMessages, liveState.pendingMessages),
       });
     }
@@ -700,6 +709,7 @@ export abstract class MemoryManagerSyncOps {
   private restoreSyncState(
     snapshot: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>,
     liveState?: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>,
+    options?: { restoreVectorDims?: boolean },
   ) {
     this.dirty = snapshot.dirty || liveState?.dirty === true;
     const mergedDirtyFiles = new Set(snapshot.sessionsDirtyFiles);
@@ -720,7 +730,9 @@ export abstract class MemoryManagerSyncOps {
           Array.from(snapshot.sessionDeltas, ([sessionFile, state]) => [sessionFile, { ...state }]),
         );
     this.lastMetaSerialized = snapshot.lastMetaSerialized;
-    this.vector.dims = snapshot.vectorDims;
+    if (options?.restoreVectorDims ?? true) {
+      this.vector.dims = snapshot.vectorDims;
+    }
   }
 
   private restoreRetryStateAfterReindexRollback(params: {
@@ -1432,7 +1444,11 @@ export abstract class MemoryManagerSyncOps {
       this.pruneEmbeddingCacheIfNeeded?.();
     } catch (err) {
       const liveSyncState = this.snapshotSyncState();
-      this.restoreSyncState(originalSyncState, liveSyncState);
+      this.restoreSyncState(originalSyncState, liveSyncState, {
+        // Unsafe reindex mutates the live DB in place, so restoring stale dims
+        // can make the next incremental retry skip vector table recreation.
+        restoreVectorDims: false,
+      });
       this.restoreRetryStateAfterReindexRollback({
         memoryReindexStarted,
         sessionReindexStarted,

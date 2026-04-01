@@ -155,10 +155,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.upsertEmbeddingCacheInto(this.db, entries);
     if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
       this.upsertEmbeddingCacheInto(this.embeddingCacheMirrorDb, entries);
+      this.pruneEmbeddingCacheIfNeededIn(this.embeddingCacheMirrorDb);
     }
   }
 
   protected pruneEmbeddingCacheIfNeeded(): void {
+    this.pruneEmbeddingCacheIfNeededIn(this.db);
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      this.pruneEmbeddingCacheIfNeededIn(this.embeddingCacheMirrorDb);
+    }
+  }
+
+  private pruneEmbeddingCacheIfNeededIn(db: DatabaseSync): void {
     if (!this.cache.enabled) {
       return;
     }
@@ -166,7 +174,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!max || max <= 0) {
       return;
     }
-    const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
+    const row = db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
       | { c: number }
       | undefined;
     const count = row?.c ?? 0;
@@ -174,16 +182,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
     const excess = count - max;
-    this.db
-      .prepare(
-        `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          ` WHERE rowid IN (\n` +
-          `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          `   ORDER BY updated_at ASC\n` +
-          `   LIMIT ?\n` +
-          ` )`,
-      )
-      .run(excess);
+    db.prepare(
+      `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
+        ` WHERE rowid IN (\n` +
+        `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
+        `   ORDER BY updated_at ASC\n` +
+        `   LIMIT ?\n` +
+        ` )`,
+    ).run(excess);
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
