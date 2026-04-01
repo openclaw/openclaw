@@ -379,6 +379,85 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.create scopes the main alias to the requested agent", async () => {
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      key: "main",
+      agentId: "longmemeval",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe("agent:longmemeval:main");
+    expect(created.payload?.entry?.sessionFile).toBeTruthy();
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+      }
+    >;
+    expect(rawStore["agent:longmemeval:main"]?.sessionId).toBe(created.payload?.sessionId);
+    expect(rawStore["agent:main:main"]).toBeUndefined();
+
+    ws.close();
+  });
+
+  test("sessions.create preserves global and unknown sentinel keys", async () => {
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const globalCreated = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      key: "global",
+      agentId: "longmemeval",
+    });
+
+    expect(globalCreated.ok).toBe(true);
+    expect(globalCreated.payload?.key).toBe("global");
+    expect(globalCreated.payload?.entry?.sessionFile).toBeTruthy();
+
+    const unknownCreated = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      key: "unknown",
+      agentId: "longmemeval",
+    });
+
+    expect(unknownCreated.ok).toBe(true);
+    expect(unknownCreated.payload?.key).toBe("unknown");
+    expect(unknownCreated.payload?.entry?.sessionFile).toBeTruthy();
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+      }
+    >;
+    expect(rawStore.global?.sessionId).toBe(globalCreated.payload?.sessionId);
+    expect(rawStore.unknown?.sessionId).toBe(unknownCreated.payload?.sessionId);
+    expect(rawStore["agent:longmemeval:global"]).toBeUndefined();
+    expect(rawStore["agent:longmemeval:unknown"]).toBeUndefined();
+
+    ws.close();
+  });
+
   test("sessions.create rejects unknown parentSessionKey", async () => {
     await createSessionStoreDir();
     const { ws } = await openClient();
