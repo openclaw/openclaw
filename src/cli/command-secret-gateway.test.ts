@@ -278,25 +278,36 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: { source: "env", provider: "default", id: envKey },
+                  },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
-                },
               },
             },
           },
         } as OpenClawConfig,
         commandName: "agent",
-        targetIds: new Set(["tools.web.search.gemini.apiKey"]),
+        targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe(
-        "gemini-local-fallback-key",
+      const googleWebSearchConfig = result.resolvedConfig.plugins?.entries?.google?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(googleWebSearchConfig?.webSearch?.apiKey).toBe("gemini-local-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+        "resolved_local",
       );
-      expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   }, 300_000);
@@ -337,22 +348,39 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           web: {
             search: {
               enabled: false,
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_DISABLED_KEY" },
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_DISABLED_KEY",
+                  },
+                },
               },
             },
           },
         },
       } as OpenClawConfig,
       commandName: "agent",
-      targetIds: new Set(["tools.web.search.gemini.apiKey"]),
+      targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
     });
 
     expect(result.hadUnresolvedTargets).toBe(false);
-    expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("inactive_surface");
+    expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+      "inactive_surface",
+    );
     expect(
       result.diagnostics.some((entry) =>
-        entry.includes("tools.web.search.gemini.apiKey: tools.web.search is disabled."),
+        entry.includes(
+          "plugins.entries.google.config.webSearch.apiKey: tools.web.search is disabled.",
+        ),
       ),
     ).toBe(true);
   });
