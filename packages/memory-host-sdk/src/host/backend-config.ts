@@ -323,7 +323,9 @@ function isCaseInsensitiveFilesystem(dir: string): boolean {
     // the filesystem treats them as the same path -> case-insensitive.
     const upper = dir.toUpperCase();
     const lower = dir.toLowerCase();
-    if (upper === lower) return process.platform === "darwin"; // can't distinguish by case
+    if (upper === lower) {
+      return process.platform === "darwin"; // can't distinguish by case
+    }
     const { ino: inoUpper } = fs.statSync(upper);
     const { ino: inoLower } = fs.statSync(lower);
     return inoUpper === inoLower;
