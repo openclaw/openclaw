@@ -47,10 +47,7 @@ vi.mock("./subagent-followup.js", () => ({
 }));
 
 // Import after mocks
-import {
-  countActiveDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../../agents/subagent-registry.js";
+import { listDescendantRunsForRequester } from "../../agents/subagent-registry.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
@@ -130,7 +127,6 @@ function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested
 describe("dispatchCronDelivery — double-announce guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -276,7 +272,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
@@ -292,7 +287,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("retries transient direct announce failures before succeeding", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads)
       .mockRejectedValueOnce(new Error("ECONNRESET while sending"))
@@ -309,7 +303,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("does not retry permanent direct announce failures", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("chat not found"));
 
@@ -338,7 +331,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("text delivery always bypasses the write-ahead queue", async () => {
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
@@ -360,7 +352,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("structured/thread delivery also bypasses the write-ahead queue", async () => {
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
@@ -376,7 +367,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("transient retry delivers exactly once with skipQueue on both attempts", async () => {
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
     // First call throws a transient error, second call succeeds.
