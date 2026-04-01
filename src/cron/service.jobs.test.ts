@@ -70,7 +70,7 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
-  it("maps legacy payload delivery updates onto delivery", () => {
+  it("applies explicit delivery patches", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",
       channel: "telegram",
@@ -78,22 +78,18 @@ describe("applyJobPatch", () => {
     });
 
     const patch: CronJobPatch = {
-      payload: {
-        kind: "agentTurn",
-        deliver: false,
-        channel: "Signal",
+      delivery: {
+        mode: "none",
+        channel: "signal",
         to: "555",
-        bestEffortDeliver: true,
+        bestEffort: true,
       },
     };
 
     expect(() => applyJobPatch(job, patch)).not.toThrow();
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
-      expect(job.payload.deliver).toBe(false);
-      expect(job.payload.channel).toBe("Signal");
-      expect(job.payload.to).toBe("555");
-      expect(job.payload.bestEffortDeliver).toBe(true);
+      expect(job.payload.message).toBe("do it");
     }
     expect(job.delivery).toEqual({
       mode: "none",
@@ -103,7 +99,7 @@ describe("applyJobPatch", () => {
     });
   });
 
-  it("maps legacy payload delivery updates for custom session targets", () => {
+  it("applies explicit delivery patches for custom session targets", () => {
     const job = createIsolatedAgentTurnJob(
       "job-custom-session",
       {
@@ -115,32 +111,13 @@ describe("applyJobPatch", () => {
     );
 
     applyJobPatch(job, {
-      payload: { kind: "agentTurn", to: "555" },
+      delivery: { mode: "announce", to: "555" },
     });
 
     expect(job.delivery).toEqual({
       mode: "announce",
       channel: "telegram",
       to: "555",
-      bestEffort: undefined,
-    });
-  });
-
-  it("treats legacy payload targets as announce requests", () => {
-    const job = createIsolatedAgentTurnJob("job-3", {
-      mode: "none",
-      channel: "telegram",
-    });
-
-    const patch: CronJobPatch = {
-      payload: { kind: "agentTurn", to: " 999 " },
-    };
-
-    expect(() => applyJobPatch(job, patch)).not.toThrow();
-    expect(job.delivery).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "999",
       bestEffort: undefined,
     });
   });

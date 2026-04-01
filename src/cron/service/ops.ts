@@ -6,7 +6,6 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
-import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -250,8 +249,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const normalizedInput = normalizeCronCreateDeliveryInput(input);
-    const job = createJob(state, normalizedInput);
+    const job = createJob(state, input);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency

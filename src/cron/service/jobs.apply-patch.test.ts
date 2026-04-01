@@ -20,15 +20,10 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-describe("applyJobPatch legacy delivery migration", () => {
-  it("threads legacy payload threadId hints into delivery", () => {
+describe("applyJobPatch delivery merge", () => {
+  it("threads explicit delivery threadId patches into delivery", () => {
     const job = makeJob();
-    const patch = {
-      payload: {
-        kind: "agentTurn",
-        threadId: "99",
-      },
-    } as unknown as Parameters<typeof applyJobPatch>[1];
+    const patch = { delivery: { threadId: "99" } } as Parameters<typeof applyJobPatch>[1];
 
     applyJobPatch(job, patch);
 

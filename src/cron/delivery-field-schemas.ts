@@ -24,10 +24,6 @@ export const DeliveryThreadIdFieldSchema = z.union([
   z.number().finite(),
 ]);
 
-export const LegacyDeliveryThreadIdFieldSchema = DeliveryThreadIdFieldSchema.transform((value) =>
-  String(value),
-);
-
 export const TimeoutSecondsFieldSchema = z
   .number()
   .finite()
@@ -48,28 +44,6 @@ export function parseDeliveryInput(input: Record<string, unknown>): ParsedDelive
     to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, input.to),
     threadId: parseOptionalField(DeliveryThreadIdFieldSchema, input.threadId),
     accountId: parseOptionalField(TrimmedNonEmptyStringFieldSchema, input.accountId),
-  };
-}
-
-export type ParsedLegacyDeliveryHints = {
-  deliver?: boolean;
-  bestEffortDeliver?: boolean;
-  channel?: string;
-  provider?: string;
-  to?: string;
-  threadId?: string;
-};
-
-export function parseLegacyDeliveryHintsInput(
-  payload: Record<string, unknown>,
-): ParsedLegacyDeliveryHints {
-  return {
-    deliver: parseOptionalField(z.boolean(), payload.deliver),
-    bestEffortDeliver: parseOptionalField(z.boolean(), payload.bestEffortDeliver),
-    channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.channel),
-    provider: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.provider),
-    to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, payload.to),
-    threadId: parseOptionalField(LegacyDeliveryThreadIdFieldSchema, payload.threadId),
   };
 }
 

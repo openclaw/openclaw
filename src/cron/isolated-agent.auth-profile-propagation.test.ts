@@ -67,7 +67,10 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       const res = await runCronIsolatedAgentTurn({
         cfg,
         deps: createCliDeps(),
-        job: makeJob({ kind: "agentTurn", message: "check status", deliver: false }),
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "check status" }),
+          delivery: { mode: "none" },
+        },
         message: "check status",
         sessionKey: "cron:job-1",
         lane: "cron",

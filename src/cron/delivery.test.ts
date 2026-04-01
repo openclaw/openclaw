@@ -32,15 +32,16 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
   });
 
-  it("respects legacy payload deliver=false", () => {
+  it("defaults missing isolated agentTurn delivery to announce", () => {
     const plan = resolveCronDeliveryPlan(
       makeJob({
         delivery: undefined,
-        payload: { kind: "agentTurn", message: "hello", deliver: false },
+        payload: { kind: "agentTurn", message: "hello" },
       }),
     );
-    expect(plan.mode).toBe("none");
-    expect(plan.requested).toBe(false);
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("last");
   });
 
   it("resolves mode=none with requested=false and no channel (#21808)", () => {
