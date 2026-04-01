@@ -539,4 +539,78 @@ describe("bundled plugin postinstall", () => {
       },
     );
   });
+
+  it("keeps same package name with different versions as separate plugin installs", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        grammy: "1.38.4",
+      },
+    });
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.39.0",
+      },
+    });
+
+    expect(discoverBundledPluginRuntimeDeps({ extensionsDir })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "grammy",
+          version: "1.38.4",
+          pluginIds: ["discord"],
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "discord",
+            "node_modules",
+            "grammy",
+            "package.json",
+          ),
+        }),
+        expect.objectContaining({
+          name: "grammy",
+          version: "1.39.0",
+          pluginIds: ["telegram"],
+          sentinelPath: path.join(
+            "dist",
+            "extensions",
+            "telegram",
+            "node_modules",
+            "grammy",
+            "package.json",
+          ),
+        }),
+      ]),
+    );
+
+    const execSync = vi.fn();
+    runBundledPluginPostinstall({
+      env: { npm_config_global: "true", HOME: "/tmp/home" },
+      extensionsDir,
+      packageRoot,
+      execSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(execSync).toHaveBeenNthCalledWith(
+      1,
+      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "discord"),
+        env: { HOME: "/tmp/home" },
+        stdio: "pipe",
+      },
+    );
+    expect(execSync).toHaveBeenNthCalledWith(
+      2,
+      "npm install --omit=dev --no-save --package-lock=false grammy@1.39.0",
+      {
+        cwd: path.join(packageRoot, "dist", "extensions", "telegram"),
+        env: { HOME: "/tmp/home" },
+        stdio: "pipe",
+      },
+    );
+  });
 });
