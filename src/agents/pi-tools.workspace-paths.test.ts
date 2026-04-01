@@ -90,6 +90,28 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("treats content-less write calls as empty-file writes", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "SCRATCH.md";
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { writeTool } = expectReadWriteEditTools(tools);
+
+          await writeTool.execute("ws-write-empty", {
+            path: testFile,
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("");
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
   it("allows deletion edits with empty newText", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {

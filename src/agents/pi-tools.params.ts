@@ -292,7 +292,17 @@ export function wrapToolParamNormalization(
       const record =
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
-      if (requiredParamGroups?.length) {
+      const isContentlessWrite =
+        record &&
+        typeof record.path === "string" &&
+        !("content" in record) &&
+        requiredParamGroups?.some((group) => group.label === "content");
+      if (isContentlessWrite) {
+        // Treat content-less write calls as an explicit truncate/write-empty operation.
+        // This avoids agent retry loops when a model intends to clear a scratch file.
+        record.content = "";
+      }
+      if (requiredParamGroups?.length && !isContentlessWrite) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
