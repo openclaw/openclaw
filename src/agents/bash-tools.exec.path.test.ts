@@ -12,6 +12,12 @@ const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+const execApprovalsMocks = vi.hoisted(() => ({
+  resolveExecApprovals:
+    vi.fn<
+      (agentId?: string, overrides?: { security?: string; ask?: string }) => ExecApprovalsResolved
+    >(),
+}));
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
@@ -24,7 +30,7 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+  return { ...mod, resolveExecApprovals: execApprovalsMocks.resolveExecApprovals };
 });
 
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
@@ -73,7 +79,7 @@ async function loadFreshBashExecPathModulesForTest() {
   });
   vi.doMock("../infra/exec-approvals.js", async (importOriginal) => {
     const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-    return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+    return { ...mod, resolveExecApprovals: execApprovalsMocks.resolveExecApprovals };
   });
   const bashExec = await import("./bash-tools.exec.js");
   return {
@@ -93,11 +99,39 @@ const normalizePathEntries = (value?: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+function createRecordingSandbox(recordCommand: (command: string) => void) {
+  return {
+    containerName: "sandbox-test",
+    workspaceDir: process.cwd(),
+    containerWorkdir: process.cwd(),
+    async buildExecSpec(params: {
+      command: string;
+      workdir?: string;
+      env: Record<string, string>;
+      usePty: boolean;
+    }) {
+      recordCommand(params.command);
+      return {
+        argv: [
+          process.execPath,
+          "-e",
+          "process.stdout.write(process.argv[1] ?? '')",
+          params.command,
+        ],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      };
+    },
+  };
+}
+
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(async () => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
+    execApprovalsMocks.resolveExecApprovals.mockReset();
+    execApprovalsMocks.resolveExecApprovals.mockImplementation(() => createExecApprovals());
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -217,6 +251,12 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  beforeEach(async () => {
+    execApprovalsMocks.resolveExecApprovals.mockReset();
+    execApprovalsMocks.resolveExecApprovals.mockImplementation(() => createExecApprovals());
+    ({ createExecTool } = await loadFreshBashExecPathModulesForTest());
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
@@ -284,6 +324,64 @@ describe("exec host env validation", () => {
         command: "echo ok",
       }),
     ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it("enforces explicit deny for sandbox exec", async () => {
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "deny",
+      sandbox: createRecordingSandbox(() => undefined),
+    });
+
+    await expect(
+      tool.execute("call-sandbox-deny-default", {
+        command: "echo ok",
+      }),
+    ).rejects.toThrow("exec denied: host=sandbox security=deny");
+  });
+
+  it("rejects sandbox exec allowlist misses", async () => {
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "allowlist",
+      ask: "off",
+      sandbox: createRecordingSandbox(() => undefined),
+    });
+
+    await expect(
+      tool.execute("call-sandbox-allowlist-miss", {
+        command: "echo ok",
+      }),
+    ).rejects.toThrow("exec denied: allowlist miss");
+  });
+
+  it("quotes sandbox allowlist-approved command arguments before execution", async () => {
+    const execPathReal =
+      fs.realpathSync.native?.(process.execPath) ?? fs.realpathSync(process.execPath);
+    execApprovalsMocks.resolveExecApprovals.mockImplementation(() => ({
+      ...createExecApprovals(),
+      allowlist: [{ pattern: process.execPath }, { pattern: execPathReal }],
+    }));
+
+    let executedCommand = "";
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "allowlist",
+      ask: "off",
+      sandbox: createRecordingSandbox((command) => {
+        executedCommand = command;
+      }),
+    });
+
+    const result = await tool.execute("call-sandbox-enforced-command", {
+      command: `${JSON.stringify(process.execPath)} $HOME`,
+    });
+
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
+      executedCommand,
+    );
+    expect(executedCommand).toContain("'$HOME'");
+    expect(executedCommand).not.toContain(" $HOME");
   });
 
   it.each([

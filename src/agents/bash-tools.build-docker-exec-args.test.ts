@@ -13,16 +13,16 @@ describe("buildDockerExecArgs", () => {
       tty: false,
     });
 
+    const bootstrapArg = args[args.length - 3];
     const commandArg = args[args.length - 1];
     expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
-    expect(commandArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
-    expect(commandArg).toContain("echo hello");
-    expect(commandArg).toBe(
-      'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',
-    );
+    expect(bootstrapArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
+    expect(bootstrapArg).toContain('exec /bin/sh -c "$1"');
+    expect(commandArg).toMatch(/'[^']*echo'/);
+    expect(commandArg).toContain("'hello'");
   });
 
-  it("does not interpolate PATH into the shell command", () => {
+  it("does not interpolate PATH into the shell bootstrap script", () => {
     const injectedPath = "$(touch /tmp/openclaw-path-injection)";
     const args = buildDockerExecArgs({
       containerName: "test-container",
@@ -34,10 +34,10 @@ describe("buildDockerExecArgs", () => {
       tty: false,
     });
 
-    const commandArg = args[args.length - 1];
+    const bootstrapArg = args[args.length - 3];
     expect(args).toContain(`OPENCLAW_PREPEND_PATH=${injectedPath}`);
-    expect(commandArg).not.toContain(injectedPath);
-    expect(commandArg).toContain("OPENCLAW_PREPEND_PATH");
+    expect(bootstrapArg).not.toContain(injectedPath);
+    expect(bootstrapArg).toContain("OPENCLAW_PREPEND_PATH");
   });
 
   it("does not add PATH export when PATH is not in env", () => {
@@ -50,9 +50,12 @@ describe("buildDockerExecArgs", () => {
       tty: false,
     });
 
+    const bootstrapArg = args[args.length - 3];
     const commandArg = args[args.length - 1];
-    expect(commandArg).toBe("echo hello");
-    expect(commandArg).not.toContain("export PATH");
+    expect(bootstrapArg).toBe('exec /bin/sh -c "$1"');
+    expect(commandArg).toMatch(/'[^']*echo'/);
+    expect(commandArg).toContain("'hello'");
+    expect(bootstrapArg).not.toContain("export PATH");
   });
 
   it("includes workdir flag when specified", () => {
@@ -89,5 +92,38 @@ describe("buildDockerExecArgs", () => {
     });
 
     expect(args).toContain("-t");
+  });
+
+  it("quotes variable-expansion payloads as literal arguments", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo $HOME",
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toMatch(/'[^']*echo'/);
+    expect(commandArg).toContain("'$HOME'");
+    expect(commandArg).not.toContain("echo $HOME");
+  });
+
+  it("rejects unsupported shell token commands", () => {
+    expect(() =>
+      buildDockerExecArgs({
+        containerName: "test-container",
+        command: "$(id)",
+        env: { HOME: "/home/user" },
+        tty: false,
+      }),
+    ).toThrow(/Security Violation: unsupported sandbox shell syntax/);
+    expect(() =>
+      buildDockerExecArgs({
+        containerName: "test-container",
+        command: "echo $(id)",
+        env: { HOME: "/home/user" },
+        tty: false,
+      }),
+    ).toThrow(/Security Violation: unsupported sandbox shell syntax/);
   });
 });

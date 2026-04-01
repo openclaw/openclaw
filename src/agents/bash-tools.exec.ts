@@ -2,7 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  buildEnforcedShellCommand,
+  evaluateShellAllowlist,
+  type ExecHost,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+  recordAllowlistUse,
+  resolveApprovalAuditCandidatePath,
+  resolveExecApprovals,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -711,6 +721,53 @@ export function createExecTool(
         );
       } else {
         applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      if (host === "sandbox" && !bypassApprovals) {
+        const approvals = resolveExecApprovals(agentId, { security, ask });
+        const hostSecurity = minSecurity(security, approvals.agent.security);
+        if (hostSecurity === "deny") {
+          throw new Error("exec denied: host=sandbox security=deny");
+        }
+        if (hostSecurity === "allowlist") {
+          const allowlistEval = evaluateShellAllowlist({
+            command: params.command,
+            allowlist: approvals.allowlist,
+            safeBins,
+            safeBinProfiles,
+            cwd: workdir,
+            env,
+            platform: process.platform,
+            trustedSafeBinDirs,
+          });
+          if (!allowlistEval.analysisOk || !allowlistEval.allowlistSatisfied) {
+            throw new Error("exec denied: allowlist miss");
+          }
+          const enforced = buildEnforcedShellCommand({
+            command: params.command,
+            segments: allowlistEval.segments,
+            platform: process.platform,
+          });
+          if (!enforced.ok || !enforced.command) {
+            throw new Error("exec denied: allowlist execution plan unavailable");
+          }
+          execCommandOverride = enforced.command;
+
+          if (allowlistEval.allowlistMatches.length > 0) {
+            const resolvedPath = resolveApprovalAuditCandidatePath(
+              allowlistEval.segments[0]?.resolution ?? null,
+              workdir,
+            );
+            const seen = new Set<string>();
+            for (const match of allowlistEval.allowlistMatches) {
+              if (seen.has(match.pattern)) {
+                continue;
+              }
+              seen.add(match.pattern);
+              recordAllowlistUse(approvals.file, agentId, match, params.command, resolvedPath);
+            }
+          }
+        }
       }
 
       if (host === "node") {

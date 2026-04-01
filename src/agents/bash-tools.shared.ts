@@ -2,6 +2,10 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import {
+  analyzeShellCommand,
+  buildEnforcedShellCommand,
+} from "../infra/exec-approvals-analysis.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend.js";
@@ -66,6 +70,12 @@ export function buildDockerExecArgs(params: {
   env: Record<string, string>;
   tty: boolean;
 }) {
+  const plannedCommand = buildDockerShellCommand({
+    command: params.command,
+    workdir: params.workdir,
+    env: params.env,
+  });
+
   const args = ["exec", "-i"];
   if (params.tty) {
     args.push("-t");
@@ -91,12 +101,52 @@ export function buildDockerExecArgs(params: {
   // overriding both Docker ENV and -e PATH=... environment variables.
   // Prepend custom PATH after profile sourcing to ensure custom tools are accessible
   // while preserving system paths that /etc/profile may have added.
-  const pathExport = hasCustomPath
-    ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
-    : "";
+  const bootstrapScript = hasCustomPath
+    ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; exec /bin/sh -c "$1"'
+    : 'exec /bin/sh -c "$1"';
   // Use absolute path for sh to avoid dependency on PATH resolution during exec.
-  args.push(params.containerName, "/bin/sh", "-lc", `${pathExport}${params.command}`);
+  // Pass the runtime command as a positional argument to avoid concatenating it into
+  // the bootstrap shell script.
+  args.push(
+    params.containerName,
+    "/bin/sh",
+    "-lc",
+    bootstrapScript,
+    "openclaw-docker-exec",
+    plannedCommand,
+  );
   return args;
+}
+
+function buildDockerShellCommand(params: {
+  command: string;
+  workdir?: string;
+  env: Record<string, string>;
+}): string {
+  const analysis = analyzeShellCommand({
+    command: params.command,
+    cwd: params.workdir,
+    env: params.env,
+    // Docker runtime command execution uses `/bin/sh` inside Linux containers.
+    platform: "linux",
+  });
+  if (!analysis.ok) {
+    throw new Error(
+      `Security Violation: unsupported sandbox shell syntax (${analysis.reason ?? "unable to parse command"}).`,
+    );
+  }
+
+  const enforced = buildEnforcedShellCommand({
+    command: params.command,
+    segments: analysis.segments,
+    platform: "linux",
+  });
+  if (!enforced.ok || !enforced.command) {
+    throw new Error(
+      `Security Violation: sandbox command execution plan unavailable (${enforced.reason ?? "unknown reason"}).`,
+    );
+  }
+  return enforced.command;
 }
 
 export async function resolveSandboxWorkdir(params: {
