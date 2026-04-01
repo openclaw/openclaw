@@ -3,6 +3,9 @@ import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
+import { parseFeishuCommentTarget } from "./comment-target.js";
+import { replyComment } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
@@ -59,6 +62,31 @@ function resolveReplyToMessageId(params: {
   return trimmed || undefined;
 }
 
+async function sendCommentThreadReply(params: {
+  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
+  to: string;
+  text: string;
+  accountId?: string;
+}) {
+  const target = parseFeishuCommentTarget(params.to);
+  if (!target) {
+    return null;
+  }
+  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const client = createFeishuClient(account);
+  const result = await replyComment(client, {
+    file_token: target.fileToken,
+    file_type: target.fileType,
+    comment_id: target.commentId,
+    content: params.text,
+  });
+  return {
+    messageId: typeof result.reply_id === "string" ? result.reply_id : "",
+    chatId: target.commentId,
+    result,
+  };
+}
+
 async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
@@ -67,6 +95,16 @@ async function sendOutboundText(params: {
   accountId?: string;
 }) {
   const { cfg, to, text, accountId, replyToMessageId } = params;
+  const commentResult = await sendCommentThreadReply({
+    cfg,
+    to,
+    text,
+    accountId,
+  });
+  if (commentResult) {
+    return commentResult;
+  }
+
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
@@ -115,6 +153,16 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         }
       }
 
+      if (parseFeishuCommentTarget(to)) {
+        return await sendOutboundText({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+        });
+      }
+
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
@@ -156,6 +204,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const commentTarget = parseFeishuCommentTarget(to);
+      if (commentTarget) {
+        const commentText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
+        return await sendOutboundText({
+          cfg,
+          to,
+          text: commentText || mediaUrl || text || "",
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+        });
+      }
+
       // Send text first if provided
       if (text?.trim()) {
         await sendOutboundText({
