@@ -1,8 +1,40 @@
 {
   "id": "firecrawl",
+  "providerAuthEnvVars": {
+    "firecrawl": ["FIRECRAWL_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Firecrawl Search API Key",
+      "help": "Firecrawl API key for web search (fallback: FIRECRAWL_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "fc-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Firecrawl Search Base URL",
+      "help": "Firecrawl Search base URL override."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["firecrawl"],
+    "tools": ["firecrawl_search", "firecrawl_scrape"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

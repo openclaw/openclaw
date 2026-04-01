@@ -1,18 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import "./accounts.test-mocks.js";
-import { createZalouserRuntimeEnv } from "./test-helpers.js";
-
-const listZaloGroupMembersMock = vi.hoisted(() => vi.fn(async () => []));
-
-vi.mock("./zalo-js.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    listZaloGroupMembers: listZaloGroupMembersMock,
-  };
-});
-
+import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
+import { createZalouserRuntimeEnv } from "./test-helpers.js";
+import { listZaloGroupMembersMock } from "./zalo-js.test-mocks.js";
 
 const runtimeStub = createZalouserRuntimeEnv();
 

@@ -185,7 +185,7 @@ ws.on("message", (data) => {
 });
 ```
 
-## Worked example: add a method end‑to‑end
+## Worked example: add a method end-to-end
 
 Example: add a new `system.echo` request that returns `{ ok: true, text }`.
 

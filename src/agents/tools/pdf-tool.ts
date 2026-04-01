@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { checkPathGuardStrict } from "../../security/path-guard.js";
 import { loadWebMediaRaw } from "../../plugin-sdk/web-media.js";
+import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   coerceImageModelConfig,
@@ -472,6 +473,13 @@ export function createPdfTool(options?: {
                 ? resolvedPdf.slice("file://".length)
                 : resolvedPdf,
             };
+        const localRoots = resolveMediaToolLocalRoots(
+          options?.workspaceDir,
+          {
+            workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+          },
+          [resolvedPathInfo.resolved],
+        );
 
         if (!isHttpUrl && !isDataUrl && options?.fsPolicy) {
           const policyRoot = sandboxConfig?.root ?? options.workspaceDir;

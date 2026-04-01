@@ -1,11 +1,20 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
-import { formatPortDiagnostics } from "../../infra/ports.js";
+import {
+  formatPortDiagnostics,
+  isDualStackLoopbackGatewayListeners,
+  type PortUsage,
+} from "../../infra/ports.js";
 import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import {
+  formatPluginCompatibilityNotice,
+  type PluginCompatibilityNotice,
+} from "../../plugins/status.js";
+import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
@@ -18,7 +27,7 @@ type ConfigSnapshotLike = {
   issues?: ConfigIssueLike[] | null;
 };
 
-type PortUsageLike = { listeners: unknown[] };
+type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
 type TailscaleStatusLike = {
   backendState: string | null;
@@ -59,10 +68,12 @@ export async function appendStatusAllDiagnosis(params: {
   tailscale: TailscaleStatusLike;
   tailscaleHttpsUrl: string | null;
   skillStatus: SkillStatusLike | null;
+  pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
   gatewayReachable: boolean;
   health: unknown;
+  nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
 
@@ -134,12 +145,20 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   if (params.portUsage) {
-    const portOk = params.portUsage.listeners.length === 0;
+    const benignDualStackLoopback = isDualStackLoopbackGatewayListeners(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
-      for (const line of formatPortDiagnostics(params.portUsage as never)) {
+      for (const line of formatPortDiagnostics(params.portUsage)) {
         lines.push(`  ${muted(line)}`);
       }
+    } else if (benignDualStackLoopback) {
+      lines.push(
+        `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
+      );
     }
   }
 
@@ -174,6 +193,18 @@ export async function appendStatusAllDiagnosis(params: {
       `Skills: ${eligible} eligible · ${missing} missing · ${params.skillStatus.workspaceDir}`,
       missing === 0 ? "ok" : "warn",
     );
+  }
+
+  emitCheck(
+    `Plugin compatibility (${params.pluginCompatibility.length || "none"})`,
+    params.pluginCompatibility.length === 0 ? "ok" : "warn",
+  );
+  for (const notice of params.pluginCompatibility.slice(0, 12)) {
+    const severity = notice.severity === "warn" ? "warn" : "info";
+    lines.push(`  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`);
+  }
+  if (params.pluginCompatibility.length > 12) {
+    lines.push(`  ${muted(`… +${params.pluginCompatibility.length - 12} more`)}`);
   }
 
   params.progress.setLabel("Reading logs…");
@@ -219,6 +250,11 @@ export async function appendStatusAllDiagnosis(params: {
     if (params.channelIssues.length > 12) {
       lines.push(`  ${muted(`… +${params.channelIssues.length - 12} more`)}`);
     }
+  } else if (params.nodeOnlyGateway) {
+    emitCheck(
+      `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
   } else {
     emitCheck(
       `Channel issues skipped (gateway ${params.gatewayReachable ? "query failed" : "unreachable"})`,

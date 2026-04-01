@@ -118,7 +118,7 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
       isEnabled: () => true,
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }

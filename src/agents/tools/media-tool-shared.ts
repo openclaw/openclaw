@@ -3,7 +3,9 @@ import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { getDefaultLocalRoots } from "../../media/web-media.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
+import type { ToolModelConfig } from "./model-config.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
@@ -23,6 +25,21 @@ export function applyImageModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageModelConfig: ImageModelConfig,
 ): OpenClawConfig | undefined {
+  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
+}
+
+export function applyImageGenerationModelConfigDefaults(
+  cfg: OpenClawConfig | undefined,
+  imageGenerationModelConfig: ToolModelConfig,
+): OpenClawConfig | undefined {
+  return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
+}
+
+function applyAgentDefaultModelConfig(
+  cfg: OpenClawConfig | undefined,
+  key: "imageModel" | "imageGenerationModel",
+  modelConfig: ToolModelConfig,
+): OpenClawConfig | undefined {
   if (!cfg) {
     return undefined;
   }
@@ -32,7 +49,7 @@ export function applyImageModelConfigDefaults(
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        imageModel: imageModelConfig,
+        [key]: modelConfig,
       },
     },
   };
@@ -54,6 +71,8 @@ function uniqueNormalized(paths: readonly string[]): string[] {
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { fsPolicy?: ToolFsPolicy },
+  options?: { workspaceOnly?: boolean },
+  _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw) ?? undefined;
   const policy = options?.fsPolicy;
@@ -67,6 +86,8 @@ export function resolveMediaToolLocalRoots(
   // Exact policy enforcement is applied per resolved file path in image/pdf tools via PathGuard.
   const defaultRoots = getDefaultLocalRoots();
   return uniqueNormalized(workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots);
+  const roots = getDefaultLocalRoots();
+  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
 }
 
 export function resolvePromptAndModelOverride(

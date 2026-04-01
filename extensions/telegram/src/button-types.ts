@@ -1,9 +1,9 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/channel-runtime";
+import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   normalizeInteractiveReply,
   type InteractiveReply,
   type InteractiveReplyButton,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/interactive-runtime";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -16,6 +16,11 @@ export type TelegramInlineButton = {
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
+const MAX_CALLBACK_DATA_BYTES = 64;
+
+function fitsTelegramCallbackData(value: string): boolean {
+  return Buffer.byteLength(value, "utf8") <= MAX_CALLBACK_DATA_BYTES;
+}
 
 function toTelegramButtonStyle(
   style?: InteractiveReplyButton["style"],
@@ -28,11 +33,14 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).map((button) => ({
-      text: button.label,
-      callback_data: button.value,
-      style: toTelegramButtonStyle(button.style),
-    }));
+    const row = buttons
+      .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
+      .filter((button) => fitsTelegramCallbackData(button.value))
+      .map((button) => ({
+        text: button.label,
+        callback_data: button.value,
+        style: toTelegramButtonStyle(button.style),
+      }));
     if (row.length > 0) {
       rows.push(row);
     }

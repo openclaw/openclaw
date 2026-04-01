@@ -28,6 +28,11 @@ import {
   type SystemdUserLingerStatus,
 } from "./systemd-linger.js";
 import {
+  classifySystemdUnavailableDetail,
+  isSystemctlMissingDetail,
+  isSystemdUserBusUnavailableDetail,
+} from "./systemd-unavailable.js";
+import {
   buildSystemdUnit,
   parseSystemdEnvAssignment,
   parseSystemdExecStart,
@@ -265,18 +270,7 @@ function readSystemctlDetail(result: { stdout: string; stderr: string }): string
   return `${result.stderr} ${result.stdout}`.trim();
 }
 
-function isSystemctlMissing(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("not found") ||
-    normalized.includes("no such file or directory") ||
-    normalized.includes("spawn systemctl enoent") ||
-    normalized.includes("spawn systemctl eacces")
-  );
-}
+const isSystemctlMissing = isSystemctlMissingDetail;
 
 function isSystemdUnitNotEnabled(detail: string): boolean {
   if (!detail) {
@@ -294,31 +288,10 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
-function isSystemctlBusUnavailable(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("failed to connect to bus") ||
-    normalized.includes("failed to connect to user scope bus") ||
-    normalized.includes("dbus_session_bus_address") ||
-    normalized.includes("xdg_runtime_dir") ||
-    normalized.includes("no medium found")
-  );
-}
+const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    isSystemctlMissing(normalized) ||
-    isSystemctlBusUnavailable(normalized) ||
-    normalized.includes("not been booted") ||
-    normalized.includes("not supported")
-  );
+  return classifySystemdUnavailableDetail(detail) !== null;
 }
 
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
@@ -376,13 +349,7 @@ function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
 }
 
 function shouldFallbackToMachineUserScope(detail: string): boolean {
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("failed to connect to bus") ||
-    normalized.includes("failed to connect to user scope bus") ||
-    normalized.includes("dbus_session_bus_address") ||
-    normalized.includes("xdg_runtime_dir")
-  );
+  return isSystemdUserBusUnavailableDetail(detail);
 }
 
 async function execSystemctlUser(
@@ -449,14 +416,13 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
-export async function installSystemdService({
+async function writeSystemdUnit({
   env,
-  stdout,
   programArguments,
   workingDirectory,
   environment,
   description,
-}: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
   await assertSystemdAvailable(env);
 
   const unitPath = resolveSystemdUnitPath(env);
@@ -481,27 +447,61 @@ export async function installSystemdService({
     environment,
   });
   await fs.writeFile(unitPath, unit, "utf8");
+  return { unitPath, backedUp };
+}
 
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+export async function stageSystemdService({
+  stdout,
+  ...args
+}: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
+  const { unitPath, backedUp } = await writeSystemdUnit(args);
+  writeFormattedLines(
+    stdout,
+    [
+      {
+        label: "Staged systemd service",
+        value: unitPath,
+      },
+      ...(backedUp
+        ? [
+            {
+              label: "Previous unit backed up to",
+              value: `${unitPath}.bak`,
+            },
+          ]
+        : []),
+    ],
+    { leadingBlankLine: true },
+  );
+  return { unitPath };
+}
+
+async function activateSystemdService(params: { env: GatewayServiceEnv }) {
+  const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctlUser(env, ["daemon-reload"]);
+  const reload = await execSystemctlUser(params.env, ["daemon-reload"]);
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
-  const enable = await execSystemctlUser(env, ["enable", unitName]);
+  const enable = await execSystemctlUser(params.env, ["enable", unitName]);
   if (enable.code !== 0) {
     throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
-  const restart = await execSystemctlUser(env, ["restart", unitName]);
+  const restart = await execSystemctlUser(params.env, ["restart", unitName]);
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
+}
 
-  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+export async function installSystemdService(
+  args: GatewayServiceInstallArgs,
+): Promise<{ unitPath: string }> {
+  const { unitPath, backedUp } = await writeSystemdUnit(args);
+  await activateSystemdService({ env: args.env });
   writeFormattedLines(
-    stdout,
+    args.stdout,
     [
       {
         label: "Installed systemd service",

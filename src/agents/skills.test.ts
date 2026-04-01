@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -73,6 +79,10 @@ afterAll(async () => {
     tempHome = null;
   }
   await fixtureSuite.cleanup();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -153,6 +163,61 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+  });
+
+  it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
+    const workspaceDir = await makeWorkspace();
+    const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
+    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "compound-bundle" }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
+      [
+        "---",
+        "name: workflows:review",
+        "description: Review code with a structured checklist",
+        "---",
+        "Review the branch carefully.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        plugins: {
+          entries: {
+            "compound-bundle": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "workflows_review",
+          skillName: "workflows:review",
+          description: "Review code with a structured checklist",
+          promptTemplate: "Review the branch carefully.",
+        }),
+      ]),
+    );
+    expect(
+      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
+    ).toContain(
+      path.join(
+        installedPluginRoot(path.join(workspaceDir, ".openclaw"), "compound-bundle"),
+        "commands",
+        "workflows-review.md",
+      ),
+    );
   });
 });
 
@@ -321,6 +386,50 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/env-skill/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: sourceConfig,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("resolved-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
   it("blocks unsafe env overrides but allows declared secrets", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "unsafe-env-skill");
@@ -398,6 +507,50 @@ describe("applySkillEnvOverrides", () => {
         restore();
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
+      }
+    });
+  });
+
+  it("blocks override-only host env overrides in skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "override-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "override-env-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["HTTPS_PROXY","NODE_TLS_REJECT_UNAUTHORIZED","DOCKER_HOST"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "override-env-skill": {
+                env: {
+                  HTTPS_PROXY: "http://proxy.example.test:8080",
+                  NODE_TLS_REJECT_UNAUTHORIZED: "0",
+                  DOCKER_HOST: "tcp://docker.example.test:2376",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
       }
     });
   });

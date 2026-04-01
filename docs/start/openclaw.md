@@ -8,13 +8,13 @@ title: "Personal Assistant Setup"
 
 # Building a personal assistant with OpenClaw
 
-OpenClaw is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents. Plugins add Mattermost. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
+OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
 You’re putting an agent in a position to:
 
-- run commands on your machine (depending on your Pi tool setup)
+- run commands on your machine (depending on your tool policy)
 - read/write files in your workspace
 - send messages back out via WhatsApp/Telegram/Discord/Mattermost (plugin)
 
@@ -36,7 +36,7 @@ You want this:
 ```mermaid
 flowchart TB
     A["<b>Your Phone (personal)<br></b><br>Your WhatsApp<br>+1-555-YOU"] -- message --> B["<b>Second Phone (assistant)<br></b><br>Assistant WA<br>+1-555-ASSIST"]
-    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>Pi agent"]
+    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>AI agent"]
 ```
 
 If you link your personal WhatsApp to OpenClaw, every message to you becomes “agent input”. That’s rarely what you want.
@@ -102,7 +102,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 }
 ```
 
-## The config that turns it into “an assistant”
+## The config that turns it into "an assistant"
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
@@ -191,6 +191,14 @@ MEDIA:https://example.com/screenshot.png
 ```
 
 OpenClaw extracts these and sends them as media alongside the text.
+
+Local-path behavior follows the same file-read trust model as the agent:
+
+- If `tools.fs.workspaceOnly` is `true`, outbound `MEDIA:` local paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `false`, outbound `MEDIA:` can use host-local files the agent is already allowed to read.
+- Host-local sends still only allow media and safe document types (images, audio, video, PDF, and Office documents). Plain text and secret-like files are not treated as sendable media.
+
+That means generated images/files outside the workspace can now send when your fs policy already allows those reads, without reopening arbitrary host-text attachment exfiltration.
 
 ## Operations checklist
 

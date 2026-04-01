@@ -1,7 +1,7 @@
-import { sendMessageWhatsApp as sendMessageWhatsAppImpl } from "../../plugin-sdk/whatsapp.js";
+import { sendMessageWhatsApp as sendMessageWhatsAppImpl } from "../../plugins/runtime/runtime-whatsapp-boundary.js";
 
 type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/whatsapp.js").sendMessageWhatsApp;
+  sendMessage: typeof import("../../plugins/runtime/runtime-whatsapp-boundary.js").sendMessageWhatsApp;
 };
 
 export const runtimeSend = {

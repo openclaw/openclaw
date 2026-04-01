@@ -3,12 +3,17 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const getChannelPluginMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveRunModelFallbacksOverride: (...args: unknown[]) =>
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (...args: unknown[]) => hoisted.getChannelPluginMock(...args),
 }));
 
 const {
@@ -46,6 +51,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.getChannelPluginMock.mockReset();
   });
 
   it("resolves model fallback options from run context", () => {
@@ -175,7 +181,24 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("uses OriginatingTo for threading tool context on telegram native commands", () => {
+  it("uses telegram plugin threading context for native commands", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          context,
+          hasRepliedRef,
+        }: {
+          context: { To?: string; MessageThreadId?: string | number };
+          hasRepliedRef?: { value: boolean };
+        }) => ({
+          currentChannelId: context.To?.trim() || undefined,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+          hasRepliedRef,
+        }),
+      },
+    });
+
     const context = buildThreadingToolContext({
       sessionCtx: {
         Provider: "telegram",

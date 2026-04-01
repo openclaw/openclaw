@@ -1,11 +1,10 @@
-import { describe } from "vitest";
-import { providerContractRegistry } from "./registry.js";
-import { installProviderPluginContractSuite } from "./suites.js";
+import { describeProviderContracts } from "../../../test/helpers/plugins/provider-contract.js";
+import { pluginRegistrationContractRegistry } from "./registry.js";
 
-for (const entry of providerContractRegistry) {
-  describe(`${entry.pluginId}:${entry.provider.id} provider contract`, () => {
-    installProviderPluginContractSuite({
-      provider: entry.provider,
-    });
-  });
+const providerContractTests = pluginRegistrationContractRegistry.filter(
+  (entry) => entry.providerIds.length > 0,
+);
+
+for (const entry of providerContractTests) {
+  describeProviderContracts(entry.pluginId);
 }

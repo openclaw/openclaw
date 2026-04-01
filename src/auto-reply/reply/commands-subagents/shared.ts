@@ -30,6 +30,7 @@ import {
 } from "../../../shared/subagents-format.js";
 import {
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
@@ -47,6 +48,7 @@ import { resolveTelegramConversationId } from "../telegram-context.js";
 export { extractAssistantText, stripToolMessages };
 export {
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
@@ -146,7 +148,7 @@ export function formatSubagentListLine(params: {
   const usageText = formatTokenUsageDisplay(params.sessionEntry);
   const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
   const task = formatTaskPreview(params.entry.task);
-  const runtime = formatDurationCompact(params.runtimeMs);
+  const runtime = formatDurationCompact(params.runtimeMs) ?? "n/a";
   const status = resolveDisplayStatus(params.entry, {
     pendingDescendants: params.pendingDescendants,
   });

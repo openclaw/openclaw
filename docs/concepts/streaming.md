@@ -90,7 +90,7 @@ more natural.
 - Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
-## “Stream chunks or everything”
+## "Stream chunks or everything"
 
 This maps to:
 
@@ -153,3 +153,9 @@ Slack:
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+
+## Related
+
+- [Messages](/concepts/messages) — message lifecycle and delivery
+- [Retry](/concepts/retry) — retry behavior on delivery failure
+- [Channels](/channels) — per-channel streaming support

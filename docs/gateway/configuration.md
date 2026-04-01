@@ -46,7 +46,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
     ```bash
     openclaw config get agents.defaults.workspace
     openclaw config set agents.defaults.heartbeat.every "2h"
-    openclaw config unset tools.web.search.apiKey
+    openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
   <Tab title="Control UI">
@@ -85,7 +85,7 @@ When validation fails:
     - [iMessage](/channels/imessage) — `channels.imessage`
     - [Google Chat](/channels/googlechat) — `channels.googlechat`
     - [Mattermost](/channels/mattermost) — `channels.mattermost`
-    - [MS Teams](/channels/msteams) — `channels.msteams`
+    - [Microsoft Teams](/channels/msteams) — `channels.msteams`
 
     All channels share the same DM policy pattern:
 
@@ -112,11 +112,11 @@ When validation fails:
       agents: {
         defaults: {
           model: {
-            primary: "anthropic/claude-sonnet-4-5",
+            primary: "anthropic/claude-sonnet-4-6",
             fallbacks: ["openai/gpt-5.2"],
           },
           models: {
-            "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
             "openai/gpt-5.2": { alias: "GPT" },
           },
         },
@@ -251,7 +251,7 @@ When validation fails:
 
     Build the image first: `scripts/sandbox-setup.sh`
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/configuration-reference#sandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/configuration-reference#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -327,7 +327,7 @@ When validation fails:
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
-    - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 

@@ -1,3 +1,6 @@
+import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
+import { sendMessage } from "../infra/outbound/message.js";
+import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -10,15 +13,37 @@ type ExecApprovalFollowupParams = {
   resultText: string;
 };
 
-export function buildExecApprovalFollowupPrompt(resultText: string): string {
+function buildExecDeniedFollowupPrompt(resultText: string): string {
   return [
-    "An async command the user already approved has completed.",
+    "An async command did not run.",
     "Do not run the command again.",
+    "There is no new command output.",
+    "Do not mention, summarize, or reuse output from any earlier run in this session.",
     "",
     "Exact completion details:",
     resultText.trim(),
     "",
     "Reply to the user in a helpful way.",
+    "Explain that the command did not run and why.",
+    "Do not claim there is new command output.",
+  ].join("\n");
+}
+
+export function buildExecApprovalFollowupPrompt(resultText: string): string {
+  const trimmed = resultText.trim();
+  if (trimmed.startsWith("Exec denied (")) {
+    return buildExecDeniedFollowupPrompt(trimmed);
+  }
+  return [
+    "An async command the user already approved has completed.",
+    "Do not run the command again.",
+    "If the task requires more steps, continue from this result before replying to the user.",
+    "Only ask the user for help if you are actually blocked.",
+    "",
+    "Exact completion details:",
+    trimmed,
+    "",
+    "Continue the task if needed, then reply to the user in a helpful way.",
     "If it succeeded, share the relevant output.",
     "If it failed, explain what went wrong.",
   ].join("\n");
@@ -29,33 +54,66 @@ export async function sendExecApprovalFollowup(
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const resultText = params.resultText.trim();
-  if (!sessionKey || !resultText) {
+  if (!resultText) {
     return false;
   }
 
-  const channel = params.turnSourceChannel?.trim();
-  const to = params.turnSourceTo?.trim();
-  const threadId =
-    params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
-      ? String(params.turnSourceThreadId)
+  const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
+    channel: params.turnSourceChannel,
+    to: params.turnSourceTo,
+    accountId: params.turnSourceAccountId,
+    threadId: params.turnSourceThreadId,
+  });
+  const normalizedTurnSourceChannel = normalizeMessageChannel(params.turnSourceChannel);
+  const sessionOnlyOriginChannel =
+    normalizedTurnSourceChannel && isGatewayMessageChannel(normalizedTurnSourceChannel)
+      ? normalizedTurnSourceChannel
       : undefined;
 
-  await callGatewayTool(
-    "agent",
-    { timeoutMs: 60_000 },
-    {
-      sessionKey,
-      message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: channel && to ? channel : undefined,
-      to: channel && to ? to : undefined,
-      accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
-      threadId: channel && to ? threadId : undefined,
-      idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-    },
-    { expectFinal: true },
-  );
+  if (sessionKey) {
+    await callGatewayTool(
+      "agent",
+      { timeoutMs: 60_000 },
+      {
+        sessionKey,
+        message: buildExecApprovalFollowupPrompt(resultText),
+        deliver: deliveryTarget.deliver,
+        ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
+        channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+        to: deliveryTarget.deliver
+          ? deliveryTarget.to
+          : sessionOnlyOriginChannel
+            ? params.turnSourceTo
+            : undefined,
+        accountId: deliveryTarget.deliver
+          ? deliveryTarget.accountId
+          : sessionOnlyOriginChannel
+            ? params.turnSourceAccountId
+            : undefined,
+        threadId: deliveryTarget.deliver
+          ? deliveryTarget.threadId
+          : sessionOnlyOriginChannel
+            ? params.turnSourceThreadId
+            : undefined,
+        idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+      },
+      { expectFinal: true },
+    );
+    return true;
+  }
 
-  return true;
+  if (deliveryTarget.deliver) {
+    await sendMessage({
+      channel: deliveryTarget.channel,
+      to: deliveryTarget.to ?? "",
+      accountId: deliveryTarget.accountId,
+      threadId: deliveryTarget.threadId,
+      content: resultText,
+      agentId: undefined,
+      idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    });
+    return true;
+  }
+
+  throw new Error("Session key or deliverable origin route is required");
 }

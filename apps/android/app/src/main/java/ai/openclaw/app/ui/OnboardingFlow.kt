@@ -9,6 +9,7 @@ import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
@@ -91,8 +93,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
@@ -208,6 +212,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val context = androidx.compose.ui.platform.LocalContext.current
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val persistedGatewayToken by viewModel.gatewayToken.collectAsState()
@@ -224,6 +229,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var manualTls by rememberSaveable { mutableStateOf(false) }
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
+  val canFinishOnboarding = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
 
   val lifecycleOwner = LocalLifecycleOwner.current
   val qrScannerOptions =
@@ -236,8 +242,10 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 
   val smsAvailable =
     remember(context) {
-      context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
+      BuildConfig.OPENCLAW_ENABLE_SMS &&
+        context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
+  val callLogAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
   val motionAvailable =
     remember(context) {
       hasMotionCapabilities(context)
@@ -287,11 +295,15 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     }
   var enableSms by
     rememberSaveable {
-      mutableStateOf(smsAvailable && isPermissionGranted(context, Manifest.permission.SEND_SMS))
+      mutableStateOf(
+        smsAvailable &&
+                isPermissionGranted(context, Manifest.permission.SEND_SMS) &&
+                isPermissionGranted(context, Manifest.permission.READ_SMS)
+      )
     }
   var enableCallLog by
     rememberSaveable {
-      mutableStateOf(isPermissionGranted(context, Manifest.permission.READ_CALL_LOG))
+      mutableStateOf(callLogAvailable && isPermissionGranted(context, Manifest.permission.READ_CALL_LOG))
     }
 
   var pendingPermissionToggle by remember { mutableStateOf<PermissionToggle?>(null) }
@@ -309,7 +321,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       PermissionToggle.Calendar -> enableCalendar = enabled
       PermissionToggle.Motion -> enableMotion = enabled && motionAvailable
       PermissionToggle.Sms -> enableSms = enabled && smsAvailable
-      PermissionToggle.CallLog -> enableCallLog = enabled
+      PermissionToggle.CallLog -> enableCallLog = enabled && callLogAvailable
     }
   }
 
@@ -336,8 +348,11 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
           !motionPermissionRequired ||
           isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)
       PermissionToggle.Sms ->
-        !smsAvailable || isPermissionGranted(context, Manifest.permission.SEND_SMS)
-      PermissionToggle.CallLog -> isPermissionGranted(context, Manifest.permission.READ_CALL_LOG)
+        !smsAvailable ||
+                (isPermissionGranted(context, Manifest.permission.SEND_SMS) &&
+                        isPermissionGranted(context, Manifest.permission.READ_SMS))
+      PermissionToggle.CallLog ->
+        !callLogAvailable || isPermissionGranted(context, Manifest.permission.READ_CALL_LOG)
     }
 
   fun setSpecialAccessToggleEnabled(toggle: SpecialAccessToggle, enabled: Boolean) {
@@ -361,6 +376,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       enableSms,
       enableCallLog,
       smsAvailable,
+      callLogAvailable,
       motionAvailable,
     ) {
       val enabled = mutableListOf<String>()
@@ -375,7 +391,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       if (enableCalendar) enabled += "Calendar"
       if (enableMotion && motionAvailable) enabled += "Motion"
       if (smsAvailable && enableSms) enabled += "SMS"
-      if (enableCallLog) enabled += "Call Log"
+      if (callLogAvailable && enableCallLog) enabled += "Call Log"
       if (enabled.isEmpty()) "None selected" else enabled.joinToString(", ")
     }
 
@@ -604,6 +620,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               motionPermissionRequired = motionPermissionRequired,
               enableSms = enableSms,
               smsAvailable = smsAvailable,
+              callLogAvailable = callLogAvailable,
               enableCallLog = enableCallLog,
               context = context,
               onDiscoveryChange = { checked ->
@@ -698,23 +715,27 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   requestPermissionToggle(
                     PermissionToggle.Sms,
                     checked,
-                    listOf(Manifest.permission.SEND_SMS),
+                    listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
                   )
                 }
               },
               onCallLogChange = { checked ->
-                requestPermissionToggle(
-                  PermissionToggle.CallLog,
-                  checked,
-                  listOf(Manifest.permission.READ_CALL_LOG),
-                )
+                if (!callLogAvailable) {
+                  setPermissionToggleEnabled(PermissionToggle.CallLog, false)
+                } else {
+                  requestPermissionToggle(
+                    PermissionToggle.CallLog,
+                    checked,
+                    listOf(Manifest.permission.READ_CALL_LOG),
+                  )
+                }
               },
             )
           OnboardingStep.FinalCheck ->
             FinalStep(
               parsedGateway = parseGatewayEndpoint(gatewayUrl),
               statusText = statusText,
-              isConnected = isConnected,
+              isConnected = canFinishOnboarding,
               serverName = serverName,
               remoteAddress = remoteAddress,
               attemptedConnect = attemptedConnect,
@@ -830,7 +851,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             }
           }
           OnboardingStep.FinalCheck -> {
-            if (isConnected) {
+            if (canFinishOnboarding) {
               Button(
                 onClick = { viewModel.setOnboardingCompleted(true) },
                 modifier = Modifier.weight(1f).height(52.dp),
@@ -864,7 +885,17 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     viewModel.setGatewayToken("")
                   }
                   viewModel.setGatewayPassword(password)
-                  viewModel.connectManual()
+                  viewModel.connect(
+                    GatewayEndpoint.manual(host = parsed.host, port = parsed.port),
+                    token = token.ifEmpty { null },
+                    bootstrapToken =
+                      if (gatewayInputMode == GatewayInputMode.SetupCode) {
+                        decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
+                      } else {
+                        null
+                      },
+                    password = password.ifEmpty { null },
+                  )
                 },
                 modifier = Modifier.weight(1f).height(52.dp),
                 shape = RoundedCornerShape(14.dp),
@@ -878,6 +909,10 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       }
     }
   }
+}
+
+internal fun canFinishOnboarding(isConnected: Boolean, isNodeConnected: Boolean): Boolean {
+  return isConnected && isNodeConnected
 }
 
 @Composable
@@ -1299,6 +1334,7 @@ private fun PermissionsStep(
   motionPermissionRequired: Boolean,
   enableSms: Boolean,
   smsAvailable: Boolean,
+  callLogAvailable: Boolean,
   enableCallLog: Boolean,
   context: Context,
   onDiscoveryChange: (Boolean) -> Unit,
@@ -1437,20 +1473,24 @@ private fun PermissionsStep(
       InlineDivider()
       PermissionToggleRow(
         title = "SMS",
-        subtitle = "Send text messages via the gateway",
+        subtitle = "Send and search text messages via the gateway",
         checked = enableSms,
-        granted = isPermissionGranted(context, Manifest.permission.SEND_SMS),
+        granted =
+          isPermissionGranted(context, Manifest.permission.SEND_SMS) ||
+            isPermissionGranted(context, Manifest.permission.READ_SMS),
         onCheckedChange = onSmsChange,
       )
     }
-    InlineDivider()
-    PermissionToggleRow(
-      title = "Call Log",
-      subtitle = "callLog.search",
-      checked = enableCallLog,
-      granted = isPermissionGranted(context, Manifest.permission.READ_CALL_LOG),
-      onCheckedChange = onCallLogChange,
-    )
+    if (callLogAvailable) {
+      InlineDivider()
+      PermissionToggleRow(
+        title = "Call Log",
+        subtitle = "callLog.search",
+        checked = enableCallLog,
+        granted = isPermissionGranted(context, Manifest.permission.READ_CALL_LOG),
+        onCheckedChange = onCallLogChange,
+      )
+    }
     Text("All settings can be changed later in Settings.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
   }
 }
@@ -1511,6 +1551,12 @@ private fun FinalStep(
   enabledPermissions: String,
   methodLabel: String,
 ) {
+  val context = androidx.compose.ui.platform.LocalContext.current
+  val gatewayAddress = parsedGateway?.displayUrl ?: "Invalid gateway URL"
+  val statusLabel = gatewayStatusForDisplay(statusText)
+  val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
+  val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Text("Review", style = onboardingTitle1Style, color = onboardingText)
 
@@ -1523,7 +1569,7 @@ private fun FinalStep(
     SummaryCard(
       icon = Icons.Default.Cloud,
       label = "Gateway",
-      value = parsedGateway?.displayUrl ?: "Invalid gateway URL",
+      value = gatewayAddress,
       accentColor = Color(0xFF7C5AC7),
     )
     SummaryCard(
@@ -1607,7 +1653,7 @@ private fun FinalStep(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         color = onboardingWarningSoft,
-        border = androidx.compose.foundation.BorderStroke(1.dp, onboardingWarning.copy(alpha = 0.2f)),
+        border = BorderStroke(1.dp, onboardingWarning.copy(alpha = 0.2f)),
       ) {
         Column(
           modifier = Modifier.padding(14.dp),
@@ -1632,13 +1678,67 @@ private fun FinalStep(
               )
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-              Text("Pairing Required", style = onboardingHeadlineStyle, color = onboardingWarning)
-              Text("Run these on your gateway host:", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+              Text(
+                  if (pairingRequired) "Pairing Required" else "Connection Failed",
+                  style = onboardingHeadlineStyle,
+                  color = onboardingWarning,
+              )
+              Text(
+                  if (pairingRequired) {
+                    "Approve this phone on the gateway host, or copy the report below."
+                  } else {
+                    "Copy this report and give it to your Claw."
+                  },
+                  style = onboardingCalloutStyle,
+                  color = onboardingTextSecondary,
+              )
             }
           }
-          CommandBlock("openclaw devices list")
-          CommandBlock("openclaw devices approve <requestId>")
-          Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+          Text("Status", style = onboardingCaption1Style.copy(fontWeight = FontWeight.Bold), color = onboardingTextSecondary)
+          Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = onboardingCommandBg,
+            border = BorderStroke(1.dp, onboardingCommandBorder),
+          ) {
+            Text(
+              statusLabel,
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+              style = onboardingCalloutStyle.copy(fontFamily = FontFamily.Monospace),
+              color = onboardingCommandText,
+            )
+          }
+          if (showDiagnostics) {
+            Text("Error", style = onboardingCaption1Style.copy(fontWeight = FontWeight.Bold), color = onboardingTextSecondary)
+            Text(
+              "OpenClaw Android ${openClawAndroidVersionLabel()}",
+              style = onboardingCaption1Style,
+              color = onboardingTextSecondary,
+            )
+            Button(
+              onClick = {
+                copyGatewayDiagnosticsReport(
+                  context = context,
+                  screen = "onboarding final check",
+                  gatewayAddress = gatewayAddress,
+                  statusText = statusLabel,
+                )
+              },
+              modifier = Modifier.fillMaxWidth().height(48.dp),
+              shape = RoundedCornerShape(12.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = onboardingSurface, contentColor = onboardingWarning),
+              border = BorderStroke(1.dp, onboardingWarning.copy(alpha = 0.3f)),
+            ) {
+              Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Copy Report for Claw", style = onboardingCalloutStyle.copy(fontWeight = FontWeight.Bold))
+            }
+          }
+          if (pairingRequired) {
+            CommandBlock("openclaw devices list")
+            CommandBlock("openclaw devices approve <requestId>")
+            Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+          }
         }
       }
     }

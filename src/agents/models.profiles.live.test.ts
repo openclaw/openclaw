@@ -2,23 +2,28 @@ import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import { isModernModelRef } from "./live-model-filter.js";
+import { isHighSignalLiveModelRef } from "./live-model-filter.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
-const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
+const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
+const LIVE_SETUP_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
+);
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -43,7 +48,55 @@ function parseModelFilter(raw?: string): Set<string> | null {
 }
 
 function logProgress(message: string): void {
-  console.log(`[live] ${message}`);
+  process.stderr.write(`[live] ${message}\n`);
+}
+
+function formatElapsedSeconds(ms: number): string {
+  return `${Math.max(1, Math.round(ms / 1_000))}s`;
+}
+
+async function withLiveHeartbeat<T>(operation: Promise<T>, context: string): Promise<T> {
+  const startedAt = Date.now();
+  let heartbeatCount = 0;
+  const timer = setInterval(() => {
+    heartbeatCount += 1;
+    logProgress(`${context}: still running (${formatElapsedSeconds(Date.now() - startedAt)})`);
+  }, LIVE_HEARTBEAT_MS);
+  timer.unref?.();
+  try {
+    return await operation;
+  } finally {
+    clearInterval(timer);
+    if (heartbeatCount > 0) {
+      logProgress(`${context}: completed after ${formatElapsedSeconds(Date.now() - startedAt)}`);
+    }
+  }
+}
+
+async function withLiveStageTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+  timeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): Promise<T> {
+  let hardTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await withLiveHeartbeat(
+      Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          hardTimer = setTimeout(() => {
+            reject(new Error(`${context} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          hardTimer.unref?.();
+        }),
+      ]),
+      context,
+    );
+  } finally {
+    if (hardTimer) {
+      clearTimeout(hardTimer);
+    }
+  }
 }
 
 function formatFailurePreview(
@@ -136,6 +189,15 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
     msg.includes("upstream error from google")
+  );
+}
+
+function isOllamaUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("ollama could not be reached") ||
+    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
+    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
   );
 }
 
@@ -237,6 +299,7 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   context: Parameters<typeof completeSimple<TApi>>[1],
   options: Parameters<typeof completeSimple<TApi>>[2],
   timeoutMs: number,
+  progressContext: string,
 ) {
   const maxTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
@@ -252,13 +315,16 @@ async function completeSimpleWithTimeout<TApi extends Api>(
     hardTimer.unref?.();
   });
   try {
-    return await Promise.race([
-      completeSimple(model, context, {
-        ...options,
-        signal: controller.signal,
-      }),
-      timeout,
-    ]);
+    return await withLiveHeartbeat(
+      Promise.race([
+        completeSimple(model, context, {
+          ...options,
+          signal: controller.signal,
+        }),
+        timeout,
+      ]),
+      progressContext,
+    );
   } finally {
     clearTimeout(abortTimer);
     if (hardTimer) {
@@ -271,6 +337,7 @@ async function completeOkWithRetry(params: {
   model: Model<Api>;
   apiKey: string;
   timeoutMs: number;
+  progressLabel: string;
 }) {
   const runOnce = async (maxTokens: number) => {
     const res = await completeSimpleWithTimeout(
@@ -291,6 +358,7 @@ async function completeOkWithRetry(params: {
         maxTokens,
       },
       params.timeoutMs,
+      `${params.progressLabel}: prompt call (maxTokens=${maxTokens})`,
     );
     const text = res.content
       .filter((block) => block.type === "text")
@@ -312,8 +380,16 @@ describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
     async () => {
-      const cfg = loadConfig();
-      await ensureOpenClawModelsJson(cfg);
+      logProgress("[live-models] loading config");
+      const cfg = await withLiveStageTimeout(
+        Promise.resolve().then(() => loadConfig()),
+        "[live-models] load config",
+      );
+      logProgress("[live-models] preparing models.json");
+      await withLiveStageTimeout(
+        ensureOpenClawModelsJson(cfg),
+        "[live-models] prepare models.json",
+      );
       if (!DIRECT_ENABLED) {
         logProgress(
           "[live-models] skipping (set OPENCLAW_LIVE_MODELS=modern|all|<list>; all=modern)",
@@ -328,8 +404,11 @@ describeLive("live models (profile keys)", () => {
 
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const models = modelRegistry.getAll();
+      logProgress("[live-models] loading model registry");
+      const models = await withLiveStageTimeout(
+        Promise.resolve().then(() => discoverModels(authStorage, agentDir).getAll()),
+        "[live-models] load model registry",
+      );
 
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
@@ -359,7 +438,7 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
-          if (!isModernModelRef({ provider: model.provider, id: model.id })) {
+          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
         }
@@ -388,13 +467,16 @@ describeLive("live models (profile keys)", () => {
         maxModels > 0 ? maxModels : candidates.length,
         (entry) => entry.model.provider,
       );
-      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[live-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_MAX_MODELS=${maxModels}`,
         );
       }
       logProgress(`[live-models] running ${selectedCandidates.length} models`);
+      logProgress(
+        `[live-models] heartbeat=${formatElapsedSeconds(LIVE_HEARTBEAT_MS)} timeout=${formatElapsedSeconds(perModelTimeoutMs)}`,
+      );
       const total = selectedCandidates.length;
 
       for (const [index, entry] of selectedCandidates.entries()) {
@@ -441,6 +523,7 @@ describeLive("live models (profile keys)", () => {
                   maxTokens: 128,
                 },
                 perModelTimeoutMs,
+                `${progressLabel}: tool-only regression first call`,
               );
 
               let toolCall = first.content.find((b) => b.type === "toolCall");
@@ -470,6 +553,7 @@ describeLive("live models (profile keys)", () => {
                     maxTokens: 128,
                   },
                   perModelTimeoutMs,
+                  `${progressLabel}: tool-only regression retry ${i + 1}`,
                 );
 
                 toolCall = first.content.find((b) => b.type === "toolCall");
@@ -514,6 +598,7 @@ describeLive("live models (profile keys)", () => {
                   maxTokens: 256,
                 },
                 perModelTimeoutMs,
+                `${progressLabel}: tool-only regression followup`,
               );
 
               const secondText = second.content
@@ -530,6 +615,7 @@ describeLive("live models (profile keys)", () => {
               model,
               apiKey,
               timeoutMs: perModelTimeoutMs,
+              progressLabel,
             });
 
             if (ok.res.stopReason === "error") {
@@ -602,6 +688,11 @@ describeLive("live models (profile keys)", () => {
             ) {
               logProgress(`${progressLabel}: rate limit, retrying with next key`);
               continue;
+            }
+            if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+              break;
             }
             if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
               if (attempt + 1 < attemptMax) {
@@ -682,6 +773,15 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "ollama" &&
+              isOllamaUnavailableErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (ollama unavailable)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

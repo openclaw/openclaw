@@ -5,23 +5,15 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
-import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getAgentLocalStatuses } from "./status.agent-local.js";
+import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
+import { scanStatusJsonCore } from "./status.scan.json-core.js";
 import {
-  buildTailscaleHttpsUrl,
-  pickGatewaySelfPresence,
-  resolveGatewayProbeSnapshot,
-  resolveMemoryPluginStatus,
   resolveSharedMemoryStatusSnapshot,
   type MemoryPluginStatus,
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
-import { getStatusSummary } from "./status.summary.js";
-import { getUpdateCheckResult } from "./status.update.js";
-
-let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 let commandSecretTargetsModulePromise:
   | Promise<typeof import("../cli/command-secret-targets.js")>
@@ -33,11 +25,6 @@ let memorySearchModulePromise: Promise<typeof import("../agents/memory-search.js
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
-
-function loadPluginRegistryModule() {
-  pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
-  return pluginRegistryModulePromise;
-}
 
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
@@ -72,13 +59,17 @@ function shouldSkipMissingConfigFastPath(): boolean {
   );
 }
 
+function isMissingConfigColdStart(): boolean {
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env));
+}
+
 function resolveDefaultMemoryStorePath(agentId: string): string {
   return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
 }
 
 async function resolveMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
   memoryPlugin: MemoryPluginStatus;
 }): Promise<MemoryStatusSnapshot | null> {
   const { resolveMemorySearchConfig } = await loadMemorySearchModule();
@@ -123,91 +114,24 @@ export async function scanStatusJsonFast(
     timeoutMs?: number;
     all?: boolean;
   },
-  _runtime: RuntimeEnv,
+  runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
+  const coldStart = isMissingConfigColdStart();
   const loadedRaw = await readStatusSourceConfig();
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } = await resolveStatusConfig({
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  if (hasPotentialConfiguredChannels(cfg)) {
-    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
-  }
-  const osSummary = resolveOsSummary();
-  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
-  });
-  const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
-
-  const tailscaleDnsPromise =
-    tailscaleMode === "off"
-      ? Promise.resolve<string | null>(null)
-      : loadStatusScanDepsRuntimeModule()
-          .then(({ getTailnetHostname }) =>
-            getTailnetHostname((cmd, args) =>
-              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ),
-          )
-          .catch(() => null);
-
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
-
-  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
-    tailscaleDnsPromise,
-    updatePromise,
-    agentStatusPromise,
-    gatewayProbePromise,
-    summaryPromise,
-  ]);
-  const tailscaleHttpsUrl = buildTailscaleHttpsUrl({
-    tailscaleMode,
-    tailscaleDns,
-    controlUiBasePath: cfg.gateway?.controlUi?.basePath,
-  });
-
-  const {
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth,
-    gatewayProbeAuthWarning,
-    gatewayProbe,
-  } = gatewaySnapshot;
-  const gatewayReachable = gatewayProbe?.ok === true;
-  const gatewaySelf = gatewayProbe?.presence
-    ? pickGatewaySelfPresence(gatewayProbe.presence)
-    : null;
-  const memoryPlugin = resolveMemoryPluginStatus(cfg);
-  const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-
-  return {
+  return await scanStatusJsonCore({
+    coldStart,
     cfg,
     sourceConfig: loadedRaw,
     secretDiagnostics,
-    osSummary,
-    tailscaleMode,
-    tailscaleDns,
-    tailscaleHttpsUrl,
-    update,
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth,
-    gatewayProbeAuthWarning,
-    gatewayProbe,
-    gatewayReachable,
-    gatewaySelf,
-    channelIssues: [],
-    agentStatus,
-    channels: { rows: [], details: [] },
-    summary,
-    memory,
-    memoryPlugin,
-  };
+    hasConfiguredChannels: hasPotentialConfiguredChannels(cfg),
+    opts,
+    resolveOsSummary,
+    resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+      opts.all ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin }) : null,
+    runtime,
+  });
 }

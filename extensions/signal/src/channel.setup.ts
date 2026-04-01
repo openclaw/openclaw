@@ -1,5 +1,5 @@
-import { type ChannelPlugin } from "openclaw/plugin-sdk/signal";
 import { type ResolvedSignalAccount } from "./accounts.js";
+import { type ChannelPlugin } from "./runtime-api.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import { createSignalPluginBase, signalSetupWizard } from "./shared.js";
 

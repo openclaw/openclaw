@@ -6,26 +6,37 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
-  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
-}));
-import {
-  listThinkingLevelLabels,
-  listThinkingLevels,
-  normalizeReasoningLevel,
-  normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
-} from "./thinking.js";
+let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
+let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
+let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
+let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
+let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
 
-beforeEach(() => {
+async function loadFreshThinkingModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../plugins/provider-thinking.js", () => ({
+    resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
+    resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
+  }));
+  return await import("./thinking.js");
+}
+
+beforeEach(async () => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
+
+  ({
+    listThinkingLevelLabels,
+    listThinkingLevels,
+    normalizeReasoningLevel,
+    normalizeThinkLevel,
+    resolveThinkingDefaultForModel,
+  } = await loadFreshThinkingModuleForTest());
 });
 
 describe("normalizeThinkLevel", () => {
@@ -74,16 +85,14 @@ describe("listThinkingLevels", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       (provider === "openai" && ["gpt-5.2", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai-codex" &&
-        ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"].includes(
-          context.modelId,
-        )) ||
+        ["gpt-5.2-codex", "gpt-5.4", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
       (provider === "github-copilot" && ["gpt-5.2", "gpt-5.2-codex"].includes(context.modelId))
         ? true
         : undefined,
     );
 
     expect(listThinkingLevels("openai-codex", "gpt-5.2-codex")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");

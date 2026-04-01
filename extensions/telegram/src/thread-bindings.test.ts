@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import { loadBundledPluginTestApiSync } from "../../../test/helpers/plugins/bundled-plugin-public-surface.js";
 import {
   __testing,
   createTelegramThreadBindingManager,
@@ -15,12 +16,13 @@ import {
 describe("telegram thread bindings", () => {
   let stateDirOverride: string | undefined;
 
-  beforeEach(() => {
-    __testing.resetTelegramThreadBindingsForTests();
+  beforeEach(async () => {
+    await __testing.resetTelegramThreadBindingsForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await __testing.resetTelegramThreadBindingsForTests();
     if (stateDirOverride) {
       delete process.env.OPENCLAW_STATE_DIR;
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
@@ -57,7 +59,7 @@ describe("telegram thread bindings", () => {
     expect(manager.getByConversationId("-100200300:topic:77")?.boundBy).toBe("user-1");
   });
 
-  it("does not support child placement", async () => {
+  it("rejects child placement when conversationId is a bare topic ID with no group context", async () => {
     createTelegramThreadBindingManager({
       accountId: "default",
       persist: false,
@@ -71,12 +73,36 @@ describe("telegram thread bindings", () => {
         conversation: {
           channel: "telegram",
           accountId: "default",
-          conversationId: "-100200300:topic:77",
+          conversationId: "77",
         },
         placement: "child",
       }),
     ).rejects.toMatchObject({
-      code: "BINDING_CAPABILITY_UNSUPPORTED",
+      code: "BINDING_CREATE_FAILED",
+    });
+  });
+
+  it("rejects child placement when parentConversationId is also a bare topic ID", async () => {
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:main:acp:child-acp-1",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "77",
+          parentConversationId: "99",
+        },
+        placement: "child",
+      }),
+    ).rejects.toMatchObject({
+      code: "BINDING_CREATE_FAILED",
     });
   });
 
@@ -90,7 +116,7 @@ describe("telegram thread bindings", () => {
       "./thread-bindings.js?scope=shared-b",
     );
 
-    bindingsA.__testing.resetTelegramThreadBindingsForTests();
+    await bindingsA.__testing.resetTelegramThreadBindingsForTests();
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
@@ -123,7 +149,7 @@ describe("telegram thread bindings", () => {
           ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
       ).toBe("agent:main:subagent:child-shared");
     } finally {
-      bindingsA.__testing.resetTelegramThreadBindingsForTests();
+      await bindingsA.__testing.resetTelegramThreadBindingsForTests();
     }
   });
 
@@ -169,6 +195,14 @@ describe("telegram thread bindings", () => {
     expect(manager.listBySessionKey("agent:main:subagent:child-1")[0]?.maxAgeMs).toBe(
       6 * 60 * 60 * 1000,
     );
+  });
+
+  it("exposes the reset helper through the bundled test api", async () => {
+    const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
+      resetTelegramThreadBindingsForTests: () => Promise<void>;
+    }>("telegram");
+
+    await expect(resetTelegramThreadBindingsForTests()).resolves.toBeUndefined();
   });
 
   it("does not persist lifecycle updates when manager persistence is disabled", async () => {
@@ -237,7 +271,7 @@ describe("telegram thread bindings", () => {
       reason: "test-detach",
     });
 
-    __testing.resetTelegramThreadBindingsForTests();
+    await __testing.resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",
@@ -246,5 +280,46 @@ describe("telegram thread bindings", () => {
     });
 
     expect(reloaded.getByConversationId("8460800771")).toBeUndefined();
+  });
+
+  it("flushes pending lifecycle update persists before test reset", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
+
+    createTelegramThreadBindingManager({
+      accountId: "persist-reset",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:child-3",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "persist-reset",
+        conversationId: "-100200300:topic:99",
+      },
+    });
+
+    setTelegramThreadBindingIdleTimeoutBySessionKey({
+      accountId: "persist-reset",
+      targetSessionKey: "agent:main:subagent:child-3",
+      idleTimeoutMs: 90_000,
+    });
+
+    await __testing.resetTelegramThreadBindingsForTests();
+
+    const statePath = path.join(
+      resolveStateDir(process.env, os.homedir),
+      "telegram",
+      "thread-bindings-persist-reset.json",
+    );
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
+      bindings?: Array<{ idleTimeoutMs?: number }>;
+    };
+    expect(persisted.bindings?.[0]?.idleTimeoutMs).toBe(90_000);
   });
 });

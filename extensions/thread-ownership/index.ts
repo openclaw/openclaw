@@ -1,8 +1,10 @@
 import {
   definePluginEntry,
+  fetchWithSsrFGuard,
+  ssrfPolicyFromAllowPrivateNetwork,
   type OpenClawConfig,
   type OpenClawPluginApi,
-} from "openclaw/plugin-sdk/thread-ownership";
+} from "./api.js";
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
@@ -93,24 +95,35 @@ export default definePluginEntry({
       if (mentionedThreads.has(`${channelId}:${threadTs}`)) return;
 
       try {
-        const resp = await fetch(`${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent_id: agentId }),
-          signal: AbortSignal.timeout(3000),
+        // The forwarder is an internal service (e.g. a Docker container); allow private-network
+        // access but pin DNS so DNS-rebinding attacks cannot pivot to a different internal host.
+        const { response: resp, release } = await fetchWithSsrFGuard({
+          url: `${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`,
+          init: {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ agent_id: agentId }),
+          },
+          timeoutMs: 3000,
+          policy: ssrfPolicyFromAllowPrivateNetwork(true),
+          auditContext: "thread-ownership",
         });
 
-        if (resp.ok) {
-          return;
+        try {
+          if (resp.ok) {
+            return;
+          }
+          if (resp.status === 409) {
+            const body = (await resp.json()) as { owner?: string };
+            api.logger.info?.(
+              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+            );
+            return { cancel: true };
+          }
+          api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
+        } finally {
+          await release();
         }
-        if (resp.status === 409) {
-          const body = (await resp.json()) as { owner?: string };
-          api.logger.info?.(
-            `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
-          );
-          return { cancel: true };
-        }
-        api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
       } catch (err) {
         api.logger.warn?.(
           `thread-ownership: ownership check failed (${String(err)}), allowing send`,

@@ -267,6 +267,27 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   ])("$name", ({ attachments, expected }) => {
     expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
   });
+
+  it("accepts dashboard image attachments with nested base64 source", () => {
+    const res = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "Zm9v",
+        },
+      },
+    ]);
+    expect(res).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: undefined,
+        content: "Zm9v",
+      },
+    ]);
+  });
 });
 
 describe("sanitizeChatSendMessageInput", () => {
@@ -847,7 +868,9 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
+        code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       }),
     );
   });
@@ -962,6 +985,45 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id: "approval-no-approver", decision: null }),
       undefined,
     );
+  });
+
+  it("keeps approvals pending when the originating chat can handle /approve directly", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const expireSpy = vi.spyOn(manager, "expire");
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          twoPhase: true,
+          timeoutMs: 60_000,
+          id: "approval-chat-route",
+          host: "gateway",
+          turnSourceChannel: "slack",
+          turnSourceTo: "D123",
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: "approval-chat-route" }),
+          undefined,
+        );
+      });
+
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).not.toHaveBeenCalled();
+
+      manager.resolve("approval-chat-route", "allow-once");
+      await requestPromise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {

@@ -89,4 +89,51 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
 
     expect(payload.messages[0].content).toBe("Hello");
   });
+
+  it("does not inject cache_control into thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "Part 1" },
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "Part 1" },
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+    ]);
+  });
+
+  it("removes pre-existing cache_control from assistant thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal",
+              thinkingSignature: "sig_1",
+              cache_control: { type: "ephemeral" },
+            },
+            { type: "text", text: "visible" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "text", text: "visible" },
+    ]);
+  });
 });

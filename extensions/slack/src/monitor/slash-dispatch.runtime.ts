@@ -1,9 +1,8 @@
+import { resolveMarkdownTableMode as resolveMarkdownTableModeImpl } from "openclaw/plugin-sdk/config-runtime";
 import {
-  createReplyPrefixOptions as createReplyPrefixOptionsImpl,
   recordInboundSessionMetaSafe as recordInboundSessionMetaSafeImpl,
   resolveConversationLabel as resolveConversationLabelImpl,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { resolveMarkdownTableMode as resolveMarkdownTableModeImpl } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   dispatchReplyWithDispatcher as dispatchReplyWithDispatcherImpl,
   finalizeInboundContext as finalizeInboundContextImpl,
@@ -18,11 +17,9 @@ type FinalizeInboundContext =
 type DispatchReplyWithDispatcher =
   typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher;
 type ResolveConversationLabel =
-  typeof import("openclaw/plugin-sdk/channel-runtime").resolveConversationLabel;
-type CreateReplyPrefixOptions =
-  typeof import("openclaw/plugin-sdk/channel-runtime").createReplyPrefixOptions;
+  typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConversationLabel;
 type RecordInboundSessionMetaSafe =
-  typeof import("openclaw/plugin-sdk/channel-runtime").recordInboundSessionMetaSafe;
+  typeof import("openclaw/plugin-sdk/conversation-runtime").recordInboundSessionMetaSafe;
 type ResolveMarkdownTableMode =
   typeof import("openclaw/plugin-sdk/config-runtime").resolveMarkdownTableMode;
 type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing").resolveAgentRoute;
@@ -50,12 +47,6 @@ export function resolveConversationLabel(
   ...args: Parameters<ResolveConversationLabel>
 ): ReturnType<ResolveConversationLabel> {
   return resolveConversationLabelImpl(...args);
-}
-
-export function createReplyPrefixOptions(
-  ...args: Parameters<CreateReplyPrefixOptions>
-): ReturnType<CreateReplyPrefixOptions> {
-  return createReplyPrefixOptionsImpl(...args);
 }
 
 export function recordInboundSessionMetaSafe(

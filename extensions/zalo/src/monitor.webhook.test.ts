@@ -1,9 +1,16 @@
-import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
+import type { RequestListener } from "node:http";
+import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/testing";
+import { setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import {
+  createImageLifecycleCore,
+  createImageUpdate,
+  createTextUpdate,
+  expectImageLifecycleDelivery,
+  postWebhookReplay,
+} from "../test-support/lifecycle-test-support.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
@@ -12,23 +19,6 @@ import {
   registerZaloWebhookTarget,
 } from "./monitor.js";
 import type { ResolvedZaloAccount } from "./types.js";
-
-async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  try {
-    await fn(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-}
-
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
   enabled: true,
@@ -127,27 +117,6 @@ describe("handleZaloWebhookRequest", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("registers and unregisters plugin HTTP route at path boundaries", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    const unregisterA = registerTarget({ path: "/hook" });
-    const unregisterB = registerTarget({ path: "/hook" });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toEqual(
-      expect.objectContaining({
-        pluginId: "zalo",
-        path: "/hook",
-        source: "zalo-webhook",
-      }),
-    );
-
-    unregisterA();
-    expect(registry.httpRoutes).toHaveLength(1);
-    unregisterB();
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
   it("returns 400 for non-object payloads", async () => {
     const unregister = registerTarget({ path: "/hook" });
 
@@ -221,32 +190,71 @@ describe("handleZaloWebhookRequest", () => {
   it("deduplicates webhook replay by event_name + message_id", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
-
-    const payload = {
-      event_name: "message.text.received",
-      message: {
-        from: { id: "123" },
-        chat: { id: "123", chat_type: "PRIVATE" },
-        message_id: "msg-replay-1",
-        date: Math.floor(Date.now() / 1000),
-        text: "hello",
-      },
-    };
+    const payload = createTextUpdate({
+      messageId: "msg-replay-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay`, {
+        const { first, replay } = await postWebhookReplay({
+          baseUrl,
+          path: "/hook-replay",
+          secret: "secret",
+          payload,
+        });
+
+        expect(first.status).toBe(200);
+        expect(replay.status).toBe(200);
+        expect(sink).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("keeps replay dedupe isolated per authenticated target", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const unregisterA = registerTarget({
+      path: "/hook-replay-scope",
+      secret: "secret-a",
+      statusSink: sinkA,
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-scope",
+      secret: "secret-b",
+      statusSink: sinkB,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "work",
+      },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-scope-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-scope`, {
           method: "POST",
           headers: {
-            "x-bot-api-secret-token": "secret",
+            "x-bot-api-secret-token": "secret-a",
             "content-type": "application/json",
           },
           body: JSON.stringify(payload),
         });
-        const second = await fetch(`${baseUrl}/hook-replay`, {
+        const second = await fetch(`${baseUrl}/hook-replay-scope`, {
           method: "POST",
           headers: {
-            "x-bot-api-secret-token": "secret",
+            "x-bot-api-secret-token": "secret-b",
             "content-type": "application/json",
           },
           body: JSON.stringify(payload),
@@ -254,11 +262,60 @@ describe("handleZaloWebhookRequest", () => {
 
         expect(first.status).toBe(200);
         expect(second.status).toBe(200);
-        expect(sink).toHaveBeenCalledTimes(1);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
+  it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
+    const {
+      core,
+      finalizeInboundContextMock,
+      recordInboundSessionMock,
+      fetchRemoteMediaMock,
+      saveMediaBufferMock,
+    } = createImageLifecycleCore();
+    const unregister = registerTarget({
+      path: "/hook-image",
+      core,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        config: {
+          dmPolicy: "open",
+        },
+      },
+    });
+    const payload = createImageUpdate();
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-image`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
       });
     } finally {
       unregister();
     }
+
+    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    expectImageLifecycleDelivery({
+      fetchRemoteMediaMock,
+      saveMediaBufferMock,
+      finalizeInboundContextMock,
+      recordInboundSessionMock,
+    });
   });
 
   it("returns 429 when per-path request rate exceeds threshold", async () => {

@@ -34,15 +34,23 @@ OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通
 
 ```json5
 {
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "pplx-...",
+            baseUrl: "https://api.perplexity.ai",
+            model: "perplexity/sonar-pro",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro",
-        },
       },
     },
   },
@@ -53,21 +61,31 @@ OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通
 
 ```json5
 {
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "pplx-...",
+            baseUrl: "https://api.perplexity.ai",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai",
-        },
       },
     },
   },
 }
 ```
 
-如果同时设置了 `PERPLEXITY_API_KEY` 和 `OPENROUTER_API_KEY`，请设置 `tools.web.search.perplexity.baseUrl`（或 `tools.web.search.perplexity.apiKey`）以消除歧义。
+如果同时设置了 `PERPLEXITY_API_KEY` 和 `OPENROUTER_API_KEY`，请设置 `plugins.entries.perplexity.config.webSearch.baseUrl`（或 `plugins.entries.perplexity.config.webSearch.apiKey`）以消除歧义。
+
+提供商专属配置现在统一放在 `plugins.entries.<plugin>.config.webSearch.*`。旧的 `tools.web.search.*` 路径仅通过兼容层继续生效，不再推荐用于新配置。
 
 如果未设置 base URL，OpenClaw 会根据 API 密钥来源选择默认值：
 

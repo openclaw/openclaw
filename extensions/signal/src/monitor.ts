@@ -1,22 +1,29 @@
+import { waitForTransportReady } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
-import type { BackoffPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createNonExitingRuntime,
+  type BackoffPolicy,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
@@ -52,6 +59,7 @@ export type MonitorSignalOpts = {
   groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
   reconnectPolicy?: Partial<BackoffPolicy>;
+  waitForTransportReady?: typeof waitForTransportReady;
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
@@ -213,8 +221,10 @@ async function waitForSignalDaemonReady(params: {
   logAfterMs: number;
   logIntervalMs?: number;
   runtime: RuntimeEnv;
+  waitForTransportReadyFn?: typeof waitForTransportReady;
 }): Promise<void> {
-  await waitForTransportReady({
+  const waitForTransportReadyFn = params.waitForTransportReadyFn ?? waitForTransportReady;
+  await waitForTransportReadyFn({
     label: "signal daemon",
     timeoutMs: params.timeoutMs,
     logAfterMs: params.logAfterMs,
@@ -296,35 +306,32 @@ async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
-    if (!text && mediaList.length === 0) {
-      continue;
-    }
-    if (mediaList.length === 0) {
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const delivered = await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
           baseUrl,
           account,
           maxBytes,
           accountId,
         });
-      }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSignal(target, caption, {
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageSignal(target, caption ?? "", {
           baseUrl,
           account,
-          mediaUrl: url,
+          mediaUrl,
           maxBytes,
           accountId,
         });
-      }
+      },
+    });
+    if (delivered !== "empty") {
+      runtime.log?.(`delivered reply to ${target}`);
     }
-    runtime.log?.(`delivered reply to ${target}`);
   }
 }
 
@@ -373,6 +380,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
+  const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
   const startupTimeoutMs = Math.min(
@@ -415,6 +423,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,
+        waitForTransportReadyFn,
       });
       const daemonExitError = daemonLifecycle.getExitError();
       if (daemonExitError) {

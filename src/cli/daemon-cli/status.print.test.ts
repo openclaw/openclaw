@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../command-format.js";
+import { printDaemonStatus } from "./status.print.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
@@ -9,9 +11,13 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
-  colorize: (_rich: boolean, _theme: unknown, text: string) => text,
-}));
+vi.mock("../../terminal/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../terminal/theme.js")>();
+  return {
+    ...actual,
+    colorize: (_rich: boolean, _theme: unknown, text: string) => text,
+  };
+});
 
 vi.mock("../../commands/onboard-helpers.js", () => ({
   resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
@@ -54,6 +60,7 @@ vi.mock("./shared.js", () => ({
   filterDaemonEnv: () => ({}),
   formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
+  resolveDaemonContainerContext: () => null,
   renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
@@ -62,8 +69,6 @@ vi.mock("./status.gather.js", () => ({
   renderPortDiagnosticsForCli: () => [],
   resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
 }));
-
-const { printDaemonStatus } = await import("./status.print.js");
 
 describe("printDaemonStatus", () => {
   beforeEach(() => {
@@ -111,6 +116,8 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Gateway runtime PID does not own the listening port"),
     );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(formatCliCommand("openclaw gateway restart")),
+    );
   });
 });

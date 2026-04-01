@@ -38,6 +38,8 @@ function createLazySender(
 }
 
 export function createDefaultDeps(): CliDeps {
+  // Keep the default dependency barrel limited to lazy senders so callers that
+  // only need outbound deps do not pull channel runtime boundaries on import.
   return {
     whatsapp: createLazySender(
       "whatsapp",
@@ -69,5 +71,3 @@ export function createDefaultDeps(): CliDeps {
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
   return createOutboundSendDepsFromCliSource(deps);
 }
-
-export { logWebSelfId } from "../plugin-sdk/whatsapp.js";

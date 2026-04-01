@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { pathExists } from "../utils.js";
+import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
@@ -39,6 +41,47 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
     trimmed.includes("#") ||
     /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
   );
+}
+
+export function resolveExpectedInstalledVersionFromSpec(
+  packageName: string,
+  spec: string,
+): string | null {
+  const normalizedPackageName = packageName.trim();
+  const normalizedSpec = normalizePackageTarget(spec);
+  if (!normalizedPackageName || !normalizedSpec.startsWith(`${normalizedPackageName}@`)) {
+    return null;
+  }
+  const rawVersion = normalizedSpec.slice(normalizedPackageName.length + 1).trim();
+  if (
+    !rawVersion ||
+    rawVersion.includes("/") ||
+    rawVersion.includes(":") ||
+    rawVersion.includes("#") ||
+    /^(latest|beta|next|main)$/i.test(rawVersion)
+  ) {
+    return null;
+  }
+  return rawVersion;
+}
+
+export async function collectInstalledGlobalPackageErrors(params: {
+  packageRoot: string;
+  expectedVersion?: string | null;
+}): Promise<string[]> {
+  const errors: string[] = [];
+  const installedVersion = await readPackageVersion(params.packageRoot);
+  if (params.expectedVersion && installedVersion !== params.expectedVersion) {
+    errors.push(
+      `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
+    );
+  }
+  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+    if (!(await pathExists(path.join(params.packageRoot, relativePath)))) {
+      errors.push(`missing bundled runtime sidecar ${relativePath}`);
+    }
+  }
+  return errors;
 }
 
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {

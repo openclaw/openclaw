@@ -1,3 +1,11 @@
+---
+title: "Auth Credential Semantics"
+summary: "Canonical credential eligibility and resolution semantics for auth profiles"
+read_when:
+  - Working on auth profile resolution or credential routing
+  - Debugging model auth failures or profile order
+---
+
 # Auth Credential Semantics
 
 This document defines the canonical credential eligibility and resolution semantics used across:
@@ -35,6 +43,13 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 1. Resolver semantics match eligibility semantics for `expires`.
 2. For eligible profiles, token material may be resolved from inline value or `tokenRef`.
 3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
+
+## OAuth SecretRef Policy Guard
+
+- SecretRef input is for static credentials only.
+- If a profile credential is `type: "oauth"`, SecretRef objects are not supported for that profile credential material.
+- If `auth.profiles.<id>.mode` is `"oauth"`, SecretRef-backed `keyRef`/`tokenRef` input for that profile is rejected.
+- Violations are hard failures in startup/reload auth resolution paths.
 
 ## Legacy-Compatible Messaging
 

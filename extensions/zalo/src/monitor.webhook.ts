@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
+import type { ResolvedZaloAccount } from "./accounts.js";
+import type { ZaloFetch, ZaloUpdate } from "./api.js";
+import type { ZaloRuntimeEnv } from "./monitor.js";
 import {
   createDedupeCache,
   createFixedWindowRateLimiter,
@@ -16,10 +18,8 @@ import {
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   resolveClientIp,
-} from "openclaw/plugin-sdk/zalo";
-import type { ResolvedZaloAccount } from "./accounts.js";
-import type { ZaloFetch, ZaloUpdate } from "./api.js";
-import type { ZaloRuntimeEnv } from "./monitor.js";
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 
@@ -59,6 +59,7 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
+  recentWebhookEvents.clear();
   webhookAnomalyTracker.clear();
 }
 
@@ -87,12 +88,12 @@ function timingSafeEquals(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
+function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
     return false;
   }
-  const key = `${update.event_name}:${messageId}`;
+  const key = `${target.path}:${target.account.accountId}:${update.event_name}:${messageId}`;
   return recentWebhookEvents.check(key, nowMs);
 }
 
@@ -222,7 +223,7 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      if (isReplayEvent(update, nowMs)) {
+      if (isReplayEvent(target, update, nowMs)) {
         res.statusCode = 200;
         res.end("ok");
         return true;

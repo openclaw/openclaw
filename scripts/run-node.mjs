@@ -4,12 +4,17 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", "extensions"];
+const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
@@ -39,8 +44,8 @@ export const isBuildRelevantRunNodePath = (repoPath) => {
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isBuildRelevantSourcePath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -61,8 +66,8 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -119,27 +124,6 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     }
   }
   return latest;
-};
-
-const runGit = (gitArgs, deps) => {
-  try {
-    const result = deps.spawnSync("git", gitArgs, {
-      cwd: deps.cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (result.status !== 0) {
-      return null;
-    }
-    return (result.stdout ?? "").trim();
-  } catch {
-    return null;
-  }
-};
-
-const resolveGitHead = (deps) => {
-  const head = runGit(["rev-parse", "HEAD"], deps);
-  return head || null;
 };
 
 const readGitStatus = (deps) => {
@@ -210,47 +194,61 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
   return latestSourceMtime != null && latestSourceMtime > stampMtime;
 };
 
-const shouldBuild = (deps) => {
+export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
-    return true;
+    return { shouldBuild: true, reason: "force_build" };
   }
   const stamp = readBuildStamp(deps);
   if (stamp.mtime == null) {
-    return true;
+    return { shouldBuild: true, reason: "missing_build_stamp" };
   }
   if (statMtime(deps.distEntry, deps.fs) == null) {
-    return true;
+    return { shouldBuild: true, reason: "missing_dist_entry" };
   }
 
   for (const filePath of deps.configFiles) {
     const mtime = statMtime(filePath, deps.fs);
     if (mtime != null && mtime > stamp.mtime) {
-      return true;
+      return { shouldBuild: true, reason: "config_newer" };
     }
   }
 
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return { shouldBuild: true, reason: "build_stamp_missing_head" };
   }
   if (currentHead && stamp.head && currentHead !== stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return { shouldBuild: true, reason: "git_head_changed" };
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
     if (dirty === true) {
-      return true;
+      return { shouldBuild: true, reason: "dirty_watched_tree" };
     }
     if (dirty === false) {
-      return false;
+      return { shouldBuild: false, reason: "clean" };
     }
   }
 
   if (hasSourceMtimeChanged(stamp.mtime, deps)) {
-    return true;
+    return { shouldBuild: true, reason: "source_mtime_newer" };
   }
-  return false;
+  return { shouldBuild: false, reason: "clean" };
 };
+
+const BUILD_REASON_LABELS = {
+  force_build: "forced by OPENCLAW_FORCE_BUILD",
+  missing_build_stamp: "build stamp missing",
+  missing_dist_entry: "dist entry missing",
+  config_newer: "config newer than build stamp",
+  build_stamp_missing_head: "build stamp missing git head",
+  git_head_changed: "git head changed",
+  dirty_watched_tree: "dirty watched source tree",
+  source_mtime_newer: "source mtime newer than build stamp",
+  clean: "clean",
+};
+
+const formatBuildReason = (reason) => BUILD_REASON_LABELS[reason] ?? reason;
 
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
@@ -291,12 +289,11 @@ const syncRuntimeArtifacts = (deps) => {
 
 const writeBuildStamp = (deps) => {
   try {
-    deps.fs.mkdirSync(deps.distRoot, { recursive: true });
-    const stamp = {
-      builtAt: Date.now(),
-      head: resolveGitHead(deps),
-    };
-    deps.fs.writeFileSync(deps.buildStampPath, `${JSON.stringify(stamp)}\n`);
+    writeDistBuildStamp({
+      cwd: deps.cwd,
+      fs: deps.fs,
+      spawnSync: deps.spawnSync,
+    });
   } catch (error) {
     // Best-effort stamp; still allow the runner to start.
     logRunner(`Failed to write build stamp: ${error?.message ?? "unknown error"}`, deps);
@@ -324,14 +321,18 @@ export async function runNodeMain(params = {}) {
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
 
-  if (!shouldBuild(deps)) {
+  const buildRequirement = resolveBuildRequirement(deps);
+  if (!buildRequirement.shouldBuild) {
     if (!syncRuntimeArtifacts(deps)) {
       return 1;
     }
     return await runOpenClaw(deps);
   }
 
-  logRunner("Building TypeScript (dist is stale).", deps);
+  logRunner(
+    `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
+    deps,
+  );
   const buildCmd = deps.execPath;
   const buildArgs = compilerArgs;
   const build = deps.spawn(buildCmd, buildArgs, {

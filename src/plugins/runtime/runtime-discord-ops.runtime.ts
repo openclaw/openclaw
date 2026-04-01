@@ -1,12 +1,12 @@
-import { auditDiscordChannelPermissions as auditDiscordChannelPermissionsImpl } from "../../../extensions/discord/src/audit.js";
 import {
+  auditDiscordChannelPermissions as auditDiscordChannelPermissionsImpl,
   listDiscordDirectoryGroupsLive as listDiscordDirectoryGroupsLiveImpl,
   listDiscordDirectoryPeersLive as listDiscordDirectoryPeersLiveImpl,
-} from "../../../extensions/discord/src/directory-live.js";
-import { monitorDiscordProvider as monitorDiscordProviderImpl } from "../../../extensions/discord/src/monitor.js";
-import { probeDiscord as probeDiscordImpl } from "../../../extensions/discord/src/probe.js";
-import { resolveDiscordChannelAllowlist as resolveDiscordChannelAllowlistImpl } from "../../../extensions/discord/src/resolve-channels.js";
-import { resolveDiscordUserAllowlist as resolveDiscordUserAllowlistImpl } from "../../../extensions/discord/src/resolve-users.js";
+  monitorDiscordProvider as monitorDiscordProviderImpl,
+  probeDiscord as probeDiscordImpl,
+  resolveDiscordChannelAllowlist as resolveDiscordChannelAllowlistImpl,
+  resolveDiscordUserAllowlist as resolveDiscordUserAllowlistImpl,
+} from "../../plugin-sdk/discord.js";
 import {
   createThreadDiscord as createThreadDiscordImpl,
   deleteMessageDiscord as deleteMessageDiscordImpl,
@@ -18,7 +18,7 @@ import {
   sendPollDiscord as sendPollDiscordImpl,
   sendTypingDiscord as sendTypingDiscordImpl,
   unpinMessageDiscord as unpinMessageDiscordImpl,
-} from "../../../extensions/discord/src/send.js";
+} from "../../plugin-sdk/discord.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 type RuntimeDiscordOps = Pick<

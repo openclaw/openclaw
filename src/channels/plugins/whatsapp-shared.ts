@@ -1,7 +1,8 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
-import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
+import { createAttachedChannelResultAdapter } from "../../plugin-sdk/channel-send-result.js";
+import type { PollInput } from "../../polls.js";
 import { escapeRegExp } from "../../utils.js";
-import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import type { ChannelOutboundAdapter } from "./types.js";
 
 export const WHATSAPP_GROUP_INTRO_HINT =
@@ -21,15 +22,35 @@ export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }):
 }
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
-type WhatsAppSendMessage = PluginRuntimeChannel["whatsapp"]["sendMessageWhatsApp"];
-type WhatsAppSendPoll = PluginRuntimeChannel["whatsapp"]["sendPollWhatsApp"];
+type WhatsAppSendMessage = (
+  to: string,
+  body: string,
+  options: {
+    verbose: boolean;
+    cfg?: OpenClawConfig;
+    mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    gifPlayback?: boolean;
+    accountId?: string;
+  },
+) => Promise<{ messageId: string; toJid: string }>;
+type WhatsAppSendPoll = (
+  to: string,
+  poll: PollInput,
+  options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+) => Promise<{ messageId: string; toJid: string }>;
 
 type CreateWhatsAppOutboundBaseParams = {
   chunker: WhatsAppChunker;
   sendMessageWhatsApp: WhatsAppSendMessage;
   sendPollWhatsApp: WhatsAppSendPoll;
   shouldLogVerbose: () => boolean;
-  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+  resolveTarget: ChannelOutboundAdapter["resolveTarget"];
   normalizeText?: (text: string | undefined) => string;
   skipEmptyText?: boolean;
 };
@@ -39,8 +60,7 @@ export function createWhatsAppOutboundBase({
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
-  resolveTarget = ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget,
   normalizeText = (text) => text ?? "",
   skipEmptyText = false,
 }: CreateWhatsAppOutboundBaseParams): Pick<
@@ -62,48 +82,53 @@ export function createWhatsAppOutboundBase({
     textChunkLimit: 4000,
     pollMaxOptions: 12,
     resolveTarget,
-    sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
-      const normalizedText = normalizeText(text);
-      if (skipEmptyText && !normalizedText) {
-        return { channel: "whatsapp", messageId: "" };
-      }
-      const send =
-        resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
-      const result = await send(to, normalizedText, {
-        verbose: false,
+    ...createAttachedChannelResultAdapter({
+      channel: "whatsapp",
+      sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
+        const normalizedText = normalizeText(text);
+        if (skipEmptyText && !normalizedText) {
+          return { messageId: "" };
+        }
+        const send =
+          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+        return await send(to, normalizedText, {
+          verbose: false,
+          cfg,
+          accountId: accountId ?? undefined,
+          gifPlayback,
+        });
+      },
+      sendMedia: async ({
         cfg,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      });
-      return { channel: "whatsapp", ...result };
-    },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      gifPlayback,
-    }) => {
-      const send =
-        resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
-      const result = await send(to, normalizeText(text), {
-        verbose: false,
-        cfg,
+        to,
+        text,
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
-        accountId: accountId ?? undefined,
+        mediaReadFile,
+        accountId,
+        deps,
         gifPlayback,
-      });
-      return { channel: "whatsapp", ...result };
-    },
-    sendPoll: async ({ cfg, to, poll, accountId }) =>
-      await sendPollWhatsApp(to, poll, {
-        verbose: shouldLogVerbose(),
-        accountId: accountId ?? undefined,
-        cfg,
-      }),
+      }) => {
+        const send =
+          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+        return await send(to, normalizeText(text), {
+          verbose: false,
+          cfg,
+          mediaUrl,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+          accountId: accountId ?? undefined,
+          gifPlayback,
+        });
+      },
+      sendPoll: async ({ cfg, to, poll, accountId }) =>
+        await sendPollWhatsApp(to, poll, {
+          verbose: shouldLogVerbose(),
+          accountId: accountId ?? undefined,
+          cfg,
+        }),
+    }),
   };
 }
