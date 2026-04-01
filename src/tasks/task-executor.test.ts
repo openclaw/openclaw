@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { installInMemoryTaskAndFlowRegistryRuntime } from "../test-utils/task-flow-registry-runtime.js";
 import {
   getFlowById,
   listFlowRecords,
@@ -52,23 +51,14 @@ vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
-async function flushAsyncWork(times = 4) {
-  for (let index = 0; index < times; index += 1) {
-    await Promise.resolve();
-  }
-}
-
 async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
-    vi.useRealTimers();
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests();
     resetFlowRegistryForTests();
-    installInMemoryTaskAndFlowRegistryRuntime();
     try {
       await run(root);
     } finally {
-      await flushAsyncWork();
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
     }
@@ -77,7 +67,6 @@ async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): P
 
 describe("task-executor", () => {
   afterEach(() => {
-    vi.useRealTimers();
     if (ORIGINAL_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -223,12 +212,6 @@ describe("task-executor", () => {
 
   it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
     await withTaskExecutorStateDir(async () => {
-      hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "telegram:123",
-        via: "direct",
-      });
-
       const created = createRunningTaskRun({
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
@@ -250,7 +233,6 @@ describe("task-executor", () => {
         terminalOutcome: "blocked",
         terminalSummary: "Writable session required.",
       });
-      await flushAsyncWork();
 
       expect(getFlowById(created.parentFlowId!)).toMatchObject({
         flowId: created.parentFlowId,
