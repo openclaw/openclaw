@@ -1,10 +1,14 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const REPO_ROOT = process.cwd();
+const require = createRequire(import.meta.url);
+const JITI_ENTRY_PATH = require.resolve("jiti");
 const PACKAGED_RUNTIME_STUB = [
   "export async function ensureMatrixCryptoRuntime() {}",
   "export async function handleVerifyRecoveryKey() {}",
@@ -14,7 +18,7 @@ const PACKAGED_RUNTIME_STUB = [
 ].join("\n");
 
 function makeFixtureRoot(prefix: string) {
-  const fixtureRoot = fs.mkdtempSync(path.join(REPO_ROOT, prefix));
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(fixtureRoot);
   return fixtureRoot;
 }
@@ -73,6 +77,11 @@ it("loads the packaged runtime wrapper without recursing through the stable root
     ) + "\n",
   );
   writeFixtureFile(fixtureRoot, "dist/plugin-sdk/index.js", "export {};\n");
+  writeFixtureFile(
+    fixtureRoot,
+    "node_modules/jiti/index.js",
+    `module.exports = require(${JSON.stringify(JITI_ENTRY_PATH)});\n`,
+  );
   writeFixtureFile(fixtureRoot, "dist/plugin-entry.runtime-C88YIa_v.js", wrapperSource);
   writeFixtureFile(
     fixtureRoot,
