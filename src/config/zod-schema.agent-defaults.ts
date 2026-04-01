@@ -16,6 +16,8 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
+    /** Global default provider params applied to all models before per-model and per-agent overrides. */
+    params: z.record(z.string(), z.unknown()).optional(),
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
@@ -82,6 +84,19 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    llm: z
+      .object({
+        idleTimeoutSeconds: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+          ),
       })
       .strict()
       .optional(),
@@ -190,6 +205,7 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

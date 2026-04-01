@@ -118,6 +118,8 @@ export type CliBackendConfig = {
 };
 
 export type AgentDefaultsConfig = {
+  /** Global default provider params applied to all models before per-model and per-agent overrides. */
+  params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
@@ -171,6 +173,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** LLM timeout configuration. */
+  llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -290,6 +294,8 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
+    requireAgentId?: boolean;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
@@ -364,4 +370,17 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+/**
+ * LLM timeout configuration.
+ */
+export type AgentLlmConfig = {
+  /**
+   * Idle timeout for LLM streaming responses in seconds.
+   * If no token is received within this time, the request is aborted.
+   * Set to 0 to disable (never timeout).
+   * Default: 60 seconds.
+   */
+  idleTimeoutSeconds?: number;
 };

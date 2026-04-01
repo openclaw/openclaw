@@ -137,6 +137,12 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
+        const entryOrigin =
+          entry.origin && typeof entry.origin === "object"
+            ? (entry.origin as Record<string, unknown>)
+            : undefined;
+        const originChannel =
+          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext =
           entry.deliveryContext && typeof entry.deliveryContext === "object"
             ? (entry.deliveryContext as Record<string, unknown>)
@@ -146,6 +152,12 @@ export function createSessionsListTool(opts?: {
         const deliveryTo = typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
         const deliveryAccountId =
           typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
+        const deliveryThreadId =
+          typeof deliveryContext?.threadId === "string" ||
+          (typeof deliveryContext?.threadId === "number" &&
+            Number.isFinite(deliveryContext.threadId))
+            ? deliveryContext.threadId
+            : undefined;
         const lastChannel =
           deliveryChannel ??
           (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
@@ -155,7 +167,7 @@ export function createSessionsListTool(opts?: {
         const derivedChannel = deriveChannel({
           key,
           kind,
-          channel: entryChannel,
+          channel: entryChannel ?? originChannel,
           lastChannel,
         });
 
@@ -193,14 +205,40 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          origin:
+            originChannel ||
+            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
+              ? {
+                  provider: originChannel,
+                  accountId:
+                    typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined,
+                }
+              : undefined,
+          spawnedBy:
+            typeof entry.spawnedBy === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.spawnedBy,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.parentSessionKey,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           deliveryContext:
-            deliveryChannel || deliveryTo || deliveryAccountId
+            deliveryChannel || deliveryTo || deliveryAccountId || deliveryThreadId
               ? {
                   channel: deliveryChannel,
                   to: deliveryTo,
                   accountId: deliveryAccountId,
+                  threadId: deliveryThreadId,
                 }
               : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
@@ -226,7 +264,12 @@ export function createSessionsListTool(opts?: {
                 )
             : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
+          fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
+          reasoningLevel:
+            typeof entry.reasoningLevel === "string" ? entry.reasoningLevel : undefined,
+          elevatedLevel: typeof entry.elevatedLevel === "string" ? entry.elevatedLevel : undefined,
+          responseUsage: typeof entry.responseUsage === "string" ? entry.responseUsage : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,

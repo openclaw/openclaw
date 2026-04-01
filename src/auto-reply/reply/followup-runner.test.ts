@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 
@@ -124,25 +125,54 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   previousSessionId?: string;
   nextSessionId?: string;
   nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
 }): void {
   const cleaned = params.key.trim();
-  if (!cleaned || !params.previousSessionId || !params.nextSessionId) {
-    return;
-  }
-  if (params.previousSessionId === params.nextSessionId) {
+  if (!cleaned) {
     return;
   }
   const queue = FOLLOWUP_TEST_QUEUES.get(cleaned);
   if (!queue) {
     return;
   }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
   const rewrite = (run?: FollowupRun["run"]) => {
-    if (!run || run.sessionId !== params.previousSessionId) {
+    if (!run) {
       return;
     }
-    run.sessionId = params.nextSessionId!;
-    if (params.nextSessionFile?.trim()) {
-      run.sessionFile = params.nextSessionFile;
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      if (params.nextSessionFile?.trim()) {
+        run.sessionFile = params.nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = params.nextAuthProfileId?.trim() || undefined;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
     }
   };
   rewrite(queue.lastRun);
@@ -202,7 +232,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   }));
   vi.doMock("../../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn(async () => false),
-    compactEmbeddedPiSession: vi.fn(async () => undefined),
+    compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
     isEmbeddedPiRunActive: vi.fn(() => false),
     isEmbeddedPiRunStreaming: vi.fn(() => false),
     queueEmbeddedPiMessage: vi.fn(async () => undefined),
@@ -243,6 +273,7 @@ const ROUTABLE_TEST_CHANNELS = new Set([
 beforeEach(async () => {
   await loadFreshFollowupRunnerModuleForTest();
   runEmbeddedPiAgentMock.mockReset();
+  compactEmbeddedPiSessionMock.mockReset();
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -526,6 +557,97 @@ describe("createFollowupRunner compaction", () => {
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toBe("final");
     expect(sessionStore.main.compactionCount).toBeUndefined();
+  });
+
+  it("injects the post-compaction refresh prompt before followup runs after preflight compaction", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-preflight-followup-"));
+    const storePath = path.join(workspaceDir, "sessions.json");
+    const transcriptPath = path.join(workspaceDir, "session.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      [
+        "## Session Startup",
+        "Read AGENTS.md before replying.",
+        "",
+        "## Red Lines",
+        "Never skip safety checks.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sessionFile: transcriptPath,
+      totalTokens: 10,
+      totalTokensFresh: false,
+      compactionCount: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    await saveSessionStore(storePath, sessionStore);
+
+    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 90_000,
+        tokensAfter: 8_000,
+      },
+    });
+
+    const embeddedCalls: Array<{ extraSystemPrompt?: string }> = [];
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: { extraSystemPrompt?: string }) => {
+        embeddedCalls.push({ extraSystemPrompt: params.extraSystemPrompt });
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 100_000,
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        sessionFile: transcriptPath,
+        workspaceDir,
+      },
+    });
+
+    await runner(queued);
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
+    expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store.main?.compactionCount).toBe(2);
   });
 });
 

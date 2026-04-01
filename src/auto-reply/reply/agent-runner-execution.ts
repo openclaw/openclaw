@@ -1,10 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -12,6 +16,8 @@ import {
   isContextOverflowError,
   isBillingErrorMessage,
   isLikelyContextOverflowError,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -25,6 +31,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -50,6 +57,12 @@ import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+// Maximum number of LiveSessionModelSwitchError retries before surfacing a
+// user-visible error. Prevents infinite ping-pong when the persisted session
+// selection keeps conflicting with fallback model choices.
+// See: https://github.com/openclaw/openclaw/issues/58348
+export const MAX_LIVE_SWITCH_RETRIES = 2;
+
 export type RuntimeFallbackAttempt = {
   provider: string;
   model: string;
@@ -73,6 +86,55 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
+
+/**
+ * Build a human-friendly rate-limit message from a FallbackSummaryError.
+ * Includes a countdown when the soonest cooldown expiry is known.
+ */
+function buildRateLimitCooldownMessage(err: unknown): string {
+  if (!isFallbackSummaryError(err)) {
+    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+  }
+  const expiry = err.soonestCooldownExpiry;
+  const now = Date.now();
+  if (typeof expiry === "number" && expiry > now) {
+    const secsLeft = Math.max(1, Math.ceil((expiry - now) / 1000));
+    if (secsLeft <= 60) {
+      return `⚠️ Rate-limited — ready in ~${secsLeft}s. Please wait a moment.`;
+    }
+    const minsLeft = Math.ceil(secsLeft / 60);
+    return `⚠️ Rate-limited — ready in ~${minsLeft} min. Please try again shortly.`;
+  }
+  return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+}
+
+function isPureTransientRateLimitSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => {
+      const reason = attempt.reason;
+      return reason === "rate_limit" || reason === "overloaded";
+    })
+  );
+}
+
+function isToolResultTurnMismatchError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("toolresult") &&
+    lower.includes("tooluse") &&
+    lower.includes("exceeds the number") &&
+    lower.includes("previous turn")
+  );
+}
+
+function buildExternalRunFailureText(message: string): string {
+  if (isToolResultTurnMismatchError(message)) {
+    return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+  }
+  return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+}
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
@@ -141,6 +203,7 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -150,6 +213,9 @@ export async function runAgentTurnWithFallback(params: {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         const reply = resolveSendableOutboundReplyParts(payload);
+        if (params.followupRun.run.silentExpected) {
+          return { skip: true };
+        }
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -240,7 +306,14 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
+            const cliSessionBinding = getCliSessionBinding(
+              params.getActiveSessionEntry(),
+              provider,
+            );
+            const authProfileId =
+              provider === params.followupRun.run.provider
+                ? params.followupRun.run.authProfileId
+                : undefined;
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
@@ -259,13 +332,16 @@ export async function runAgentTurnWithFallback(params: {
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId,
+                  cliSessionId: cliSessionBinding?.sessionId,
+                  cliSessionBinding,
+                  authProfileId,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
                   images: params.opts?.images,
+                  imageOrder: params.opts?.imageOrder,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -366,6 +442,7 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
+                imageOrder: params.opts?.imageOrder,
                 abortSignal: params.opts?.abortSignal,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
@@ -386,6 +463,9 @@ export async function runAgentTurnWithFallback(params: {
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
+                        if (params.followupRun.run.silentExpected) {
+                          return;
+                        }
                         await params.typingSignals.signalReasoningDelta();
                         await params.opts?.onReasoningStream?.({
                           text: payload.text,
@@ -558,6 +638,41 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
+      if (err instanceof LiveSessionModelSwitchError) {
+        liveModelSwitchRetries += 1;
+        if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
+          // Prevent infinite loop when persisted session selection keeps
+          // conflicting with fallback model choices (e.g. overloaded primary
+          // triggers fallback, but session store keeps pulling back to the
+          // overloaded model). Surface the last error to the user instead.
+          // See: https://github.com/openclaw/openclaw/issues/58348
+          defaultRuntime.error(
+            `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
+              `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
+          );
+          const switchErrorText = shouldSurfaceToControlUi
+            ? "⚠️ Agent failed before reply: model switch could not be completed. " +
+              "The requested model may be temporarily unavailable.\n" +
+              "Logs: openclaw logs --follow"
+            : "⚠️ Agent failed before reply: model switch could not be completed. " +
+              "The requested model may be temporarily unavailable. Please try again shortly.";
+          return {
+            kind: "final",
+            payload: {
+              text: switchErrorText,
+            },
+          };
+        }
+        params.followupRun.run.provider = err.provider;
+        params.followupRun.run.model = err.model;
+        params.followupRun.run.authProfileId = err.authProfileId;
+        params.followupRun.run.authProfileIdSource = err.authProfileId
+          ? err.authProfileIdSource
+          : undefined;
+        fallbackProvider = err.provider;
+        fallbackModel = err.model;
+        continue;
+      }
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
@@ -652,17 +767,28 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      // Only classify as rate-limit when we have concrete evidence from the
+      // underlying error. FallbackSummaryError messages embed per-attempt
+      // reason labels like `(rate_limit)`, so string-matching the summary text
+      // would misclassify mixed-cause exhaustion as a pure transient cooldown.
+      const isRateLimit = isFallbackSummaryError(err)
+        ? isPureTransientRateLimitSummary(err)
+        : isRateLimitErrorMessage(message);
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
-        : isContextOverflow
-          ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : isRoleOrderingError
-            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+        : isRateLimit
+          ? buildRateLimitCooldownMessage(err)
+          : isContextOverflow
+            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+            : isRoleOrderingError
+              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+              : shouldSurfaceToControlUi
+                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                : buildExternalRunFailureText(message);
 
       return {
         kind: "final",
@@ -680,13 +806,57 @@ export async function runAgentTurnWithFallback(params: {
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
-  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
-    return {
-      kind: "final",
-      payload: {
-        text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
-      },
-    };
+  if (finalEmbeddedError && !hasPayloadText) {
+    const errorMsg = finalEmbeddedError.message ?? "";
+    if (isContextOverflowError(errorMsg)) {
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+        },
+      };
+    }
+  }
+
+  // Surface rate limit and overload errors that occur mid-turn (after tool
+  // calls) instead of silently returning an empty response. See #36142.
+  // Only applies when the assistant produced no valid (non-error) reply text,
+  // so tool-level rate-limit messages don't override a successful turn.
+  // Prioritize metaErrorMsg (raw upstream error) over errorPayloadText to
+  // avoid self-matching on pre-formatted "⚠️" messages from run.ts, and
+  // skip already-formatted payloads so tool-specific 429 errors (e.g.
+  // browser/search tool failures) are preserved rather than overwritten.
+  //
+  // Instead of early-returning kind:"final" (which would bypass
+  // buildReplyPayloads() filtering and session bookkeeping), inject the
+  // error payload into runResult so it flows through the normal
+  // kind:"success" path — preserving streaming dedup, message_send
+  // suppression, and usage/model metadata updates.
+  if (runResult) {
+    const hasNonErrorContent = runResult.payloads?.some(
+      (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
+    );
+    if (!hasNonErrorContent) {
+      const metaErrorMsg = finalEmbeddedError?.message ?? "";
+      const rawErrorPayloadText =
+        runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
+          ?.text ?? "";
+      const errorCandidate = metaErrorMsg || rawErrorPayloadText;
+      if (
+        errorCandidate &&
+        (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
+      ) {
+        const isOverloaded = isOverloadedErrorMessage(errorCandidate);
+        runResult.payloads = [
+          {
+            text: isOverloaded
+              ? "⚠️ The AI service is temporarily overloaded. Please try again in a moment."
+              : "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            isError: true,
+          },
+        ];
+      }
+    }
   }
 
   return {
