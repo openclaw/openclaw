@@ -85,6 +85,26 @@ openclaw plugins install @sliverp/qqbot
 ```
 
 ### wecom
+### OSOP (Open Standard Operating Procedures)
+
+Structured workflow logging, risk analysis, and self-optimization for AI agents.
+Records every AI session as `.osop` + `.osoplog.yaml` — portable workflow
+definitions that work across Claude Code, Codex, Grok, Cursor, and OpenClaw.
+Includes security review, HTML report generation, and a self-optimization loop
+that improves workflows from execution history.
+
+- **ClawHub:** `osop`, `osop-log`, `osop-report`, `osop-review`, `osop-optimize`
+- **repo:** [github.com/Archie0125/osop-skill](https://github.com/Archie0125/osop-skill)
+- **website:** [osop.ai](https://osop.ai)
+
+```bash
+clawhub install osop
+clawhub install osop-log
+clawhub install osop-report
+clawhub install osop-review
+clawhub install osop-optimize
+```
+
 
 OpenClaw Enterprise WeCom Channel Plugin.
 A bot plugin powered by WeCom AI Bot WebSocket persistent connections,
