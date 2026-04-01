@@ -12,6 +12,18 @@ function keysAt(schema: Record<string, unknown>, path: string): string[] {
   return leaf ? Object.keys(leaf).toSorted() : [];
 }
 
+function propertyAt(
+  schema: Record<string, unknown>,
+  path: string,
+): Record<string, unknown> | undefined {
+  let cursor: Record<string, unknown> | undefined = schema;
+  for (const segment of path.split(".")) {
+    const props = cursor?.["properties"] as Record<string, Record<string, unknown>> | undefined;
+    cursor = props?.[segment];
+  }
+  return cursor;
+}
+
 describe("CronToolSchema", () => {
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -60,6 +72,20 @@ describe("CronToolSchema", () => {
     );
   });
 
+  it("marks staggerMs as cron-only in both job and patch schedule schemas", () => {
+    const jobStagger = propertyAt(
+      CronToolSchema as Record<string, unknown>,
+      "job.schedule.staggerMs",
+    );
+    const patchStagger = propertyAt(
+      CronToolSchema as Record<string, unknown>,
+      "patch.schedule.staggerMs",
+    );
+
+    expect(jobStagger?.description).toBe("Random jitter in ms (kind=cron)");
+    expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
+  });
+
   it("job.delivery exposes mode, channel, to, bestEffort, accountId, failureDestination", () => {
     expect(keysAt(CronToolSchema as Record<string, unknown>, "job.delivery")).toEqual(
       ["accountId", "bestEffort", "channel", "failureDestination", "mode", "to"].toSorted(),
@@ -77,6 +103,7 @@ describe("CronToolSchema", () => {
         "model",
         "text",
         "thinking",
+        "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
     );
@@ -86,16 +113,18 @@ describe("CronToolSchema", () => {
     expect(keysAt(CronToolSchema as Record<string, unknown>, "job.payload")).toContain("fallbacks");
   });
 
-  it("patch.payload omits fallbacks (not consumed by mergeCronPayload)", () => {
+  it("patch.payload exposes agentTurn fallback overrides", () => {
     expect(keysAt(CronToolSchema as Record<string, unknown>, "patch.payload")).toEqual(
       [
         "allowUnsafeExternalContent",
+        "fallbacks",
         "kind",
         "lightContext",
         "message",
         "model",
         "text",
         "thinking",
+        "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
     );
@@ -105,5 +134,38 @@ describe("CronToolSchema", () => {
     expect(keysAt(CronToolSchema as Record<string, unknown>, "job.failureAlert")).toEqual(
       ["accountId", "after", "channel", "cooldownMs", "mode", "to"].toSorted(),
     );
+  });
+
+  it("job.failureAlert also allows boolean false", () => {
+    const root = (CronToolSchema as Record<string, unknown>).properties as
+      | Record<string, { properties?: Record<string, unknown>; type?: unknown }>
+      | undefined;
+    const jobProps = root?.job?.properties as
+      | Record<string, { type?: unknown; not?: { const?: unknown } }>
+      | undefined;
+    const schema = jobProps?.failureAlert;
+    expect(schema?.type).toEqual(["object", "boolean"]);
+    expect(schema?.not?.const).toBe(true);
+  });
+
+  it("job.agentId and job.sessionKey accept null for clear/keep-unset flows", () => {
+    const root = (CronToolSchema as Record<string, unknown>).properties as
+      | Record<string, { properties?: Record<string, unknown> }>
+      | undefined;
+    const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
+
+    expect(jobProps?.agentId?.type).toEqual(["string", "null"]);
+    expect(jobProps?.sessionKey?.type).toEqual(["string", "null"]);
+  });
+
+  it("patch.payload.toolsAllow accepts null for clear flows", () => {
+    const root = (CronToolSchema as Record<string, unknown>).properties as
+      | Record<string, { properties?: Record<string, unknown> }>
+      | undefined;
+    const patchProps = root?.patch?.properties as
+      | Record<string, { properties?: Record<string, { type?: unknown }> }>
+      | undefined;
+
+    expect(patchProps?.payload?.properties?.toolsAllow?.type).toEqual(["array", "null"]);
   });
 });
