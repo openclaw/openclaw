@@ -388,11 +388,14 @@ const GRAPH_MEDIA_SUCCESS_CASES: GraphMediaSuccessCase[] = [
       };
     },
     expectedLength: 2,
+    assert: ({ fetchMock }) => {
+      const calledUrls = fetchMock.mock.calls.map(([calledUrl]) => String(calledUrl));
+      expect(calledUrls).not.toContain(`${DEFAULT_MESSAGE_URL}/attachments`);
+    },
   }),
 ];
 type GraphFetchMockOptions = {
   hostedContents?: unknown[];
-  attachments?: unknown[];
   messageAttachments?: unknown[];
   onShareRequest?: (url: string) => Response | Promise<Response>;
   onUnhandled?: (url: string) => Response | Promise<Response> | undefined;
@@ -409,7 +412,6 @@ const buildShareReferenceGraphFetchOptions = (params: {
   onShareRequest?: GraphFetchMockOptions["onShareRequest"];
   onUnhandled?: GraphFetchMockOptions["onUnhandled"];
 }) => ({
-  attachments: [params.referenceAttachment],
   messageAttachments: [params.referenceAttachment],
   ...(params.onShareRequest ? { onShareRequest: params.onShareRequest } : {}),
   ...(params.onUnhandled ? { onUnhandled: params.onUnhandled } : {}),
@@ -427,16 +429,11 @@ type GraphEndpointResponseHandler = {
 };
 const createGraphEndpointResponseHandlers = (params: {
   hostedContents: unknown[];
-  attachments: unknown[];
   messageAttachments: unknown[];
 }): GraphEndpointResponseHandler[] => [
   {
     suffix: "/hostedContents",
     buildResponse: () => createGraphCollectionResponse(params.hostedContents),
-  },
-  {
-    suffix: "/attachments",
-    buildResponse: () => createGraphCollectionResponse(params.attachments),
   },
   {
     suffix: "/messages/123",
@@ -453,11 +450,9 @@ const resolveGraphEndpointResponse = (
 
 const createGraphFetchMock = (options: GraphFetchMockOptions = {}) => {
   const hostedContents = options.hostedContents ?? [];
-  const attachments = options.attachments ?? [];
   const messageAttachments = options.messageAttachments ?? [];
   const endpointHandlers = createGraphEndpointResponseHandlers({
     hostedContents,
-    attachments,
     messageAttachments,
   });
   return vi.fn(async (url: string) => {
@@ -714,9 +709,6 @@ describe("msteams attachments", () => {
         }
         if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
           return createGraphCollectionResponse([]);
-        }
-        if (url === `${DEFAULT_MESSAGE_URL}/attachments`) {
-          return createGraphCollectionResponse([referenceAttachment]);
         }
         if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
           return createRedirectResponse(escapedUrl);

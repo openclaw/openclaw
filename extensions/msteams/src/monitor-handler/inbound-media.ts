@@ -2,6 +2,7 @@ import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
   downloadMSTeamsGraphMedia,
+  summarizeMSTeamsHtmlAttachments,
   type MSTeamsAccessTokenProvider,
   type MSTeamsAttachmentLike,
   type MSTeamsHtmlAttachmentSummary,
@@ -50,13 +51,15 @@ export async function resolveMSTeamsInboundMedia(params: {
     authAllowHosts: params.authAllowHosts,
     preserveFilenames,
   });
+  const effectiveHtmlSummary = htmlSummary ?? summarizeMSTeamsHtmlAttachments(attachments);
 
   if (mediaList.length === 0) {
     const onlyHtmlAttachments =
       attachments.length > 0 &&
       attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
+    const hasAttachmentTags = (effectiveHtmlSummary?.attachmentTags ?? 0) > 0;
 
-    if (onlyHtmlAttachments) {
+    if (onlyHtmlAttachments && hasAttachmentTags) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
@@ -115,12 +118,12 @@ export async function resolveMSTeamsInboundMedia(params: {
 
   if (mediaList.length > 0) {
     log.debug?.("downloaded attachments", { count: mediaList.length });
-  } else if (htmlSummary?.imgTags) {
+  } else if (effectiveHtmlSummary?.imgTags) {
     log.debug?.("inline images detected but none downloaded", {
-      imgTags: htmlSummary.imgTags,
-      srcHosts: htmlSummary.srcHosts,
-      dataImages: htmlSummary.dataImages,
-      cidImages: htmlSummary.cidImages,
+      imgTags: effectiveHtmlSummary.imgTags,
+      srcHosts: effectiveHtmlSummary.srcHosts,
+      dataImages: effectiveHtmlSummary.dataImages,
+      cidImages: effectiveHtmlSummary.cidImages,
     });
   }
 

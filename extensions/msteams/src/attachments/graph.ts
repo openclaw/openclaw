@@ -261,6 +261,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const sharePointMedia: MSTeamsInboundMedia[] = [];
   const downloadedReferenceUrls = new Set<string>();
+  let messageAttachments: GraphAttachment[] = [];
+  let messageStatus: number | undefined;
   try {
     const { response: msgRes, release } = await fetchWithSsrFGuard({
       url: messageUrl,
@@ -272,6 +274,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       auditContext: "msteams.graph.message",
     });
     try {
+      messageStatus = msgRes.status;
       if (msgRes.ok) {
         const msgData = (await msgRes.json()) as {
           body?: { content?: string; contentType?: string };
@@ -282,10 +285,11 @@ export async function downloadMSTeamsGraphMedia(params: {
             name?: string;
           }>;
         };
+        messageAttachments = Array.isArray(msgData.attachments) ? msgData.attachments : [];
 
         // Extract SharePoint file attachments (contentType: "reference")
         // Download any file type, not just images
-        const spAttachments = (msgData.attachments ?? []).filter(
+        const spAttachments = messageAttachments.filter(
           (a) => a.contentType === "reference" && a.contentUrl && a.name,
         );
         for (const att of spAttachments) {
@@ -350,14 +354,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     ssrfPolicy,
   });
 
-  const attachments = await fetchGraphCollection<GraphAttachment>({
-    url: `${messageUrl}/attachments`,
-    accessToken,
-    fetchFn: params.fetchFn,
-    ssrfPolicy,
-  });
-
-  const normalizedAttachments = attachments.items.map(normalizeGraphAttachment);
+  const normalizedAttachments = messageAttachments.map(normalizeGraphAttachment);
   const filteredAttachments =
     sharePointMedia.length > 0
       ? normalizedAttachments.filter((att) => {
@@ -387,7 +384,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     hostedCount: hosted.count,
     attachmentCount: filteredAttachments.length + sharePointMedia.length,
     hostedStatus: hosted.status,
-    attachmentStatus: attachments.status,
+    attachmentStatus: messageStatus,
     messageUrl,
   };
 }
