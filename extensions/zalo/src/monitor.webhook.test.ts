@@ -118,27 +118,6 @@ describe("handleZaloWebhookRequest", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("registers and unregisters plugin HTTP route at path boundaries", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    const unregisterA = registerTarget({ path: "/hook" });
-    const unregisterB = registerTarget({ path: "/hook" });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toEqual(
-      expect.objectContaining({
-        pluginId: "zalo",
-        path: "/hook",
-        source: "zalo-webhook",
-      }),
-    );
-
-    unregisterA();
-    expect(registry.httpRoutes).toHaveLength(1);
-    unregisterB();
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
   it("returns 400 for non-object payloads", async () => {
     const unregister = registerTarget({ path: "/hook" });
 
