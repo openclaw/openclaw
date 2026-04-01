@@ -4,10 +4,6 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-### Breaking
-
-- Docs/CLI: stop documenting `openclaw flows`; use `openclaw tasks list|show|cancel` instead. Update old notes or scripts that still reference `openclaw flows`. (#58690) Thanks @neeravmakwana
-
 ### Changes
 
 - Tasks/chat: add `/tasks` as a chat-native background task board for the current session, with recent task details and agent-local fallback counts when no linked tasks are visible. Related #54226. Thanks @vincentkoc.
