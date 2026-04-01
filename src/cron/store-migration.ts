@@ -119,6 +119,14 @@ function copyTopLevelAgentTurnFields(
     mutated = true;
   }
   if (
+    !("threadId" in payload) &&
+    ((typeof raw.threadId === "number" && Number.isFinite(raw.threadId)) ||
+      (typeof raw.threadId === "string" && raw.threadId.trim()))
+  ) {
+    payload.threadId = typeof raw.threadId === "string" ? raw.threadId.trim() : raw.threadId;
+    mutated = true;
+  }
+  if (
     typeof payload.bestEffortDeliver !== "boolean" &&
     typeof raw.bestEffortDeliver === "boolean"
   ) {
@@ -164,6 +172,9 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
   if ("to" in raw) {
     delete raw.to;
+  }
+  if ("threadId" in raw) {
+    delete raw.threadId;
   }
   if ("bestEffortDeliver" in raw) {
     delete raw.bestEffortDeliver;
@@ -319,6 +330,7 @@ export function normalizeStoredCronJobs(
       "deliver" in raw ||
       "channel" in raw ||
       "to" in raw ||
+      "threadId" in raw ||
       "bestEffortDeliver" in raw ||
       "provider" in raw;
     if (hadLegacyTopLevelPayloadFields || hadLegacyTopLevelDeliveryFields) {
