@@ -102,9 +102,11 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+const CHAT_HISTORY_TEXT_MAX_CHARS = 64_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+const CHAT_HISTORY_TEXT_MAX_BYTES = CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES - 8 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_HISTORY_TRUNCATED_SUFFIX = "\n...(truncated)...";
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -484,11 +486,45 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
 }
 
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
-  if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
+  if (
+    text.length <= CHAT_HISTORY_TEXT_MAX_CHARS &&
+    Buffer.byteLength(text, "utf8") <= CHAT_HISTORY_TEXT_MAX_BYTES
+  ) {
     return { text, truncated: false };
   }
+
+  let next = text;
+  let truncated = false;
+
+  if (next.length > CHAT_HISTORY_TEXT_MAX_CHARS) {
+    next = next.slice(0, CHAT_HISTORY_TEXT_MAX_CHARS);
+    truncated = true;
+  }
+
+  if (Buffer.byteLength(next, "utf8") > CHAT_HISTORY_TEXT_MAX_BYTES) {
+    const suffixBytes = Buffer.byteLength(CHAT_HISTORY_TRUNCATED_SUFFIX, "utf8");
+    const maxPrefixBytes = Math.max(0, CHAT_HISTORY_TEXT_MAX_BYTES - suffixBytes);
+    let low = 0;
+    let high = next.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      const candidate = next.slice(0, mid);
+      if (Buffer.byteLength(candidate, "utf8") <= maxPrefixBytes) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    next = next.slice(0, low);
+    truncated = true;
+  }
+
+  if (!truncated) {
+    return { text: next, truncated: false };
+  }
+
   return {
-    text: `${text.slice(0, CHAT_HISTORY_TEXT_MAX_CHARS)}\n...(truncated)...`,
+    text: `${next}${CHAT_HISTORY_TRUNCATED_SUFFIX}`,
     truncated: true,
   };
 }
