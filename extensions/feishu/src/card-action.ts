@@ -13,7 +13,10 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
-import { isFeishuExecApprovalApprover } from "./exec-approvals.js";
+import {
+  isFeishuExecApprovalApprover,
+  isFeishuExecApprovalClientEnabled,
+} from "./exec-approvals.js";
 import {
   FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION,
   FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION,
@@ -320,6 +323,18 @@ export async function handleFeishuCardAction(params: {
           completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
           return;
         }
+        // Verify exec approvals are still enabled for this account.
+        if (!isFeishuExecApprovalClientEnabled({ cfg, accountId: account.accountId })) {
+          await sendMessageFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            text: "❌ 飞书命令执行审批已禁用。",
+            accountId,
+          }).catch(() => {});
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+
         // Verify the operator is a configured approver before resolving.
         if (
           !isFeishuExecApprovalApprover({
@@ -366,14 +381,23 @@ export async function handleFeishuCardAction(params: {
             cwd: cwd || undefined,
           });
           const originalMessageId = event.context.open_message_id;
+          let cardUpdated = false;
           if (originalMessageId) {
-            await updateCardFeishu({
-              cfg,
-              messageId: originalMessageId,
-              card: resolvedCard,
-              accountId,
-            }).catch(() => {});
-          } else {
+            try {
+              await updateCardFeishu({
+                cfg,
+                messageId: originalMessageId,
+                card: resolvedCard,
+                accountId,
+              });
+              cardUpdated = true;
+            } catch (patchErr) {
+              log(
+                `feishu[${account.accountId}]: failed to patch card ${originalMessageId}: ${String(patchErr)}`,
+              );
+            }
+          }
+          if (!cardUpdated) {
             await sendCardFeishu({
               cfg,
               to: resolveCallbackTarget(event),
