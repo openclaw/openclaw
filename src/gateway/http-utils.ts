@@ -135,7 +135,13 @@ export function resolveTrustedHttpOperatorScopes(
     return [];
   }
 
-  const raw = getHeader(req, "x-openclaw-scopes")?.trim();
+  const headerValue = getHeader(req, "x-openclaw-scopes");
+  if (headerValue === undefined) {
+    // No scope header present — trusted clients without an explicit header
+    // get the default operator scopes (matching pre-#57783 behavior).
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
+  const raw = headerValue.trim();
   if (!raw) {
     return [];
   }
