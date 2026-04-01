@@ -165,8 +165,21 @@ export async function cleanOrphanBackups(
   // (N-1 because the primary .bak also counts toward CONFIG_BACKUP_COUNT.)
   const maxDatetimeSlots = CONFIG_BACKUP_COUNT - 1;
   if (datetimeBackups.length > maxDatetimeSlots) {
-    // Lexicographic sort = chronological for YYYYMMDD-HHmmss format.
-    datetimeBackups.sort();
+    // Sort chronologically. The YYYYMMDD-HHmmss prefix sorts correctly
+    // lexicographically; for same-second collision suffixes (-02, … -100)
+    // we compare the numeric tail so -100 sorts after -99.
+    datetimeBackups.sort((a, b) => {
+      const suffA = a.slice(bakPrefix.length);
+      const suffB = b.slice(bakPrefix.length);
+      const tsA = suffA.slice(0, 15); // YYYYMMDD-HHmmss = 15 chars
+      const tsB = suffB.slice(0, 15);
+      if (tsA !== tsB) {
+        return tsA < tsB ? -1 : 1;
+      }
+      const seqA = parseInt(suffA.slice(16) || "0", 10); // skip the "-" after timestamp
+      const seqB = parseInt(suffB.slice(16) || "0", 10);
+      return seqA - seqB;
+    });
     const toRemove = datetimeBackups.slice(0, datetimeBackups.length - maxDatetimeSlots);
     for (const old of toRemove) {
       await ioFs.unlink(path.join(dir, old)).catch(() => {
