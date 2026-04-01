@@ -162,9 +162,12 @@ class Embeddings {
   }
 
   async embed(text: string): Promise<number[]> {
-    const params: { model: string; input: string; dimensions?: number } = {
+    const params: { model: string; input: string; dimensions?: number; encoding_format?: "float" | "base64" } = {
       model: this.model,
       input: text,
+      // Force float encoding: the OpenAI SDK v6+ defaults to base64 which
+      // local servers (LM Studio, Ollama, etc.) do not support correctly.
+      encoding_format: "float",
     };
     if (this.dimensions) {
       params.dimensions = this.dimensions;
