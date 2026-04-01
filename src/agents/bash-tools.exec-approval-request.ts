@@ -11,7 +11,7 @@ export type RequestExecApprovalDecisionParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  cwd: string;
+  cwd: string | undefined;
   nodeId?: string;
   host: "gateway" | "node";
   security: ExecSecurity;
