@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 public enum ColorHexSupport {
     public static func color(fromHex hex: String) -> Color? {
@@ -45,5 +46,25 @@ public enum ColorHexSupport {
         let blueInt = Int(blue * 255)
         return String(format: "#%02X%02X%02X", redInt, greenInt, blueInt)
         #endif
+    }
+
+    public static func contrastingTextColor(for backgroundColor: Color) -> Color {
+        let nsColor = NSColor(backgroundColor)
+        guard let rgbColor = nsColor.usingColorSpace(.deviceRGB) else {
+            return .white
+        }
+
+        // Calculate relative luminance using WCAG formula with gamma linearization
+        func linearize(_ component: CGFloat) -> CGFloat {
+            component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+        }
+
+        let rLinear = linearize(rgbColor.redComponent)
+        let gLinear = linearize(rgbColor.greenComponent)
+        let bLinear = linearize(rgbColor.blueComponent)
+
+        let luminance = 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
+
+        return luminance > 0.5 ? Color.black : Color.white
     }
 }

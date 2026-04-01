@@ -114,7 +114,7 @@ struct ColorSettings: View {
         }
         .onAppear {
             if let hex = self.store.customColorHex,
-               let color = ColorHexSupport.color(fromHex: hex)
+               let color = OpenClawKit.ColorHexSupport.color(fromHex: hex)
             {
                 self.customColor = color
             }
@@ -159,7 +159,7 @@ struct ColorSettings: View {
 
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.white)
+                        .foregroundStyle(OpenClawKit.ColorHexSupport.contrastingTextColor(for: displayColor))
                         .font(.title3)
                         .shadow(radius: 2)
                 }
@@ -181,7 +181,7 @@ struct ColorSettings: View {
     }
 
     private func applyCustomColor() {
-        if let hex = ColorHexSupport.hex(from: self.customColor) {
+        if let hex = OpenClawKit.ColorHexSupport.hex(from: self.customColor) {
             self.store.selectedPaletteIndex = nil
             self.store.customColorHex = hex
             self.store.useAccentColor = false

@@ -136,17 +136,7 @@ enum OpenClawChatTheme {
     static var userText: Color {
         #if os(macOS)
         let backgroundColor = ColorPreferencesStore.shared.resolvedColor
-        let nsColor = NSColor(backgroundColor)
-        guard let rgbColor = nsColor.usingColorSpace(.deviceRGB) else {
-            return .white
-        }
-
-        // Calculate relative luminance using WCAG formula
-        let luminance = 0.2126 * rgbColor.redComponent +
-                       0.7152 * rgbColor.greenComponent +
-                       0.0722 * rgbColor.blueComponent
-
-        return luminance > 0.6 ? Color.black : Color.white
+        return ColorHexSupport.contrastingTextColor(for: backgroundColor)
         #else
         return .white
         #endif
