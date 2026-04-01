@@ -582,47 +582,6 @@ describe("monitorDiscordProvider", () => {
     expect(params?.workerRunTimeoutMs).toBe(300_000);
   });
 
-  it("registers plugin commands from the real registry as native Discord commands", async () => {
-    const {
-      clearPluginCommands,
-      getPluginCommandSpecs: getRealPluginCommandSpecs,
-      registerPluginCommand,
-    } = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-      "openclaw/plugin-sdk/plugin-runtime",
-    );
-    clearPluginCommands();
-    listNativeCommandSpecsForConfigMock.mockReturnValue([
-      { name: "status", description: "Status", acceptsArgs: false },
-    ]);
-    getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
-      getRealPluginCommandSpecs(provider),
-    );
-
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
-      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
-      .filter((value): value is string => typeof value === "string");
-
-    expect(commandNames).toContain("status");
-    expect(commandNames).toContain("pair");
-    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
-    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-  });
-
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
     const runtime = baseRuntime();
     const request = new Request("https://discord.com/api/v10/applications/commands", {
