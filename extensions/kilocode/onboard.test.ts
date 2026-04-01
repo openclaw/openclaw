@@ -140,10 +140,6 @@ describe("Kilo Gateway provider config", () => {
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
         KILOCODE_DEFAULT_MODEL_REF,
       );
-    });
-
-    it("also registers the provider", () => {
-      const result = applyKilocodeConfig(emptyCfg);
       const provider = result.models?.providers?.kilocode;
       expect(provider).toBeDefined();
       expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);

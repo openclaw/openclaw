@@ -138,7 +138,8 @@ function tryCreateCronTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,
@@ -170,6 +171,7 @@ function tryFinishCronTaskRun(
     if (result.status === "ok" || result.status === "skipped") {
       completeTaskRunByRunId({
         runId: result.taskRunId,
+        runtime: "cron",
         endedAt: result.endedAt,
         lastEventAt: result.endedAt,
         terminalSummary: result.summary ?? undefined,
@@ -178,6 +180,7 @@ function tryFinishCronTaskRun(
     }
     failTaskRunByRunId({
       runId: result.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(result.error) === timeoutErrorMessage() ? "timed_out" : "failed",
       endedAt: result.endedAt,
@@ -424,9 +427,7 @@ export function applyJobResult(
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const isBestEffort =
-        job.delivery?.bestEffort === true ||
-        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+      const isBestEffort = job.delivery?.bestEffort === true;
       if (!isBestEffort) {
         const now = state.deps.nowMs();
         const lastAlert = job.state.lastFailureAlertAtMs;
@@ -1175,6 +1176,7 @@ async function executeMainSessionCronJob(
   });
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
+    const isRecurringJob = job.schedule.kind !== "at";
     const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
     const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
     const waitStartedAt = state.deps.nowMs();
@@ -1192,6 +1194,17 @@ async function executeMainSessionCronJob(
       });
       if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
         break;
+      }
+      if (isRecurringJob) {
+        // Recurring main-session cron jobs should not hold the cron lane open
+        // while the main lane is busy, or their measured duration starts to
+        // reflect queue wait instead of cron bookkeeping (#58833).
+        state.deps.requestHeartbeatNow({
+          reason,
+          agentId: job.agentId,
+          sessionKey: targetMainSessionKey,
+        });
+        return { status: "ok", summary: text };
       }
       if (abortSignal?.aborted) {
         return { status: "error", error: timeoutErrorMessage() };

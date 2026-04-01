@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { formatZonedTimestamp, type ChannelSetupInput } from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { withResolvedActionClient, withStartedActionClient } from "./matrix/actions/client.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -24,6 +22,7 @@ import {
   type MatrixDirectRoomCandidate,
 } from "./matrix/direct-management.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
+import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
