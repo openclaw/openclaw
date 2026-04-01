@@ -343,6 +343,7 @@ const partitionUnitsBySurface = (units, surface) => {
 export async function executePlan(plan, options = {}) {
   const env = options.env ?? process.env;
   const artifacts = options.artifacts ?? createExecutionArtifacts(env);
+  const spawnImpl = options.spawn ?? spawn;
   const pnpmInvocation = resolvePnpmCommandInvocation({
     npmExecPath: env.npm_execpath,
     nodeExecPath: process.execPath,
@@ -740,7 +741,7 @@ export async function executePlan(plan, options = {}) {
           childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = vitestFsModuleCachePath;
           laneLogStream.write(`[test-parallel] fsModuleCachePath=${vitestFsModuleCachePath}\n`);
         }
-        child = spawn(pnpmInvocation.command, spawnArgs, {
+        child = spawnImpl(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
           env: childEnv,
           shell: false,

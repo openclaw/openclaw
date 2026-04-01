@@ -29,12 +29,16 @@ vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => ({})),
-  resolveFreshSessionTotalTokens: vi.fn(() => undefined),
-  resolveMainSessionKey: vi.fn(() => "main"),
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: vi.fn(() => ({})),
+    resolveFreshSessionTotalTokens: vi.fn(() => undefined),
+    resolveMainSessionKey: vi.fn(() => "main"),
+    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  };
+});
 
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
