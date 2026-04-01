@@ -110,7 +110,7 @@ describe("buildWSLDiagnosticNotes", () => {
       wslConfSystemdEnabled: true,
       wslconfig: { memory: "8GB", processors: 4, swap: "4GB" },
       kernelVersion: "5.15.153.1-microsoft-standard-WSL2",
-      hostTotalMemoryBytes: 32 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     };
   }
 
@@ -148,18 +148,21 @@ describe("buildWSLDiagnosticNotes", () => {
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
 
-  it("hints about missing .wslconfig when host memory is limited", () => {
+  it("warns when no .wslconfig and WSL visible memory is below 4GB", () => {
     const diag = healthyDiag();
     diag.wslconfig = null;
-    diag.hostTotalMemoryBytes = 4 * 1024 * 1024 * 1024;
+    // os.totalmem() inside WSL returns the WSL VM allocation directly
+    diag.wslVisibleMemoryBytes = 3 * 1024 * 1024 * 1024; // 3GB visible
     const notes = buildWSLDiagnosticNotes(diag);
-    expect(notes.some((n) => n.includes("No .wslconfig found"))).toBe(true);
+    expect(notes.some((n) => n.includes("limited to ~3GB"))).toBe(true);
+    expect(notes.some((n) => n.includes(".wslconfig"))).toBe(true);
   });
 
-  it("does not hint about .wslconfig when host memory is ample", () => {
+  it("does not warn when no .wslconfig but WSL visible memory is ample", () => {
     const diag = healthyDiag();
     diag.wslconfig = null;
-    diag.hostTotalMemoryBytes = 32 * 1024 * 1024 * 1024;
+    // 8GB visible — well above the 4GB threshold
+    diag.wslVisibleMemoryBytes = 8 * 1024 * 1024 * 1024;
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
 
@@ -171,7 +174,7 @@ describe("buildWSLDiagnosticNotes", () => {
       wslConfSystemdEnabled: null,
       wslconfig: null,
       kernelVersion: null,
-      hostTotalMemoryBytes: 32 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     };
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
@@ -188,7 +191,7 @@ describe("buildWSLInfoSummary", () => {
       wslConfSystemdEnabled: true,
       wslconfig: { memory: "8GB", processors: 4, swap: "4GB" },
       kernelVersion: "5.15.153.1-microsoft-standard-WSL2",
-      hostTotalMemoryBytes: 32 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("WSL2");
     expect(summary).toContain("systemd ✓");
@@ -205,7 +208,7 @@ describe("buildWSLInfoSummary", () => {
       wslConfSystemdEnabled: false,
       wslconfig: { memory: "8GB", processors: 4, swap: "4GB" },
       kernelVersion: "5.15.153.1-microsoft-standard-WSL2",
-      hostTotalMemoryBytes: 32 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("systemd ✗");
   });
@@ -218,7 +221,7 @@ describe("buildWSLInfoSummary", () => {
       wslConfSystemdEnabled: false,
       wslconfig: null,
       kernelVersion: null,
-      hostTotalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 16 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("WSL1");
     expect(summary).toContain("systemd ✗");
@@ -232,7 +235,7 @@ describe("buildWSLInfoSummary", () => {
       wslConfSystemdEnabled: null,
       wslconfig: null,
       kernelVersion: null,
-      hostTotalMemoryBytes: 32 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
     expect(summary).toBeNull();
   });
@@ -245,7 +248,7 @@ describe("buildWSLInfoSummary", () => {
       wslConfSystemdEnabled: true,
       wslconfig: null,
       kernelVersion: "5.15.153.1-microsoft-standard-WSL2",
-      hostTotalMemoryBytes: 32 * 1024 * 1024 * 1024,
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("WSL2");
     expect(summary).not.toContain("memory limit");
