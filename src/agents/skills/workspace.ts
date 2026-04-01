@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,6 +13,7 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
+import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
