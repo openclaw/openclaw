@@ -672,27 +672,40 @@ export class DiscordVoiceManager {
 
     // --- FORK: streaming TTS for local Kyutai provider ---
     if (ttsConfig.provider === "kyutai") {
-      try {
-        const { streamKyutaiTtsRaw48k } = await import("./kyutai-streaming.js");
-        const pcmStream = await streamKyutaiTtsRaw48k(speakText);
-        logVoiceVerbose(`discord voice: kyutai streaming started`);
-        this.enqueuePlayback(entry, async () => {
-          const voiceSdk = loadDiscordVoiceSdk();
-          const resource = voiceSdk.createAudioResource(pcmStream, {
-            inputType: voiceSdk.StreamType.Raw,
+      const MAX_RETRIES = 2;
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          const { streamKyutaiTtsRaw48k, kyutaiPrewarm } = await import("./kyutai-streaming.js");
+          if (attempt > 0) {
+            // Wait for sidecar to come up after MCP restart
+            await kyutaiPrewarm();
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+          const pcmStream = await streamKyutaiTtsRaw48k(speakText);
+          logVoiceVerbose(`discord voice: kyutai streaming started (attempt ${attempt + 1})`);
+          this.enqueuePlayback(entry, async () => {
+            const voiceSdk = loadDiscordVoiceSdk();
+            const resource = voiceSdk.createAudioResource(pcmStream, {
+              inputType: voiceSdk.StreamType.Raw,
+            });
+            entry.player.play(resource);
+            await voiceSdk
+              .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+              .catch(() => undefined);
+            await voiceSdk
+              .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+              .catch(() => undefined);
+            logVoiceVerbose(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
           });
-          entry.player.play(resource);
-          await voiceSdk
-            .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
-            .catch(() => undefined);
-          await voiceSdk
-            .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
-            .catch(() => undefined);
-          logVoiceVerbose(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
-        });
-        return;
-      } catch (err) {
-        logger.warn(`discord voice: kyutai streaming failed, falling back to batch: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (attempt < MAX_RETRIES - 1 && msg.includes("fetch failed")) {
+            logger.warn(`discord voice: kyutai streaming attempt ${attempt + 1} failed (sidecar not ready), retrying...`);
+            continue;
+          }
+          logger.warn(`discord voice: kyutai streaming failed, falling back to batch: ${msg}`);
+        }
       }
     }
     // --- END FORK ---
