@@ -41,6 +41,12 @@ def unique_strings(values: list[str]) -> list[str]:
     return result
 
 
+def resolve_list_arg(values: list[str] | None, defaults: list[str]) -> list[str]:
+    if values is None:
+        return defaults.copy()
+    return unique_strings(values)
+
+
 def update_config(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     plugins = data.get("plugins")
     if not isinstance(plugins, dict):
@@ -75,8 +81,8 @@ def update_config(data: dict[str, Any], args: argparse.Namespace) -> dict[str, A
 
     config_payload.update(
         {
-            "agentIds": unique_strings(args.agent_id),
-            "triggers": unique_strings(args.trigger),
+            "agentIds": resolve_list_arg(args.agent_id, ["main"]),
+            "triggers": resolve_list_arg(args.trigger, ["user"]),
             "minItems": args.min_items,
             "applyCloseout": not args.no_apply_closeout,
             "applyMemory": not args.no_apply_memory,
@@ -110,8 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Enable the workspace auto-session-closeout plugin in OpenClaw config.")
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--workspace", type=Path, default=default_workspace_path())
-    parser.add_argument("--agent-id", action="append", default=["main"], help="Agent id to auto-closeout. Repeat for more ids.")
-    parser.add_argument("--trigger", action="append", default=["user"], help="Allowed trigger kind. Repeat for more.")
+    parser.add_argument("--agent-id", action="append", default=None, help="Agent id to auto-closeout. Repeat for more ids.")
+    parser.add_argument("--trigger", action="append", default=None, help="Allowed trigger kind. Repeat for more.")
     parser.add_argument("--min-items", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=int, default=20)
     parser.add_argument("--python-bin")

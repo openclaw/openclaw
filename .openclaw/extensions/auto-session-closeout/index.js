@@ -17,8 +17,7 @@ function trimString(value) {
 
 function normalizeStringList(value, fallback = []) {
   if (!Array.isArray(value)) return [...fallback];
-  const normalized = value.map((entry) => trimString(entry)).filter(Boolean);
-  return normalized.length > 0 ? normalized : [...fallback];
+  return value.map((entry) => trimString(entry)).filter(Boolean);
 }
 
 function cleanupProcessedRunIds() {

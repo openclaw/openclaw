@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shlex
 import string
 import subprocess
@@ -2793,7 +2794,7 @@ def initialize_dispatch_run(bundle: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return {
-        "run_id": f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{bundle['bundle_id']}",
+        "run_id": f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-{secrets.token_hex(2)}-{bundle['bundle_id']}",
         "bundle_id": bundle["bundle_id"],
         "goal": bundle["goal"],
         "status": "blocked" if bundle["blocked"] else "active",
@@ -2824,7 +2825,8 @@ def apply_dispatch_run(workspace: Path, payload: dict[str, Any]) -> dict[str, An
 
 def _resolve_dispatch_run_file(workspace: Path, run_file: str | None) -> Path:
     if run_file:
-        return Path(run_file)
+        path = Path(run_file)
+        return path if path.is_absolute() else workspace / path
     runs_dir = _dispatch_runs_dir(workspace)
     candidates = sorted(runs_dir.glob("*.json"))
     if not candidates:
@@ -3842,7 +3844,14 @@ def execute_dispatch_launch(launch_payload: dict[str, Any], cmd_runner=None, tim
     if result.returncode != 0 and "--local" not in launch_payload["command"] and _is_gateway_transport_error(combined_error):
         fallback_attempted = True
         active_command = [*launch_payload["command"], "--local"]
-        result = runner(active_command, capture_output=True, text=True, check=False, env=exec_env)
+        result = runner(
+            active_command,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=exec_env,
+            timeout=timeout_seconds,
+        )
 
     stdout = result.stdout.strip()
     stderr = result.stderr.strip()

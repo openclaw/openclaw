@@ -126,6 +126,21 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(updated["current_stage"], "evidence")
             self.assertEqual(updated["stages"][0]["status"], "completed")
 
+    def test_dispatch_run_ids_are_unique_for_same_bundle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "memory").mkdir(parents=True)
+            (workspace / "memory/current-task.md").write_text(
+                "# Current Task\n\n## 当前主任务\n- 继续优化 OpenClaw harness\n",
+                encoding="utf-8",
+            )
+            bundle = harness.build_dispatch_bundle(workspace, "继续优化 OpenClaw harness，并且把 nightly dream 和验证链接起来")
+
+            first = harness.initialize_dispatch_run(bundle)
+            second = harness.initialize_dispatch_run(bundle)
+
+            self.assertNotEqual(first["run_id"], second["run_id"])
+
     def test_dispatch_update_rejects_pending_stage(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
@@ -155,6 +170,19 @@ class RouteTests(unittest.TestCase):
             self.assertIn("If a command asks for approval, stop and report the blocker instead of requesting approval.", explore_prompt)
             self.assertIn("reuse evidence already gathered", plan_prompt)
             self.assertIn("tests", plan_prompt)
+
+    def test_load_dispatch_run_resolves_relative_run_file_against_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            runs_dir = workspace / "memory" / "dispatch_runs"
+            runs_dir.mkdir(parents=True)
+            run_path = runs_dir / "demo.json"
+            run_path.write_text(json.dumps({"run_id": "demo"}, ensure_ascii=False), encoding="utf-8")
+
+            resolved_path, payload = harness.load_dispatch_run(workspace, "memory/dispatch_runs/demo.json")
+
+            self.assertEqual(resolved_path, run_path)
+            self.assertEqual(payload["run_id"], "demo")
 
     def test_dispatch_update_verification_creates_report(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1742,9 +1770,11 @@ class RouteTests(unittest.TestCase):
 
     def test_execute_dispatch_launch_falls_back_to_local_on_gateway_transport_error(self):
         calls = []
+        timeouts = []
 
         def fake_runner(command, **kwargs):
             calls.append(command)
+            timeouts.append(kwargs.get("timeout"))
             if "--local" in command:
                 return SimpleNamespace(returncode=0, stdout='{"reply":"local ok"}', stderr="")
             return SimpleNamespace(returncode=1, stdout="", stderr="gateway closed (1006 abnormal closure)")
@@ -1757,6 +1787,28 @@ class RouteTests(unittest.TestCase):
         self.assertTrue(execution["fallback_attempted"])
         self.assertEqual(execution["command_mode"], "local")
         self.assertEqual(len(calls), 2)
+        self.assertEqual(timeouts, [None, None])
+
+    def test_execute_dispatch_launch_preserves_timeout_for_local_fallback(self):
+        calls = []
+        timeouts = []
+
+        def fake_runner(command, **kwargs):
+            calls.append(command)
+            timeouts.append(kwargs.get("timeout"))
+            if "--local" in command:
+                return SimpleNamespace(returncode=0, stdout='{"reply":"local ok"}', stderr="")
+            return SimpleNamespace(returncode=1, stdout="", stderr="gateway closed (1006 abnormal closure)")
+
+        execution = harness.execute_dispatch_launch(
+            {"command": ["openclaw", "agent", "--json"]},
+            cmd_runner=fake_runner,
+            timeout_seconds=13,
+        )
+        self.assertEqual(execution["returncode"], 0)
+        self.assertTrue(execution["fallback_attempted"])
+        self.assertEqual(calls[1], ["openclaw", "agent", "--json", "--local"])
+        self.assertEqual(timeouts, [13, 13])
 
     def test_execute_dispatch_launch_returns_timeout_payload(self):
         def fake_runner(command, **kwargs):

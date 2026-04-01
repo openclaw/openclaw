@@ -10,12 +10,17 @@ import enable_auto_session_closeout_plugin as plugin_enable
 
 
 class EnableAutoSessionCloseoutPluginTests(unittest.TestCase):
-    def build_args(self, workspace: str = "/tmp/workspace") -> argparse.Namespace:
+    def build_args(
+        self,
+        workspace: str = "/tmp/workspace",
+        agent_ids: list[str] | None = None,
+        triggers: list[str] | None = None,
+    ) -> argparse.Namespace:
         return argparse.Namespace(
             config=Path("/tmp/openclaw.json"),
             workspace=Path(workspace),
-            agent_id=["main"],
-            trigger=["user"],
+            agent_id=agent_ids,
+            trigger=triggers,
             min_items=2,
             timeout_seconds=20,
             python_bin=None,
@@ -76,6 +81,14 @@ class EnableAutoSessionCloseoutPluginTests(unittest.TestCase):
 
         self.assertEqual(args.config, Path("/tmp/oc-home/openclaw.json"))
         self.assertEqual(args.workspace, Path("/tmp/oc-home/workspace"))
+
+    def test_update_config_uses_explicit_agent_and_trigger_lists_without_defaults(self):
+        args = self.build_args("/tmp/ws-c", agent_ids=["worker"], triggers=["cron"])
+        updated = plugin_enable.update_config({}, args)
+
+        config_payload = updated["plugins"]["entries"][plugin_enable.PLUGIN_ID]["config"]
+        self.assertEqual(config_payload["agentIds"], ["worker"])
+        self.assertEqual(config_payload["triggers"], ["cron"])
 
 
 if __name__ == "__main__":
