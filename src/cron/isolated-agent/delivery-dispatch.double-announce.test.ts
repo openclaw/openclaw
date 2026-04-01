@@ -20,7 +20,7 @@ vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
 }));
 
@@ -61,7 +61,7 @@ vi.mock("./subagent-followup.js", () => ({
 }));
 
 // Import after mocks
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { callGateway } from "../../gateway/call.runtime.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";

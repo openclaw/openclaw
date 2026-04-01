@@ -144,7 +144,7 @@ vi.mock("../../agents/subagent-announce.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
