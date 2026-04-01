@@ -58,6 +58,12 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
+      - name: Build
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Validate release tag and package metadata
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -76,7 +82,8 @@ jobs:
           {
             echo "## Public macOS validation only"
             echo
-            echo "This workflow no longer rebuilds JS artifacts, signs, notarizes, or uploads macOS assets."
+            echo "This workflow validates the public release handoff and still builds JS artifacts needed for release checks."
+            echo "It does not sign, notarize, or upload macOS assets."
             echo
             echo "Next step:"
             echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml\` with tag \`${RELEASE_TAG}\` and wait for the private mac validation lane to pass."

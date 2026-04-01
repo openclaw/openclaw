@@ -135,7 +135,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   workflow change before merge.
 - `.github/workflows/macos-release.yml` in `openclaw/openclaw` is now a
   public validation-only handoff. It validates the tag/release state and points
-  operators to the private repo; it does not build or publish macOS artifacts.
+  operators to the private repo. It still rebuilds the JS outputs needed for
+  release validation, but it does not sign, notarize, or publish macOS
+  artifacts.
 - `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
   is the required private mac validation lane for `swift test`; keep it green
   before any real mac publish run starts.
