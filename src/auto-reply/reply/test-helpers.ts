@@ -19,7 +19,7 @@ export function createMockTypingController(
 }
 
 export function createMockFollowupRun(
-  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
+  overrides: Partial<FollowupRun> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
   const base: FollowupRun = {
     execution: { visibility: "internal", agentPrompt: "hello" },

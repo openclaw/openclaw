@@ -476,7 +476,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.commandBody).toContain("System: [t] Node connected.");
   });
 
-  it("carries system events into followupRun.prompt for deferred turns", async () => {
+  it("carries system events into followupRun.execution.agentPrompt for deferred turns", async () => {
     // drainFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
@@ -490,7 +490,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
-    // must not be stripped from the queue/steer body (followupRun.prompt).
+    // must not be stripped from the queue/steer execution payload.
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
 
     await runPreparedReply(
