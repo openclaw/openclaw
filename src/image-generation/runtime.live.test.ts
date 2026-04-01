@@ -215,7 +215,7 @@ describeLive("image generation live (provider sweep)", () => {
         expect(result.provider).toBe(testCase.providerId);
         expect(result.images.length).toBeGreaterThan(0);
         expect(result.images[0]?.mimeType.startsWith("image/")).toBe(true);
-        expect(result.images[0]?.buffer.byteLength).toBeGreaterThan(512);
+        expect(result.images[0]?.buffer?.byteLength).toBeGreaterThan(512);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         failures.push(
