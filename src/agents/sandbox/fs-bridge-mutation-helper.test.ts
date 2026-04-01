@@ -30,18 +30,17 @@ function runMutation(args: string[], input?: string) {
 }
 
 function runForcedExdevMutation(args: string[]) {
-  return spawnSync(
-    "python3",
-    [
-      "-c",
-      SANDBOX_PINNED_MUTATION_PYTHON.replace(FORCED_EXDEV_RENAME, FORCED_EXDEV_REPLACE),
-      ...args,
-    ],
-    {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    },
+  const patchedSource = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+    FORCED_EXDEV_RENAME,
+    FORCED_EXDEV_REPLACE,
   );
+  if (patchedSource === SANDBOX_PINNED_MUTATION_PYTHON) {
+    throw new Error("forced EXDEV test patch did not match the mutation helper source");
+  }
+  return spawnSync("python3", ["-c", patchedSource, ...args], {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
 }
 
 function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
