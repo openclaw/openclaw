@@ -237,4 +237,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OPENCLAW_PREPACK_PREPARED: "1"
-        run: bash scripts/openclaw-npm-publish.sh --publish "${{ steps.publish_tarball.outputs.path }}"
+        run: |
+          set -euo pipefail
+          publish_target="${{ steps.publish_tarball.outputs.path }}"
+          if [[ -n "${publish_target}" ]]; then
+            publish_target="./${publish_target}"
+          fi
+          bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
