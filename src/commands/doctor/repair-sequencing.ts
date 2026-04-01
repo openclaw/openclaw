@@ -48,7 +48,11 @@ export async function runDoctorRepairSequence(params: {
   };
 
   applyMutation(await maybeRepairTelegramAllowFromUsernames(state.candidate));
-  applyMutation(maybeRepairDiscordNumericIds(state.candidate));
+  applyMutation(
+    maybeRepairDiscordNumericIds(state.candidate, {
+      doctorFixCommand: params.doctorFixCommand,
+    }),
+  );
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, process.env));
   applyMutation(maybeRepairStalePluginConfig(state.candidate, process.env));

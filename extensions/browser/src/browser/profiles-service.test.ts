@@ -58,7 +58,6 @@ async function createWorkProfileWithConfig(params: {
 
 describe("BrowserProfilesService", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ resolveBrowserConfig } = await import("./config.js"));
     ({ createBrowserProfilesService } = await import("./profiles-service.js"));
   });

@@ -3,7 +3,7 @@ import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord } from "../types.js";
 
-type DiscordNumericIdHit = { path: string; entry: number };
+type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
 type DiscordIdListRef = {
   pathLabel: string;
@@ -102,7 +102,11 @@ export function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumeric
       if (typeof entry !== "number") {
         continue;
       }
-      hits.push({ path: `${pathLabel}[${index}]`, entry });
+      hits.push({
+        path: `${pathLabel}[${index}]`,
+        entry,
+        safe: Number.isSafeInteger(entry) && entry >= 0,
+      });
     }
   };
 
@@ -122,17 +126,88 @@ export function collectDiscordNumericIdWarnings(params: {
   if (params.hits.length === 0) {
     return [];
   }
-  const samplePath = sanitizeForLog(params.hits[0]?.path ?? "channels.discord.allowFrom");
-  const sampleEntry = sanitizeForLog(String(params.hits[0]?.entry ?? ""));
+  const lines: string[] = [];
+  const hitsByListPath = new Map<string, DiscordNumericIdHit[]>();
+  for (const hit of params.hits) {
+    const listPath = hit.path.replace(/\[\d+\]$/, "");
+    const existing = hitsByListPath.get(listPath);
+    if (existing) {
+      existing.push(hit);
+      continue;
+    }
+    hitsByListPath.set(listPath, [hit]);
+  }
+
+  const repairableHits: DiscordNumericIdHit[] = [];
+  const blockedHits: DiscordNumericIdHit[] = [];
+  for (const hits of hitsByListPath.values()) {
+    if (hits.some((hit) => !hit.safe)) {
+      blockedHits.push(...hits);
+      continue;
+    }
+    repairableHits.push(...hits);
+  }
+
+  if (repairableHits.length > 0) {
+    const sample = repairableHits[0];
+    const samplePath = sanitizeForLog(sample.path);
+    const sampleEntry = sanitizeForLog(String(sample.entry));
+    lines.push(
+      `- Discord allowlists contain ${repairableHits.length} numeric ${repairableHits.length === 1 ? "entry" : "entries"} (e.g. ${samplePath}=${sampleEntry}).`,
+      `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
+    );
+  }
+  if (blockedHits.length > 0) {
+    const sample = blockedHits[0];
+    const samplePath = sanitizeForLog(sample.path);
+    lines.push(
+      `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that cannot be auto-repaired (e.g. ${samplePath}).`,
+      `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
+    );
+  }
+  return lines;
+}
+
+function collectBlockedDiscordNumericIdRepairWarnings(params: {
+  hits: DiscordNumericIdHit[];
+  doctorFixCommand: string;
+}): string[] {
+  const hitsByListPath = new Map<string, DiscordNumericIdHit[]>();
+  for (const hit of params.hits) {
+    const listPath = hit.path.replace(/\[\d+\]$/, "");
+    const existing = hitsByListPath.get(listPath);
+    if (existing) {
+      existing.push(hit);
+      continue;
+    }
+    hitsByListPath.set(listPath, [hit]);
+  }
+
+  const blockedHits: DiscordNumericIdHit[] = [];
+  for (const hits of hitsByListPath.values()) {
+    if (hits.some((hit) => !hit.safe)) {
+      blockedHits.push(...hits);
+    }
+  }
+  if (blockedHits.length === 0) {
+    return [];
+  }
+
+  const sample = blockedHits[0];
+  const samplePath = sanitizeForLog(sample.path);
   return [
-    `- Discord allowlists contain ${params.hits.length} numeric entries (e.g. ${samplePath}=${sampleEntry}).`,
-    `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
+    `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that could not be auto-repaired (e.g. ${samplePath}).`,
+    `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
   ];
 }
 
-export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
+export function maybeRepairDiscordNumericIds(
+  cfg: OpenClawConfig,
+  params?: { doctorFixCommand?: string },
+): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   const hits = scanDiscordNumericIdEntries(cfg);
   if (hits.length === 0) {
@@ -145,6 +220,12 @@ export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
   const repairList = (pathLabel: string, holder: Record<string, unknown>, key: string) => {
     const raw = holder[key];
     if (!Array.isArray(raw)) {
+      return;
+    }
+    const hasUnsafe = raw.some(
+      (entry) => typeof entry === "number" && (!Number.isSafeInteger(entry) || entry < 0),
+    );
+    if (hasUnsafe) {
       return;
     }
     let converted = 0;
@@ -170,8 +251,16 @@ export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
     }
   }
 
-  if (changes.length === 0) {
+  const warnings =
+    params?.doctorFixCommand === undefined
+      ? []
+      : collectBlockedDiscordNumericIdRepairWarnings({
+          hits,
+          doctorFixCommand: params.doctorFixCommand,
+        });
+
+  if (changes.length === 0 && warnings.length === 0) {
     return { config: cfg, changes: [] };
   }
-  return { config: next, changes };
+  return { config: next, changes, warnings };
 }
