@@ -1205,6 +1205,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/dinference",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
