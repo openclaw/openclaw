@@ -545,6 +545,12 @@ importers:
 
   extensions/ollama: {}
 
+  extensions/ostk:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/open-prose: {}
 
   extensions/openai: {}
