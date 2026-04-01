@@ -54,7 +54,7 @@ export type SlackExecApprovalTarget = "dm" | "channel" | "both";
 export type SlackExecApprovalConfig = {
   /** Enable Slack exec approvals for this account. Default: false. */
   enabled?: boolean;
-  /** Slack user IDs allowed to approve exec requests. Optional: falls back to owner IDs inferred from allowFrom/defaultTo when possible. */
+  /** Slack user IDs allowed to approve exec requests. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];

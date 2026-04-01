@@ -199,6 +199,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
   });
 
+  it("restarts for gateway.auth.token changes", () => {
+    const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("gateway.auth.token");
+  });
+
+  it("restarts for gateway.auth.mode changes", () => {
+    const plan = buildGatewayReloadPlan(["gateway.auth.mode"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("gateway.auth.mode");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
@@ -227,6 +239,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "gateway.auth.token",
+      expectRestartGateway: true,
+      expectRestartReason: "gateway.auth.token",
     },
     {
       path: "unknownField",
@@ -304,7 +321,10 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
   };
 }
 
-function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) {
+function createReloaderHarness(
+  readSnapshot: () => Promise<ConfigFileSnapshot>,
+  options: { initialInternalWriteHash?: string | null } = {},
+) {
   const watcher = createWatcherMock();
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
   const onHotReload = vi.fn(async () => {});
@@ -325,6 +345,7 @@ function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) 
   };
   const reloader = startGatewayConfigReloader({
     initialConfig: { gateway: { reload: { debounceMs: 0 } } },
+    initialInternalWriteHash: options.initialInternalWriteHash,
     readSnapshot,
     subscribeToWrites,
     onHotReload,
@@ -511,6 +532,45 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(2);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+
+  it("dedupes the first watcher reread for startup internal writes", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, auth: { mode: "token", token: "startup" } },
+          },
+          hash: "startup-internal-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          hash: "external-after-startup-1",
+        }),
+      );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialInternalWriteHash: "startup-internal-1",
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
 
     await harness.reloader.stop();

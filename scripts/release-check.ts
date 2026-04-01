@@ -23,6 +23,8 @@ const requiredPathGroups = [
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
+  "scripts/npm-runner.mjs",
+  "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
