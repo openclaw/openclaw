@@ -146,8 +146,20 @@ function estimateMessageChars(message: AgentMessage): number {
       if (b.type === "text" && typeof b.text === "string") {
         chars += estimateWeightedTextChars(b.text);
       }
-      if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += estimateWeightedTextChars(b.thinking);
+      const blockType = (b as { type?: unknown }).type;
+      if (blockType === "thinking" || blockType === "redacted_thinking") {
+        const thinking = (b as { thinking?: unknown }).thinking;
+        if (typeof thinking === "string") {
+          chars += estimateWeightedTextChars(thinking);
+        }
+        const data = (b as { data?: unknown }).data;
+        if (blockType === "redacted_thinking" && typeof data === "string") {
+          chars += estimateWeightedTextChars(data);
+        }
+        const signature = (b as { thinkingSignature?: unknown }).thinkingSignature;
+        if (typeof signature === "string") {
+          chars += estimateWeightedTextChars(signature);
+        }
       }
       if (b.type === "toolCall") {
         try {

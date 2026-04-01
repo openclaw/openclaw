@@ -2,15 +2,17 @@ import { describe, expect, it } from "vitest";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 describe("stripThoughtSignatures", () => {
-  it("preserves thinking and redacted_thinking blocks verbatim", () => {
+  it("preserves thinkingSignature while still stripping invalid thought signatures", () => {
     const thinkingBlock = {
       type: "thinking",
       thinking: "internal",
+      thinkingSignature: "keep_me",
       thoughtSignature: "msg_123",
     };
     const redactedBlock = {
       type: "redacted_thinking",
       redacted_thinking: "...",
+      thinkingSignature: "keep_me_too",
       thoughtSignature: "msg_456",
     };
     const textBlock = {
@@ -23,8 +25,16 @@ describe("stripThoughtSignatures", () => {
       includeCamelCase: true,
     });
 
-    expect(result[0]).toBe(thinkingBlock);
-    expect(result[1]).toBe(redactedBlock);
+    expect(result[0]).toEqual({
+      type: "thinking",
+      thinking: "internal",
+      thinkingSignature: "keep_me",
+    });
+    expect(result[1]).toEqual({
+      type: "redacted_thinking",
+      redacted_thinking: "...",
+      thinkingSignature: "keep_me_too",
+    });
     expect(result[2]).toEqual({
       type: "text",
       text: "visible",
