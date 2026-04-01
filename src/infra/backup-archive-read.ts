@@ -202,3 +202,35 @@ export function isRootManifestEntry(entryPath: string): boolean {
   const parts = entryPath.split("/");
   return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
 }
+
+export function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
+  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
+  const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
+  const normalizedEntries = [...entries];
+  const normalizedEntrySet = new Set(normalizedEntries);
+
+  if (!normalizedEntrySet.has(manifestEntryPath)) {
+    throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
+  }
+
+  for (const entry of normalizedEntries) {
+    if (!isArchivePathWithin(entry, archiveRoot)) {
+      throw new Error(`Archive entry is outside the declared archive root: ${entry}`);
+    }
+  }
+
+  const payloadRoot = path.posix.join(archiveRoot, "payload");
+  for (const asset of manifest.assets) {
+    const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
+    if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
+      throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
+    }
+    const exact = normalizedEntrySet.has(assetArchivePath);
+    const nested = normalizedEntries.some(
+      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
+    );
+    if (!exact && !nested) {
+      throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
+    }
+  }
+}

@@ -14,6 +14,7 @@ import {
   listArchiveEntries,
   normalizeArchivePath,
   parseManifest,
+  verifyManifestAgainstEntries,
 } from "./backup-archive-read.js";
 
 export type BackupRestoreOptions = {
@@ -70,19 +71,24 @@ async function readManifestFromArchive(archivePath: string): Promise<BackupManif
     throw new Error("Backup archive manifest entry could not be resolved.");
   }
 
+  const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
+
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
-  return parseManifest(manifestRaw);
+  const manifest = parseManifest(manifestRaw);
+
+  // Verify archive structural integrity before trusting manifest assets
+  verifyManifestAgainstEntries(manifest, normalizedEntrySet);
+
+  return manifest;
 }
 
 export async function planRestore(opts: BackupRestoreOptions): Promise<BackupRestoreResult> {
   const archivePath = resolveUserPath(opts.archive);
   const manifest = await readManifestFromArchive(archivePath);
 
-  // Cross-platform check
-  const currentPlatform = process.platform === "win32" ? "win32" : "posix";
-  const archivePlatform =
-    manifest.platform === "win32" ? "win32" : manifest.platform === "unknown" ? "unknown" : "posix";
-  if (archivePlatform !== "unknown" && archivePlatform !== currentPlatform) {
+  // Cross-platform check: compare exact platform IDs to prevent restoring
+  // host-specific absolute paths on a different OS (e.g. linux vs darwin).
+  if (manifest.platform !== "unknown" && manifest.platform !== process.platform) {
     throw new Error(
       `Archive was created on ${manifest.platform} but current platform is ${process.platform}. Cross-platform restore is not supported.`,
     );
