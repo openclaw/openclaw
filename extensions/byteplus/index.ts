@@ -2,6 +2,10 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
+import {
+  BYTEPLUS_CODING_MODEL_CATALOG,
+  BYTEPLUS_MODEL_CATALOG,
+} from "./models.js";
 
 const PROVIDER_ID = "byteplus";
 const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";
@@ -56,6 +60,25 @@ export default definePluginEntry({
             },
           };
         },
+      },
+      augmentModelCatalog: () => {
+        const byteplusModels = BYTEPLUS_MODEL_CATALOG.map((entry) => ({
+          provider: "byteplus",
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        }));
+        const byteplusPlanModels = BYTEPLUS_CODING_MODEL_CATALOG.map((entry) => ({
+          provider: "byteplus-plan",
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        }));
+        return [...byteplusModels, ...byteplusPlanModels];
       },
     });
   },
