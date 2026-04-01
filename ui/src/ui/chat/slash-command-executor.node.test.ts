@@ -524,6 +524,36 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 
+  it("falls back to input and output tokens when totalTokens is missing", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-4.1-mini",
+              inputTokens: 1200,
+              outputTokens: 300,
+              contextTokens: 4000,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "usage",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **38%** of 4k\nModel: `gpt-4.1-mini`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
   it("reports the current thinking level for bare /think", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {

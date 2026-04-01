@@ -382,12 +382,18 @@ async function executeUsage(
     if (!session) {
       return { content: "No active session." };
     }
-    const input = session.inputTokens ?? 0;
-    const output = session.outputTokens ?? 0;
-    const total = Number.isFinite(session.totalTokens) ? (session.totalTokens ?? null) : null;
+    const hasInputTokens = Number.isFinite(session.inputTokens);
+    const hasOutputTokens = Number.isFinite(session.outputTokens);
+    const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
+    const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
+    const fallbackTotal = hasInputTokens || hasOutputTokens ? input + output : null;
+    const total = Number.isFinite(session.totalTokens)
+      ? (session.totalTokens ?? null)
+      : fallbackTotal;
     const totalTokensFresh = session.totalTokensFresh !== false;
     const ctx = session.contextTokens ?? 0;
-    const pct = total !== null && totalTokensFresh && ctx > 0 ? Math.round((total / ctx) * 100) : null;
+    const pct =
+      total !== null && totalTokensFresh && ctx > 0 ? Math.round((total / ctx) * 100) : null;
     const totalDisplay =
       total === null ? "n/a" : `${totalTokensFresh ? "" : "~"}${fmtTokens(total)}`;
 
