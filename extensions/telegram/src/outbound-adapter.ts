@@ -18,13 +18,29 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { sendMessageTelegram } from "./send.js";
+import { parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 
 type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
 
+function resolveTelegramOutboundTarget(params: {
+  to: string;
+  threadId?: string | number | null;
+}): {
+  to: string;
+  messageThreadId?: number;
+} {
+  const parsedTarget = parseTelegramTarget(params.to);
+  return {
+    to: parsedTarget.chatId,
+    messageThreadId: parseTelegramThreadId(params.threadId) ?? parsedTarget.messageThreadId,
+  };
+}
+
 function resolveTelegramSendContext(params: {
+  to: string;
   cfg: NonNullable<TelegramSendOpts>["cfg"];
   deps?: OutboundSendDeps;
   accountId?: string | null;
@@ -33,6 +49,7 @@ function resolveTelegramSendContext(params: {
   gatewayClientScopes?: readonly string[];
 }): {
   send: TelegramSendFn;
+  to: string;
   baseOpts: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
@@ -45,13 +62,18 @@ function resolveTelegramSendContext(params: {
 } {
   const send =
     resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ?? sendMessageTelegram;
+  const target = resolveTelegramOutboundTarget({
+    to: params.to,
+    threadId: params.threadId,
+  });
   return {
     send,
+    to: target.to,
     baseOpts: {
       verbose: false,
       textMode: "html",
       cfg: params.cfg,
-      messageThreadId: parseTelegramThreadId(params.threadId),
+      messageThreadId: target.messageThreadId,
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
       accountId: params.accountId ?? undefined,
       gatewayClientScopes: params.gatewayClientScopes,
@@ -124,7 +146,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       threadId,
       gatewayClientScopes,
     }) => {
-      const { send, baseOpts } = resolveTelegramSendContext({
+      const { send, to: resolvedTo, baseOpts } = resolveTelegramSendContext({
+        to,
         cfg,
         deps,
         accountId,
@@ -132,7 +155,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         threadId,
         gatewayClientScopes,
       });
-      return await send(to, text, {
+      return await send(resolvedTo, text, {
         ...baseOpts,
       });
     },
@@ -150,7 +173,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       forceDocument,
       gatewayClientScopes,
     }) => {
-      const { send, baseOpts } = resolveTelegramSendContext({
+      const { send, to: resolvedTo, baseOpts } = resolveTelegramSendContext({
+        to,
         cfg,
         deps,
         accountId,
@@ -158,7 +182,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         threadId,
         gatewayClientScopes,
       });
-      return await send(to, text, {
+      return await send(resolvedTo, text, {
         ...baseOpts,
         mediaUrl,
         mediaLocalRoots,
@@ -180,7 +204,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     forceDocument,
     gatewayClientScopes,
   }) => {
-    const { send, baseOpts } = resolveTelegramSendContext({
+    const { send, to: resolvedTo, baseOpts } = resolveTelegramSendContext({
+      to,
       cfg,
       deps,
       accountId,
@@ -190,7 +215,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     const result = await sendTelegramPayloadMessages({
       send,
-      to,
+      to: resolvedTo,
       payload,
       baseOpts: {
         ...baseOpts,
