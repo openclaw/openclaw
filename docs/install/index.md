@@ -138,7 +138,6 @@ openclaw gateway status # verify the Gateway is running
 Deploy OpenClaw on a cloud server or VPS:
 
 <CardGroup cols={3}>
-  <Card title="Agent Computer" href="/install/agentcomputer">Managed worker + published port</Card>
   <Card title="VPS" href="/vps">Any Linux VPS</Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">Shared Docker steps</Card>
   <Card title="Kubernetes" href="/install/kubernetes">K8s</Card>
@@ -149,6 +148,7 @@ Deploy OpenClaw on a cloud server or VPS:
   <Card title="Railway" href="/install/railway">Railway</Card>
   <Card title="Render" href="/install/render">Render</Card>
   <Card title="Northflank" href="/install/northflank">Northflank</Card>
+  <Card title="Agent Computer" href="/install/agentcomputer">Managed worker + published port</Card>
 </CardGroup>
 
 ## Update, migrate, or uninstall

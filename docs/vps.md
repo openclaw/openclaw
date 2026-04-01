@@ -17,7 +17,6 @@ tuning that applies everywhere.
 ## Pick a provider
 
 <CardGroup cols={2}>
-  <Card title="Agent Computer" href="/install/agentcomputer">Managed worker + published port</Card>
   <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
   <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
   <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
@@ -27,6 +26,7 @@ tuning that applies everywhere.
   <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
+  <Card title="Agent Computer" href="/install/agentcomputer">Managed worker + published port</Card>
   <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
 </CardGroup>
 
