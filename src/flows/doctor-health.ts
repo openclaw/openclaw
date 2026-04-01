@@ -67,11 +67,15 @@ export async function doctorCommand(
   if (updateResult.handled && !isWatch) {
     return;
   }
-  void maybeRepairUiProtocolFreshness(runtime, skipPrompter);
+  await maybeRepairUiProtocolFreshness(runtime, skipPrompter);
   noteSourceInstallIssues(root);
   noteStartupOptimizationHints();
 
   if (isWatch) {
+    process.on("SIGINT", () => {
+      outro("Doctor watch stopped.");
+      process.exit(0);
+    });
     // Watch loop: rebuild prompter + ctx on every iteration
     while (true) {
       const prompter = createDoctorPrompter({ runtime, options: effectiveOptions });
@@ -113,9 +117,9 @@ export async function doctorCommand(
       configPath: configResult.path ?? CONFIG_PATH,
     };
     await runDoctorHealthContributions(ctx);
-  }
 
-  outro("Doctor complete.");
+    outro("Doctor complete.");
+  }
 }
 
 function sleep(ms: number): Promise<void> {
