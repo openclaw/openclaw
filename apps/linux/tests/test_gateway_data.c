@@ -107,13 +107,26 @@ static void test_skills_parse_basic(void) {
         "      \"description\": \"Search the web\","
         "      \"source\": \"bundled\","
         "      \"key\": \"web-search\","
+        "      \"primaryEnv\": \"SERP_API_KEY\","
+        "      \"emoji\": \"🔍\","
+        "      \"homepage\": \"https://example.com\","
         "      \"enabled\": true,"
         "      \"disabled\": false,"
         "      \"installed\": true,"
         "      \"managed\": false,"
         "      \"bundled\": true,"
         "      \"hasUpdate\": false,"
-        "      \"eligible\": true"
+        "      \"eligible\": true,"
+        "      \"always\": true,"
+        "      \"requirements\": { \"bins\": [\"curl\"], \"env\": [\"SERP_API_KEY\"], \"config\": [\"skills.web-search.enabled\"] },"
+        "      \"missing\": { \"env\": [\"SERP_API_KEY\"] },"
+        "      \"configChecks\": ["
+        "        { \"path\": \"skills.web-search.enabled\", \"value\": true, \"satisfied\": true },"
+        "        { \"path\": \"skills.web-search.apiKey\", \"satisfied\": false }"
+        "      ],"
+        "      \"install\": ["
+        "        { \"id\": \"npm\", \"kind\": \"npm\", \"label\": \"Install via npm\", \"bins\": [\"npm\"] }"
+        "      ]"
         "    },"
         "    {"
         "      \"name\": \"Code Runner\","
@@ -141,11 +154,38 @@ static void test_skills_parse_basic(void) {
     ASSERT(data->skills[0].enabled == TRUE, "skill[0] enabled");
     ASSERT(data->skills[0].bundled == TRUE, "skill[0] bundled");
     ASSERT(data->skills[0].has_update == FALSE, "skill[0] has_update");
+    ASSERT(data->skills[0].always == TRUE, "skill[0] always");
+    ASSERT(g_strcmp0(data->skills[0].primary_env, "SERP_API_KEY") == 0, "skill[0] primaryEnv");
+    ASSERT(g_strcmp0(data->skills[0].emoji, "\xf0\x9f\x94\x8d") == 0, "skill[0] emoji");
+    ASSERT(g_strcmp0(data->skills[0].homepage, "https://example.com") == 0, "skill[0] homepage");
+    /* requirements */
+    ASSERT(data->skills[0].n_req_bins == 1, "skill[0] req_bins count");
+    ASSERT(g_strcmp0(data->skills[0].req_bins[0], "curl") == 0, "skill[0] req_bins[0]");
+    ASSERT(data->skills[0].n_req_env == 1, "skill[0] req_env count");
+    ASSERT(data->skills[0].n_req_config == 1, "skill[0] req_config count");
+    /* missing */
+    ASSERT(data->skills[0].n_missing_env == 1, "skill[0] missing_env count");
+    ASSERT(g_strcmp0(data->skills[0].missing_env[0], "SERP_API_KEY") == 0, "skill[0] missing_env[0]");
+    ASSERT(data->skills[0].missing_bins == NULL, "skill[0] missing_bins null");
+    /* configChecks */
+    ASSERT(data->skills[0].n_config_checks == 2, "skill[0] config_checks count");
+    ASSERT(g_strcmp0(data->skills[0].config_checks[0].path, "skills.web-search.enabled") == 0, "cc[0] path");
+    ASSERT(data->skills[0].config_checks[0].satisfied == TRUE, "cc[0] satisfied");
+    ASSERT(g_strcmp0(data->skills[0].config_checks[0].value_str, "true") == 0, "cc[0] value_str");
+    ASSERT(data->skills[0].config_checks[1].satisfied == FALSE, "cc[1] satisfied");
+    ASSERT(data->skills[0].config_checks[1].value_str == NULL, "cc[1] value_str null");
+    /* install */
+    ASSERT(data->skills[0].n_install_options == 1, "skill[0] install count");
+    ASSERT(g_strcmp0(data->skills[0].install_options[0].id, "npm") == 0, "install[0] id");
+    ASSERT(g_strcmp0(data->skills[0].install_options[0].kind, "npm") == 0, "install[0] kind");
+    ASSERT(data->skills[0].install_options[0].n_bins == 1, "install[0] bins count");
 
     ASSERT(g_strcmp0(data->skills[1].name, "Code Runner") == 0, "skill[1] name");
     ASSERT(data->skills[1].disabled == TRUE, "skill[1] disabled");
     ASSERT(data->skills[1].has_update == TRUE, "skill[1] has_update");
     ASSERT(data->skills[1].eligible == FALSE, "skill[1] eligible");
+    ASSERT(data->skills[1].n_config_checks == 0, "skill[1] no config_checks");
+    ASSERT(data->skills[1].n_install_options == 0, "skill[1] no install");
 
     gateway_skills_data_free(data);
     json_node_unref(node);
@@ -176,10 +216,21 @@ static void test_sessions_parse_basic(void) {
         "      \"displayName\": \"Main Session\","
         "      \"channel\": \"telegram\","
         "      \"subject\": \"user@example.com\","
+        "      \"room\": \"room-1\","
+        "      \"space\": \"space-A\","
         "      \"status\": \"running\","
         "      \"modelProvider\": \"openai\","
         "      \"model\": \"gpt-4o\","
-        "      \"updatedAt\": 1700000000500"
+        "      \"sessionId\": \"sid-42\","
+        "      \"thinkingLevel\": \"medium\","
+        "      \"verboseLevel\": \"high\","
+        "      \"updatedAt\": 1700000000500,"
+        "      \"inputTokens\": 100,"
+        "      \"outputTokens\": 200,"
+        "      \"totalTokens\": 300,"
+        "      \"contextTokens\": 8192,"
+        "      \"systemSent\": true,"
+        "      \"abortedLastRun\": false"
         "    },"
         "    {"
         "      \"key\": \"agent:sub-1:task-abc\","
@@ -193,20 +244,36 @@ static void test_sessions_parse_basic(void) {
     GatewaySessionsData *data = gateway_data_parse_sessions(node);
     ASSERT(data != NULL, "sessions data parsed");
     ASSERT(data->ts == 1700000001000, "sessions ts");
+    ASSERT(g_strcmp0(data->path, "/tmp/sessions") == 0, "sessions path");
     ASSERT(data->count == 2, "sessions count");
     ASSERT(data->n_sessions == 2, "sessions array count");
+    ASSERT(g_strcmp0(data->defaults.model, "gpt-4") == 0, "defaults model");
+    ASSERT(data->defaults.context_tokens == 8192, "defaults context_tokens");
 
     ASSERT(g_strcmp0(data->sessions[0].key, "main") == 0, "session[0] key");
     ASSERT(g_strcmp0(data->sessions[0].kind, "direct") == 0, "session[0] kind");
     ASSERT(g_strcmp0(data->sessions[0].display_name, "Main Session") == 0, "session[0] display_name");
     ASSERT(g_strcmp0(data->sessions[0].channel, "telegram") == 0, "session[0] channel");
+    ASSERT(g_strcmp0(data->sessions[0].room, "room-1") == 0, "session[0] room");
+    ASSERT(g_strcmp0(data->sessions[0].space, "space-A") == 0, "session[0] space");
     ASSERT(g_strcmp0(data->sessions[0].status, "running") == 0, "session[0] status");
+    ASSERT(g_strcmp0(data->sessions[0].session_id, "sid-42") == 0, "session[0] session_id");
+    ASSERT(g_strcmp0(data->sessions[0].thinking_level, "medium") == 0, "session[0] thinking_level");
+    ASSERT(g_strcmp0(data->sessions[0].verbose_level, "high") == 0, "session[0] verbose_level");
     ASSERT(data->sessions[0].updated_at == 1700000000500, "session[0] updated_at");
+    ASSERT(data->sessions[0].input_tokens == 100, "session[0] input_tokens");
+    ASSERT(data->sessions[0].output_tokens == 200, "session[0] output_tokens");
+    ASSERT(data->sessions[0].total_tokens == 300, "session[0] total_tokens");
+    ASSERT(data->sessions[0].context_tokens == 8192, "session[0] context_tokens");
+    ASSERT(data->sessions[0].system_sent == TRUE, "session[0] system_sent");
+    ASSERT(data->sessions[0].aborted_last_run == FALSE, "session[0] aborted_last_run");
 
     ASSERT(g_strcmp0(data->sessions[1].key, "agent:sub-1:task-abc") == 0, "session[1] key");
     ASSERT(g_strcmp0(data->sessions[1].kind, "group") == 0, "session[1] kind");
     ASSERT(data->sessions[1].display_name == NULL, "session[1] display_name null");
     ASSERT(data->sessions[1].status == NULL, "session[1] status null");
+    ASSERT(data->sessions[1].input_tokens == 0, "session[1] input_tokens default");
+    ASSERT(data->sessions[1].system_sent == FALSE, "session[1] system_sent default");
 
     gateway_sessions_data_free(data);
     json_node_unref(node);
@@ -223,18 +290,32 @@ static void test_cron_parse_basic(void) {
         "      \"name\": \"Daily Report\","
         "      \"description\": \"Generates daily summary\","
         "      \"enabled\": true,"
+        "      \"autoDelete\": false,"
         "      \"createdAtMs\": 1700000000000,"
         "      \"updatedAtMs\": 1700000001000,"
+        "      \"agentId\": \"agent-main\","
+        "      \"transcriptSessionKey\": \"sess-abc\","
+        "      \"schedule\": { \"type\": \"cron\", \"value\": \"0 9 * * *\" },"
         "      \"state\": {"
         "        \"nextRunAtMs\": 1700100000000,"
         "        \"lastRunAtMs\": 1700000000000,"
-        "        \"lastRunStatus\": \"ok\""
+        "        \"lastRunStatus\": \"ok\","
+        "        \"lastDurationMs\": 1500"
+        "      },"
+        "      \"payload\": {"
+        "        \"message\": \"Generate report\","
+        "        \"thinking\": \"deep\","
+        "        \"timeout\": 60,"
+        "        \"sessionTarget\": \"isolated\","
+        "        \"wakeMode\": \"now\","
+        "        \"delivery\": \"direct\""
         "      }"
         "    },"
         "    {"
         "      \"id\": \"job-2\","
         "      \"name\": \"Cleanup\","
         "      \"enabled\": false,"
+        "      \"autoDelete\": true,"
         "      \"createdAtMs\": 1700000000000,"
         "      \"updatedAtMs\": 1700000002000,"
         "      \"state\": {"
@@ -262,13 +343,28 @@ static void test_cron_parse_basic(void) {
     ASSERT(g_strcmp0(data->jobs[0].id, "job-1") == 0, "job[0] id");
     ASSERT(g_strcmp0(data->jobs[0].name, "Daily Report") == 0, "job[0] name");
     ASSERT(data->jobs[0].enabled == TRUE, "job[0] enabled");
+    ASSERT(data->jobs[0].auto_delete == FALSE, "job[0] auto_delete");
+    ASSERT(g_strcmp0(data->jobs[0].agent_id, "agent-main") == 0, "job[0] agent_id");
+    ASSERT(g_strcmp0(data->jobs[0].transcript_session_key, "sess-abc") == 0, "job[0] transcript_session_key");
+    ASSERT(g_strcmp0(data->jobs[0].schedule_type, "cron") == 0, "job[0] schedule_type");
+    ASSERT(g_strcmp0(data->jobs[0].schedule_value, "0 9 * * *") == 0, "job[0] schedule_value");
     ASSERT(data->jobs[0].next_run_at_ms == 1700100000000, "job[0] next_run_at_ms");
     ASSERT(g_strcmp0(data->jobs[0].last_run_status, "ok") == 0, "job[0] last_run_status");
+    ASSERT(data->jobs[0].last_duration_ms == 1500, "job[0] last_duration_ms");
+    ASSERT(g_strcmp0(data->jobs[0].payload_message, "Generate report") == 0, "job[0] payload_message");
+    ASSERT(g_strcmp0(data->jobs[0].payload_thinking, "deep") == 0, "job[0] payload_thinking");
+    ASSERT(data->jobs[0].payload_timeout == 60, "job[0] payload_timeout");
+    ASSERT(g_strcmp0(data->jobs[0].session_target, "isolated") == 0, "job[0] session_target");
+    ASSERT(g_strcmp0(data->jobs[0].wake_mode, "now") == 0, "job[0] wake_mode");
+    ASSERT(g_strcmp0(data->jobs[0].delivery, "direct") == 0, "job[0] delivery");
 
     ASSERT(g_strcmp0(data->jobs[1].id, "job-2") == 0, "job[1] id");
     ASSERT(data->jobs[1].enabled == FALSE, "job[1] enabled");
+    ASSERT(data->jobs[1].auto_delete == TRUE, "job[1] auto_delete");
     ASSERT(g_strcmp0(data->jobs[1].last_run_status, "error") == 0, "job[1] last_run_status");
     ASSERT(g_strcmp0(data->jobs[1].last_error, "timeout exceeded") == 0, "job[1] last_error");
+    ASSERT(data->jobs[1].schedule_type == NULL, "job[1] no schedule_type");
+    ASSERT(data->jobs[1].payload_message == NULL, "job[1] no payload_message");
 
     gateway_cron_data_free(data);
     json_node_unref(node);
@@ -286,7 +382,11 @@ static void test_nodes_parse_basic(void) {
         "      \"displayName\": \"iPhone 15\","
         "      \"platform\": \"ios\","
         "      \"version\": \"1.2.0\","
+        "      \"coreVersion\": \"2.0.0\","
+        "      \"uiVersion\": \"1.5.0\","
         "      \"deviceFamily\": \"iPhone\","
+        "      \"modelIdentifier\": \"iPhone16,1\","
+        "      \"remoteIp\": \"192.168.1.42\","
         "      \"paired\": true,"
         "      \"connected\": true,"
         "      \"connectedAtMs\": 1700000001500,"
@@ -310,12 +410,18 @@ static void test_nodes_parse_basic(void) {
     ASSERT(g_strcmp0(data->nodes[0].node_id, "node-abc") == 0, "node[0] id");
     ASSERT(g_strcmp0(data->nodes[0].display_name, "iPhone 15") == 0, "node[0] display_name");
     ASSERT(g_strcmp0(data->nodes[0].platform, "ios") == 0, "node[0] platform");
+    ASSERT(g_strcmp0(data->nodes[0].core_version, "2.0.0") == 0, "node[0] core_version");
+    ASSERT(g_strcmp0(data->nodes[0].ui_version, "1.5.0") == 0, "node[0] ui_version");
+    ASSERT(g_strcmp0(data->nodes[0].model_identifier, "iPhone16,1") == 0, "node[0] model_identifier");
+    ASSERT(g_strcmp0(data->nodes[0].remote_ip, "192.168.1.42") == 0, "node[0] remote_ip");
     ASSERT(data->nodes[0].connected == TRUE, "node[0] connected");
     ASSERT(data->nodes[0].connected_at_ms == 1700000001500, "node[0] connected_at_ms");
 
     ASSERT(g_strcmp0(data->nodes[1].node_id, "node-xyz") == 0, "node[1] id");
     ASSERT(data->nodes[1].connected == FALSE, "node[1] connected");
     ASSERT(data->nodes[1].platform == NULL, "node[1] platform null");
+    ASSERT(data->nodes[1].core_version == NULL, "node[1] core_version null");
+    ASSERT(data->nodes[1].remote_ip == NULL, "node[1] remote_ip null");
 
     gateway_nodes_data_free(data);
     json_node_unref(node);
@@ -698,6 +804,280 @@ static void test_nodes_non_object_payload(void) {
     json_node_unref(node);
 }
 
+/* ── Cron Status tests ────────────────────────────────────────────── */
+
+static void test_cron_status_parse_basic(void) {
+    const gchar *json =
+        "{\"enabled\": true, \"storePath\": \"/tmp/cron\", \"nextWakeAtMs\": 1700100000000}";
+    JsonNode *node = parse_json(json);
+    GatewayCronStatus *data = gateway_data_parse_cron_status(node);
+    ASSERT(data != NULL, "cron_status: parsed");
+    ASSERT(data->enabled == TRUE, "cron_status: enabled");
+    ASSERT(g_strcmp0(data->store_path, "/tmp/cron") == 0, "cron_status: store_path");
+    ASSERT(data->next_wake_at_ms == 1700100000000, "cron_status: next_wake_at_ms");
+    gateway_cron_status_free(data);
+    json_node_unref(node);
+}
+
+static void test_cron_status_null(void) {
+    GatewayCronStatus *data = gateway_data_parse_cron_status(NULL);
+    ASSERT(data == NULL, "cron_status_null: returns NULL");
+}
+
+static void test_cron_status_empty(void) {
+    JsonNode *node = parse_json("{}");
+    GatewayCronStatus *data = gateway_data_parse_cron_status(node);
+    ASSERT(data != NULL, "cron_status_empty: parsed");
+    ASSERT(data->enabled == FALSE, "cron_status_empty: enabled default");
+    ASSERT(data->store_path == NULL, "cron_status_empty: store_path null");
+    gateway_cron_status_free(data);
+    json_node_unref(node);
+}
+
+/* ── Cron Runs tests ─────────────────────────────────────────────── */
+
+static void test_cron_runs_parse_basic(void) {
+    const gchar *json =
+        "{"
+        "  \"entries\": ["
+        "    { \"id\": \"run-1\", \"jobId\": \"job-1\", \"status\": \"ok\","
+        "      \"timestampMs\": 1700000000000, \"durationMs\": 500, \"summary\": \"Done\" },"
+        "    { \"id\": \"run-2\", \"jobId\": \"job-1\", \"status\": \"error\","
+        "      \"timestampMs\": 1700000001000, \"error\": \"timeout\" }"
+        "  ],"
+        "  \"total\": 10, \"offset\": 0, \"limit\": 2, \"hasMore\": true"
+        "}";
+    JsonNode *node = parse_json(json);
+    GatewayCronRunsData *data = gateway_data_parse_cron_runs(node);
+    ASSERT(data != NULL, "cron_runs: parsed");
+    ASSERT(data->n_entries == 2, "cron_runs: count");
+    ASSERT(data->total == 10, "cron_runs: total");
+    ASSERT(data->has_more == TRUE, "cron_runs: has_more");
+    ASSERT(g_strcmp0(data->entries[0].id, "run-1") == 0, "run[0] id");
+    ASSERT(g_strcmp0(data->entries[0].status, "ok") == 0, "run[0] status");
+    ASSERT(data->entries[0].duration_ms == 500, "run[0] duration_ms");
+    ASSERT(g_strcmp0(data->entries[0].summary, "Done") == 0, "run[0] summary");
+    ASSERT(g_strcmp0(data->entries[1].status, "error") == 0, "run[1] status");
+    ASSERT(g_strcmp0(data->entries[1].error, "timeout") == 0, "run[1] error");
+    gateway_cron_runs_data_free(data);
+    json_node_unref(node);
+}
+
+static void test_cron_runs_null(void) {
+    GatewayCronRunsData *data = gateway_data_parse_cron_runs(NULL);
+    ASSERT(data == NULL, "cron_runs_null: returns NULL");
+}
+
+/* ── Pairing List tests ──────────────────────────────────────────── */
+
+static void test_pairing_list_parse_basic(void) {
+    const gchar *json =
+        "{"
+        "  \"pending\": ["
+        "    { \"requestId\": \"req-1\", \"nodeId\": \"n-1\", \"displayName\": \"Phone\","
+        "      \"platform\": \"android\", \"version\": \"1.0\", \"remoteIp\": \"10.0.0.1\","
+        "      \"isRepair\": false, \"ts\": 1700000000.0 }"
+        "  ],"
+        "  \"paired\": ["
+        "    { \"nodeId\": \"n-2\", \"displayName\": \"Laptop\", \"platform\": \"linux\","
+        "      \"version\": \"2.0\", \"remoteIp\": \"10.0.0.2\", \"approvedAtMs\": 1699999000000.0 }"
+        "  ]"
+        "}";
+    JsonNode *node = parse_json(json);
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data != NULL, "pairing: parsed");
+    ASSERT(data->n_pending == 1, "pairing: n_pending");
+    ASSERT(data->n_paired == 1, "pairing: n_paired");
+    ASSERT(g_strcmp0(data->pending[0].request_id, "req-1") == 0, "pending[0] request_id");
+    ASSERT(g_strcmp0(data->pending[0].node_id, "n-1") == 0, "pending[0] node_id");
+    ASSERT(g_strcmp0(data->pending[0].platform, "android") == 0, "pending[0] platform");
+    ASSERT(data->pending[0].is_repair == FALSE, "pending[0] is_repair");
+    ASSERT(g_strcmp0(data->paired[0].node_id, "n-2") == 0, "paired[0] node_id");
+    ASSERT(g_strcmp0(data->paired[0].platform, "linux") == 0, "paired[0] platform");
+    gateway_pairing_list_free(data);
+    json_node_unref(node);
+}
+
+static void test_pairing_list_empty(void) {
+    JsonNode *node = parse_json("{}");
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data != NULL, "pairing_empty: parsed");
+    ASSERT(data->n_pending == 0, "pairing_empty: n_pending");
+    ASSERT(data->n_paired == 0, "pairing_empty: n_paired");
+    gateway_pairing_list_free(data);
+    json_node_unref(node);
+}
+
+static void test_pairing_list_null(void) {
+    GatewayPairingList *data = gateway_data_parse_pairing_list(NULL);
+    ASSERT(data == NULL, "pairing_null: returns NULL");
+}
+
+static void test_pairing_list_partial_pending(void) {
+    /* Pending request with only requestId */
+    JsonNode *node = parse_json(
+        "{\"pending\": [{\"requestId\": \"r1\"}]}");
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data != NULL, "pairing_partial: parsed");
+    ASSERT(data->n_pending == 1, "pairing_partial: n_pending");
+    ASSERT(g_strcmp0(data->pending[0].request_id, "r1") == 0, "pairing_partial: request_id");
+    ASSERT(data->pending[0].node_id == NULL, "pairing_partial: node_id NULL");
+    ASSERT(data->pending[0].platform == NULL, "pairing_partial: platform NULL");
+    ASSERT(data->pending[0].is_repair == FALSE, "pairing_partial: is_repair default");
+    ASSERT(data->n_paired == 0, "pairing_partial: n_paired 0");
+    gateway_pairing_list_free(data);
+    json_node_unref(node);
+}
+
+static void test_pairing_list_partial_paired(void) {
+    /* Paired node with only nodeId */
+    JsonNode *node = parse_json(
+        "{\"paired\": [{\"nodeId\": \"n1\"}]}");
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data != NULL, "pairing_partial_paired: parsed");
+    ASSERT(data->n_paired == 1, "pairing_partial_paired: n_paired");
+    ASSERT(g_strcmp0(data->paired[0].node_id, "n1") == 0, "pairing_partial_paired: node_id");
+    ASSERT(data->paired[0].display_name == NULL, "pairing_partial_paired: name NULL");
+    ASSERT(data->paired[0].approved_at_ms == 0, "pairing_partial_paired: approved default");
+    ASSERT(data->n_pending == 0, "pairing_partial_paired: n_pending 0");
+    gateway_pairing_list_free(data);
+    json_node_unref(node);
+}
+
+static void test_pairing_list_wrong_type_arrays(void) {
+    /* pending/paired are strings instead of arrays */
+    JsonNode *node = parse_json(
+        "{\"pending\": \"nope\", \"paired\": 42}");
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data != NULL, "pairing_wrong_type: parsed");
+    ASSERT(data->n_pending == 0, "pairing_wrong_type: n_pending 0");
+    ASSERT(data->n_paired == 0, "pairing_wrong_type: n_paired 0");
+    gateway_pairing_list_free(data);
+    json_node_unref(node);
+}
+
+static void test_pairing_list_non_object_payload(void) {
+    JsonNode *node = parse_json("\"just a string\"");
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data == NULL, "pairing_str: returns NULL");
+    json_node_unref(node);
+}
+
+static void test_pairing_list_repair_flag(void) {
+    const gchar *json =
+        "{\"pending\": ["
+        "  { \"requestId\": \"r1\", \"isRepair\": true }"
+        "]}";
+    JsonNode *node = parse_json(json);
+    GatewayPairingList *data = gateway_data_parse_pairing_list(node);
+    ASSERT(data != NULL, "pairing_repair: parsed");
+    ASSERT(data->pending[0].is_repair == TRUE, "pairing_repair: is_repair true");
+    gateway_pairing_list_free(data);
+    json_node_unref(node);
+}
+
+/* ── Channels with account details test ──────────────────────────── */
+
+static void test_channels_with_account_details(void) {
+    const gchar *json =
+        "{"
+        "  \"ts\": 1700000000000,"
+        "  \"channelOrder\": [\"telegram\"],"
+        "  \"channelLabels\": { \"telegram\": \"Telegram\" },"
+        "  \"channels\": { \"telegram\": { \"connected\": true } },"
+        "  \"channelAccounts\": {"
+        "    \"telegram\": ["
+        "      { \"accountId\": \"bot-1\", \"displayName\": \"MyBot\", \"username\": \"mybot\", \"status\": \"connected\" },"
+        "      { \"accountId\": \"bot-2\", \"status\": \"disconnected\" }"
+        "    ]"
+        "  },"
+        "  \"channelDefaultAccountId\": { \"telegram\": \"bot-1\" }"
+        "}";
+
+    JsonNode *node = parse_json(json);
+    GatewayChannelsData *data = gateway_data_parse_channels(node);
+    ASSERT(data != NULL, "ch_acct_detail: parsed");
+    ASSERT(data->n_channels == 1, "ch_acct_detail: 1 channel");
+    ASSERT(data->channels[0].account_count == 2, "ch_acct_detail: 2 accounts");
+    ASSERT(g_strcmp0(data->channels[0].default_account_id, "bot-1") == 0, "ch_acct_detail: default");
+    gateway_channels_data_free(data);
+    json_node_unref(node);
+}
+
+/* ── Config Snapshot tests ───────────────────────────────────────── */
+
+static void test_config_get_parse_basic(void) {
+    const gchar *json =
+        "{"
+        "  \"path\": \"/home/user/.openclaw/config.yaml\","
+        "  \"hash\": \"abc123\","
+        "  \"exists\": true,"
+        "  \"valid\": true,"
+        "  \"config\": { \"gateway\": { \"port\": 18789 } },"
+        "  \"issues\": [\"minor warning\"]"
+        "}";
+    JsonNode *node = parse_json(json);
+    GatewayConfigSnapshot *data = gateway_data_parse_config_get(node);
+    ASSERT(data != NULL, "config_get: parsed");
+    ASSERT(g_strcmp0(data->path, "/home/user/.openclaw/config.yaml") == 0, "config_get: path");
+    ASSERT(g_strcmp0(data->hash, "abc123") == 0, "config_get: hash");
+    ASSERT(data->exists == TRUE, "config_get: exists");
+    ASSERT(data->valid == TRUE, "config_get: valid");
+    ASSERT(data->config != NULL, "config_get: config not null");
+    ASSERT(data->n_issues == 1, "config_get: n_issues");
+    ASSERT(g_strcmp0(data->issues[0], "minor warning") == 0, "config_get: issues[0]");
+    gateway_config_snapshot_free(data);
+    json_node_unref(node);
+}
+
+static void test_config_get_null(void) {
+    GatewayConfigSnapshot *data = gateway_data_parse_config_get(NULL);
+    ASSERT(data == NULL, "config_get_null: returns NULL");
+}
+
+static void test_config_get_no_config_obj(void) {
+    JsonNode *node = parse_json("{\"path\": \"/tmp/c\", \"exists\": false}");
+    GatewayConfigSnapshot *data = gateway_data_parse_config_get(node);
+    ASSERT(data != NULL, "config_get_no_obj: parsed");
+    ASSERT(data->config == NULL, "config_get_no_obj: config null");
+    ASSERT(data->exists == FALSE, "config_get_no_obj: exists false");
+    ASSERT(data->issues == NULL, "config_get_no_obj: issues null");
+    gateway_config_snapshot_free(data);
+    json_node_unref(node);
+}
+
+/* ── Config Schema tests ─────────────────────────────────────────── */
+
+static void test_config_schema_parse_basic(void) {
+    const gchar *json =
+        "{"
+        "  \"schema\": { \"type\": \"object\", \"properties\": {} },"
+        "  \"uiHints\": { \"secrets\": [\"apiKey\"] }"
+        "}";
+    JsonNode *node = parse_json(json);
+    GatewayConfigSchema *data = gateway_data_parse_config_schema(node);
+    ASSERT(data != NULL, "config_schema: parsed");
+    ASSERT(data->schema != NULL, "config_schema: schema not null");
+    ASSERT(data->ui_hints != NULL, "config_schema: ui_hints not null");
+    gateway_config_schema_free(data);
+    json_node_unref(node);
+}
+
+static void test_config_schema_null(void) {
+    GatewayConfigSchema *data = gateway_data_parse_config_schema(NULL);
+    ASSERT(data == NULL, "config_schema_null: returns NULL");
+}
+
+static void test_config_schema_empty(void) {
+    JsonNode *node = parse_json("{}");
+    GatewayConfigSchema *data = gateway_data_parse_config_schema(node);
+    ASSERT(data != NULL, "config_schema_empty: parsed");
+    ASSERT(data->schema == NULL, "config_schema_empty: schema null");
+    ASSERT(data->ui_hints == NULL, "config_schema_empty: ui_hints null");
+    gateway_config_schema_free(data);
+    json_node_unref(node);
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 
 int main(void) {
@@ -755,6 +1135,38 @@ int main(void) {
     test_nodes_wrong_type_fields();
     test_nodes_null_input();
     test_nodes_non_object_payload();
+
+    /* Cron Status */
+    test_cron_status_parse_basic();
+    test_cron_status_null();
+    test_cron_status_empty();
+
+    /* Cron Runs */
+    test_cron_runs_parse_basic();
+    test_cron_runs_null();
+
+    /* Pairing List */
+    test_pairing_list_parse_basic();
+    test_pairing_list_empty();
+    test_pairing_list_null();
+    test_pairing_list_partial_pending();
+    test_pairing_list_partial_paired();
+    test_pairing_list_wrong_type_arrays();
+    test_pairing_list_non_object_payload();
+    test_pairing_list_repair_flag();
+
+    /* Channels — account details */
+    test_channels_with_account_details();
+
+    /* Config Snapshot */
+    test_config_get_parse_basic();
+    test_config_get_null();
+    test_config_get_no_config_obj();
+
+    /* Config Schema */
+    test_config_schema_parse_basic();
+    test_config_schema_null();
+    test_config_schema_empty();
 
     g_print("gateway_data: %d/%d tests passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
