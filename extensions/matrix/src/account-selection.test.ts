@@ -83,4 +83,21 @@ describe("Matrix account selection topology", () => {
     expect(resolveMatrixDefaultOrOnlyAccountId(cfg, env)).toBe("ops");
     expect(requiresExplicitMatrixDefaultAccount(cfg, env)).toBe(false);
   });
+
+  it("keeps env-backed named accounts that rely on cached credentials", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_OPS_USER_ID: "@ops:example.org",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveConfiguredMatrixAccountIds(cfg, env)).toEqual(["ops"]);
+    expect(resolveMatrixDefaultOrOnlyAccountId(cfg, env)).toBe("ops");
+    expect(requiresExplicitMatrixDefaultAccount(cfg, env)).toBe(false);
+  });
 });

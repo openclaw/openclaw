@@ -451,6 +451,22 @@ describe("resolveMatrixConfig", () => {
     expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
   });
 
+  it("keeps implicit selection for env-backed accounts that can use cached credentials", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_OPS_USER_ID: "@ops:example.org",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveImplicitMatrixAccountId(cfg, env)).toBe("ops");
+    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
+  });
+
   it("rejects explicit non-default account ids that are neither configured nor scoped in env", () => {
     const cfg = {
       channels: {
@@ -794,6 +810,43 @@ describe("resolveMatrixAuth", () => {
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
+      accessToken: "cached-token",
+      deviceId: "CACHEDDEVICE",
+    });
+    expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses cached matching credentials for env-backed named accounts without fresh auth", async () => {
+    vi.mocked(credentialsReadModule!.loadMatrixCredentials).mockReturnValue({
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "cached-token",
+      deviceId: "CACHEDDEVICE",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    vi.mocked(credentialsReadModule!.credentialsMatchConfig).mockReturnValue(true);
+
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_OPS_USER_ID: "@ops:example.org",
+    } as NodeJS.ProcessEnv;
+
+    const auth = await resolveMatrixAuth({
+      cfg,
+      env,
+      accountId: "ops",
+    });
+
+    expect(auth).toMatchObject({
+      accountId: "ops",
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
       accessToken: "cached-token",
       deviceId: "CACHEDDEVICE",
     });

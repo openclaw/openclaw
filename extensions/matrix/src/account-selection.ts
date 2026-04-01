@@ -78,13 +78,15 @@ function resolveGlobalMatrixEnvStringSources(env: NodeJS.ProcessEnv): MatrixTopo
   };
 }
 
-function hasReadyResolvedMatrixAuth(values: {
+function hasUsableResolvedMatrixAuth(values: {
   homeserver: string;
   userId: string;
   accessToken: string;
-  password: string;
 }): boolean {
-  return Boolean(values.homeserver && (values.accessToken || (values.userId && values.password)));
+  // Account discovery must keep homeserver+userId shapes because auth can still
+  // resolve through cached Matrix credentials even when no fresh token/password
+  // is present in config or env.
+  return Boolean(values.homeserver && (values.accessToken || values.userId));
 }
 
 function hasReadyEffectiveMatrixAccountSource(params: {
@@ -99,7 +101,7 @@ function hasReadyEffectiveMatrixAccountSource(params: {
     channel: resolveMatrixChannelStringSources(params.channel),
     globalEnv: resolveGlobalMatrixEnvStringSources(params.env),
   });
-  return hasReadyResolvedMatrixAuth(resolved);
+  return hasUsableResolvedMatrixAuth(resolved);
 }
 
 function hasConfiguredDefaultMatrixAccountSource(params: {
