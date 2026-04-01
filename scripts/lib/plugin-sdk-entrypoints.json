@@ -210,6 +210,7 @@
   "speech",
   "sglang",
   "session-store-runtime",
+  "string-normalization-runtime",
   "state-paths",
   "synthetic",
   "telegram-account",
