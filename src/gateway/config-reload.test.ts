@@ -199,6 +199,24 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
   });
 
+  it("treats gateway.auth.token as no-op (#58620)", () => {
+    const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("gateway.auth.token");
+  });
+
+  it("treats gateway.auth.mode as no-op (#58620)", () => {
+    const plan = buildGatewayReloadPlan(["gateway.auth.mode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("gateway.auth.mode");
+  });
+
+  it("treats gateway.controlUi.allowedOrigins as no-op (#58620)", () => {
+    const plan = buildGatewayReloadPlan(["gateway.controlUi.allowedOrigins"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("gateway.controlUi.allowedOrigins");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
@@ -227,6 +245,16 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "gateway.auth.token",
+      expectRestartGateway: false,
+      expectNoopPath: "gateway.auth.token",
+    },
+    {
+      path: "gateway.controlUi.allowedOrigins",
+      expectRestartGateway: false,
+      expectNoopPath: "gateway.controlUi.allowedOrigins",
     },
     {
       path: "unknownField",

@@ -34,6 +34,14 @@ type ReloadAction =
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
+  // Auth config (token, mode) is resolved once during prepareGatewayStartupConfig.
+  // Startup may auto-generate gateway.auth.token and persist it, which the file
+  // watcher would otherwise see as a restart-worthy change under the catch-all
+  // "gateway" prefix, causing a self-induced restart loop (#58620).
+  { prefix: "gateway.auth", kind: "none" },
+  // Control UI allowed-origins may be seeded at startup; treat as no-op to avoid
+  // the same self-induced restart loop.
+  { prefix: "gateway.controlUi", kind: "none" },
   {
     prefix: "gateway.channelHealthCheckMinutes",
     kind: "hot",
