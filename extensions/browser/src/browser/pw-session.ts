@@ -923,6 +923,7 @@ export async function createPageViaPlaywright(opts: {
 
   const page = await context.newPage();
   ensurePageState(page);
+  const createdTargetId = await pageTargetId(page).catch(() => null);
 
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
@@ -938,17 +939,19 @@ export async function createPageViaPlaywright(opts: {
       url: targetUrl,
       timeoutMs: 30_000,
       ssrfPolicy: opts.ssrfPolicy,
+      targetId: createdTargetId ?? undefined,
     });
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page,
       response,
       ssrfPolicy: opts.ssrfPolicy,
+      targetId: createdTargetId ?? undefined,
     });
   }
 
   // Get the targetId for this page
-  const tid = await pageTargetId(page).catch(() => null);
+  const tid = createdTargetId || (await pageTargetId(page).catch(() => null));
   if (!tid) {
     throw new Error("Failed to get targetId for new page");
   }
