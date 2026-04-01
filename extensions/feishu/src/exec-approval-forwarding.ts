@@ -86,7 +86,10 @@ export function buildFeishuExecApprovalPendingPayload(params: {
     approvalCommandId: params.request.id,
     command: commandDisplay.commandText,
     cwd: params.request.request.cwd ?? undefined,
-    host: params.request.request.host === "node" ? "node" : "gateway",
+    host:
+      params.request.request.host === "node" || params.request.request.host === "sandbox"
+        ? params.request.request.host
+        : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
@@ -96,7 +99,10 @@ export function buildFeishuExecApprovalPendingPayload(params: {
     approvalId: params.request.id,
     command: commandDisplay.commandText,
     cwd: params.request.request.cwd ?? undefined,
-    host: params.request.request.host === "node" ? "node" : "gateway",
+    host:
+      params.request.request.host === "node" || params.request.request.host === "sandbox"
+        ? params.request.request.host
+        : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
     expiresAtMs: params.request.expiresAtMs,
   });

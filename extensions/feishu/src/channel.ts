@@ -1086,13 +1086,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         render: {
           exec: {
             buildPendingPayload: (params) => buildFeishuExecApprovalPendingPayload(params),
-            // When resolved via Feishu card button (resolvedBy starts with
-            // "feishu:"), the card is already updated in-place by card-action.ts
-            // — suppress the duplicate text message.  When resolved from another
-            // surface (terminal, web, etc.), return undefined to fall through to
-            // the default text notification so Feishu users stay informed.
+            // When resolved via Feishu card button, the card is already updated
+            // in-place by card-action.ts — suppress the duplicate text message.
+            // The gateway sets resolvedBy to clientDisplayName, which is
+            // "Feishu card approval (feishu:...)" for card-action resolutions.
+            // When resolved from another surface, return undefined to fall through
+            // to the default text notification so Feishu users stay informed.
             buildResolvedPayload: ({ resolved }) =>
-              resolved.resolvedBy?.startsWith("feishu:") ? null : undefined,
+              resolved.resolvedBy?.includes("Feishu card approval") ? null : undefined,
           },
         },
       },
