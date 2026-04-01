@@ -52,10 +52,13 @@ export const AUTO_IMAGE_KEY_PROVIDERS = [
 export const AUTO_VIDEO_KEY_PROVIDERS = ["google", "moonshot"] as const;
 export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
   openai: "gpt-5-mini",
+  "openai-codex": "gpt-5.4",
   anthropic: "claude-opus-4-6",
   google: "gemini-3-flash-preview",
   minimax: "MiniMax-VL-01",
   "minimax-portal": "MiniMax-VL-01",
+  moonshot: "kimi-k2.5",
+  openrouter: "auto",
   zai: "glm-4.6v",
 };
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;

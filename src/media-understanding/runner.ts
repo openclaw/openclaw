@@ -8,6 +8,7 @@ import {
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
+import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -100,6 +101,68 @@ function resolveConfiguredKeyProviderOrder(params: {
     );
 
   return [...new Set([...configuredProviders, ...params.fallbackProviders])];
+}
+
+function resolveConfiguredImageModelId(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): string | undefined {
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    params.providerId,
+  ) as
+    | {
+        models?: Array<{
+          id?: string;
+          input?: string[];
+        }>;
+      }
+    | undefined;
+  const configured = providerCfg?.models?.find((entry) => {
+    const id = entry?.id?.trim();
+    return Boolean(id) && entry?.input?.includes("image");
+  });
+  const id = configured?.id?.trim();
+  return id || undefined;
+}
+
+function resolveCatalogImageModelId(params: {
+  providerId: string;
+  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+}): string | undefined {
+  const matches = params.catalog.filter(
+    (entry) =>
+      normalizeMediaProviderId(entry.provider) === params.providerId && modelSupportsVision(entry),
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  const autoEntry = matches.find((entry) => entry.id.trim().toLowerCase() === "auto");
+  return (autoEntry ?? matches[0])?.id.trim() || undefined;
+}
+
+async function resolveAutoImageModelId(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  explicitModel?: string;
+}): Promise<string | undefined> {
+  const explicit = params.explicitModel?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const configuredModel = resolveConfiguredImageModelId(params);
+  if (configuredModel) {
+    return configuredModel;
+  }
+  const defaultModel = DEFAULT_IMAGE_MODELS[params.providerId];
+  if (defaultModel) {
+    return defaultModel;
+  }
+  const catalog = await loadModelCatalog({ config: params.cfg });
+  return resolveCatalogImageModelId({
+    providerId: params.providerId,
+    catalog,
+  });
 }
 
 export function buildProviderRegistry(
@@ -390,7 +453,14 @@ async function resolveKeyEntry(params: {
     ) {
       return null;
     }
-    return { type: "provider" as const, provider: providerId, model };
+    const resolvedModel =
+      capability === "image"
+        ? await resolveAutoImageModelId({ cfg, providerId, explicitModel: model })
+        : model;
+    if (capability === "image" && !resolvedModel) {
+      return null;
+    }
+    return { type: "provider" as const, provider: providerId, model: resolvedModel };
   };
 
   if (capability === "image") {
@@ -407,8 +477,7 @@ async function resolveKeyEntry(params: {
       capability,
       fallbackProviders: AUTO_IMAGE_KEY_PROVIDERS,
     })) {
-      const model = DEFAULT_IMAGE_MODELS[providerId];
-      const entry = await checkProvider(providerId, model);
+      const entry = await checkProvider(providerId);
       if (entry) {
         return entry;
       }
@@ -533,11 +602,8 @@ export async function resolveAutoImageModel(params: {
       return null;
     }
     const provider = entry.provider;
-    if (!provider) {
-      return null;
-    }
-    const model = entry.model ?? DEFAULT_IMAGE_MODELS[provider];
-    if (!model) {
+    const model = entry.model?.trim();
+    if (!provider || !model) {
       return null;
     }
     return { provider, model };
@@ -599,10 +665,21 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
+  const model =
+    params.capability === "image"
+      ? await resolveAutoImageModelId({
+          cfg: params.cfg,
+          providerId,
+          explicitModel: params.activeModel?.model,
+        })
+      : params.activeModel?.model;
+  if (params.capability === "image" && !model) {
+    return null;
+  }
   return {
     type: "provider",
     provider: providerId,
-    model: params.activeModel?.model,
+    model,
   };
 }
 
