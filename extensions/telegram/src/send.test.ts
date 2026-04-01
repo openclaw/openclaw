@@ -940,6 +940,40 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
+  it("retries wrapped pre-connect HttpError sends", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
+      code: "ECONNREFUSED",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      name: "HttpError",
+      error: fetchError,
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({
+        message_id: 1,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "1", chatId });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));
@@ -1860,6 +1894,57 @@ describe("sendStickerTelegram", () => {
         api,
       }),
     ).rejects.toThrow(/returned no message_id/i);
+  });
+
+  it("does not retry generic grammY failed envelopes for sticker sends", async () => {
+    const chatId = "123";
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'sendSticker' failed!"));
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await expect(
+      sendStickerTelegram(chatId, "fileId123", {
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow(/Network request for 'sendSticker' failed!/i);
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries rate-limited sticker sends and honors retry_after", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce({
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 1 } },
+      })
+      .mockResolvedValueOnce({
+        message_id: 109,
+        chat: { id: chatId },
+      });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendStickerTelegram(chatId, "fileId123", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "109", chatId });
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1000);
+    expect(sendSticker).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
   });
 });
 
