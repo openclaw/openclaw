@@ -1,15 +1,15 @@
 import { EventEmitter } from "node:events";
 import { RateLimitError } from "@buape/carbon";
+import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../../../src/acp/runtime/errors.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import {
   baseConfig,
   baseRuntime,
   getFirstDiscordMessageHandlerParams,
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
-} from "../../../../test/helpers/extensions/discord-provider.test-support.js";
+} from "../test-support/provider.test-support.js";
 
 const {
   clientConstructorOptionsMock,
@@ -582,36 +582,20 @@ describe("monitorDiscordProvider", () => {
     expect(params?.workerRunTimeoutMs).toBe(300_000);
   });
 
-  it("registers plugin commands as native Discord commands", async () => {
-    listNativeCommandSpecsForConfigMock.mockReturnValue([
-      { name: "cmd", description: "built-in", acceptsArgs: false },
-    ]);
-    getPluginCommandSpecsMock.mockReturnValue([
-      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
-    ]);
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
-      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
-      .filter((value): value is string => typeof value === "string");
-    expect(getPluginCommandSpecsMock).toHaveBeenCalledWith("discord");
-    expect(commandNames).toContain("cmd");
-    expect(commandNames).toContain("cron_jobs");
-  });
-
   it("registers plugin commands from the real registry as native Discord commands", async () => {
-    const { clearPluginCommands, getPluginCommandSpecs, registerPluginCommand } =
-      await import("../../../../src/plugins/commands.js");
+    const {
+      clearPluginCommands,
+      getPluginCommandSpecs: getRealPluginCommandSpecs,
+      registerPluginCommand,
+    } = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+      "openclaw/plugin-sdk/plugin-runtime",
+    );
     clearPluginCommands();
     listNativeCommandSpecsForConfigMock.mockReturnValue([
       { name: "status", description: "Status", acceptsArgs: false },
     ]);
     getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
-      getPluginCommandSpecs(provider),
+      getRealPluginCommandSpecs(provider),
     );
 
     expect(
@@ -640,7 +624,6 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
-    const { RateLimitError } = await import("@buape/carbon");
     const runtime = baseRuntime();
     const request = new Request("https://discord.com/api/v10/applications/commands", {
       method: "PUT",

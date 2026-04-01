@@ -4,6 +4,12 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  compareReleaseVersions as compareReleaseVersionsBase,
+  resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
+  parseReleaseVersion as parseReleaseVersionBase,
+  resolveNpmPublishPlan as resolveNpmPublishPlanBase,
+} from "./lib/npm-publish-plan.mjs";
 
 type PackageJson = {
   name?: string;
@@ -37,11 +43,16 @@ export type ParsedReleaseTag = {
   date: Date;
 };
 
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
-const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
+export type NpmPublishPlan = {
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta";
+  mirrorDistTags: ("latest" | "beta")[];
+};
+
+export type NpmDistTagMirrorAuth = {
+  hasAuth: boolean;
+  source: "node-auth-token" | "npm-token" | "none";
+};
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
@@ -60,83 +71,29 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/\/+$/, "");
 }
 
-function parseDateParts(
-  version: string,
-  groups: Record<string, string | undefined>,
-  channel: "stable" | "beta",
-): ParsedReleaseVersion | null {
-  const year = Number.parseInt(groups.year ?? "", 10);
-  const month = Number.parseInt(groups.month ?? "", 10);
-  const day = Number.parseInt(groups.day ?? "", 10);
-  const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return {
-    version,
-    baseVersion: `${year}.${month}.${day}`,
-    channel,
-    year,
-    month,
-    day,
-    betaNumber,
-    date,
-  };
+export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
+  return parseReleaseVersionBase(version) as ParsedReleaseVersion | null;
 }
 
-export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
-  }
+export function compareReleaseVersions(left: string, right: string): number | null {
+  return compareReleaseVersionsBase(left, right);
+}
 
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
-  if (stableMatch?.groups) {
-    return parseDateParts(trimmed, stableMatch.groups, "stable");
-  }
+export function resolveNpmPublishPlan(
+  version: string,
+  currentBetaVersion?: string | null,
+): NpmPublishPlan {
+  return resolveNpmPublishPlanBase(version, currentBetaVersion) as NpmPublishPlan;
+}
 
-  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
-  if (betaMatch?.groups) {
-    return parseDateParts(trimmed, betaMatch.groups, "beta");
-  }
-
-  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
-  if (correctionMatch?.groups) {
-    const parsedCorrection = parseDateParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
-      return null;
-    }
-
-    return {
-      ...parsedCorrection,
-      correctionNumber,
-    };
-  }
-
-  return null;
+export function resolveNpmDistTagMirrorAuth(params?: {
+  nodeAuthToken?: string | null;
+  npmToken?: string | null;
+}): NpmDistTagMirrorAuth {
+  return resolveNpmDistTagMirrorAuthBase({
+    nodeAuthToken: params?.nodeAuthToken ?? process.env.NODE_AUTH_TOKEN,
+    npmToken: params?.npmToken ?? process.env.NPM_TOKEN,
+  }) as NpmDistTagMirrorAuth;
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
@@ -418,23 +375,25 @@ function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
   let stdout = "";
   try {
-    stdout = runNpmCommand(["pack", "--json", "--dry-run"]);
+    stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
   } catch (error) {
     const message = describeExecFailure(error);
     errors.push(
-      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run\`: ${message}`,
+      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run --ignore-scripts\`: ${message}`,
     );
     return errors;
   }
 
   const packResults = parseNpmPackJsonOutput(stdout);
   if (!packResults) {
-    errors.push("Failed to parse JSON output from `npm pack --json --dry-run`.");
+    errors.push("Failed to parse JSON output from `npm pack --json --dry-run --ignore-scripts`.");
     return errors;
   }
   const firstResult = packResults[0];
   if (!firstResult || !Array.isArray(firstResult.files)) {
-    errors.push("`npm pack --json --dry-run` did not return a files list to validate.");
+    errors.push(
+      "`npm pack --json --dry-run --ignore-scripts` did not return a files list to validate.",
+    );
     return errors;
   }
 

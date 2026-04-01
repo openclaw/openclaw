@@ -12,8 +12,10 @@ import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
   resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
@@ -30,12 +32,16 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createOpenAIAttributionHeadersWrapper,
+  createCodexNativeWebSearchWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
+  createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -76,6 +82,7 @@ export function resolveExtraParams(params: {
   modelId: string;
   agentId?: string;
 }): Record<string, unknown> | undefined {
+  const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
@@ -84,19 +91,29 @@ export function resolveExtraParams(params: {
       ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
       : undefined;
 
-  if (!globalParams && !agentParams) {
+  if (!defaultParams && !globalParams && !agentParams) {
     return undefined;
   }
 
-  const merged = Object.assign({}, globalParams, agentParams);
+  const merged = Object.assign({}, defaultParams, globalParams, agentParams);
   const resolvedParallelToolCalls = resolveAliasedParamValue(
-    [globalParams, agentParams],
+    [defaultParams, globalParams, agentParams],
     "parallel_tool_calls",
     "parallelToolCalls",
   );
   if (resolvedParallelToolCalls !== undefined) {
     merged.parallel_tool_calls = resolvedParallelToolCalls;
     delete merged.parallelToolCalls;
+  }
+
+  const resolvedTextVerbosity = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (resolvedTextVerbosity !== undefined) {
+    merged.text_verbosity = resolvedTextVerbosity;
+    delete merged.textVerbosity;
   }
 
   return merged;
@@ -264,7 +281,11 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+    if (
+      model.api !== "openai-completions" &&
+      model.api !== "openai-responses" &&
+      model.api !== "azure-openai-responses"
+    ) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -281,6 +302,7 @@ type ApplyExtraParamsContext = {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  agentDir?: string;
   workspaceDir?: string;
   thinkingLevel?: ThinkLevel;
   model?: ProviderRuntimeModel;
@@ -364,6 +386,19 @@ function applyPostPluginStreamWrappers(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
+  if (ctx.provider === "anthropic") {
+    const anthropicServiceTier = resolveAnthropicServiceTier(ctx.effectiveExtraParams);
+    if (anthropicServiceTier) {
+      log.debug(
+        `applying Anthropic service_tier=${anthropicServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createAnthropicServiceTierWrapper(
+        ctx.agent.streamFn,
+        anthropicServiceTier,
+      );
+    }
+  }
+
   const anthropicFastMode = resolveAnthropicFastMode(ctx.effectiveExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(
@@ -388,12 +423,41 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createOpenAIFastModeWrapper(ctx.agent.streamFn);
   }
 
-  const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
-  if (openAIServiceTier) {
-    log.debug(
-      `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+  if (ctx.provider === "openai" || ctx.provider === "openai-codex") {
+    const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
+    if (openAIServiceTier) {
+      log.debug(
+        `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    }
+
+    const rawTextVerbosity = resolveAliasedParamValue(
+      [ctx.resolvedExtraParams, ctx.override],
+      "text_verbosity",
+      "textVerbosity",
     );
-    ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    if (rawTextVerbosity === null) {
+      log.debug("text verbosity suppressed by null override, skipping injection");
+    } else if (rawTextVerbosity !== undefined) {
+      const openAITextVerbosity = resolveOpenAITextVerbosity({
+        text_verbosity: rawTextVerbosity,
+      });
+      if (openAITextVerbosity) {
+        log.debug(
+          `applying OpenAI text verbosity=${openAITextVerbosity} for ${ctx.provider}/${ctx.modelId}`,
+        );
+        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(
+          ctx.agent.streamFn,
+          openAITextVerbosity,
+        );
+      }
+    }
+
+    ctx.agent.streamFn = createCodexNativeWebSearchWrapper(ctx.agent.streamFn, {
+      config: ctx.cfg,
+      agentDir: ctx.agentDir,
+    });
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
@@ -403,6 +467,15 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn,
     ctx.effectiveExtraParams,
   );
+
+  if (
+    ctx.provider === "openai" ||
+    ctx.provider === "openai-codex" ||
+    ctx.provider === "azure-openai" ||
+    ctx.provider === "azure-openai-responses"
+  ) {
+    ctx.agent.streamFn = createOpenAIReasoningCompatibilityWrapper(ctx.agent.streamFn);
+  }
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.resolvedExtraParams, ctx.override],
@@ -441,6 +514,7 @@ export function applyExtraParamsToAgent(
   agentId?: string,
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
+  agentDir?: string,
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -463,12 +537,12 @@ export function applyExtraParamsToAgent(
     agentId,
     resolvedExtraParams,
   });
-
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
     cfg,
     provider,
     modelId,
+    agentDir,
     workspaceDir,
     thinkingLevel,
     model,

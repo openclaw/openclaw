@@ -174,6 +174,18 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function isInvalidStreamingEventOrderError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("unexpected event order") &&
+    lower.includes("message_start") &&
+    lower.includes("message_stop")
+  );
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = raw.toLowerCase();
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -532,11 +544,16 @@ export function classifyFailoverReasonFromHttpStatus(
   return null;
 }
 
-function stripFinalTagsFromText(text: string): string {
-  if (!text) {
-    return text;
+function coerceText(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function stripFinalTagsFromText(text: unknown): string {
+  const normalized = coerceText(text);
+  if (!normalized) {
+    return normalized;
   }
-  return text.replace(FINAL_TAG_RE, "");
+  return normalized.replace(FINAL_TAG_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -685,6 +702,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isInvalidStreamingEventOrderError(raw)) {
+    return "LLM request failed: provider returned an invalid streaming response. Please try again.";
+  }
+
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -739,12 +760,13 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
-  if (!text) {
-    return text;
+export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
+  const raw = coerceText(text);
+  if (!raw) {
+    return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripFinalTagsFromText(raw);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
@@ -775,6 +797,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isInvalidStreamingEventOrderError(trimmed)) {
+      return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -839,7 +865,7 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
 // Non-transient api_error payloads (context overflow, validation/schema errors)
 // must NOT be classified as timeout.
 const API_ERROR_TRANSIENT_SIGNALS_RE =
-  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable/i;
+  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable|unexpected error/i;
 
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {

@@ -1,8 +1,4 @@
 import { beforeEach, describe } from "vitest";
-import { __testing as discordThreadBindingTesting } from "../../../extensions/discord/runtime-api.js";
-import { feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
-import { resetMatrixThreadBindingsForTests } from "../../../extensions/matrix/api.js";
-import { __testing as telegramThreadBindingTesting } from "../../../extensions/telegram/src/thread-bindings.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
@@ -23,7 +19,21 @@ import {
   installChannelThreadingContractSuite,
   installSessionBindingContractSuite,
 } from "../../../src/channels/plugins/contracts/suites.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
 import { __testing as sessionBindingTesting } from "../../../src/infra/outbound/session-binding-service.js";
+import { feishuThreadBindingTesting } from "../../../src/plugin-sdk/feishu-conversation.js";
+import { resetMatrixThreadBindingsForTests } from "../../../src/plugin-sdk/matrix.js";
+import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
+import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+
+const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
+  discordThreadBindingTesting: {
+    resetThreadBindingsForTests: () => void;
+  };
+}>("discord");
+const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
+  resetTelegramThreadBindingsForTests: () => Promise<void>;
+}>("telegram");
 
 function hasEntries<T extends { id: string }>(
   entries: readonly T[],
@@ -114,11 +124,13 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
 
   describe(`${entry.id} session binding contract`, () => {
     beforeEach(async () => {
+      resetPluginRuntimeStateForTest();
+      setDefaultChannelPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
       discordThreadBindingTesting.resetThreadBindingsForTests();
       feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
       resetMatrixThreadBindingsForTests();
-      await telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
+      await resetTelegramThreadBindingsForTests();
     });
 
     installSessionBindingContractSuite({

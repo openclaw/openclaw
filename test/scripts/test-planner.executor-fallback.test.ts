@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../helpers/import-fresh.js";
+import { createExecutionArtifacts, executePlan } from "../../scripts/test-planner/executor.mjs";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -13,12 +13,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  vi.resetModules();
 });
 
 describe("test planner executor", () => {
   it("falls back to child exit when close never arrives", async () => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const fakeChild = Object.assign(new EventEmitter(), {
@@ -33,13 +32,6 @@ describe("test planner executor", () => {
       }, 0);
       return fakeChild;
     });
-    vi.doMock("node:child_process", () => ({
-      spawn: spawnMock,
-    }));
-
-    const { executePlan, createExecutionArtifacts } = await importFreshModule<
-      typeof import("../../scripts/test-planner/executor.mjs")
-    >(import.meta.url, "../../scripts/test-planner/executor.mjs?scope=exit-fallback");
     const artifacts = createExecutionArtifacts({ OPENCLAW_TEST_CLOSE_GRACE_MS: "10" });
     const executePromise = executePlan(
       {
@@ -51,9 +43,11 @@ describe("test planner executor", () => {
       {
         env: { OPENCLAW_TEST_CLOSE_GRACE_MS: "10" },
         artifacts,
+        spawn: spawnMock,
       },
     );
 
+    await vi.runAllTimersAsync();
     await expect(executePromise).resolves.toMatchObject({
       exitCode: 0,
       summary: {
@@ -66,7 +60,7 @@ describe("test planner executor", () => {
   });
 
   it("collects failures across planned units when failure policy is collect-all", async () => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     const children = [1, 2].map((pid, index) => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
@@ -93,15 +87,8 @@ describe("test planner executor", () => {
       }, 0);
       return child;
     });
-    vi.doMock("node:child_process", () => ({
-      spawn: spawnMock,
-    }));
-
-    const { executePlan, createExecutionArtifacts } = await importFreshModule<
-      typeof import("../../scripts/test-planner/executor.mjs")
-    >(import.meta.url, "../../scripts/test-planner/executor.mjs?scope=collect-all");
     const artifacts = createExecutionArtifacts({});
-    const report = await executePlan(
+    const reportPromise = executePlan(
       {
         failurePolicy: "collect-all",
         passthroughMetadataOnly: false,
@@ -125,8 +112,11 @@ describe("test planner executor", () => {
       {
         env: {},
         artifacts,
+        spawn: spawnMock,
       },
     );
+    await vi.runAllTimersAsync();
+    const report = await reportPromise;
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(report.exitCode).toBe(1);
@@ -141,7 +131,7 @@ describe("test planner executor", () => {
   });
 
   it("injects a valid localstorage file path into child NODE_OPTIONS", async () => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const fakeChild = Object.assign(new EventEmitter(), {
@@ -159,43 +149,37 @@ describe("test planner executor", () => {
       }, 0);
       return fakeChild;
     });
-    vi.doMock("node:child_process", () => ({
-      spawn: spawnMock,
-    }));
-
-    const { executePlan, createExecutionArtifacts } = await importFreshModule<
-      typeof import("../../scripts/test-planner/executor.mjs")
-    >(import.meta.url, "../../scripts/test-planner/executor.mjs?scope=localstorage-file");
     const artifacts = createExecutionArtifacts({
       NODE_OPTIONS: "--max_old_space_size=4096 --localstorage-file",
     });
-    await expect(
-      executePlan(
-        {
-          failurePolicy: "fail-fast",
-          passthroughMetadataOnly: false,
-          passthroughOptionArgs: [],
-          targetedUnits: [],
-          parallelUnits: [{ id: "unit-a", args: ["vitest", "run", "src/alpha.test.ts"] }],
-          serialUnits: [],
-          serialPrefixUnits: [],
-          shardCount: 1,
-          shardIndexOverride: null,
-          topLevelSingleShardAssignments: new Map(),
-          runtimeCapabilities: { isWindowsCi: false, isCI: false, isWindows: false },
-          topLevelParallelEnabled: false,
-          topLevelParallelLimit: 1,
-          deferredRunConcurrency: 1,
-          passthroughRequiresSingleRun: false,
+    const executePromise = executePlan(
+      {
+        failurePolicy: "fail-fast",
+        passthroughMetadataOnly: false,
+        passthroughOptionArgs: [],
+        targetedUnits: [],
+        parallelUnits: [{ id: "unit-a", args: ["vitest", "run", "src/alpha.test.ts"] }],
+        serialUnits: [],
+        serialPrefixUnits: [],
+        shardCount: 1,
+        shardIndexOverride: null,
+        topLevelSingleShardAssignments: new Map(),
+        runtimeCapabilities: { isWindowsCi: false, isCI: false, isWindows: false },
+        topLevelParallelEnabled: false,
+        topLevelParallelLimit: 1,
+        deferredRunConcurrency: 1,
+        passthroughRequiresSingleRun: false,
+      },
+      {
+        env: {
+          NODE_OPTIONS: "--max_old_space_size=4096 --localstorage-file",
         },
-        {
-          env: {
-            NODE_OPTIONS: "--max_old_space_size=4096 --localstorage-file",
-          },
-          artifacts,
-        },
-      ),
-    ).resolves.toMatchObject({
+        artifacts,
+        spawn: spawnMock,
+      },
+    );
+    await vi.runAllTimersAsync();
+    await expect(executePromise).resolves.toMatchObject({
       exitCode: 0,
     });
 

@@ -115,7 +115,7 @@ Options:
                              fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
                              upgrade = fresh snapshot -> latest release -> target package/current main tgz -> onboard smoke
                              both    = run both lanes
-  --provider <openai|anthropic>
+  --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
@@ -241,6 +241,12 @@ case "$PROVIDER" in
     AUTH_KEY_FLAG="anthropic-api-key"
     MODEL_ID="anthropic/claude-sonnet-4-6"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
     die "invalid --provider: $PROVIDER"
@@ -1284,7 +1290,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
-  SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
+  SUMMARY_CURRENT_HEAD="${PACKED_MAIN_COMMIT_SHORT:-$(git rev-parse --short HEAD)}" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \

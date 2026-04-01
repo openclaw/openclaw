@@ -136,6 +136,17 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
+  it("sanitizes invalid streaming event order errors", () => {
+    expect(
+      sanitizeUserFacingText(
+        'Unexpected event order, got message_start before receiving "message_stop"',
+        { errorContext: true },
+      ),
+    ).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
+    );
+  });
+
   it.each([
     {
       input: "Hello there!\n\nHello there!",
@@ -166,6 +177,11 @@ describe("sanitizeUserFacingText", () => {
 
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
+  });
+
+  it("tolerates non-string input without throwing", () => {
+    expect(sanitizeUserFacingText(undefined as unknown as string)).toBe("");
+    expect(sanitizeUserFacingText(42 as unknown as string)).toBe("42");
   });
 });
 

@@ -18,6 +18,10 @@ export {
 } from "../infra/exec-approval-reply.js";
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 export {
+  doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestOriginTarget,
+  resolveApprovalRequestAccountId,
+  resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
@@ -31,3 +35,17 @@ export {
   type PluginApprovalRequestPayload,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
+export { createApproverRestrictedNativeApprovalAdapter } from "./approval-delivery-helpers.js";
+export { resolveApprovalApprovers } from "./approval-approvers.js";
+export {
+  matchesApprovalRequestFilters,
+  matchesApprovalRequestSessionFilter,
+  type ApprovalRequestFilterInput,
+} from "../infra/approval-request-filters.js";
+export {
+  buildApprovalPendingReplyPayload,
+  buildApprovalResolvedReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+  buildPluginApprovalResolvedReplyPayload,
+} from "./approval-renderers.js";

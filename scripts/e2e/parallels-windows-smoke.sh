@@ -22,6 +22,7 @@ CHECK_LATEST_REF=1
 SNAPSHOT_ID=""
 SNAPSHOT_STATE=""
 SNAPSHOT_NAME=""
+PACKED_MAIN_COMMIT_SHORT=""
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
@@ -62,6 +63,10 @@ artifact_label() {
   printf 'current main tgz'
 }
 
+extract_package_build_commit_from_tgz() {
+  tar -xOf "$1" package/dist/build-info.json | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))'
+}
+
 warn() {
   printf 'warn: %s\n' "$*" >&2
 }
@@ -89,7 +94,7 @@ Options:
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
                              Default: "pre-openclaw-native-e2e-2026-03-12"
   --mode <fresh|upgrade|both>
-  --provider <openai|anthropic>
+  --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
@@ -200,6 +205,12 @@ case "$PROVIDER" in
     AUTH_KEY_FLAG="anthropic-api-key"
     MODEL_ID="anthropic/claude-sonnet-4-6"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
     die "invalid --provider: $PROVIDER"
@@ -730,7 +741,7 @@ ensure_guest_git() {
 }
 
 pack_main_tgz() {
-  local mingit_name mingit_url short_head pkg
+  local mingit_name mingit_url short_head pkg packed_commit
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
     mapfile -t mingit_meta < <(resolve_mingit_download)
@@ -770,6 +781,9 @@ pack_main_tgz() {
   )"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
+  packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
+  [[ -n "$packed_commit" ]] || die "failed to read packed build commit from $MAIN_TGZ_PATH"
+  PACKED_MAIN_COMMIT_SHORT="${packed_commit:0:7}"
   say "Packed $MAIN_TGZ_PATH"
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
 }
@@ -779,7 +793,8 @@ verify_target_version() {
     verify_version_contains "$TARGET_EXPECT_VERSION"
     return
   fi
-  verify_version_contains "$(git rev-parse --short=7 HEAD)"
+  [[ -n "$PACKED_MAIN_COMMIT_SHORT" ]] || die "packed main commit not captured"
+  verify_version_contains "$PACKED_MAIN_COMMIT_SHORT"
 }
 
 start_server() {
@@ -1193,7 +1208,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
-  SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
+  SUMMARY_CURRENT_HEAD="${PACKED_MAIN_COMMIT_SHORT:-$(git rev-parse --short HEAD)}" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \

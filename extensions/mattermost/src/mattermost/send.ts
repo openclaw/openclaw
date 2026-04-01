@@ -1,6 +1,5 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -22,6 +21,7 @@ import {
   setInteractionSecret,
   type MattermostInteractiveButtonInput,
 } from "./interactions.js";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
@@ -31,6 +31,7 @@ export type MattermostSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyToId?: string;
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
@@ -417,6 +418,7 @@ export async function sendMessageMattermost(
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
       });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,

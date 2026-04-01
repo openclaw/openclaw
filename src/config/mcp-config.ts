@@ -1,11 +1,18 @@
-import { readConfigFileSnapshot, writeConfigFile } from "./io.js";
+import { readSourceConfigSnapshot } from "./io.js";
+import { replaceConfigFile } from "./mutate.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 export type ConfigMcpServers = Record<string, Record<string, unknown>>;
 
 type ConfigMcpReadResult =
-  | { ok: true; path: string; config: OpenClawConfig; mcpServers: ConfigMcpServers }
+  | {
+      ok: true;
+      path: string;
+      config: OpenClawConfig;
+      mcpServers: ConfigMcpServers;
+      baseHash?: string;
+    }
   | { ok: false; path: string; error: string };
 
 type ConfigMcpWriteResult =
@@ -34,7 +41,7 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
 }
 
 export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readSourceConfigSnapshot();
   if (!snapshot.valid) {
     return {
       ok: false,
@@ -42,11 +49,13 @@ export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
       error: "Config file is invalid; fix it before using MCP config commands.",
     };
   }
+  const sourceConfig = snapshot.sourceConfig ?? snapshot.resolved;
   return {
     ok: true,
     path: snapshot.path,
-    config: structuredClone(snapshot.resolved),
-    mcpServers: normalizeConfiguredMcpServers(snapshot.resolved.mcp?.servers),
+    config: structuredClone(sourceConfig),
+    mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    baseHash: snapshot.hash,
   };
 }
 
@@ -84,7 +93,10 @@ export async function setConfiguredMcpServer(params: {
       error: `Config invalid after MCP set (${issue.path}: ${issue.message}).`,
     };
   }
-  await writeConfigFile(validated.config);
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: loaded.baseHash,
+  });
   return {
     ok: true,
     path: loaded.path,
@@ -139,7 +151,10 @@ export async function unsetConfiguredMcpServer(params: {
       error: `Config invalid after MCP unset (${issue.path}: ${issue.message}).`,
     };
   }
-  await writeConfigFile(validated.config);
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: loaded.baseHash,
+  });
   return {
     ok: true,
     path: loaded.path,

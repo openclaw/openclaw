@@ -2,7 +2,7 @@
 summary: "ClawHub guide: public registry, native OpenClaw install flows, and ClawHub CLI workflows"
 read_when:
   - Introducing ClawHub to new users
-  - Installing, searching, or publishing skills
+  - Installing, searching, or publishing skills or plugins
   - Explaining ClawHub CLI flags and sync behavior
 title: "ClawHub"
 ---
@@ -46,7 +46,7 @@ metadata so later `update` calls can stay on ClawHub.
 
 ## What ClawHub is
 
-- A public registry for OpenClaw skills.
+- A public registry for OpenClaw skills and plugins.
 - A versioned store of skill bundles and metadata.
 - A discovery surface for search, tags, and usage signals.
 
@@ -201,14 +201,22 @@ List:
 
 - `clawhub list` (reads `.clawhub/lock.json`)
 
-Publish:
+Publish skills:
 
-- `clawhub publish <path>`
+- `clawhub skill publish <path>`
 - `--slug <slug>`: Skill slug.
 - `--name <name>`: Display name.
 - `--version <version>`: Semver version.
 - `--changelog <text>`: Changelog text (can be empty).
 - `--tags <tags>`: Comma-separated tags (default: `latest`).
+
+Publish plugins:
+
+- `clawhub package publish <source>`
+- `<source>` can be a local folder, `owner/repo`, `owner/repo@ref`, or a GitHub URL.
+- `--dry-run`: Build the exact publish plan without uploading anything.
+- `--json`: Emit machine-readable output for CI.
+- `--source-repo`, `--source-commit`, `--source-ref`: Optional overrides when auto-detection is not enough.
 
 Delete/undelete (owner/admin only):
 
@@ -251,13 +259,43 @@ clawhub update --all
 For a single skill folder:
 
 ```bash
-clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
+clawhub skill publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
 ```
 
 To scan and back up many skills at once:
 
 ```bash
 clawhub sync --all
+```
+
+### Publish a plugin from GitHub
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+clawhub package publish your-org/your-plugin@v1.0.0
+clawhub package publish https://github.com/your-org/your-plugin
+```
+
+Code plugins must include the required OpenClaw metadata in `package.json`:
+
+```json
+{
+  "name": "@myorg/openclaw-my-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  }
+}
 ```
 
 ## Advanced details (technical)

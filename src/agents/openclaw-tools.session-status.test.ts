@@ -8,6 +8,22 @@ const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
 const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
+const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
+  vi.fn(
+    (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
+      [] as Array<Record<string, unknown>>,
+  ),
+);
+const resolveEnvApiKeyMock = vi.hoisted(
+  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
+);
+const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
+  () =>
+    vi.fn(
+      (_params?: { provider?: string }) =>
+        null as { apiKey: string; source: string } | null,
+    ),
+);
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -141,8 +157,8 @@ function createAuthProfilesModuleMock() {
 
 function createModelAuthModuleMock() {
   return {
-    resolveEnvApiKey: () => null,
-    resolveUsableCustomProviderApiKey: () => null,
+    resolveEnvApiKey: resolveEnvApiKeyMock,
+    resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
     resolveModelAuthMode: () => "api-key",
   };
 }
@@ -189,6 +205,12 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   vi.doMock("../auto-reply/status.js", () => ({
     buildStatusMessage: buildStatusMessageMock,
   }));
+  vi.doMock("../tasks/task-owner-access.js", () => ({
+    listTasksForRelatedSessionKeyForOwner: (params: {
+      relatedSessionKey: string;
+      callerOwnerKey: string;
+    }) => listTasksForRelatedSessionKeyForOwnerMock(params),
+  }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
 
@@ -196,10 +218,16 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
+  resolveEnvApiKeyMock.mockReset();
+  resolveEnvApiKeyMock.mockReturnValue(null);
+  resolveUsableCustomProviderApiKeyMock.mockReset();
+  resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
   loadCombinedSessionStoreForGatewayMock.mockClear();
+  listTasksForRelatedSessionKeyForOwnerMock.mockClear();
+  listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   loadSessionStoreMock.mockReturnValue(store);
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({
     storePath: "(multiple)",
@@ -375,6 +403,38 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:current");
   });
 
+  it("includes background task context in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-1",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        task: "Summarize inbox backlog",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        progressSummary: "Indexing the latest threads",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-1", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 active");
+    expect(text).toContain("acp");
+    expect(text).toContain("Summarize inbox backlog");
+    expect(text).toContain("Indexing the latest threads");
+  });
+
   it("resolves a literal current sessionId in session_status", async () => {
     resetSessionStore({
       main: {
@@ -462,6 +522,54 @@ describe("session_status tool", () => {
             primary: "anthropic/claude-opus-4-6",
           }),
         }),
+      }),
+    );
+  });
+
+  it("infers configured custom providers for runtime-only models in session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "runtime-custom-provider",
+        updatedAt: 10,
+        model: "qwen-max",
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+      models: {
+        providers: {
+          "qwen-dashscope": {
+            apiKey: "DASHSCOPE_API_KEY",
+            models: [{ id: "qwen-max" }],
+          },
+        },
+      },
+      tools: {
+        agentToAgent: { enabled: false },
+      },
+    };
+    resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
+      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
+    );
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-runtime-custom-provider", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "qwen-dashscope/qwen-max",
+          }),
+        }),
+        modelAuth: "api-key (models.json)",
       }),
     );
   });
@@ -688,6 +796,47 @@ describe("session_status tool", () => {
     );
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsandboxed same-agent bare main session_status outside self visibility", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "self" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    await expect(
+      tool.execute("call-self-visibility-bare-main", {
+        sessionKey: "main",
+        model: "default",
+      }),
+    ).rejects.toThrow(
+      "Session status visibility is restricted to the current session (tools.sessions.visibility=self).",
+    );
+
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 

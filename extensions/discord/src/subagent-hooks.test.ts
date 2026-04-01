@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
-} from "../../../test/helpers/extensions/subagent-hooks.js";
+} from "../../../test/helpers/plugins/subagent-hooks.js";
 
 type ThreadBindingRecord = {
   accountId: string;
@@ -166,9 +166,11 @@ async function expectSubagentSpawningError(params?: {
 }
 
 describe("discord subagent hook handlers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ registerDiscordSubagentHooks } = await import("./subagent-hooks.js"));
+  });
+
+  beforeEach(() => {
     hookMocks.resolveDiscordAccount.mockClear();
     hookMocks.resolveDiscordAccount.mockImplementation((params?: { accountId?: string }) => ({
       accountId: params?.accountId?.trim() || "default",
@@ -181,14 +183,6 @@ describe("discord subagent hook handlers", () => {
     hookMocks.autoBindSpawnedDiscordSubagent.mockClear();
     hookMocks.listThreadBindingsBySessionKey.mockClear();
     hookMocks.unbindThreadBindingsBySessionKey.mockClear();
-  });
-
-  it("registers subagent hooks", () => {
-    const handlers = registerHandlersForTest();
-    expect(handlers.has("subagent_spawning")).toBe(true);
-    expect(handlers.has("subagent_delivery_target")).toBe(true);
-    expect(handlers.has("subagent_spawned")).toBe(false);
-    expect(handlers.has("subagent_ended")).toBe(true);
   });
 
   it("binds thread routing on subagent_spawning", async () => {

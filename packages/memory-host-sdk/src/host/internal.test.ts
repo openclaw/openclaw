@@ -249,6 +249,115 @@ describe("chunkMarkdown", () => {
       expect(chunk.text.length).toBeLessThanOrEqual(maxChars);
     }
   });
+
+  it("produces more chunks for CJK text than for equal-length ASCII text", () => {
+    // CJK chars ≈ 1 token each; ASCII chars ≈ 0.25 tokens each.
+    // For the same raw character count, CJK content should produce more chunks
+    // because each character "weighs" ~4× more in token estimation.
+    const chunkTokens = 50;
+
+    // 400 ASCII chars → ~100 tokens → fits in ~2 chunks
+    const asciiLines = Array.from({ length: 20 }, () => "a".repeat(20)).join("\n");
+    const asciiChunks = chunkMarkdown(asciiLines, { tokens: chunkTokens, overlap: 0 });
+
+    // 400 CJK chars → ~400 tokens → needs ~8 chunks
+    const cjkLines = Array.from({ length: 20 }, () => "你".repeat(20)).join("\n");
+    const cjkChunks = chunkMarkdown(cjkLines, { tokens: chunkTokens, overlap: 0 });
+
+    expect(cjkChunks.length).toBeGreaterThan(asciiChunks.length);
+  });
+
+  it("respects token budget for Chinese text", () => {
+    // With tokens=100, each CJK char ≈ 1 token, so chunks should hold ~100 CJK chars.
+    const chunkTokens = 100;
+    const lines: string[] = [];
+    for (let i = 0; i < 50; i++) {
+      lines.push("这是一个测试句子用来验证分块逻辑是否正确处理中文文本内容");
+    }
+    const content = lines.join("\n");
+    const chunks = chunkMarkdown(content, { tokens: chunkTokens, overlap: 0 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    // Each chunk's CJK content should not vastly exceed the token budget.
+    // With CJK-aware estimation, each char ≈ 1 token, so chunk text length
+    // (in CJK chars) should be roughly <= tokens budget (with some tolerance
+    // for line boundaries).
+    for (const chunk of chunks) {
+      // Count actual CJK characters in the chunk
+      const cjkCount = (chunk.text.match(/[\u4e00-\u9fff]/g) ?? []).length;
+      // Allow 2× tolerance for line-boundary rounding
+      expect(cjkCount).toBeLessThanOrEqual(chunkTokens * 2);
+    }
+  });
+
+  it("keeps English chunking behavior unchanged", () => {
+    const chunkTokens = 100;
+    const maxChars = chunkTokens * 4; // 400 chars
+    const content = "hello world this is a test. ".repeat(50);
+    const chunks = chunkMarkdown(content, { tokens: chunkTokens, overlap: 0 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(maxChars);
+    }
+  });
+
+  it("handles mixed CJK and ASCII content correctly", () => {
+    const chunkTokens = 50;
+    const lines: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      lines.push(`Line ${i}: 这是中英文混合的测试内容 with some English text`);
+    }
+    const content = lines.join("\n");
+    const chunks = chunkMarkdown(content, { tokens: chunkTokens, overlap: 0 });
+    // Should produce multiple chunks and not crash
+    expect(chunks.length).toBeGreaterThan(1);
+    // Verify all content is preserved
+    const reconstructed = chunks.map((c) => c.text).join("\n");
+    // Due to overlap=0, the concatenated chunks should cover all lines
+    expect(reconstructed).toContain("Line 0");
+    expect(reconstructed).toContain("Line 29");
+  });
+
+  it("splits very long CJK lines into budget-sized segments", () => {
+    // A single line of 2000 CJK characters (no newlines).
+    // With tokens=200, each CJK char ≈ 1 token.
+    const longCjkLine = "中".repeat(2000);
+    const chunks = chunkMarkdown(longCjkLine, { tokens: 200, overlap: 0 });
+    expect(chunks.length).toBeGreaterThanOrEqual(8);
+    for (const chunk of chunks) {
+      const cjkCount = (chunk.text.match(/[\u4E00-\u9FFF]/g) ?? []).length;
+      expect(cjkCount).toBeLessThanOrEqual(200 * 2);
+    }
+  });
+  it("does not break surrogate pairs when splitting long CJK lines", () => {
+    // "𠀀" (U+20000) is a surrogate pair: 2 UTF-16 code units per character.
+    // A line of 500 such characters = 1000 UTF-16 code units.
+    // With tokens=99 (odd), the fine-split must not cut inside a pair.
+    const surrogateChar = "\u{20000}"; // 𠀀
+    const longLine = surrogateChar.repeat(500);
+    const chunks = chunkMarkdown(longLine, { tokens: 99, overlap: 0 });
+    for (const chunk of chunks) {
+      // No chunk should contain the Unicode replacement character U+FFFD,
+      // which would indicate a broken surrogate pair.
+      expect(chunk.text).not.toContain("\uFFFD");
+      // Every character in the chunk should be a valid string (no lone surrogates).
+      for (let i = 0; i < chunk.text.length; i += 1) {
+        const code = chunk.text.charCodeAt(i);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          // High surrogate must be followed by a low surrogate
+          const next = chunk.text.charCodeAt(i + 1);
+          expect(next).toBeGreaterThanOrEqual(0xdc00);
+          expect(next).toBeLessThanOrEqual(0xdfff);
+        }
+      }
+    }
+  });
+  it("does not over-split long Latin lines (backward compat)", () => {
+    // 2000 ASCII chars / 800 maxChars -> about 3 segments, not 10 tiny ones.
+    const longLatinLine = "a".repeat(2000);
+    const chunks = chunkMarkdown(longLatinLine, { tokens: 200, overlap: 0 });
+    expect(chunks.length).toBeLessThanOrEqual(5);
+  });
 });
 
 describe("remapChunkLines", () => {

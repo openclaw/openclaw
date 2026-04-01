@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 
 vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
@@ -206,18 +206,18 @@ describe("mattermost setup", () => {
     });
   });
 
-  it("skips slash callback registration in setup-only mode", () => {
+  it.each([
+    { name: "skips slash callback registration in setup-only mode", mode: "setup-only" as const },
+    { name: "registers slash callback routes in full mode", mode: "full" as const },
+  ])("$name", ({ mode }) => {
     const registerHttpRoute = vi.fn();
 
-    plugin.register(createApi("setup-only", registerHttpRoute));
+    plugin.register(createApi(mode, registerHttpRoute));
 
-    expect(registerHttpRoute).not.toHaveBeenCalled();
-  });
-
-  it("registers slash callback routes in full mode", () => {
-    const registerHttpRoute = vi.fn();
-
-    plugin.register(createApi("full", registerHttpRoute));
+    if (mode === "setup-only") {
+      expect(registerHttpRoute).not.toHaveBeenCalled();
+      return;
+    }
 
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
     expect(registerHttpRoute).toHaveBeenCalledWith(
