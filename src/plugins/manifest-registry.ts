@@ -335,6 +335,48 @@ function matchesInstalledPluginRecord(params: {
   });
 }
 
+/**
+ * When bundled ships a plugin id, a redundant copy under ~/.openclaw/extensions/<id>
+ * (or a workspace checkout) is almost always shadowed by precedence. Emitting a warn-level
+ * manifest diagnostic for that case floods stderr on every config validation (e.g. Zed ACP).
+ * Suppress the diagnostic while keeping loader-visible disabled rows + `error` text intact.
+ */
+function shouldSuppressBenignBundledShadowDuplicate(params: {
+  pluginId: string;
+  existing: PluginCandidate;
+  candidate: PluginCandidate;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const origins = new Set([params.existing.origin, params.candidate.origin]);
+  if (!origins.has("bundled")) {
+    return false;
+  }
+  if (origins.has("config")) {
+    return false;
+  }
+  const globalCandidate =
+    params.existing.origin === "global"
+      ? params.existing
+      : params.candidate.origin === "global"
+        ? params.candidate
+        : undefined;
+  if (globalCandidate) {
+    if (
+      matchesInstalledPluginRecord({
+        pluginId: params.pluginId,
+        candidate: globalCandidate,
+        config: params.config,
+        env: params.env,
+      })
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return origins.has("workspace");
+}
+
 function resolveDuplicatePrecedenceRank(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -512,29 +554,61 @@ export function loadPluginManifestRegistry(
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
+      // Same id, different roots: resolve precedence in `records` and skip `records.push` for the
+      // loser. Upstream historically fell through and appended duplicate `plugins[]` rows.
+      const candidateRank = resolveDuplicatePrecedenceRank({
         pluginId: manifest.id,
-        source: candidate.source,
-        message:
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate,
-            config,
-            env,
-          }) <
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate: existing.candidate,
-            config,
-            env,
-          })
-            ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
-            : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
+        candidate,
+        config,
+        env,
       });
-    } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+      const existingRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate: existing.candidate,
+        config,
+        env,
+      });
+
+      if (
+        !shouldSuppressBenignBundledShadowDuplicate({
+          pluginId: manifest.id,
+          existing: existing.candidate,
+          candidate,
+          config,
+          env,
+        })
+      ) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message:
+            candidateRank < existingRank
+              ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
+              : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${existing.candidate.source})`,
+        });
+      }
+
+      if (candidateRank < existingRank) {
+        records[existing.recordIndex] = isBundleRecord
+          ? buildBundleRecord({
+              manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+              candidate,
+              manifestPath: manifestRes.manifestPath,
+            })
+          : buildRecord({
+              manifest: manifest as PluginManifest,
+              candidate,
+              manifestPath: manifestRes.manifestPath,
+              schemaCacheKey,
+              configSchema,
+            });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+      }
+      continue;
     }
+
+    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
 
     records.push(
       isBundleRecord

@@ -310,7 +310,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses manifest duplicate diagnostic when bundled shadows a non-installed global copy", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -330,7 +330,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
   it("reports explicit installed globals as the effective duplicate winner", () => {
@@ -557,26 +557,25 @@ describe("loadPluginManifestRegistry", () => {
 
   it.each([
     {
-      name: "reports bundled plugins as the duplicate winner for auto-discovered globals",
+      name: "does not emit manifest duplicate diagnostic for bundled vs auto-discovered global",
       registry: () =>
         createDuplicateCandidateRegistry({
           pluginId: "feishu",
           duplicateOrigin: "global",
         }),
-      expectedMessage: "global plugin will be overridden by bundled plugin",
     },
     {
-      name: "reports bundled plugins as the duplicate winner for workspace duplicates",
+      name: "does not emit manifest duplicate diagnostic for bundled vs workspace shadow",
       registry: () =>
         createDuplicateCandidateRegistry({
           pluginId: "shadowed",
           duplicateOrigin: "workspace",
         }),
-      expectedMessage: "workspace plugin will be overridden by bundled plugin",
     },
-  ] as const)("$name", ({ registry: buildRegistry, expectedMessage }) => {
+  ] as const)("$name", ({ registry: buildRegistry }) => {
     const registry = buildRegistry();
-    expectRegistryDiagnosticContains(registry, expectedMessage);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins).toHaveLength(1);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
