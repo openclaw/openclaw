@@ -768,6 +768,22 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
+  it("allows pnpm dlx package binaries with data-like runtime names", () => {
+    withFakeRuntimeBin({
+      binName: "pnpm",
+      run: () => {
+        const tmp = fs.mkdtempSync(
+          path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-runtime-token-"),
+        );
+        try {
+          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node"], tmp);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
   it("allows pnpm dlx package binaries with local file arguments", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],

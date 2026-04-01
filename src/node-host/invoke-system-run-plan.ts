@@ -915,7 +915,13 @@ function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined
       cwd,
       shellCommand: null,
     });
-    if (!snapshot.ok || snapshot.snapshot) {
+    if (!snapshot.ok) {
+      if (candidateArgv.length > 1) {
+        return true;
+      }
+      continue;
+    }
+    if (snapshot.snapshot) {
       return true;
     }
   }
