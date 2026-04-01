@@ -22,7 +22,10 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import { listTasksForAgentId, listTasksForSessionKey } from "../../tasks/task-registry.js";
+import {
+  listTasksForAgentIdForStatus,
+  listTasksForSessionKeyForStatus,
+} from "../../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
@@ -61,7 +64,7 @@ function shouldLoadUsageSummary(params: {
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKey(sessionKey));
+  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
   if (!task) {
     return undefined;
@@ -79,7 +82,7 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
 }
 
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForAgentId(agentId));
+  const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
     return undefined;
   }
