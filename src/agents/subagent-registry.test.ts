@@ -277,7 +277,9 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    });
     await vi.waitFor(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
         childSessionKey: "agent:main:subagent:child",

@@ -1,5 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import * as registry from "./subagent-registry.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 /**
  * Regression test for #18264: Gateway announcement delivery loop.
@@ -72,6 +71,13 @@ vi.mock("./timeout.js", () => ({
 }));
 
 describe("announce loop guard (#18264)", () => {
+  let registry: typeof import("./subagent-registry.js");
+
+  beforeAll(async () => {
+    vi.resetModules();
+    registry = await import("./subagent-registry.js");
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.callGateway.mockClear();
