@@ -247,6 +247,41 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
+  it('warns that durable allow-always trust bypasses ask="always"', async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          ask: "always",
+        },
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "/usr/bin/echo",
+                source: "allow-always",
+              },
+            ],
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              ask: "always",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain('tools.exec: ask="always" still bypasses future prompts');
+    expect(message).toContain("allow-always entry");
+    expect(message).toContain('before ask="always" is evaluated');
+  });
+
   it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
     const cfg = {
       agents: {
