@@ -122,7 +122,7 @@ describe("yep web search provider", () => {
 
   it("sends highlights type and maps highlights in response", async () => {
     vi.stubEnv("YEP_API_KEY", "yep_test_key");
-    const mockFetch = vi.fn(async () => {
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
       return {
         ok: true,
         json: async () => ({
@@ -164,7 +164,8 @@ describe("yep web search provider", () => {
     })) as Record<string, unknown>;
 
     // Verify request body uses highlights type
-    const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    const fetchInit = mockFetch.mock.calls[0]?.[1] as RequestInit;
+    const requestBody = JSON.parse(fetchInit.body as string);
     expect(requestBody.type).toBe("highlights");
 
     // First result has highlights, second has empty array (omitted)
@@ -211,7 +212,7 @@ describe("yep web search provider", () => {
 
   it("passes safe_search to the API", async () => {
     vi.stubEnv("YEP_API_KEY", "yep_test_key");
-    const mockFetch = vi.fn(async () => {
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
       return {
         ok: true,
         json: async () => ({ success: true, results: [] }),
@@ -233,8 +234,27 @@ describe("yep web search provider", () => {
 
     await tool.execute({ query: "test safe search passthrough", safe_search: true });
 
-    const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    const fetchInit = mockFetch.mock.calls[0]?.[1] as RequestInit;
+    const requestBody = JSON.parse(fetchInit.body as string);
     expect(requestBody.safe_search).toBe(true);
+  });
+
+  it("returns validation error for invalid language codes", async () => {
+    vi.stubEnv("YEP_API_KEY", "yep_test_key");
+    const provider = createYepWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "yep_test_key",
+        yep: { apiKey: "yep_test_key" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({ query: "test", language: "en-US" });
+    expect(result).toMatchObject({ error: "invalid_language" });
   });
 
   it("returns validation errors for invalid crawl date ranges", async () => {

@@ -276,7 +276,14 @@ function createYepToolDefinition(
         };
       }
       const searchMode = rawSearchMode as "fast" | "balanced" | undefined;
-      const language = normalizeYepLanguage(readStringParam(params, "language"));
+      const rawLanguage = readStringParam(params, "language");
+      const language = normalizeYepLanguage(rawLanguage);
+      if (rawLanguage && !language) {
+        return {
+          error: "invalid_language",
+          message: "language must be a 2-letter ISO 639-1 code like 'en', 'de', or 'fr'.",
+        };
+      }
       const contentType = readStringParam(params, "content_type");
       const safeSearch =
         typeof params.safe_search === "boolean" ? params.safe_search : undefined;
