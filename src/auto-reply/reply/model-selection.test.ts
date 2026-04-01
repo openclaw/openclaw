@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -15,6 +18,14 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
   ]),
 }));
+
+afterEach(() => {
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
+});
+
+beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
+});
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
   id: "gpt-5.4",
@@ -123,6 +134,22 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("prefers provider-qualified cache keys over bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(1_000_000);
   });
 });
 

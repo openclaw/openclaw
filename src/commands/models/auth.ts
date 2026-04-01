@@ -276,6 +276,7 @@ async function runProviderAuthMethod(params: {
 
   const result = await params.method.run({
     config: params.config,
+    env: process.env,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,
@@ -535,6 +536,14 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
+  if (providerId !== "openai-codex") {
+    return;
+  }
+  runtime.log(
+    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+  );
+}
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
@@ -586,4 +595,5 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter,
     setDefault: opts.setDefault,
   });
+  maybeLogOpenAICodexNativeSearchTip(runtime, selectedProvider.id);
 }

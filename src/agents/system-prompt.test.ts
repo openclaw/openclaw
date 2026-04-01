@@ -149,6 +149,61 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("tells the agent not to execute /approve through exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+    );
+  });
+
+  it("keeps manual /approve instructions for non-native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "signal" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
+  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).not.toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
+  it("treats webchat as a native approval surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "webchat" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).not.toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -272,7 +327,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -414,10 +469,7 @@ describe("buildAgentSystemPrompt", () => {
 
   // The system prompt intentionally does NOT include the current date/time.
   // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
   // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
   it("does NOT include a date or time in the system prompt (cache stability)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
@@ -427,10 +479,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    // This is intentional for prompt cache stability. If you want to add date/time
+    // awareness, do it through gateway-level timestamp injection into messages, not
+    // the system prompt.
     expect(prompt).toContain("Time zone: America/Chicago");
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");

@@ -28,6 +28,16 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    workspace: Type.Optional(NonEmptyString),
+    model: Type.Optional(
+      Type.Object(
+        {
+          primary: Type.Optional(NonEmptyString),
+          fallbacks: Type.Optional(Type.Array(NonEmptyString)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -194,6 +204,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     {
       name: NonEmptyString,
       installId: NonEmptyString,
+      dangerouslyForceUnsafeInstall: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
@@ -234,6 +245,14 @@ export const ToolsCatalogParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
     includePlugins: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsEffectiveParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    sessionKey: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -287,6 +306,38 @@ export const ToolsCatalogResultSchema = Type.Object(
     agentId: NonEmptyString,
     profiles: Type.Array(ToolCatalogProfileSchema),
     groups: Type.Array(ToolCatalogGroupSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsEffectiveEntrySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    description: Type.String(),
+    rawDescription: Type.String(),
+    source: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
+    pluginId: Type.Optional(NonEmptyString),
+    channelId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsEffectiveGroupSchema = Type.Object(
+  {
+    id: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
+    label: NonEmptyString,
+    source: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
+    tools: Type.Array(ToolsEffectiveEntrySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsEffectiveResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    profile: NonEmptyString,
+    groups: Type.Array(ToolsEffectiveGroupSchema),
   },
   { additionalProperties: false },
 );

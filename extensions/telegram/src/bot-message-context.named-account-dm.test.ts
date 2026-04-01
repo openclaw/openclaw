@@ -1,17 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
+import {
+  getRecordedUpdateLastRoute,
+  loadTelegramMessageContextRouteHarness,
+  recordInboundSessionMock,
+} from "./bot-message-context.route-test-support.js";
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
-let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
-let setRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").setRuntimeConfigSnapshot;
+let clearRuntimeConfigSnapshot: typeof import("openclaw/plugin-sdk/config-runtime").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("openclaw/plugin-sdk/config-runtime").setRuntimeConfigSnapshot;
 
 describe("buildTelegramMessageContext named-account DM fallback", () => {
   const baseCfg = {
@@ -26,11 +22,8 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
   });
 
   beforeAll(async () => {
-    vi.resetModules();
-    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-      await import("../../../src/config/config.js"));
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
+    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot, buildTelegramMessageContextForTest } =
+      await loadTelegramMessageContextRouteHarness());
   });
 
   beforeEach(() => {
@@ -38,10 +31,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
   });
 
   function getLastUpdateLastRoute(): { sessionKey?: string } | undefined {
-    const callArgs = recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
-      updateLastRoute?: { sessionKey?: string };
-    };
-    return callArgs?.updateLastRoute;
+    return getRecordedUpdateLastRoute() as { sessionKey?: string } | undefined;
   }
 
   function buildNamedAccountDmMessage(messageId = 1) {

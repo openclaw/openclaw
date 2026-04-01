@@ -1,8 +1,12 @@
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import {
+  buildPluginSnapshotCacheEnvKey,
+  resolvePluginSnapshotCacheTtlMs,
+  shouldUsePluginSnapshotCache,
+} from "./cache-controls.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
   ProviderAuthMethod,
@@ -21,54 +25,6 @@ const providerWizardCache = new WeakMap<
   WeakMap<NodeJS.ProcessEnv, Map<string, ProviderWizardCacheEntry>>
 >();
 
-const DEFAULT_DISCOVERY_CACHE_MS = 1000;
-const DEFAULT_MANIFEST_CACHE_MS = 1000;
-
-function shouldUseProviderWizardCache(env: NodeJS.ProcessEnv): boolean {
-  if (env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim()) {
-    return false;
-  }
-  if (env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim()) {
-    return false;
-  }
-  const discoveryCacheMs = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
-  if (discoveryCacheMs === "0") {
-    return false;
-  }
-  const manifestCacheMs = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
-  if (manifestCacheMs === "0") {
-    return false;
-  }
-  return true;
-}
-
-function resolveProviderWizardCacheTtlMs(env: NodeJS.ProcessEnv): number {
-  const discoveryCacheMs = resolveCacheMs(
-    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
-    DEFAULT_DISCOVERY_CACHE_MS,
-  );
-  const manifestCacheMs = resolveCacheMs(
-    env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
-    DEFAULT_MANIFEST_CACHE_MS,
-  );
-  return Math.min(discoveryCacheMs, manifestCacheMs);
-}
-
-function resolveCacheMs(rawValue: string | undefined, defaultMs: number): number {
-  const raw = rawValue?.trim();
-  if (raw === "" || raw === "0") {
-    return 0;
-  }
-  if (!raw) {
-    return defaultMs;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return defaultMs;
-  }
-  return Math.max(0, parsed);
-}
-
 function buildProviderWizardCacheKey(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -77,21 +33,7 @@ function buildProviderWizardCacheKey(params: {
   return JSON.stringify({
     workspaceDir: params.workspaceDir ?? "",
     config: params.config,
-    env: {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE:
-        params.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE ?? "",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE:
-        params.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE ?? "",
-      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: params.env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS ?? "",
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: params.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ?? "",
-      OPENCLAW_HOME: params.env.OPENCLAW_HOME ?? "",
-      OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR ?? "",
-      OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH ?? "",
-      HOME: params.env.HOME ?? "",
-      USERPROFILE: params.env.USERPROFILE ?? "",
-      VITEST: params.env.VITEST ?? "",
-    },
+    env: buildPluginSnapshotCacheEnvKey(params.env),
   });
 }
 
@@ -188,11 +130,13 @@ function resolveProviderWizardProviders(params: {
     return resolvePluginProviders(params);
   }
   const env = params.env ?? process.env;
-  if (!shouldUseProviderWizardCache(env)) {
+  if (!shouldUsePluginSnapshotCache(env)) {
     return resolvePluginProviders({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
   }
   const cacheKey = buildProviderWizardCacheKey({
@@ -210,8 +154,10 @@ function resolveProviderWizardProviders(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
   });
-  const ttlMs = resolveProviderWizardCacheTtlMs(env);
+  const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
   let nextConfigCache = configCache;
   if (!nextConfigCache) {
     nextConfigCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderWizardCacheEntry>>();
@@ -386,8 +332,16 @@ export async function runProviderModelSelectedHook(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const parsed = parseModelRef(params.model, DEFAULT_PROVIDER);
-  if (!parsed) {
+  const rawModel = params.model.trim();
+  if (!rawModel) {
+    return;
+  }
+  const slashIndex = rawModel.indexOf("/");
+  const selectedProviderId =
+    slashIndex === -1
+      ? DEFAULT_PROVIDER
+      : normalizeProviderId(rawModel.slice(0, slashIndex).trim());
+  if (!selectedProviderId || (slashIndex !== -1 && !rawModel.slice(slashIndex + 1).trim())) {
     return;
   }
 
@@ -396,9 +350,7 @@ export async function runProviderModelSelectedHook(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const provider = providers.find(
-    (entry) => normalizeProviderId(entry.id) === normalizeProviderId(parsed.provider),
-  );
+  const provider = providers.find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;
   }

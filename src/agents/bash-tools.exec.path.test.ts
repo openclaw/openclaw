@@ -24,7 +24,13 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  const approvals: ExecApprovalsResolved = {
+  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+});
+
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+
+function createExecApprovals(): ExecApprovalsResolved {
+  return {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
@@ -53,10 +59,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       agents: {},
     },
   };
-  return { ...mod, resolveExecApprovals: () => approvals };
-});
-
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+}
 
 async function loadFreshBashExecPathModulesForTest() {
   vi.resetModules();
@@ -70,36 +73,7 @@ async function loadFreshBashExecPathModulesForTest() {
   });
   vi.doMock("../infra/exec-approvals.js", async (importOriginal) => {
     const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-    const approvals: ExecApprovalsResolved = {
-      path: "/tmp/exec-approvals.json",
-      socketPath: "/tmp/exec-approvals.sock",
-      token: "token",
-      defaults: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-        autoAllowSkills: false,
-      },
-      agent: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-        autoAllowSkills: false,
-      },
-      allowlist: [],
-      file: {
-        version: 1,
-        socket: { path: "/tmp/exec-approvals.sock", token: "token" },
-        defaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "full",
-          autoAllowSkills: false,
-        },
-        agents: {},
-      },
-    };
-    return { ...mod, resolveExecApprovals: () => approvals };
+    return { ...mod, resolveExecApprovals: () => createExecApprovals() };
   });
   const bashExec = await import("./bash-tools.exec.js");
   return {
@@ -254,6 +228,22 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
   });
 
+  it("blocks proxy and TLS override env vars on host execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+        env: {
+          HTTPS_PROXY: "http://proxy.example.test:8080",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        },
+      }),
+    ).rejects.toThrow(
+      /Security Violation: blocked override keys: HTTPS_PROXY, NODE_TLS_REJECT_UNAUTHORIZED\./,
+    );
+  });
+
   it("strips dangerous inherited env vars from host execution", async () => {
     if (isWin) {
       return;
@@ -277,25 +267,13 @@ describe("exec host env validation", () => {
     }
   });
 
-  it("defaults to sandbox when sandbox runtime is unavailable", async () => {
+  it("routes implicit auto host to gateway when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
     const result = await tool.execute("call1", {
       command: "echo ok",
     });
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
-    expect(text).toContain("ok");
-
-    const err = await tool
-      .execute("call2", {
-        command: "echo ok",
-        host: "gateway",
-      })
-      .then(() => null)
-      .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-    expect(err).toBeTruthy();
-    expect(err?.message).toMatch(/exec host not allowed/);
-    expect(err?.message).toMatch(/tools\.exec\.host=sandbox/);
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
@@ -305,6 +283,33 @@ describe("exec host env validation", () => {
       tool.execute("call1", {
         command: "echo ok",
       }),
-    ).rejects.toThrow(/sandbox runtime is unavailable/);
+    ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it.each([
+    "echo ok && /approve abc123 allow-once",
+    "echo ok | /approve abc123 deny",
+    "echo ok\n/approve abc123 allow-once",
+    "FOO=1 /approve abc123 allow-once",
+    "env -i /approve abc123 deny",
+    "env --ignore-environment /approve abc123 allow-once",
+    "env -i FOO=1 /approve abc123 allow-once",
+    "env -S '/approve abc123 deny'",
+    "command /approve abc123 deny",
+    "command -p /approve abc123 deny",
+    "exec -a openclaw /approve abc123 deny",
+    "sudo /approve abc123 allow-once",
+    "sudo -E /approve abc123 allow-once",
+    "bash -lc '/approve abc123 deny'",
+    "bash -c 'sudo /approve abc123 allow-once'",
+    "sh -c '/approve abc123 allow-once'",
+  ])("rejects /approve shell commands in %s", async (command) => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-approve", {
+        command,
+      }),
+    ).rejects.toThrow(/exec cannot run \/approve commands/);
   });
 });

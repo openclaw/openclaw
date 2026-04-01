@@ -14,7 +14,7 @@ const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
 
-Profiles peak RSS for built extension entrypoints in dist/extensions/*/index.js.
+Profiles peak RSS for built bundled plugin entrypoints.
 Run pnpm build first if you want stats for the latest source changes.
 
 Options:
@@ -179,7 +179,7 @@ function findExtensionEntries(repoRoot) {
     .toSorted((a, b) => a.dir.localeCompare(b.dir));
 
   if (entries.length === 0) {
-    throw new Error("No built extension entrypoints found under dist/extensions/*/index.js");
+    throw new Error("No built bundled plugin entrypoints found in the dist plugin tree");
   }
   return entries;
 }
