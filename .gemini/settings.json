@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    }
+  },
+  "hooks": {
+    "BeforeTool": [],
+    "AfterTool": [
+      {
+        "matcher": "replace|write_file",
+        "hooks": [
+          {
+            "command": "python3 -c \"import sys,json,subprocess; d=json.load(sys.stdin); fp=d.get('tool_input',{}).get('file_path',''); exec('') if not fp or not any(fp.endswith(e) for e in ('.ts','.tsx','.js','.jsx')) else subprocess.run(['pnpm','exec','oxfmt','--write',fp],cwd='/home/marco/.openclaw/workspace/repos/openclaw',capture_output=True)\"",
+            "type": "command",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [],
+    "AfterAgent": [],
+    "Notification": [],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "command": "sh -c '[ \"$OPENCLAW_DEV_AGENT\" = \"1\" ] || exit 0; echo \"RAPPEL POST-COMPACTION: Lis ~/.openclaw/docs/ARCHITECTURE.md avant toute modification. Fichiers patch protégés (NE PAS TOUCHER): apps/android/, dispatch-from-config.ts, chrome.ts, types.whatsapp.ts, zod-schema.providers-whatsapp.ts. Bootstrap < 16k chars. atomic_write_json pour JSON. JAMAIS git push dans le repo source.\"'",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [],
+    "PreCompress": [],
+    "BeforeModel": [],
+    "AfterModel": [],
+    "BeforeToolSelection": []
+  }
+}

@@ -99,8 +99,8 @@ export function buildGatewayConnectionDetails(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort = resolveGatewayPort(config);
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
+  const tailnetIPv4 = bindMode === "tailnet" ? pickPrimaryTailnetIPv4() : undefined;
   const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
   const preferLan = bindMode === "lan";
   const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;

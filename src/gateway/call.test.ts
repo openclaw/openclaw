@@ -211,6 +211,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.url).toBe("ws://10.0.0.5:18800");
     expect(details.urlSource).toBe("local lan 10.0.0.5");
     expect(details.bindDetail).toBe("Bind: lan");
+    expect(pickPrimaryTailnetIPv4).not.toHaveBeenCalled();
   });
 
   it("prefers remote url when configured", () => {

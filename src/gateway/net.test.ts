@@ -178,6 +178,13 @@ describe("pickPrimaryLanIPv4", () => {
     });
     expect(pickPrimaryLanIPv4()).toBeUndefined();
   });
+
+  it("returns undefined when networkInterfaces throws", () => {
+    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+    expect(pickPrimaryLanIPv4()).toBeUndefined();
+  });
 });
 
 describe("isPrivateOrLoopbackAddress", () => {
