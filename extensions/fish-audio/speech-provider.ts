@@ -271,6 +271,12 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         ...(asNumber(talkProviderConfig.speed) == null
           ? {}
           : { speed: asNumber(talkProviderConfig.speed) }),
+        ...(asNumber(talkProviderConfig.temperature) == null
+          ? {}
+          : { temperature: asNumber(talkProviderConfig.temperature) }),
+        ...(asNumber(talkProviderConfig.topP) == null
+          ? {}
+          : { topP: asNumber(talkProviderConfig.topP) }),
       };
     },
 
