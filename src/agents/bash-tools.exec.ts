@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { readPathWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
@@ -45,7 +45,6 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -117,26 +116,18 @@ async function validateScriptFileForShellBleed(params: {
     ? path.resolve(target.relOrAbsPath)
     : path.resolve(params.workdir, target.relOrAbsPath);
 
-  // Best-effort: only validate if file exists and is reasonably small.
-  let stat: { isFile(): boolean; size: number };
+  // Best-effort: only validate when we can safely open and pin a file inside workdir.
+  let content: string;
   try {
-    await assertSandboxPath({
+    const safeRead = await readPathWithinRoot({
+      rootDir: params.workdir,
       filePath: absPath,
-      cwd: params.workdir,
-      root: params.workdir,
+      maxBytes: 512 * 1024,
     });
-    stat = await fs.stat(absPath);
+    content = safeRead.buffer.toString("utf-8");
   } catch {
     return;
   }
-  if (!stat.isFile()) {
-    return;
-  }
-  if (stat.size > 512 * 1024) {
-    return;
-  }
-
-  const content = await fs.readFile(absPath, "utf-8");
 
   // Common failure mode: shell env var syntax leaking into Python/JS.
   // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.

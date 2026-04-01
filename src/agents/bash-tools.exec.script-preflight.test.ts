@@ -90,4 +90,44 @@ describeNonWin("exec script preflight", () => {
       expect(text).not.toMatch(/exec preflight:/);
     });
   });
+
+  it("skips preflight file reads for symlinked scripts that point outside the workdir", async () => {
+    await withTempDir("openclaw-exec-preflight-symlink-", async (parent) => {
+      const outsidePath = path.join(parent, "outside.js");
+      const workdir = path.join(parent, "workdir");
+      const symlinkPath = path.join(workdir, "bad.js");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
+      await fs.symlink(outsidePath, symlinkPath);
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-symlink-outside", {
+        command: "node bad.js",
+        workdir,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("skips preflight file reads for hardlinked scripts that alias outside files", async () => {
+    await withTempDir("openclaw-exec-preflight-hardlink-", async (parent) => {
+      const outsidePath = path.join(parent, "outside.js");
+      const workdir = path.join(parent, "workdir");
+      const hardlinkPath = path.join(workdir, "bad.js");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
+      await fs.link(outsidePath, hardlinkPath);
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-hardlink-outside", {
+        command: "node bad.js",
+        workdir,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
 });
