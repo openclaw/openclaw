@@ -335,6 +335,11 @@ actor TalkModeRuntime {
         self.lastHeard = nil
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        // Play "send" chime when the user's speech is finalized and about to be sent
+        let sendChime = await MainActor.run { AppStateStore.shared.voiceWakeSendChime }
+        if sendChime != .none {
+            await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
+        }
         await self.stopRecognition()
         await self.sendAndSpeak(text)
     }
@@ -456,6 +461,7 @@ actor TalkModeRuntime {
 
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
+
         switch Self.playbackPlan(apiKey: input.apiKey, voiceId: input.voiceId) {
         case let .elevenLabsThenSystemVoice(apiKey, voiceId):
             do {
