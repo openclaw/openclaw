@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { CronJob } from "../../cron/types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { getCronChannelOptions, printCronList } from "./shared.js";
 
@@ -169,7 +171,13 @@ describe("printCronList", () => {
 });
 
 describe("getCronChannelOptions", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     expect(getCronChannelOptions()).toBe("last|<channel-id>");
   });
 });
