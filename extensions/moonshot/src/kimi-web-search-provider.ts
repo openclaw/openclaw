@@ -35,7 +35,10 @@ import {
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
 const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
-/** Models that require explicit thinking disablement for web search. */
+/** Models that require explicit thinking disablement for web search.
+ * Reasoning variants (kimi-k2-thinking, kimi-k2-thinking-turbo) are excluded
+ * because they default to thinking-enabled and disabling it would defeat their
+ * purpose; they are also unlikely to be used for web search. */
 const KIMI_THINKING_MODELS = new Set(["kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
@@ -334,16 +337,18 @@ async function runKimiSearchProviderSetup(
   const existingPluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
   const existingBaseUrl =
     typeof existingPluginConfig?.baseUrl === "string" ? existingPluginConfig.baseUrl.trim() : "";
+  // Normalize trailing slashes so initialValue matches canonical option values.
+  const normalizedBaseUrl = existingBaseUrl.replace(/\/+$/, "");
   const existingModel =
     typeof existingPluginConfig?.model === "string" ? existingPluginConfig.model.trim() : "";
 
   // Region selection (baseUrl)
-  const isCustomBaseUrl = existingBaseUrl && !isNativeMoonshotBaseUrl(existingBaseUrl);
+  const isCustomBaseUrl = normalizedBaseUrl && !isNativeMoonshotBaseUrl(normalizedBaseUrl);
   const regionOptions: Array<{ value: string; label: string; hint?: string }> = [];
   if (isCustomBaseUrl) {
     regionOptions.push({
-      value: existingBaseUrl,
-      label: `Keep current (${existingBaseUrl})`,
+      value: normalizedBaseUrl,
+      label: `Keep current (${normalizedBaseUrl})`,
       hint: "custom endpoint",
     });
   }
@@ -363,14 +368,14 @@ async function runKimiSearchProviderSetup(
   const regionChoice = await ctx.prompter.select<string>({
     message: "Kimi API region",
     options: regionOptions,
-    initialValue: existingBaseUrl || MOONSHOT_BASE_URL,
+    initialValue: normalizedBaseUrl || MOONSHOT_BASE_URL,
   });
   const baseUrl = regionChoice;
 
   // Model selection
   const currentModelLabel = existingModel
     ? `Keep current (moonshot/${existingModel})`
-    : `Keep current (moonshot/${DEFAULT_KIMI_SEARCH_MODEL})`;
+    : `Use default (moonshot/${DEFAULT_KIMI_SEARCH_MODEL})`;
   const modelChoice = await ctx.prompter.select<string>({
     message: "Kimi web search model",
     options: [
