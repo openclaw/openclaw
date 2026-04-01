@@ -619,6 +619,24 @@ export async function runEmbeddedPiAgent(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
+          const failedOrAbortedAttempt =
+            aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
+          const persistedSelection =
+            failedOrAbortedAttempt && shouldTrackPersistedLiveSelection
+              ? resolvePersistedLiveSelection()
+              : null;
+          if (
+            failedOrAbortedAttempt &&
+            canRestartForLiveSwitch &&
+            params.authProfileIdSource === "user" &&
+            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), persistedSelection)
+          ) {
+            log.info(
+              `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,
+            );
+            throw new LiveSessionModelSwitchError(persistedSelection);
+          }
+
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
