@@ -119,7 +119,7 @@ describe("exec approval reply helpers", () => {
             },
             {
               label: "Allow Always",
-              value: "/approve req-1 always",
+              value: "/approve req-1 allow-always",
               style: "primary",
             },
             {
@@ -236,7 +236,7 @@ describe("exec approval reply helpers", () => {
         decision: "allow-always",
         label: "Allow Always",
         style: "primary",
-        command: "/approve req-1 always",
+        command: "/approve req-1 allow-always",
       },
       {
         decision: "deny",
@@ -256,7 +256,7 @@ describe("exec approval reply helpers", () => {
           type: "buttons",
           buttons: [
             { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
-            { label: "Allow Always", value: "/approve req-1 always", style: "primary" },
+            { label: "Allow Always", value: "/approve req-1 allow-always", style: "primary" },
             { label: "Deny", value: "/approve req-1 deny", style: "danger" },
           ],
         },
@@ -270,7 +270,7 @@ describe("exec approval reply helpers", () => {
         approvalCommandId: "req-1",
         decision: "allow-always",
       }),
-    ).toBe("/approve req-1 always");
+    ).toBe("/approve req-1 allow-always");
 
     expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
       approvalId: "req-1",
