@@ -59,9 +59,22 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       isNativeDeliveryEnabled: ({ accountId }) => accountId !== "disabled",
       resolveNativeDeliveryMode: ({ accountId }) =>
         accountId === "channel-only" ? "channel" : "dm",
+      resolveOriginTarget: () => ({ to: "origin-chat" }),
+      resolveApproverDmTargets: () => [{ to: "approver-1" }],
     });
     const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
     const hasConfiguredDmRoute = adapter.delivery.hasConfiguredDmRoute;
+    const nativeCapabilities = adapter.native?.describeDeliveryCapabilities({
+      cfg: {} as never,
+      accountId: "channel-only",
+      approvalKind: "exec",
+      request: {
+        id: "approval-1",
+        request: { command: "pwd" },
+        createdAtMs: 0,
+        expiresAtMs: 10_000,
+      },
+    });
 
     expect(
       getActionAvailabilityState({
@@ -77,7 +90,21 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         action: "approve",
       }),
     ).toEqual({ kind: "disabled" });
+    expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "disabled",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "disabled" });
     expect(hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
+    expect(nativeCapabilities).toEqual({
+      enabled: true,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: false,
+    });
   });
 
   it("suppresses forwarding fallback only for matching native-delivery surfaces", () => {

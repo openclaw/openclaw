@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -11,11 +11,6 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
 const { resolveBundledPluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
-
-const mockedModuleIds = [
-  "../plugins/web-search-providers.js",
-  "../plugins/web-search-providers.runtime.js",
-] as const;
 
 let bundledWebSearchProviders: typeof import("../plugins/web-search-providers.js");
 let runtimeWebSearchProviders: typeof import("../plugins/web-search-providers.runtime.js");
@@ -217,12 +212,6 @@ describe("runtime web tools resolution", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  afterAll(() => {
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
   });
 
   it("keeps web search disabled when search config is absent", async () => {

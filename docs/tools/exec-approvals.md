@@ -213,7 +213,7 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
-If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
+If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
 
 Default safe bins:
 
@@ -415,9 +415,10 @@ resolved approver list for authorization even when native approval delivery is d
 
 ### Native approval delivery
 
-Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
+Discord, Slack, and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
+- Slack: uses shared `approvals.exec.targets` with `channel: "slack"` and renders Block Kit approval buttons when interactivity is enabled
 - Telegram: `channels.telegram.execApprovals.*`
 
 These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
@@ -493,3 +494,10 @@ Related:
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Skills](/tools/skills)
+
+## Related
+
+- [Exec](/tools/exec) — shell command execution tool
+- [Sandboxing](/gateway/sandboxing) — sandbox modes and workspace access
+- [Security](/gateway/security) — security model and hardening
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — when to use each

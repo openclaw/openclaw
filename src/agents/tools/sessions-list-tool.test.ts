@@ -1,12 +1,59 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  gatewayCall: vi.fn(),
+  createAgentToAgentPolicy: vi.fn(() => ({})),
+  createSessionVisibilityGuard: vi.fn(async () => ({
+    check: () => ({ allowed: true }),
+  })),
+  resolveEffectiveSessionToolsVisibility: vi.fn(() => "all"),
+  resolveSandboxedSessionToolContext: vi.fn(() => ({
+    mainKey: "main",
+    alias: "main",
+    requesterInternalKey: undefined,
+    restrictToSpawned: false,
+  })),
+}));
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => mocks.gatewayCall(opts),
+}));
+
+vi.mock("./sessions-helpers.js", async (importActual) => {
+  const actual = await importActual<typeof import("./sessions-helpers.js")>();
+  return {
+    ...actual,
+    createAgentToAgentPolicy: () => mocks.createAgentToAgentPolicy(),
+    createSessionVisibilityGuard: async () => await mocks.createSessionVisibilityGuard(),
+    resolveEffectiveSessionToolsVisibility: () => mocks.resolveEffectiveSessionToolsVisibility(),
+    resolveSandboxedSessionToolContext: () => mocks.resolveSandboxedSessionToolContext(),
+  };
+});
 
 describe("sessions-list-tool", () => {
+  let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
+
+  beforeAll(async () => {
+    ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
+    vi.clearAllMocks();
+    mocks.createAgentToAgentPolicy.mockReturnValue({});
+    mocks.createSessionVisibilityGuard.mockResolvedValue({
+      check: () => ({ allowed: true }),
+    });
+    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("all");
+    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
+      mainKey: "main",
+      alias: "main",
+      requesterInternalKey: undefined,
+      restrictToSpawned: false,
+    });
   });
 
   it("keeps deliveryContext.threadId in sessions_list results", async () => {
-    const gatewayCallMock = vi.fn(async (opts: unknown) => {
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
@@ -39,30 +86,6 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-
-    vi.doMock("../../gateway/call.js", () => ({
-      callGateway: gatewayCallMock,
-    }));
-    vi.doMock("./sessions-helpers.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
-      return {
-        ...actual,
-        createAgentToAgentPolicy: () => ({}),
-        createSessionVisibilityGuard: async () => ({
-          check: () => ({ allowed: true }),
-        }),
-        resolveEffectiveSessionToolsVisibility: () => "all",
-        resolveSandboxedSessionToolContext: () => ({
-          mainKey: "main",
-          alias: "main",
-          requesterInternalKey: undefined,
-          restrictToSpawned: false,
-        }),
-      };
-    });
-
-    const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
     const result = await tool.execute("call-1", {});
@@ -92,7 +115,7 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps numeric deliveryContext.threadId in sessions_list results", async () => {
-    const gatewayCallMock = vi.fn(async (opts: unknown) => {
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
@@ -114,30 +137,6 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-
-    vi.doMock("../../gateway/call.js", () => ({
-      callGateway: gatewayCallMock,
-    }));
-    vi.doMock("./sessions-helpers.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
-      return {
-        ...actual,
-        createAgentToAgentPolicy: () => ({}),
-        createSessionVisibilityGuard: async () => ({
-          check: () => ({ allowed: true }),
-        }),
-        resolveEffectiveSessionToolsVisibility: () => "all",
-        resolveSandboxedSessionToolContext: () => ({
-          mainKey: "main",
-          alias: "main",
-          requesterInternalKey: undefined,
-          restrictToSpawned: false,
-        }),
-      };
-    });
-
-    const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
     const result = await tool.execute("call-2", {});
@@ -161,7 +160,7 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps live session setting metadata in sessions_list results", async () => {
-    const gatewayCallMock = vi.fn(async (opts: unknown) => {
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
@@ -183,30 +182,6 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-
-    vi.doMock("../../gateway/call.js", () => ({
-      callGateway: gatewayCallMock,
-    }));
-    vi.doMock("./sessions-helpers.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
-      return {
-        ...actual,
-        createAgentToAgentPolicy: () => ({}),
-        createSessionVisibilityGuard: async () => ({
-          check: () => ({ allowed: true }),
-        }),
-        resolveEffectiveSessionToolsVisibility: () => "all",
-        resolveSandboxedSessionToolContext: () => ({
-          mainKey: "main",
-          alias: "main",
-          requesterInternalKey: undefined,
-          restrictToSpawned: false,
-        }),
-      };
-    });
-
-    const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
     const result = await tool.execute("call-3", {});

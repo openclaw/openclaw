@@ -10,32 +10,35 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import {
-  getExecApprovalApproverDmNoticeText,
-  resolveExecApprovalCommandDisplay,
-  type ExecApprovalDecision,
-  type ExecApprovalRequest,
-  type ExecApprovalResolved,
-  type PluginApprovalRequest,
-  type PluginApprovalResolved,
-} from "openclaw/plugin-sdk/approval-runtime";
+import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { EventFrame } from "openclaw/plugin-sdk/gateway-runtime";
-import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import {
-  normalizeAccountId,
-  normalizeMessageChannel,
-  resolveAgentIdFromSessionKey,
-} from "openclaw/plugin-sdk/routing";
+  createExecApprovalChannelRuntime,
+  deliverApprovalRequestViaChannelNativePlan,
+  doesApprovalRequestMatchChannelAccount,
+  type ExecApprovalChannelRuntime,
+} from "openclaw/plugin-sdk/infra-runtime";
+import { buildExecApprovalActionDescriptors } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
+import { getExecApprovalApproverDmNoticeText } from "openclaw/plugin-sdk/infra-runtime";
+import type {
+  ExecApprovalActionDescriptor,
+  ExecApprovalDecision,
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+  PluginApprovalRequest,
+  PluginApprovalResolved,
+} from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
-import * as sendShared from "../send.shared.js";
+import { createDiscordNativeApprovalAdapter } from "../approval-native.js";
+import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
+import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
+export { extractDiscordChannelId } from "../approval-native.js";
 export type {
   ExecApprovalRequest,
   ExecApprovalResolved,
@@ -43,15 +46,9 @@ export type {
   PluginApprovalResolved,
 };
 
-/** Extract Discord channel ID from a session key like "agent:main:discord:channel:123456789" */
-export function extractDiscordChannelId(sessionKey?: string | null): string | null {
-  if (!sessionKey) {
-    return null;
-  }
-  // Session key format: agent:<id>:discord:channel:<channelId> or agent:<id>:discord:group:<channelId>
-  const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
-  return match ? match[1] : null;
-}
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+type ApprovalKind = "exec" | "plugin";
 
 function buildDiscordApprovalDmRedirectNotice(): { content: string } {
   return {
@@ -62,14 +59,20 @@ function buildDiscordApprovalDmRedirectNotice(): { content: string } {
 type PendingApproval = {
   discordMessageId: string;
   discordChannelId: string;
-  timeoutId: NodeJS.Timeout;
+  timeoutId?: NodeJS.Timeout;
+};
+type PreparedDeliveryTarget = {
+  discordChannelId: string;
+  recipientUserId?: string;
 };
 
-type ApprovalKind = "exec" | "plugin";
+function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
+  return approvalId.startsWith("plugin:") ? "plugin" : "exec";
+}
 
-type CachedApprovalRequest =
-  | { kind: "exec"; request: ExecApprovalRequest }
-  | { kind: "plugin"; request: PluginApprovalRequest };
+function isPluginApprovalRequest(request: ApprovalRequest): request is PluginApprovalRequest {
+  return resolveApprovalKindFromId(request.id) === "plugin";
+}
 
 function encodeCustomIdValue(value: string): string {
   return encodeURIComponent(value);
@@ -113,16 +116,6 @@ export function parseExecApprovalData(
     approvalId: decodeCustomIdValue(rawId),
     action,
   };
-}
-
-function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
-  return approvalId.startsWith("plugin:") ? "plugin" : "exec";
-}
-
-function isPluginApprovalRequest(
-  request: ExecApprovalRequest | PluginApprovalRequest,
-): request is PluginApprovalRequest {
-  return resolveApprovalKindFromId(request.id) === "plugin";
 }
 
 type ExecApprovalContainerParams = {
@@ -177,111 +170,29 @@ class ExecApprovalActionButton extends Button {
   label: string;
   style: ButtonStyle;
 
-  constructor(params: {
-    approvalId: string;
-    action: ExecApprovalDecision;
-    label: string;
-    style: ButtonStyle;
-  }) {
+  constructor(params: { approvalId: string; descriptor: ExecApprovalActionDescriptor }) {
     super();
-    this.customId = buildExecApprovalCustomId(params.approvalId, params.action);
-    this.label = params.label;
-    this.style = params.style;
+    this.customId = buildExecApprovalCustomId(params.approvalId, params.descriptor.decision);
+    this.label = params.descriptor.label;
+    this.style =
+      params.descriptor.style === "success"
+        ? ButtonStyle.Success
+        : params.descriptor.style === "primary"
+          ? ButtonStyle.Primary
+          : params.descriptor.style === "danger"
+            ? ButtonStyle.Danger
+            : ButtonStyle.Secondary;
   }
 }
 
 class ExecApprovalActionRow extends Row<Button> {
   constructor(approvalId: string) {
     super([
-      new ExecApprovalActionButton({
-        approvalId,
-        action: "allow-once",
-        label: "Allow once",
-        style: ButtonStyle.Success,
-      }),
-      new ExecApprovalActionButton({
-        approvalId,
-        action: "allow-always",
-        label: "Always allow",
-        style: ButtonStyle.Primary,
-      }),
-      new ExecApprovalActionButton({
-        approvalId,
-        action: "deny",
-        label: "Deny",
-        style: ButtonStyle.Danger,
-      }),
+      ...buildExecApprovalActionDescriptors({ approvalCommandId: approvalId }).map(
+        (descriptor) => new ExecApprovalActionButton({ approvalId, descriptor }),
+      ),
     ]);
   }
-}
-
-function resolveAccountIdFromSessionKey(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string | null;
-}): string | null {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  try {
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[sessionKey];
-    const channel = normalizeMessageChannel(entry?.origin?.provider ?? entry?.lastChannel);
-    if (channel && channel !== "discord") {
-      return null;
-    }
-    const accountId = entry?.origin?.accountId ?? entry?.lastAccountId;
-    return accountId?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveExecApprovalAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
-}): string | null {
-  return resolveAccountIdFromSessionKey({
-    cfg: params.cfg,
-    sessionKey: params.request.request.sessionKey,
-  });
-}
-
-function resolvePluginApprovalAccountId(params: {
-  cfg: OpenClawConfig;
-  request: PluginApprovalRequest;
-}): string | null {
-  const fromSession = resolveAccountIdFromSessionKey({
-    cfg: params.cfg,
-    sessionKey: params.request.request.sessionKey,
-  });
-  if (fromSession) {
-    return fromSession;
-  }
-  return params.request.request.turnSourceAccountId?.trim() || null;
-}
-
-function resolveApprovalAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ExecApprovalRequest | PluginApprovalRequest;
-}): string | null {
-  return isPluginApprovalRequest(params.request)
-    ? resolvePluginApprovalAccountId({ cfg: params.cfg, request: params.request })
-    : resolveExecApprovalAccountId({ cfg: params.cfg, request: params.request });
-}
-
-function resolveApprovalAgentId(
-  request: ExecApprovalRequest | PluginApprovalRequest,
-): string | null {
-  return request.request.agentId?.trim() || null;
-}
-
-function resolveApprovalSessionKey(
-  request: ExecApprovalRequest | PluginApprovalRequest,
-): string | null {
-  return request.request.sessionKey?.trim() || null;
 }
 
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
@@ -526,412 +437,258 @@ export type DiscordExecApprovalHandlerOpts = {
   cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   onResolve?: (id: string, decision: ExecApprovalDecision) => Promise<void>;
-  __testing?: {
-    createGatewayClient?: typeof gatewayRuntime.createOperatorApprovalsGatewayClient;
-    createDiscordClient?: (...args: Parameters<typeof sendShared.createDiscordClient>) => {
-      rest: {
-        post: (...args: unknown[]) => Promise<unknown>;
-        patch: (...args: unknown[]) => Promise<unknown>;
-        delete: (...args: unknown[]) => Promise<unknown>;
-      };
-      request: (fn: () => Promise<unknown>, label: string) => Promise<unknown>;
-    };
-  };
 };
 
 export class DiscordExecApprovalHandler {
-  private gatewayClient: gatewayRuntime.GatewayClient | null = null;
-  private pending = new Map<string, PendingApproval>();
-  private requestCache = new Map<string, CachedApprovalRequest>();
+  private readonly runtime: ExecApprovalChannelRuntime<ApprovalRequest, ApprovalResolved>;
   private opts: DiscordExecApprovalHandlerOpts;
-  private started = false;
 
   constructor(opts: DiscordExecApprovalHandlerOpts) {
     this.opts = opts;
+    this.runtime = createExecApprovalChannelRuntime<
+      PendingApproval,
+      ApprovalRequest,
+      ApprovalResolved
+    >({
+      label: "discord/exec-approvals",
+      clientDisplayName: "Discord Exec Approvals",
+      cfg: this.opts.cfg,
+      gatewayUrl: this.opts.gatewayUrl,
+      eventKinds: ["exec", "plugin"],
+      isConfigured: () => Boolean(this.opts.config.enabled && this.getApprovers().length > 0),
+      shouldHandle: (request) => this.shouldHandle(request),
+      deliverRequested: async (request) => await this.deliverRequested(request),
+      finalizeResolved: async ({ request, resolved, entries }) => {
+        await this.finalizeResolved(request, resolved, entries);
+      },
+      finalizeExpired: async ({ request, entries }) => {
+        await this.finalizeExpired(request, entries);
+      },
+    });
   }
 
-  shouldHandle(request: ExecApprovalRequest | PluginApprovalRequest): boolean {
+  shouldHandle(request: ApprovalRequest): boolean {
     const config = this.opts.config;
     if (!config.enabled) {
       return false;
     }
-    if (!config.approvers || config.approvers.length === 0) {
+    if (this.getApprovers().length === 0) {
       return false;
     }
 
-    const requestAccountId = resolveApprovalAccountId({
-      cfg: this.opts.cfg,
-      request,
+    if (
+      !doesApprovalRequestMatchChannelAccount({
+        cfg: this.opts.cfg,
+        request,
+        channel: "discord",
+        accountId: this.opts.accountId,
+      })
+    ) {
+      return false;
+    }
+
+    return matchesApprovalRequestFilters({
+      request: request.request,
+      agentFilter: config.agentFilter,
+      sessionFilter: config.sessionFilter,
     });
-    if (requestAccountId) {
-      const handlerAccountId = normalizeAccountId(this.opts.accountId);
-      if (normalizeAccountId(requestAccountId) !== handlerAccountId) {
-        return false;
-      }
-    }
-
-    // Check agent filter
-    if (config.agentFilter?.length) {
-      const agentId = resolveApprovalAgentId(request);
-      if (!agentId) {
-        return false;
-      }
-      if (!config.agentFilter.includes(agentId)) {
-        return false;
-      }
-    }
-
-    // Check session filter (substring match)
-    if (config.sessionFilter?.length) {
-      const session = resolveApprovalSessionKey(request);
-      if (!session) {
-        return false;
-      }
-      const matches = config.sessionFilter.some((p) => {
-        if (session.includes(p)) {
-          return true;
-        }
-        const regex = compileSafeRegex(p);
-        return regex ? testRegexWithBoundedInput(regex, session) : false;
-      });
-      if (!matches) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   async start(): Promise<void> {
-    if (this.started) {
-      return;
-    }
-    this.started = true;
-
-    const config = this.opts.config;
-    if (!config.enabled) {
-      logDebug("discord exec approvals: disabled");
-      return;
-    }
-
-    if (!config.approvers || config.approvers.length === 0) {
-      logDebug("discord exec approvals: no approvers configured");
-      return;
-    }
-
-    logDebug("discord exec approvals: starting handler");
-
-    this.gatewayClient = await (
-      this.opts.__testing?.createGatewayClient ??
-      gatewayRuntime.createOperatorApprovalsGatewayClient
-    )({
-      config: this.opts.cfg,
-      gatewayUrl: this.opts.gatewayUrl,
-      clientDisplayName: "Discord Exec Approvals",
-      onEvent: (evt) => this.handleGatewayEvent(evt),
-      onHelloOk: () => {
-        logDebug("discord exec approvals: connected to gateway");
-      },
-      onConnectError: (err) => {
-        logError(`discord exec approvals: connect error: ${err.message}`);
-      },
-      onClose: (code, reason) => {
-        logDebug(`discord exec approvals: gateway closed: ${code} ${reason}`);
-      },
-    });
-
-    this.gatewayClient.start();
+    await this.runtime.start();
   }
 
   async stop(): Promise<void> {
-    if (!this.started) {
-      return;
-    }
-    this.started = false;
-
-    // Clear all pending timeouts
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeoutId);
-    }
-    this.pending.clear();
-    this.requestCache.clear();
-
-    this.gatewayClient?.stop();
-    this.gatewayClient = null;
-
-    logDebug("discord exec approvals: stopped");
+    await this.runtime.stop();
   }
 
-  private handleGatewayEvent(evt: EventFrame): void {
-    if (evt.event === "exec.approval.requested") {
-      const request = evt.payload as ExecApprovalRequest;
-      void this.handleApprovalRequested(request);
-    } else if (evt.event === "plugin.approval.requested") {
-      const request = evt.payload as PluginApprovalRequest;
-      void this.handleApprovalRequested(request);
-    } else if (evt.event === "exec.approval.resolved") {
-      const resolved = evt.payload as ExecApprovalResolved;
-      void this.handleApprovalResolved(resolved);
-    } else if (evt.event === "plugin.approval.resolved") {
-      const resolved = evt.payload as PluginApprovalResolved;
-      void this.handleApprovalResolved(resolved);
-    }
-  }
-
-  private async handleApprovalRequested(
-    request: ExecApprovalRequest | PluginApprovalRequest,
-  ): Promise<void> {
-    if (!this.shouldHandle(request)) {
-      return;
-    }
-
-    const pluginRequest: PluginApprovalRequest | null = isPluginApprovalRequest(request)
-      ? request
-      : null;
-    logDebug(
-      `discord exec approvals: received ${pluginRequest ? "plugin" : "exec"} request ${request.id}`,
+  private async deliverRequested(request: ApprovalRequest): Promise<PendingApproval[]> {
+    const { rest, request: discordRequest } = createDiscordClient(
+      { token: this.opts.token, accountId: this.opts.accountId },
+      this.opts.cfg,
     );
-    let container: ExecApprovalContainer;
-    if (pluginRequest) {
-      this.requestCache.set(request.id, { kind: "plugin", request: pluginRequest });
-      container = createPluginApprovalRequestContainer({
-        request: pluginRequest,
-        cfg: this.opts.cfg,
-        accountId: this.opts.accountId,
-        actionRow: new ExecApprovalActionRow(request.id),
-      });
-    } else {
-      const execRequest = request as ExecApprovalRequest;
-      this.requestCache.set(request.id, { kind: "exec", request: execRequest });
-      container = createExecApprovalRequestContainer({
-        request: execRequest,
-        cfg: this.opts.cfg,
-        accountId: this.opts.accountId,
-        actionRow: new ExecApprovalActionRow(request.id),
-      });
-    }
 
-    const { rest, request: discordRequest } = (
-      this.opts.__testing?.createDiscordClient ?? sendShared.createDiscordClient
-    )({ token: this.opts.token, accountId: this.opts.accountId }, this.opts.cfg);
+    const actionRow = new ExecApprovalActionRow(request.id);
+    const container = isPluginApprovalRequest(request)
+      ? createPluginApprovalRequestContainer({
+          request,
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          actionRow,
+        })
+      : createExecApprovalRequestContainer({
+          request,
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          actionRow,
+        });
     const payload = buildExecApprovalPayload(container);
-    const body = sendShared.stripUndefinedFields(serializePayload(payload));
-
-    const target = this.opts.config.target ?? "dm";
-    const sendToDm = target === "dm" || target === "both";
-    const sendToChannel = target === "channel" || target === "both";
-    let fallbackToDm = false;
-    const sessionKey = resolveApprovalSessionKey(request);
-    const originatingChannelId =
-      sessionKey && target === "dm" ? extractDiscordChannelId(sessionKey) : null;
-
-    if (target === "dm" && originatingChannelId) {
-      try {
+    const body = stripUndefinedFields(serializePayload(payload));
+    const approvalKind: ApprovalKind = isPluginApprovalRequest(request) ? "plugin" : "exec";
+    const nativeApprovalAdapter = createDiscordNativeApprovalAdapter(this.opts.config);
+    return await deliverApprovalRequestViaChannelNativePlan<
+      PreparedDeliveryTarget,
+      PendingApproval,
+      ApprovalRequest
+    >({
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+      approvalKind,
+      request,
+      adapter: nativeApprovalAdapter.native,
+      sendOriginNotice: async ({ originTarget }) => {
         await discordRequest(
           () =>
-            rest.post(Routes.channelMessages(originatingChannelId), {
+            rest.post(Routes.channelMessages(originTarget.to), {
               body: buildDiscordApprovalDmRedirectNotice(),
             }) as Promise<{ id: string; channel_id: string }>,
           "send-approval-dm-redirect-notice",
         );
-      } catch (err) {
-        logError(`discord exec approvals: failed to send DM redirect notice: ${String(err)}`);
-      }
-    }
-
-    // Send to originating channel if configured
-    if (sendToChannel) {
-      const channelId = extractDiscordChannelId(sessionKey);
-      if (channelId) {
-        try {
-          const message = (await discordRequest(
-            () =>
-              rest.post(Routes.channelMessages(channelId), {
-                body,
-              }) as Promise<{ id: string; channel_id: string }>,
-            "send-approval-channel",
-          )) as { id: string; channel_id: string };
-
-          if (message?.id) {
-            const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
-            const timeoutId = setTimeout(() => {
-              void this.handleApprovalTimeout(request.id, "channel");
-            }, timeoutMs);
-
-            this.pending.set(`${request.id}:channel`, {
-              discordMessageId: message.id,
-              discordChannelId: channelId,
-              timeoutId,
-            });
-
-            logDebug(`discord exec approvals: sent approval ${request.id} to channel ${channelId}`);
-          }
-        } catch (err) {
-          logError(`discord exec approvals: failed to send to channel: ${String(err)}`);
+      },
+      prepareTarget: async ({ plannedTarget }) => {
+        if (plannedTarget.surface === "origin") {
+          return {
+            dedupeKey: plannedTarget.target.to,
+            target: {
+              discordChannelId: plannedTarget.target.to,
+            },
+          };
         }
-      } else {
-        if (!sendToDm) {
-          logError(
-            `discord exec approvals: target is "channel" but could not extract channel id from session key "${sessionKey ?? "(none)"}" — falling back to DM delivery for approval ${request.id}`,
-          );
-          fallbackToDm = true;
-        } else {
-          logDebug("discord exec approvals: could not extract channel id from session key");
+
+        const userId = plannedTarget.target.to;
+        const dmChannel = (await discordRequest(
+          () =>
+            rest.post(Routes.userChannels(), {
+              body: { recipient_id: userId },
+            }) as Promise<{ id: string }>,
+          "dm-channel",
+        )) as { id: string };
+
+        if (!dmChannel?.id) {
+          logError(`discord exec approvals: failed to create DM for user ${userId}`);
+          return null;
         }
-      }
-    }
 
-    // Send to approver DMs if configured (or as fallback when channel extraction fails)
-    if (sendToDm || fallbackToDm) {
-      const approvers = this.opts.config.approvers ?? [];
-
-      for (const approver of approvers) {
-        const userId = String(approver);
-        try {
-          // Create DM channel
-          const dmChannel = (await discordRequest(
-            () =>
-              rest.post(Routes.userChannels(), {
-                body: { recipient_id: userId },
-              }) as Promise<{ id: string }>,
-            "dm-channel",
-          )) as { id: string };
-
-          if (!dmChannel?.id) {
-            logError(`discord exec approvals: failed to create DM for user ${userId}`);
-            continue;
-          }
-
-          // Send message with components v2 + buttons
-          const message = (await discordRequest(
-            () =>
-              rest.post(Routes.channelMessages(dmChannel.id), {
-                body,
-              }) as Promise<{ id: string; channel_id: string }>,
-            "send-approval",
-          )) as { id: string; channel_id: string };
-
-          if (!message?.id) {
-            logError(`discord exec approvals: failed to send message to user ${userId}`);
-            continue;
-          }
-
-          // Clear any existing pending DM entry to avoid timeout leaks
-          const existingDm = this.pending.get(`${request.id}:dm`);
-          if (existingDm) {
-            clearTimeout(existingDm.timeoutId);
-          }
-
-          // Set up timeout
-          const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
-          const timeoutId = setTimeout(() => {
-            void this.handleApprovalTimeout(request.id, "dm");
-          }, timeoutMs);
-
-          this.pending.set(`${request.id}:dm`, {
-            discordMessageId: message.id,
+        return {
+          dedupeKey: dmChannel.id,
+          target: {
             discordChannelId: dmChannel.id,
-            timeoutId,
-          });
+            recipientUserId: userId,
+          },
+        };
+      },
+      deliverTarget: async ({ plannedTarget, preparedTarget }) => {
+        const message = (await discordRequest(
+          () =>
+            rest.post(Routes.channelMessages(preparedTarget.discordChannelId), {
+              body,
+            }) as Promise<{ id: string; channel_id: string }>,
+          plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
+        )) as { id: string; channel_id: string };
 
-          logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
-        } catch (err) {
-          logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
+        if (!message?.id) {
+          if (plannedTarget.surface === "origin") {
+            logError("discord exec approvals: failed to send to channel");
+          } else if (preparedTarget.recipientUserId) {
+            logError(
+              `discord exec approvals: failed to send message to user ${preparedTarget.recipientUserId}`,
+            );
+          }
+          return null;
         }
-      }
-    }
+
+        return {
+          discordMessageId: message.id,
+          discordChannelId: preparedTarget.discordChannelId,
+        };
+      },
+      onOriginNoticeError: ({ error }) => {
+        logError(`discord exec approvals: failed to send DM redirect notice: ${String(error)}`);
+      },
+      onDuplicateSkipped: ({ preparedTarget }) => {
+        logDebug(
+          `discord exec approvals: skipping duplicate approval ${request.id} for channel ${preparedTarget.dedupeKey}`,
+        );
+      },
+      onDelivered: ({ plannedTarget, preparedTarget }) => {
+        if (plannedTarget.surface === "origin") {
+          logDebug(
+            `discord exec approvals: sent approval ${request.id} to channel ${preparedTarget.target.discordChannelId}`,
+          );
+          return;
+        }
+        logDebug(
+          `discord exec approvals: sent approval ${request.id} to user ${plannedTarget.target.to}`,
+        );
+      },
+      onDeliveryError: ({ error, plannedTarget }) => {
+        if (plannedTarget.surface === "origin") {
+          logError(`discord exec approvals: failed to send to channel: ${String(error)}`);
+          return;
+        }
+        logError(
+          `discord exec approvals: failed to notify user ${plannedTarget.target.to}: ${String(error)}`,
+        );
+      },
+    });
   }
 
-  private async handleApprovalResolved(
-    resolved: ExecApprovalResolved | PluginApprovalResolved,
+  async handleApprovalRequested(request: ApprovalRequest): Promise<void> {
+    await this.runtime.handleRequested(request);
+  }
+
+  async handleApprovalResolved(resolved: ApprovalResolved): Promise<void> {
+    await this.runtime.handleResolved(resolved);
+  }
+
+  async handleApprovalTimeout(approvalId: string, _source?: "channel" | "dm"): Promise<void> {
+    await this.runtime.handleExpired(approvalId);
+  }
+
+  private async finalizeResolved(
+    request: ApprovalRequest,
+    resolved: ApprovalResolved,
+    entries: PendingApproval[],
   ): Promise<void> {
-    // Clean up all pending entries for this approval (channel + dm)
-    const cached = this.requestCache.get(resolved.id);
-    this.requestCache.delete(resolved.id);
+    const container = isPluginApprovalRequest(request)
+      ? createPluginResolvedContainer({
+          request,
+          decision: resolved.decision,
+          resolvedBy: resolved.resolvedBy,
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+        })
+      : createExecResolvedContainer({
+          request,
+          decision: resolved.decision,
+          resolvedBy: resolved.resolvedBy,
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+        });
 
-    if (!cached) {
-      return;
-    }
-
-    logDebug(
-      `discord exec approvals: resolved ${cached.kind} ${resolved.id} with ${resolved.decision}`,
-    );
-
-    const container =
-      cached.kind === "plugin"
-        ? createPluginResolvedContainer({
-            request: cached.request,
-            decision: resolved.decision,
-            resolvedBy: resolved.resolvedBy,
-            cfg: this.opts.cfg,
-            accountId: this.opts.accountId,
-          })
-        : createExecResolvedContainer({
-            request: cached.request,
-            decision: resolved.decision,
-            resolvedBy: resolved.resolvedBy,
-            cfg: this.opts.cfg,
-            accountId: this.opts.accountId,
-          });
-
-    for (const suffix of [":channel", ":dm", ""]) {
-      const key = `${resolved.id}${suffix}`;
-      const pending = this.pending.get(key);
-      if (!pending) {
-        continue;
-      }
-
-      clearTimeout(pending.timeoutId);
-      this.pending.delete(key);
-
+    for (const pending of entries) {
       await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
     }
   }
 
-  private async handleApprovalTimeout(
-    approvalId: string,
-    source?: "channel" | "dm",
+  private async finalizeExpired(
+    request: ApprovalRequest,
+    entries: PendingApproval[],
   ): Promise<void> {
-    const key = source ? `${approvalId}:${source}` : approvalId;
-    const pending = this.pending.get(key);
-    if (!pending) {
-      return;
+    const container = isPluginApprovalRequest(request)
+      ? createPluginExpiredContainer({
+          request,
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+        })
+      : createExecExpiredContainer({
+          request,
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+        });
+    for (const pending of entries) {
+      await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
     }
-
-    this.pending.delete(key);
-
-    const cached = this.requestCache.get(approvalId);
-
-    // Only clean up requestCache if no other pending entries exist for this approval
-    const hasOtherPending =
-      this.pending.has(`${approvalId}:channel`) ||
-      this.pending.has(`${approvalId}:dm`) ||
-      this.pending.has(approvalId);
-    if (!hasOtherPending) {
-      this.requestCache.delete(approvalId);
-    }
-
-    if (!cached) {
-      return;
-    }
-
-    logDebug(
-      `discord exec approvals: timeout for ${cached.kind} ${approvalId} (${source ?? "default"})`,
-    );
-
-    const container =
-      cached.kind === "plugin"
-        ? createPluginExpiredContainer({
-            request: cached.request,
-            cfg: this.opts.cfg,
-            accountId: this.opts.accountId,
-          })
-        : createExecExpiredContainer({
-            request: cached.request,
-            cfg: this.opts.cfg,
-            accountId: this.opts.accountId,
-          });
-    await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
   }
 
   private async finalizeMessage(
@@ -945,9 +702,10 @@ export class DiscordExecApprovalHandler {
     }
 
     try {
-      const { rest, request: discordRequest } = (
-        this.opts.__testing?.createDiscordClient ?? sendShared.createDiscordClient
-      )({ token: this.opts.token, accountId: this.opts.accountId }, this.opts.cfg);
+      const { rest, request: discordRequest } = createDiscordClient(
+        { token: this.opts.token, accountId: this.opts.accountId },
+        this.opts.cfg,
+      );
 
       await discordRequest(
         () => rest.delete(Routes.channelMessage(channelId, messageId)) as Promise<void>,
@@ -965,15 +723,16 @@ export class DiscordExecApprovalHandler {
     container: DiscordUiContainer,
   ): Promise<void> {
     try {
-      const { rest, request: discordRequest } = (
-        this.opts.__testing?.createDiscordClient ?? sendShared.createDiscordClient
-      )({ token: this.opts.token, accountId: this.opts.accountId }, this.opts.cfg);
+      const { rest, request: discordRequest } = createDiscordClient(
+        { token: this.opts.token, accountId: this.opts.accountId },
+        this.opts.cfg,
+      );
       const payload = buildExecApprovalPayload(container);
 
       await discordRequest(
         () =>
           rest.patch(Routes.channelMessage(channelId, messageId), {
-            body: sendShared.stripUndefinedFields(serializePayload(payload)),
+            body: stripUndefinedFields(serializePayload(payload)),
           }),
         "update-approval",
       );
@@ -983,11 +742,6 @@ export class DiscordExecApprovalHandler {
   }
 
   async resolveApproval(approvalId: string, decision: ExecApprovalDecision): Promise<boolean> {
-    if (!this.gatewayClient) {
-      logError("discord exec approvals: gateway client not connected");
-      return false;
-    }
-
     const method =
       resolveApprovalKindFromId(approvalId) === "plugin"
         ? "plugin.approval.resolve"
@@ -995,7 +749,7 @@ export class DiscordExecApprovalHandler {
     logDebug(`discord exec approvals: resolving ${approvalId} with ${decision} via ${method}`);
 
     try {
-      await this.gatewayClient.request(method, {
+      await this.runtime.request(method, {
         id: approvalId,
         decision,
       });
@@ -1009,7 +763,11 @@ export class DiscordExecApprovalHandler {
 
   /** Return the list of configured approver IDs. */
   getApprovers(): string[] {
-    return this.opts.config.approvers ?? [];
+    return getDiscordExecApprovalApprovers({
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+      configOverride: this.opts.config,
+    });
   }
 }
 
@@ -1048,7 +806,7 @@ export class ExecApprovalButton extends Button {
     if (!approvers.some((id) => String(id) === userId)) {
       try {
         await interaction.reply({
-          content: "⛔ You are not authorized to approve requests.",
+          content: "⛔ You are not authorized to approve exec requests.",
           ephemeral: true,
         });
       } catch {

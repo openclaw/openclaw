@@ -6,25 +6,25 @@ import {
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
+  isSilentReplyText,
   resolveChunkMode,
   resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackTableAttachments, renderSlackTablesFallbackText } from "./block-kit-tables.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks, markdownToSlackMrkdwnWithTables } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -55,9 +55,14 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
   threadTs?: string;
   identity?: SlackSendIdentity;
@@ -240,16 +245,23 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
+  const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
-    localRoots: params.mediaLocalRoots,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
   const uploadTitle = params.uploadTitle ?? uploadFileName;
@@ -325,7 +337,7 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWebClient(token);
+  const client = opts.client ?? createSlackWriteClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
@@ -422,9 +434,11 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      mediaAccess: opts.mediaAccess,
       uploadFileName: opts.uploadFileName,
       uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,

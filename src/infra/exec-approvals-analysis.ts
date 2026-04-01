@@ -697,7 +697,7 @@ function renderSafeBinSegmentArgv(segment: ExecCommandSegment): string | null {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | null)[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
   if (params.segments.length !== params.segmentSatisfiedBy.length) {
