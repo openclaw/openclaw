@@ -4,9 +4,9 @@
  * 提供 LLM 主动压缩上下文并存档的能力
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { homedir } from 'os';
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { homedir } from "node:os";
 
 // 存档配置接口
 export interface ContextArchiveConfig {
