@@ -21,10 +21,13 @@ function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 function resolveFreshSessionTotalTokens(entry: SessionEntry): number | undefined {
+  // Only use totalTokens when freshly reported by the API for the current context.
+  // The cumulative totalTokens (across all turns) is NOT the current context size
+  // and produces wildly incorrect pressure values after compaction.
   if ("totalTokensFresh" in entry && entry.totalTokensFresh) {
     return (entry as { totalTokens?: number }).totalTokens;
   }
-  return (entry as { totalTokens?: number }).totalTokens;
+  return undefined;
 }
 
 export function maybeInjectAgentCompactionPressureSignal(params: {
