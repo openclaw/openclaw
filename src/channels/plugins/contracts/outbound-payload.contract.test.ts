@@ -6,7 +6,7 @@ import {
   installWhatsAppOutboundPayloadContractSuite,
   installZaloOutboundPayloadContractSuite,
   installZalouserOutboundPayloadContractSuite,
-} from "../../../test/helpers/channels/outbound-payload-contract.js";
+} from "../../../../test/helpers/channels/outbound-payload-contract.js";
 
 describe("slack outbound payload contract", () => {
   installSlackOutboundPayloadContractSuite();
