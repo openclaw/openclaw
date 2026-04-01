@@ -1,15 +1,21 @@
 import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getFlowById, listFlowRecords, resolveFlowForLookupToken } from "../tasks/flow-registry.js";
 import type { FlowRecord, FlowStatus } from "../tasks/flow-registry.types.js";
+import {
+  getFlowById,
+  listFlowRecords,
+  resolveFlowForLookupToken,
+} from "../tasks/flow-runtime-internal.js";
+import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
-import { listTasksForFlowId } from "../tasks/task-registry.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;
-const SHAPE_PAD = 12;
+const MODE_PAD = 14;
+const REV_PAD = 6;
+const CTRL_PAD = 20;
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -52,9 +58,10 @@ function formatFlowStatusCell(status: FlowStatus, rich: boolean) {
 function formatFlowRows(flows: FlowRecord[], rich: boolean) {
   const header = [
     "Flow".padEnd(ID_PAD),
-    "Shape".padEnd(SHAPE_PAD),
+    "Mode".padEnd(MODE_PAD),
     "Status".padEnd(STATUS_PAD),
-    "Owner".padEnd(24),
+    "Rev".padEnd(REV_PAD),
+    "Controller".padEnd(CTRL_PAD),
     "Tasks".padEnd(14),
     "Goal",
   ].join(" ");
@@ -65,9 +72,10 @@ function formatFlowRows(flows: FlowRecord[], rich: boolean) {
     lines.push(
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
-        flow.shape.padEnd(SHAPE_PAD),
+        flow.syncMode.padEnd(MODE_PAD),
         formatFlowStatusCell(flow.status, rich),
-        truncate(flow.ownerKey, 24).padEnd(24),
+        String(flow.revision).padEnd(REV_PAD),
+        truncate(flow.controllerId ?? "n/a", CTRL_PAD).padEnd(CTRL_PAD),
         counts.padEnd(14),
         truncate(flow.goal, 80),
       ].join(" "),
@@ -81,7 +89,25 @@ function formatFlowListSummary(flows: FlowRecord[]) {
     (flow) => flow.status === "queued" || flow.status === "running",
   ).length;
   const blocked = flows.filter((flow) => flow.status === "blocked").length;
-  return `${active} active · ${blocked} blocked · ${flows.length} total`;
+  const cancelRequested = flows.filter((flow) => flow.cancelRequestedAt != null).length;
+  return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
+}
+
+function summarizeWait(flow: FlowRecord): string {
+  if (flow.waitJson == null) {
+    return "n/a";
+  }
+  if (
+    typeof flow.waitJson === "string" ||
+    typeof flow.waitJson === "number" ||
+    typeof flow.waitJson === "boolean"
+  ) {
+    return String(flow.waitJson);
+  }
+  if (Array.isArray(flow.waitJson)) {
+    return `array(${flow.waitJson.length})`;
+  }
+  return Object.keys(flow.waitJson).toSorted().join(", ") || "object";
 }
 
 export async function flowsListCommand(
@@ -161,14 +187,20 @@ export async function flowsShowCommand(
   const lines = [
     "Flow:",
     `flowId: ${flow.flowId}`,
-    `shape: ${flow.shape}`,
+    `syncMode: ${flow.syncMode}`,
     `status: ${flow.status}`,
     `notify: ${flow.notifyPolicy}`,
     `ownerKey: ${flow.ownerKey}`,
+    `controllerId: ${flow.controllerId ?? "n/a"}`,
+    `revision: ${flow.revision}`,
     `goal: ${flow.goal}`,
     `currentStep: ${flow.currentStep ?? "n/a"}`,
     `blockedTaskId: ${flow.blockedTaskId ?? "n/a"}`,
     `blockedSummary: ${flow.blockedSummary ?? "n/a"}`,
+    `wait: ${summarizeWait(flow)}`,
+    `cancelRequestedAt: ${
+      flow.cancelRequestedAt ? new Date(flow.cancelRequestedAt).toISOString() : "n/a"
+    }`,
     `createdAt: ${new Date(flow.createdAt).toISOString()}`,
     `updatedAt: ${new Date(flow.updatedAt).toISOString()}`,
     `endedAt: ${flow.endedAt ? new Date(flow.endedAt).toISOString() : "n/a"}`,
@@ -211,5 +243,5 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     return;
   }
   const updated = getFlowById(flow.flowId) ?? result.flow ?? flow;
-  runtime.log(`Cancelled ${updated.flowId} (${updated.shape}) with status ${updated.status}.`);
+  runtime.log(`Cancelled ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
 }

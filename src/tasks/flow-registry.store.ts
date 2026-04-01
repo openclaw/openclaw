@@ -19,6 +19,27 @@ export type FlowRegistryStore = {
   close?: () => void;
 };
 
+export type FlowRegistryHookEvent =
+  | {
+      kind: "restored";
+      flows: FlowRecord[];
+    }
+  | {
+      kind: "upserted";
+      flow: FlowRecord;
+      previous?: FlowRecord;
+    }
+  | {
+      kind: "deleted";
+      flowId: string;
+      previous: FlowRecord;
+    };
+
+export type FlowRegistryHooks = {
+  // Hooks are incremental/observational. Snapshot persistence belongs to FlowRegistryStore.
+  onEvent?: (event: FlowRegistryHookEvent) => void;
+};
+
 const defaultFlowRegistryStore: FlowRegistryStore = {
   loadSnapshot: loadFlowRegistryStateFromSqlite,
   saveSnapshot: saveFlowRegistryStateToSqlite,
@@ -28,18 +49,30 @@ const defaultFlowRegistryStore: FlowRegistryStore = {
 };
 
 let configuredFlowRegistryStore: FlowRegistryStore = defaultFlowRegistryStore;
+let configuredFlowRegistryHooks: FlowRegistryHooks | null = null;
 
 export function getFlowRegistryStore(): FlowRegistryStore {
   return configuredFlowRegistryStore;
 }
 
-export function configureFlowRegistryRuntime(params: { store?: FlowRegistryStore }) {
+export function getFlowRegistryHooks(): FlowRegistryHooks | null {
+  return configuredFlowRegistryHooks;
+}
+
+export function configureFlowRegistryRuntime(params: {
+  store?: FlowRegistryStore;
+  hooks?: FlowRegistryHooks | null;
+}) {
   if (params.store) {
     configuredFlowRegistryStore = params.store;
+  }
+  if ("hooks" in params) {
+    configuredFlowRegistryHooks = params.hooks ?? null;
   }
 }
 
 export function resetFlowRegistryRuntimeForTests() {
   configuredFlowRegistryStore.close?.();
   configuredFlowRegistryStore = defaultFlowRegistryStore;
+  configuredFlowRegistryHooks = null;
 }

@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { getFlowById, listFlowRecords, resetFlowRegistryForTests } from "./flow-registry.js";
+import {
+  createManagedFlow,
+  getFlowById,
+  listFlowRecords,
+  resetFlowRegistryForTests,
+} from "./flow-registry.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
   completeTaskRunByRunId,
-  createLinearFlow,
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
@@ -285,12 +289,13 @@ describe("task-executor", () => {
     });
   });
 
-  it("cancels active tasks linked to a linear flow", async () => {
+  it("cancels active tasks linked to a managed flow", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
-      const flow = createLinearFlow({
+      const flow = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
         goal: "Inspect PR batch",
       });
       const child = createRunningTaskRun({
@@ -327,8 +332,9 @@ describe("task-executor", () => {
 
   it("denies cross-owner flow cancellation through the owner-scoped wrapper", async () => {
     await withTaskExecutorStateDir(async () => {
-      const flow = createLinearFlow({
+      const flow = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
         goal: "Protected flow",
       });
 

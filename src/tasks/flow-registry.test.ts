@@ -2,13 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createFlowRecord,
+  createFlowForTask,
+  createManagedFlow,
   deleteFlowRecordById,
+  failFlow,
   getFlowById,
   listFlowRecords,
+  requestFlowCancel,
   resetFlowRegistryForTests,
+  resumeFlow,
+  setFlowWaiting,
   syncFlowFromTask,
-  updateFlowRecordById,
+  updateFlowRecordByIdExpectedRevision,
 } from "./flow-registry.js";
+import { configureFlowRegistryRuntime } from "./flow-registry.store.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
@@ -39,63 +46,249 @@ describe("flow-registry", () => {
     resetFlowRegistryForTests();
   });
 
-  it("creates, updates, lists, and deletes flow records", async () => {
+  it("creates managed flows and updates them through revision-checked helpers", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
-      const created = createFlowRecord({
+      const created = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/managed-controller",
         goal: "Investigate flaky test",
-        status: "running",
         currentStep: "spawn_task",
+        stateJson: { phase: "spawn" },
       });
 
-      expect(getFlowById(created.flowId)).toMatchObject({
+      expect(created).toMatchObject({
         flowId: created.flowId,
-        status: "running",
+        syncMode: "managed",
+        controllerId: "tests/managed-controller",
+        revision: 0,
+        status: "queued",
         currentStep: "spawn_task",
+        stateJson: { phase: "spawn" },
       });
 
-      const updated = updateFlowRecordById(created.flowId, {
-        status: "waiting",
-        currentStep: "ask_user",
-      });
-      expect(updated).toMatchObject({
+      const waiting = setFlowWaiting({
         flowId: created.flowId,
-        status: "waiting",
-        currentStep: "ask_user",
+        expectedRevision: created.revision,
+        currentStep: "await_review",
+        stateJson: { phase: "await_review" },
+        waitJson: { kind: "task", taskId: "task-123" },
+      });
+      expect(waiting).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+          revision: 1,
+          status: "waiting",
+          currentStep: "await_review",
+          waitJson: { kind: "task", taskId: "task-123" },
+        }),
+      });
+
+      const conflict = updateFlowRecordByIdExpectedRevision({
+        flowId: created.flowId,
+        expectedRevision: 0,
+        patch: {
+          currentStep: "stale",
+        },
+      });
+      expect(conflict).toMatchObject({
+        applied: false,
+        reason: "revision_conflict",
+        current: expect.objectContaining({
+          flowId: created.flowId,
+          revision: 1,
+        }),
+      });
+
+      const resumed = resumeFlow({
+        flowId: created.flowId,
+        expectedRevision: 1,
+        status: "running",
+        currentStep: "resume_work",
+      });
+      expect(resumed).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+          revision: 2,
+          status: "running",
+          currentStep: "resume_work",
+          waitJson: null,
+        }),
+      });
+
+      const cancelRequested = requestFlowCancel({
+        flowId: created.flowId,
+        expectedRevision: 2,
+        cancelRequestedAt: 400,
+      });
+      expect(cancelRequested).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+          revision: 3,
+          cancelRequestedAt: 400,
+        }),
+      });
+
+      const failed = failFlow({
+        flowId: created.flowId,
+        expectedRevision: 3,
+        blockedSummary: "Task runner failed.",
+        endedAt: 500,
+      });
+      expect(failed).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+          revision: 4,
+          status: "failed",
+          blockedSummary: "Task runner failed.",
+          endedAt: 500,
+        }),
       });
 
       expect(listFlowRecords()).toEqual([
         expect.objectContaining({
           flowId: created.flowId,
-          goal: "Investigate flaky test",
-          status: "waiting",
+          revision: 4,
+          cancelRequestedAt: 400,
         }),
       ]);
 
       expect(deleteFlowRecordById(created.flowId)).toBe(true);
       expect(getFlowById(created.flowId)).toBeUndefined();
-      expect(listFlowRecords()).toEqual([]);
     });
   });
 
-  it("stores blocked metadata and clears it when a later task resumes the same flow", async () => {
+  it("requires a controller for managed flows and rejects clearing it later", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
-      const created = createFlowRecord({
-        shape: "single_task",
+      expect(() =>
+        createFlowRecord({
+          ownerKey: "agent:main:main",
+          goal: "Missing controller",
+        }),
+      ).toThrow("Managed flow controllerId is required.");
+
+      const created = createManagedFlow({
         ownerKey: "agent:main:main",
-        goal: "Fix permissions",
-        status: "running",
+        controllerId: "tests/managed-controller",
+        goal: "Protected controller",
+      });
+
+      expect(() =>
+        updateFlowRecordByIdExpectedRevision({
+          flowId: created.flowId,
+          expectedRevision: created.revision,
+          patch: {
+            controllerId: null,
+          },
+        }),
+      ).toThrow("Managed flow controllerId is required.");
+    });
+  });
+
+  it("emits restored, upserted, and deleted flow hook events", () => {
+    const onEvent = vi.fn();
+    configureFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map(),
+        }),
+        saveSnapshot: () => {},
+      },
+      hooks: {
+        onEvent,
+      },
+    });
+
+    const created = createManagedFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/hooks",
+      goal: "Observe hooks",
+    });
+
+    deleteFlowRecordById(created.flowId);
+
+    expect(onEvent).toHaveBeenCalledWith({
+      kind: "restored",
+      flows: [],
+    });
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "upserted",
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+        }),
+      }),
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "deleted",
+        flowId: created.flowId,
+      }),
+    );
+  });
+
+  it("normalizes restored managed flows without a controller id", () => {
+    configureFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map([
+            [
+              "legacy-managed",
+              {
+                flowId: "legacy-managed",
+                syncMode: "managed",
+                ownerKey: "agent:main:main",
+                revision: 0,
+                status: "queued",
+                notifyPolicy: "done_only",
+                goal: "Legacy managed flow",
+                createdAt: 10,
+                updatedAt: 10,
+              },
+            ],
+          ]),
+        }),
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(getFlowById("legacy-managed")).toMatchObject({
+      flowId: "legacy-managed",
+      syncMode: "managed",
+      controllerId: "core/legacy-restored",
+    });
+  });
+
+  it("mirrors one-task flow state from tasks and leaves managed flows alone", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const mirrored = createFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-running",
+          notifyPolicy: "done_only",
+          status: "running",
+          label: "Fix permissions",
+          task: "Fix permissions",
+          createdAt: 100,
+          lastEventAt: 100,
+        },
       });
 
       const blocked = syncFlowFromTask({
         taskId: "task-blocked",
-        parentFlowId: created.flowId,
+        parentFlowId: mirrored.flowId,
         status: "succeeded",
         terminalOutcome: "blocked",
         notifyPolicy: "done_only",
@@ -105,51 +298,25 @@ describe("flow-registry", () => {
         endedAt: 200,
         terminalSummary: "Writable session required.",
       });
-
       expect(blocked).toMatchObject({
-        flowId: created.flowId,
+        flowId: mirrored.flowId,
+        syncMode: "task_mirrored",
         status: "blocked",
         blockedTaskId: "task-blocked",
         blockedSummary: "Writable session required.",
-        endedAt: 200,
       });
 
-      const resumed = syncFlowFromTask({
-        taskId: "task-retry",
-        parentFlowId: created.flowId,
-        status: "running",
-        notifyPolicy: "done_only",
-        label: "Fix permissions",
-        task: "Fix permissions",
-        lastEventAt: 260,
-        progressSummary: "Retrying with writable session",
-      });
-
-      expect(resumed).toMatchObject({
-        flowId: created.flowId,
-        status: "running",
-      });
-      expect(resumed?.blockedTaskId).toBeUndefined();
-      expect(resumed?.blockedSummary).toBeUndefined();
-      expect(resumed?.endedAt).toBeUndefined();
-    });
-  });
-
-  it("does not auto-sync linear flow state from linked child tasks", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetFlowRegistryForTests();
-
-      const created = createFlowRecord({
+      const managed = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/managed",
         goal: "Cluster PRs",
-        status: "waiting",
         currentStep: "wait_for",
+        status: "waiting",
+        waitJson: { kind: "external_event" },
       });
-
-      const synced = syncFlowFromTask({
+      const syncedManaged = syncFlowFromTask({
         taskId: "task-child",
-        parentFlowId: created.flowId,
+        parentFlowId: managed.flowId,
         status: "running",
         notifyPolicy: "done_only",
         label: "Child task",
@@ -157,12 +324,47 @@ describe("flow-registry", () => {
         lastEventAt: 250,
         progressSummary: "Running child task",
       });
-
-      expect(synced).toMatchObject({
-        flowId: created.flowId,
-        shape: "linear",
+      expect(syncedManaged).toMatchObject({
+        flowId: managed.flowId,
+        syncMode: "managed",
         status: "waiting",
         currentStep: "wait_for",
+        waitJson: { kind: "external_event" },
+      });
+    });
+  });
+
+  it("preserves explicit json null in state and wait payloads", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const created = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/null-state",
+        goal: "Null payloads",
+        stateJson: null,
+        waitJson: null,
+      });
+
+      expect(created).toMatchObject({
+        flowId: created.flowId,
+        stateJson: null,
+        waitJson: null,
+      });
+
+      const resumed = resumeFlow({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        stateJson: null,
+      });
+
+      expect(resumed).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+          stateJson: null,
+        }),
       });
     });
   });

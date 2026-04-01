@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
-import { getFlowRegistryStore, resetFlowRegistryRuntimeForTests } from "./flow-registry.store.js";
-import type { FlowRecord, FlowShape, FlowStatus } from "./flow-registry.types.js";
+import {
+  getFlowRegistryHooks,
+  getFlowRegistryStore,
+  resetFlowRegistryRuntimeForTests,
+  type FlowRegistryHookEvent,
+} from "./flow-registry.store.js";
+import type { FlowRecord, FlowStatus, FlowSyncMode, JsonValue } from "./flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const flows = new Map<string, FlowRecord>();
@@ -15,6 +20,10 @@ type FlowRecordPatch = Partial<
     | "currentStep"
     | "blockedTaskId"
     | "blockedSummary"
+    | "controllerId"
+    | "stateJson"
+    | "waitJson"
+    | "cancelRequestedAt"
     | "updatedAt"
     | "endedAt"
   >
@@ -22,18 +31,85 @@ type FlowRecordPatch = Partial<
   currentStep?: string | null;
   blockedTaskId?: string | null;
   blockedSummary?: string | null;
+  controllerId?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
   endedAt?: number | null;
 };
+
+export type FlowUpdateResult =
+  | {
+      applied: true;
+      flow: FlowRecord;
+    }
+  | {
+      applied: false;
+      reason: "not_found" | "revision_conflict";
+      current?: FlowRecord;
+    };
+
+function cloneStructuredValue<T>(value: T | undefined): T | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return structuredClone(value);
+}
 
 function cloneFlowRecord(record: FlowRecord): FlowRecord {
   return {
     ...record,
-    ...(record.requesterOrigin ? { requesterOrigin: { ...record.requesterOrigin } } : {}),
+    ...(record.requesterOrigin
+      ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
+      : {}),
+    ...(record.stateJson !== undefined
+      ? { stateJson: cloneStructuredValue(record.stateJson)! }
+      : {}),
+    ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
+  };
+}
+
+function normalizeRestoredFlowRecord(record: FlowRecord): FlowRecord {
+  const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
+  const controllerId =
+    syncMode === "managed"
+      ? (normalizeText(record.controllerId) ?? "core/legacy-restored")
+      : undefined;
+  return {
+    ...record,
+    syncMode,
+    ownerKey: assertFlowOwnerKey(record.ownerKey),
+    ...(record.requesterOrigin
+      ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
+      : {}),
+    ...(controllerId ? { controllerId } : {}),
+    currentStep: normalizeText(record.currentStep),
+    blockedTaskId: normalizeText(record.blockedTaskId),
+    blockedSummary: normalizeText(record.blockedSummary),
+    ...(record.stateJson !== undefined
+      ? { stateJson: cloneStructuredValue(record.stateJson)! }
+      : {}),
+    ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
+    revision: Math.max(0, record.revision),
+    cancelRequestedAt: record.cancelRequestedAt ?? undefined,
+    endedAt: record.endedAt ?? undefined,
   };
 }
 
 function snapshotFlowRecords(source: ReadonlyMap<string, FlowRecord>): FlowRecord[] {
   return [...source.values()].map((record) => cloneFlowRecord(record));
+}
+
+function emitFlowRegistryHookEvent(createEvent: () => FlowRegistryHookEvent): void {
+  const hooks = getFlowRegistryHooks();
+  if (!hooks?.onEvent) {
+    return;
+  }
+  try {
+    hooks.onEvent(createEvent());
+  } catch {
+    // Flow hooks are observational. They must not break registry writes.
+  }
 }
 
 function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
@@ -45,6 +121,15 @@ function normalizeOwnerKey(ownerKey?: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeText(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeJsonBlob(value: JsonValue | null | undefined): JsonValue | undefined {
+  return value === undefined ? undefined : cloneStructuredValue(value);
+}
+
 function assertFlowOwnerKey(ownerKey: string): string {
   const normalized = normalizeOwnerKey(ownerKey);
   if (!normalized) {
@@ -53,8 +138,12 @@ function assertFlowOwnerKey(ownerKey: string): string {
   return normalized;
 }
 
-function ensureFlowShape(shape?: FlowShape): FlowShape {
-  return shape ?? "linear";
+function assertControllerId(controllerId?: string | null): string {
+  const normalized = normalizeText(controllerId);
+  if (!normalized) {
+    throw new Error("Managed flow controllerId is required.");
+  }
+  return normalized;
 }
 
 function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
@@ -99,8 +188,12 @@ function ensureFlowRegistryReady() {
   const restored = getFlowRegistryStore().loadSnapshot();
   flows.clear();
   for (const [flowId, flow] of restored.flows) {
-    flows.set(flowId, cloneFlowRecord(flow));
+    flows.set(flowId, normalizeRestoredFlowRecord(flow));
   }
+  emitFlowRegistryHookEvent(() => ({
+    kind: "restored",
+    flows: snapshotFlowRecords(flows),
+  }));
 }
 
 function persistFlowRegistry() {
@@ -127,40 +220,146 @@ function persistFlowDelete(flowId: string) {
   persistFlowRegistry();
 }
 
-export function createFlowRecord(params: {
-  shape?: FlowShape;
+function buildFlowRecord(params: {
+  syncMode?: FlowSyncMode;
   ownerKey: string;
+  requesterOrigin?: FlowRecord["requesterOrigin"];
+  controllerId?: string | null;
+  revision?: number;
+  status?: FlowStatus;
+  notifyPolicy?: TaskNotifyPolicy;
+  goal: string;
+  currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+}): FlowRecord {
+  const now = params.createdAt ?? Date.now();
+  const syncMode = params.syncMode ?? "managed";
+  const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
+  return {
+    flowId: crypto.randomUUID(),
+    syncMode,
+    ownerKey: assertFlowOwnerKey(params.ownerKey),
+    ...(params.requesterOrigin
+      ? { requesterOrigin: cloneStructuredValue(params.requesterOrigin)! }
+      : {}),
+    ...(controllerId ? { controllerId } : {}),
+    revision: Math.max(0, params.revision ?? 0),
+    status: params.status ?? "queued",
+    notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
+    goal: params.goal,
+    currentStep: normalizeText(params.currentStep),
+    blockedTaskId: normalizeText(params.blockedTaskId),
+    blockedSummary: normalizeText(params.blockedSummary),
+    ...(normalizeJsonBlob(params.stateJson) !== undefined
+      ? { stateJson: normalizeJsonBlob(params.stateJson)! }
+      : {}),
+    ...(normalizeJsonBlob(params.waitJson) !== undefined
+      ? { waitJson: normalizeJsonBlob(params.waitJson)! }
+      : {}),
+    ...(params.cancelRequestedAt != null ? { cancelRequestedAt: params.cancelRequestedAt } : {}),
+    createdAt: now,
+    updatedAt: params.updatedAt ?? now,
+    ...(params.endedAt != null ? { endedAt: params.endedAt } : {}),
+  };
+}
+
+function applyFlowPatch(current: FlowRecord, patch: FlowRecordPatch): FlowRecord {
+  const controllerId =
+    patch.controllerId === undefined ? current.controllerId : normalizeText(patch.controllerId);
+  if (current.syncMode === "managed") {
+    assertControllerId(controllerId);
+  }
+  return {
+    ...current,
+    ...(patch.status ? { status: patch.status } : {}),
+    ...(patch.notifyPolicy ? { notifyPolicy: patch.notifyPolicy } : {}),
+    ...(patch.goal ? { goal: patch.goal } : {}),
+    controllerId,
+    currentStep:
+      patch.currentStep === undefined ? current.currentStep : normalizeText(patch.currentStep),
+    blockedTaskId:
+      patch.blockedTaskId === undefined
+        ? current.blockedTaskId
+        : normalizeText(patch.blockedTaskId),
+    blockedSummary:
+      patch.blockedSummary === undefined
+        ? current.blockedSummary
+        : normalizeText(patch.blockedSummary),
+    stateJson:
+      patch.stateJson === undefined ? current.stateJson : normalizeJsonBlob(patch.stateJson),
+    waitJson: patch.waitJson === undefined ? current.waitJson : normalizeJsonBlob(patch.waitJson),
+    cancelRequestedAt:
+      patch.cancelRequestedAt === undefined
+        ? current.cancelRequestedAt
+        : (patch.cancelRequestedAt ?? undefined),
+    revision: current.revision + 1,
+    updatedAt: patch.updatedAt ?? Date.now(),
+    endedAt: patch.endedAt === undefined ? current.endedAt : (patch.endedAt ?? undefined),
+  };
+}
+
+function writeFlowRecord(next: FlowRecord, previous?: FlowRecord): FlowRecord {
+  flows.set(next.flowId, next);
+  persistFlowUpsert(next);
+  emitFlowRegistryHookEvent(() => ({
+    kind: "upserted",
+    flow: cloneFlowRecord(next),
+    ...(previous ? { previous: cloneFlowRecord(previous) } : {}),
+  }));
+  return cloneFlowRecord(next);
+}
+
+export function createFlowRecord(params: {
+  syncMode?: FlowSyncMode;
+  ownerKey: string;
+  requesterOrigin?: FlowRecord["requesterOrigin"];
+  controllerId?: string | null;
+  revision?: number;
+  status?: FlowStatus;
+  notifyPolicy?: TaskNotifyPolicy;
+  goal: string;
+  currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+}): FlowRecord {
+  ensureFlowRegistryReady();
+  const record = buildFlowRecord(params);
+  return writeFlowRecord(record);
+}
+
+export function createManagedFlow(params: {
+  ownerKey: string;
+  controllerId: string;
   requesterOrigin?: FlowRecord["requesterOrigin"];
   status?: FlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
-  currentStep?: string;
-  blockedTaskId?: string;
-  blockedSummary?: string;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
   createdAt?: number;
   updatedAt?: number;
-  endedAt?: number;
+  endedAt?: number | null;
 }): FlowRecord {
-  ensureFlowRegistryReady();
-  const now = params.createdAt ?? Date.now();
-  const record: FlowRecord = {
-    flowId: crypto.randomUUID(),
-    shape: ensureFlowShape(params.shape),
-    ownerKey: assertFlowOwnerKey(params.ownerKey),
-    ...(params.requesterOrigin ? { requesterOrigin: { ...params.requesterOrigin } } : {}),
-    status: params.status ?? "queued",
-    notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
-    goal: params.goal,
-    currentStep: params.currentStep?.trim() || undefined,
-    blockedTaskId: params.blockedTaskId?.trim() || undefined,
-    blockedSummary: params.blockedSummary?.trim() || undefined,
-    createdAt: now,
-    updatedAt: params.updatedAt ?? now,
-    ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
-  };
-  flows.set(record.flowId, record);
-  persistFlowUpsert(record);
-  return cloneFlowRecord(record);
+  return createFlowRecord({
+    ...params,
+    syncMode: "managed",
+    controllerId: assertControllerId(params.controllerId),
+  });
 }
 
 export function createFlowForTask(params: {
@@ -192,7 +391,7 @@ export function createFlowForTask(params: {
     ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
     : undefined;
   return createFlowRecord({
-    shape: "single_task",
+    syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
@@ -207,35 +406,160 @@ export function createFlowForTask(params: {
   });
 }
 
-export function updateFlowRecordById(flowId: string, patch: FlowRecordPatch): FlowRecord | null {
+function updateFlowRecordByIdUnchecked(flowId: string, patch: FlowRecordPatch): FlowRecord | null {
   ensureFlowRegistryReady();
   const current = flows.get(flowId);
   if (!current) {
     return null;
   }
-  const next: FlowRecord = {
-    ...current,
-    ...(patch.status ? { status: patch.status } : {}),
-    ...(patch.notifyPolicy ? { notifyPolicy: patch.notifyPolicy } : {}),
-    ...(patch.goal ? { goal: patch.goal } : {}),
-    currentStep:
-      patch.currentStep === undefined
-        ? current.currentStep
-        : patch.currentStep?.trim() || undefined,
-    blockedTaskId:
-      patch.blockedTaskId === undefined
-        ? current.blockedTaskId
-        : patch.blockedTaskId?.trim() || undefined,
-    blockedSummary:
-      patch.blockedSummary === undefined
-        ? current.blockedSummary
-        : patch.blockedSummary?.trim() || undefined,
-    updatedAt: patch.updatedAt ?? Date.now(),
-    endedAt: patch.endedAt === undefined ? current.endedAt : (patch.endedAt ?? undefined),
+  return writeFlowRecord(applyFlowPatch(current, patch), current);
+}
+
+export function updateFlowRecordByIdExpectedRevision(params: {
+  flowId: string;
+  expectedRevision: number;
+  patch: FlowRecordPatch;
+}): FlowUpdateResult {
+  ensureFlowRegistryReady();
+  const current = flows.get(params.flowId);
+  if (!current) {
+    return {
+      applied: false,
+      reason: "not_found",
+    };
+  }
+  if (current.revision !== params.expectedRevision) {
+    return {
+      applied: false,
+      reason: "revision_conflict",
+      current: cloneFlowRecord(current),
+    };
+  }
+  return {
+    applied: true,
+    flow: writeFlowRecord(applyFlowPatch(current, params.patch), current),
   };
-  flows.set(flowId, next);
-  persistFlowUpsert(next);
-  return cloneFlowRecord(next);
+}
+
+export function setFlowWaiting(params: {
+  flowId: string;
+  expectedRevision: number;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  updatedAt?: number;
+}): FlowUpdateResult {
+  return updateFlowRecordByIdExpectedRevision({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    patch: {
+      status:
+        normalizeText(params.blockedTaskId) || normalizeText(params.blockedSummary)
+          ? "blocked"
+          : "waiting",
+      currentStep: params.currentStep,
+      stateJson: params.stateJson,
+      waitJson: params.waitJson,
+      blockedTaskId: params.blockedTaskId,
+      blockedSummary: params.blockedSummary,
+      endedAt: null,
+      updatedAt: params.updatedAt,
+    },
+  });
+}
+
+export function resumeFlow(params: {
+  flowId: string;
+  expectedRevision: number;
+  status?: Extract<FlowStatus, "queued" | "running">;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  updatedAt?: number;
+}): FlowUpdateResult {
+  return updateFlowRecordByIdExpectedRevision({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    patch: {
+      status: params.status ?? "queued",
+      currentStep: params.currentStep,
+      stateJson: params.stateJson,
+      waitJson: null,
+      blockedTaskId: null,
+      blockedSummary: null,
+      endedAt: null,
+      updatedAt: params.updatedAt,
+    },
+  });
+}
+
+export function finishFlow(params: {
+  flowId: string;
+  expectedRevision: number;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  updatedAt?: number;
+  endedAt?: number;
+}): FlowUpdateResult {
+  const endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+  return updateFlowRecordByIdExpectedRevision({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    patch: {
+      status: "succeeded",
+      currentStep: params.currentStep,
+      stateJson: params.stateJson,
+      waitJson: null,
+      blockedTaskId: null,
+      blockedSummary: null,
+      endedAt,
+      updatedAt: params.updatedAt ?? endedAt,
+    },
+  });
+}
+
+export function failFlow(params: {
+  flowId: string;
+  expectedRevision: number;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  updatedAt?: number;
+  endedAt?: number;
+}): FlowUpdateResult {
+  const endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+  return updateFlowRecordByIdExpectedRevision({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    patch: {
+      status: "failed",
+      currentStep: params.currentStep,
+      stateJson: params.stateJson,
+      waitJson: null,
+      blockedTaskId: params.blockedTaskId,
+      blockedSummary: params.blockedSummary,
+      endedAt,
+      updatedAt: params.updatedAt ?? endedAt,
+    },
+  });
+}
+
+export function requestFlowCancel(params: {
+  flowId: string;
+  expectedRevision: number;
+  cancelRequestedAt?: number;
+  updatedAt?: number;
+}): FlowUpdateResult {
+  return updateFlowRecordByIdExpectedRevision({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    patch: {
+      cancelRequestedAt: params.cancelRequestedAt ?? params.updatedAt ?? Date.now(),
+      updatedAt: params.updatedAt,
+    },
+  });
 }
 
 export function syncFlowFromTask(
@@ -262,7 +586,7 @@ export function syncFlowFromTask(
   if (!flow) {
     return null;
   }
-  if (flow.shape !== "single_task") {
+  if (flow.syncMode !== "task_mirrored") {
     return flow;
   }
   const terminalFlowStatus = deriveFlowStatusFromTask(task);
@@ -272,13 +596,14 @@ export function syncFlowFromTask(
     terminalFlowStatus === "failed" ||
     terminalFlowStatus === "cancelled" ||
     terminalFlowStatus === "lost";
-  return updateFlowRecordById(flowId, {
+  return updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: resolveFlowGoal(task),
     blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
+    waitJson: null,
     updatedAt: task.lastEventAt ?? Date.now(),
     ...(isTerminal
       ? {
@@ -334,6 +659,11 @@ export function deleteFlowRecordById(flowId: string): boolean {
   }
   flows.delete(flowId);
   persistFlowDelete(flowId);
+  emitFlowRegistryHookEvent(() => ({
+    kind: "deleted",
+    flowId,
+    previous: cloneFlowRecord(current),
+  }));
   return true;
 }
 

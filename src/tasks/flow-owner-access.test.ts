@@ -5,7 +5,7 @@ import {
   listFlowsForOwner,
   resolveFlowForLookupTokenForOwner,
 } from "./flow-owner-access.js";
-import { createFlowRecord, resetFlowRegistryForTests } from "./flow-registry.js";
+import { createManagedFlow, resetFlowRegistryForTests } from "./flow-registry.js";
 
 afterEach(() => {
   resetFlowRegistryForTests({ persist: false });
@@ -13,14 +13,16 @@ afterEach(() => {
 
 describe("flow owner access", () => {
   it("returns owner-scoped flows for direct and owner-key lookups", () => {
-    const older = createFlowRecord({
+    const older = createManagedFlow({
       ownerKey: "agent:main:main",
+      controllerId: "tests/owner-access",
       goal: "Older flow",
       createdAt: 100,
       updatedAt: 100,
     });
-    const latest = createFlowRecord({
+    const latest = createManagedFlow({
       ownerKey: "agent:main:main",
+      controllerId: "tests/owner-access",
       goal: "Latest flow",
       createdAt: 200,
       updatedAt: 200,
@@ -51,8 +53,9 @@ describe("flow owner access", () => {
   });
 
   it("denies cross-owner flow reads", () => {
-    const flow = createFlowRecord({
+    const flow = createManagedFlow({
       ownerKey: "agent:main:main",
+      controllerId: "tests/owner-access",
       goal: "Hidden flow",
     });
 

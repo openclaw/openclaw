@@ -3,8 +3,8 @@ import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginCompatibilityWarnings, buildPluginStatusReport } from "../plugins/status.js";
-import { listFlowRecords } from "../tasks/flow-registry.js";
-import { listTasksForFlowId } from "../tasks/task-registry.js";
+import { listFlowRecords } from "../tasks/flow-runtime-internal.js";
+import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
@@ -13,12 +13,13 @@ function noteFlowRecoveryHints() {
     const tasks = listTasksForFlowId(flow.flowId);
     const findings: string[] = [];
     if (
-      flow.shape === "linear" &&
-      (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
-      tasks.length === 0
+      flow.syncMode === "managed" &&
+      flow.status === "running" &&
+      tasks.length === 0 &&
+      flow.waitJson === undefined
     ) {
       findings.push(
-        `${flow.flowId}: ${flow.status} linear flow has no linked tasks; inspect or cancel it manually.`,
+        `${flow.flowId}: running managed flow has no linked tasks or wait state; inspect or cancel it manually.`,
       );
     }
     if (

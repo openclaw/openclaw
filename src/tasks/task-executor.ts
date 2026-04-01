@@ -1,14 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFlowByIdForOwner } from "./flow-owner-access.js";
+import type { FlowRecord } from "./flow-registry.types.js";
 import {
   createFlowForTask,
-  createFlowRecord,
   deleteFlowRecordById,
   getFlowById,
-  updateFlowRecordById,
-} from "./flow-registry.js";
-import type { FlowRecord } from "./flow-registry.types.js";
+  updateFlowRecordByIdExpectedRevision,
+} from "./flow-runtime-internal.js";
 import {
   cancelTaskById,
   createTaskRecord,
@@ -106,28 +105,6 @@ export function createQueuedTaskRun(params: {
   return ensureSingleTaskFlow({
     task,
     requesterOrigin: params.requesterOrigin,
-  });
-}
-
-export function createLinearFlow(params: {
-  ownerKey: string;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  goal: string;
-  notifyPolicy?: TaskNotifyPolicy;
-  currentStep?: string;
-  createdAt?: number;
-  updatedAt?: number;
-}): FlowRecord {
-  return createFlowRecord({
-    shape: "linear",
-    ownerKey: params.ownerKey,
-    requesterOrigin: params.requesterOrigin,
-    goal: params.goal,
-    notifyPolicy: params.notifyPolicy,
-    currentStep: params.currentStep,
-    status: "queued",
-    createdAt: params.createdAt,
-    updatedAt: params.updatedAt,
   });
 }
 
@@ -450,17 +427,34 @@ export async function cancelFlowById(params: {
     };
   }
   const now = Date.now();
-  const updatedFlow = updateFlowRecordById(flow.flowId, {
-    status: "cancelled",
-    blockedTaskId: null,
-    blockedSummary: null,
-    endedAt: now,
-    updatedAt: now,
+  const refreshedFlow = getFlowById(flow.flowId) ?? flow;
+  const updatedFlowResult = updateFlowRecordByIdExpectedRevision({
+    flowId: refreshedFlow.flowId,
+    expectedRevision: refreshedFlow.revision,
+    patch: {
+      status: "cancelled",
+      blockedTaskId: null,
+      blockedSummary: null,
+      endedAt: now,
+      updatedAt: now,
+    },
   });
+  if (!updatedFlowResult.applied) {
+    return {
+      found: true,
+      cancelled: false,
+      reason:
+        updatedFlowResult.reason === "revision_conflict"
+          ? "Flow changed while cancellation was in progress."
+          : "Flow not found.",
+      flow: updatedFlowResult.current ?? getFlowById(flow.flowId),
+      tasks: refreshedTasks,
+    };
+  }
   return {
     found: true,
     cancelled: true,
-    flow: updatedFlow ?? getFlowById(flow.flowId),
+    flow: updatedFlowResult.flow,
     tasks: refreshedTasks,
   };
 }

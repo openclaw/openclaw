@@ -1,7 +1,13 @@
 import { statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createFlowRecord, getFlowById, resetFlowRegistryForTests } from "./flow-registry.js";
+import {
+  createManagedFlow,
+  getFlowById,
+  requestFlowCancel,
+  resetFlowRegistryForTests,
+  setFlowWaiting,
+} from "./flow-registry.js";
 import { resolveFlowRegistryDir, resolveFlowRegistrySqlitePath } from "./flow-registry.paths.js";
 import { configureFlowRegistryRuntime } from "./flow-registry.store.js";
 import type { FlowRecord } from "./flow-registry.types.js";
@@ -9,16 +15,21 @@ import type { FlowRecord } from "./flow-registry.types.js";
 function createStoredFlow(): FlowRecord {
   return {
     flowId: "flow-restored",
-    shape: "linear",
+    syncMode: "managed",
     ownerKey: "agent:main:main",
+    controllerId: "tests/restored-controller",
+    revision: 4,
     status: "blocked",
     notifyPolicy: "done_only",
     goal: "Restored flow",
     currentStep: "spawn_task",
     blockedTaskId: "task-restored",
     blockedSummary: "Writable session required.",
+    stateJson: { lane: "triage", done: 3 },
+    waitJson: { kind: "task", taskId: "task-restored" },
+    cancelRequestedAt: 115,
     createdAt: 100,
-    updatedAt: 100,
+    updatedAt: 120,
     endedAt: 120,
   };
 }
@@ -61,15 +72,18 @@ describe("flow-registry store runtime", () => {
 
     expect(getFlowById("flow-restored")).toMatchObject({
       flowId: "flow-restored",
-      shape: "linear",
-      goal: "Restored flow",
-      blockedTaskId: "task-restored",
-      blockedSummary: "Writable session required.",
+      syncMode: "managed",
+      controllerId: "tests/restored-controller",
+      revision: 4,
+      stateJson: { lane: "triage", done: 3 },
+      waitJson: { kind: "task", taskId: "task-restored" },
+      cancelRequestedAt: 115,
     });
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
-    createFlowRecord({
+    createManagedFlow({
       ownerKey: "agent:main:main",
+      controllerId: "tests/new-flow",
       goal: "New flow",
       status: "running",
       currentStep: "wait_for",
@@ -83,25 +97,73 @@ describe("flow-registry store runtime", () => {
     expect(latestSnapshot.flows.get("flow-restored")?.goal).toBe("Restored flow");
   });
 
-  it("restores persisted flows from the default sqlite store", async () => {
+  it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
-      const created = createFlowRecord({
+      const created = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/persisted-flow",
         goal: "Persisted flow",
-        status: "waiting",
+        status: "running",
+        currentStep: "spawn_task",
+        stateJson: { phase: "spawn" },
+      });
+      const waiting = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
         currentStep: "ask_user",
+        stateJson: { phase: "ask_user" },
+        waitJson: { kind: "external_event", topic: "telegram" },
+      });
+      expect(waiting).toMatchObject({
+        applied: true,
+      });
+      const cancelRequested = requestFlowCancel({
+        flowId: created.flowId,
+        expectedRevision: waiting.applied ? waiting.flow.revision : -1,
+        cancelRequestedAt: 444,
+      });
+      expect(cancelRequested).toMatchObject({
+        applied: true,
       });
 
       resetFlowRegistryForTests({ persist: false });
 
       expect(getFlowById(created.flowId)).toMatchObject({
         flowId: created.flowId,
-        shape: "linear",
+        syncMode: "managed",
+        controllerId: "tests/persisted-flow",
+        revision: 2,
         status: "waiting",
         currentStep: "ask_user",
+        stateJson: { phase: "ask_user" },
+        waitJson: { kind: "external_event", topic: "telegram" },
+        cancelRequestedAt: 444,
+      });
+    });
+  });
+
+  it("round-trips explicit json null through sqlite", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const created = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/null-roundtrip",
+        goal: "Persist null payloads",
+        stateJson: null,
+        waitJson: null,
+      });
+
+      resetFlowRegistryForTests({ persist: false });
+
+      expect(getFlowById(created.flowId)).toMatchObject({
+        flowId: created.flowId,
+        stateJson: null,
+        waitJson: null,
       });
     });
   });
@@ -114,12 +176,14 @@ describe("flow-registry store runtime", () => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
-      createFlowRecord({
+      createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/secured-flow",
         goal: "Secured flow",
         status: "blocked",
         blockedTaskId: "task-secured",
         blockedSummary: "Need auth.",
+        waitJson: { kind: "task", taskId: "task-secured" },
       });
 
       const registryDir = resolveFlowRegistryDir(process.env);

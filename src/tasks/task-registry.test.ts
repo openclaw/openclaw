@@ -11,7 +11,7 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createFlowRecord, resetFlowRegistryForTests } from "./flow-registry.js";
+import { createManagedFlow, resetFlowRegistryForTests } from "./flow-registry.js";
 import {
   createTaskRecord,
   findLatestTaskForOwnerKey,
@@ -302,8 +302,9 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
 
-      const flow = createFlowRecord({
+      const flow = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
         goal: "Owner main flow",
       });
 
@@ -326,8 +327,9 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
 
-      const flow = createFlowRecord({
+      const flow = createManagedFlow({
         ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
         goal: "Owner main flow",
       });
 
@@ -358,8 +360,9 @@ describe("task-registry", () => {
         runId: "owner-main-task",
         task: "Safe task",
       });
-      const flow = createFlowRecord({
+      const flow = createManagedFlow({
         ownerKey: "agent:main:other",
+        controllerId: "tests/task-registry",
         goal: "Other owner flow",
       });
 

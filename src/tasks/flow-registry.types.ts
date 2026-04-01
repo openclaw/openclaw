@@ -1,7 +1,15 @@
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { TaskNotifyPolicy } from "./task-registry.types.js";
 
-export type FlowShape = "single_task" | "linear";
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type FlowSyncMode = "task_mirrored" | "managed";
 
 export type FlowStatus =
   | "queued"
@@ -15,15 +23,20 @@ export type FlowStatus =
 
 export type FlowRecord = {
   flowId: string;
-  shape: FlowShape;
+  syncMode: FlowSyncMode;
   ownerKey: string;
   requesterOrigin?: DeliveryContext;
+  controllerId?: string;
+  revision: number;
   status: FlowStatus;
   notifyPolicy: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
   blockedTaskId?: string;
   blockedSummary?: string;
+  stateJson?: JsonValue;
+  waitJson?: JsonValue;
+  cancelRequestedAt?: number;
   createdAt: number;
   updatedAt: number;
   endedAt?: number;

@@ -32,11 +32,11 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/flow-registry.js", () => ({
+vi.mock("../tasks/flow-runtime-internal.js", () => ({
   listFlowRecords: (...args: unknown[]) => mocks.listFlowRecords(...args),
 }));
 
-vi.mock("../tasks/task-registry.js", () => ({
+vi.mock("../tasks/runtime-internal.js", () => ({
   listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowId(...args),
 }));
 
@@ -183,8 +183,9 @@ describe("noteWorkspaceStatus", () => {
       flows: [
         {
           flowId: "flow-123",
-          shape: "linear",
+          syncMode: "managed",
           ownerKey: "agent:main:main",
+          revision: 0,
           status: "blocked",
           notifyPolicy: "done_only",
           goal: "Investigate PR batch",

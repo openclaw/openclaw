@@ -9,7 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { getFlowById, syncFlowFromTask } from "./flow-registry.js";
+import { getFlowById, syncFlowFromTask } from "./flow-runtime-internal.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -540,9 +540,7 @@ function findExistingTaskForCreate(params: {
           normalizeComparableText(task.childSessionKey) ===
             normalizeComparableText(params.childSessionKey) &&
           normalizeComparableText(task.parentFlowId) ===
-            normalizeComparableText(params.parentFlowId) &&
-          normalizeComparableText(task.label) === normalizeComparableText(params.label) &&
-          normalizeComparableText(task.task) === normalizeComparableText(params.task),
+            normalizeComparableText(params.parentFlowId),
       )
     : [];
   const exact = runId

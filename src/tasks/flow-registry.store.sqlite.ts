@@ -4,19 +4,25 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { resolveFlowRegistryDir, resolveFlowRegistrySqlitePath } from "./flow-registry.paths.js";
 import type { FlowRegistryStoreSnapshot } from "./flow-registry.store.js";
-import type { FlowRecord, FlowShape } from "./flow-registry.types.js";
+import type { FlowRecord, FlowSyncMode, JsonValue } from "./flow-registry.types.js";
 
 type FlowRegistryRow = {
   flow_id: string;
-  shape: FlowShape | null;
+  sync_mode: FlowSyncMode | null;
+  shape?: string | null;
   owner_key: string;
   requester_origin_json: string | null;
+  controller_id: string | null;
+  revision: number | bigint | null;
   status: FlowRecord["status"];
   notify_policy: FlowRecord["notifyPolicy"];
   goal: string;
   current_step: string | null;
   blocked_task_id: string | null;
   blocked_summary: string | null;
+  state_json: string | null;
+  wait_json: string | null;
+  cancel_requested_at: number | bigint | null;
   created_at: number | bigint;
   updated_at: number | bigint;
   ended_at: number | bigint | null;
@@ -48,7 +54,7 @@ function normalizeNumber(value: number | bigint | null): number | undefined {
 }
 
 function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
+  return value === undefined ? null : JSON.stringify(value);
 }
 
 function parseJsonValue<T>(raw: string | null): T | undefined {
@@ -62,20 +68,35 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
   }
 }
 
+function rowToSyncMode(row: FlowRegistryRow): FlowSyncMode {
+  if (row.sync_mode === "task_mirrored" || row.sync_mode === "managed") {
+    return row.sync_mode;
+  }
+  return row.shape === "single_task" ? "task_mirrored" : "managed";
+}
+
 function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
   const endedAt = normalizeNumber(row.ended_at);
+  const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
   const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
+  const stateJson = parseJsonValue<JsonValue>(row.state_json);
+  const waitJson = parseJsonValue<JsonValue>(row.wait_json);
   return {
     flowId: row.flow_id,
-    shape: row.shape === "linear" ? "linear" : "single_task",
+    syncMode: rowToSyncMode(row),
     ownerKey: row.owner_key,
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(row.controller_id ? { controllerId: row.controller_id } : {}),
+    revision: normalizeNumber(row.revision) ?? 0,
     status: row.status,
     notifyPolicy: row.notify_policy,
     goal: row.goal,
     ...(row.current_step ? { currentStep: row.current_step } : {}),
     ...(row.blocked_task_id ? { blockedTaskId: row.blocked_task_id } : {}),
     ...(row.blocked_summary ? { blockedSummary: row.blocked_summary } : {}),
+    ...(stateJson !== undefined ? { stateJson } : {}),
+    ...(waitJson !== undefined ? { waitJson } : {}),
+    ...(cancelRequestedAt != null ? { cancelRequestedAt } : {}),
     createdAt: normalizeNumber(row.created_at) ?? 0,
     updatedAt: normalizeNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
@@ -85,15 +106,20 @@ function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
 function bindFlowRecord(record: FlowRecord) {
   return {
     flow_id: record.flowId,
-    shape: record.shape,
+    sync_mode: record.syncMode,
     owner_key: record.ownerKey,
     requester_origin_json: serializeJson(record.requesterOrigin),
+    controller_id: record.controllerId ?? null,
+    revision: record.revision,
     status: record.status,
     notify_policy: record.notifyPolicy,
     goal: record.goal,
     current_step: record.currentStep ?? null,
     blocked_task_id: record.blockedTaskId ?? null,
     blocked_summary: record.blockedSummary ?? null,
+    state_json: serializeJson(record.stateJson),
+    wait_json: serializeJson(record.waitJson),
+    cancel_requested_at: record.cancelRequestedAt ?? null,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
     ended_at: record.endedAt ?? null,
@@ -105,15 +131,21 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
     selectAll: db.prepare(`
       SELECT
         flow_id,
+        sync_mode,
         shape,
         owner_key,
         requester_origin_json,
+        controller_id,
+        revision,
         status,
         notify_policy,
         goal,
         current_step,
         blocked_task_id,
         blocked_summary,
+        state_json,
+        wait_json,
+        cancel_requested_at,
         created_at,
         updated_at,
         ended_at
@@ -123,43 +155,58 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
     upsertRow: db.prepare(`
       INSERT INTO flow_runs (
         flow_id,
-        shape,
+        sync_mode,
         owner_key,
         requester_origin_json,
+        controller_id,
+        revision,
         status,
         notify_policy,
         goal,
         current_step,
         blocked_task_id,
         blocked_summary,
+        state_json,
+        wait_json,
+        cancel_requested_at,
         created_at,
         updated_at,
         ended_at
       ) VALUES (
         @flow_id,
-        @shape,
+        @sync_mode,
         @owner_key,
         @requester_origin_json,
+        @controller_id,
+        @revision,
         @status,
         @notify_policy,
         @goal,
         @current_step,
         @blocked_task_id,
         @blocked_summary,
+        @state_json,
+        @wait_json,
+        @cancel_requested_at,
         @created_at,
         @updated_at,
         @ended_at
       )
       ON CONFLICT(flow_id) DO UPDATE SET
-        shape = excluded.shape,
+        sync_mode = excluded.sync_mode,
         owner_key = excluded.owner_key,
         requester_origin_json = excluded.requester_origin_json,
+        controller_id = excluded.controller_id,
+        revision = excluded.revision,
         status = excluded.status,
         notify_policy = excluded.notify_policy,
         goal = excluded.goal,
         current_step = excluded.current_step,
         blocked_task_id = excluded.blocked_task_id,
         blocked_summary = excluded.blocked_summary,
+        state_json = excluded.state_json,
+        wait_json = excluded.wait_json,
+        cancel_requested_at = excluded.cancel_requested_at,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         ended_at = excluded.ended_at
@@ -178,15 +225,21 @@ function ensureSchema(db: DatabaseSync) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS flow_runs (
       flow_id TEXT PRIMARY KEY,
-      shape TEXT NOT NULL,
+      shape TEXT,
+      sync_mode TEXT NOT NULL DEFAULT 'managed',
       owner_key TEXT NOT NULL,
       requester_origin_json TEXT,
+      controller_id TEXT,
+      revision INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL,
       notify_policy TEXT NOT NULL,
       goal TEXT NOT NULL,
       current_step TEXT,
       blocked_task_id TEXT,
       blocked_summary TEXT,
+      state_json TEXT,
+      wait_json TEXT,
+      cancel_requested_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       ended_at INTEGER
@@ -200,11 +253,59 @@ function ensureSchema(db: DatabaseSync) {
       WHERE owner_key IS NULL
     `);
   }
+  if (!hasFlowRunsColumn(db, "shape")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN shape TEXT;`);
+  }
+  if (!hasFlowRunsColumn(db, "sync_mode")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN sync_mode TEXT;`);
+    if (hasFlowRunsColumn(db, "shape")) {
+      db.exec(`
+        UPDATE flow_runs
+        SET sync_mode = CASE
+          WHEN shape = 'single_task' THEN 'task_mirrored'
+          ELSE 'managed'
+        END
+        WHERE sync_mode IS NULL
+      `);
+    } else {
+      db.exec(`
+        UPDATE flow_runs
+        SET sync_mode = 'managed'
+        WHERE sync_mode IS NULL
+      `);
+    }
+  }
+  if (!hasFlowRunsColumn(db, "controller_id")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN controller_id TEXT;`);
+  }
+  db.exec(`
+    UPDATE flow_runs
+    SET controller_id = 'core/legacy-restored'
+    WHERE sync_mode = 'managed'
+      AND (controller_id IS NULL OR trim(controller_id) = '')
+  `);
+  if (!hasFlowRunsColumn(db, "revision")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN revision INTEGER;`);
+    db.exec(`
+      UPDATE flow_runs
+      SET revision = 0
+      WHERE revision IS NULL
+    `);
+  }
   if (!hasFlowRunsColumn(db, "blocked_task_id")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_task_id TEXT;`);
   }
   if (!hasFlowRunsColumn(db, "blocked_summary")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_summary TEXT;`);
+  }
+  if (!hasFlowRunsColumn(db, "state_json")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN state_json TEXT;`);
+  }
+  if (!hasFlowRunsColumn(db, "wait_json")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN wait_json TEXT;`);
+  }
+  if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);
