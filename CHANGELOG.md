@@ -19,6 +19,8 @@ Docs: https://docs.openclaw.ai
 - Channels/WhatsApp: pass inbound message timestamp to model context so the AI can see when WhatsApp messages were sent. (#58590) Thanks @Maninae
 - Web UI/OpenResponses: preserve rewritten stream snapshots in webchat and keep OpenResponses final streamed text aligned when models rewind earlier output. (#58641) Thanks @neeravmakwana
 - MiniMax/plugins: auto-enable the bundled MiniMax plugin for API-key auth/config so MiniMax image generation and other plugin-owned capabilities load without manual plugin allowlisting. (#57127) Thanks @tars90percent.
+- Plugins: suppress benign duplicate-plugin-id **warnings** when **bundled** shadows a redundant non-installed **global** or **workspace** copy, reducing noisy config validation stderr (for example editor ACP sessions).
+- Plugins: keep **one manifest registry row per plugin id** when two candidates disagree on disk by applying `resolveDuplicatePrecedenceRank` in place and skipping a second `plugins[]` append for the losing candidate.
 
 ## 2026.3.31
 
