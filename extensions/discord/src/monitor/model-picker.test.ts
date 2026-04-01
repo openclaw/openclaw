@@ -21,6 +21,12 @@ import {
 } from "./model-picker.js";
 import { createModelsProviderData } from "./model-picker.test-utils.js";
 
+const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+  buildModelsProviderData: buildModelsProviderDataMock,
+}));
+
 type SerializedComponent = {
   type: number;
   custom_id?: string;
@@ -71,14 +77,12 @@ describe("loadDiscordModelPickerData", () => {
   it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
     const cfg = {} as OpenClawConfig;
-    const spy = vi
-      .spyOn(modelsCommandModule, "buildModelsProviderData")
-      .mockResolvedValue(expected);
+    buildModelsProviderDataMock.mockResolvedValue(expected);
 
     const result = await loadDiscordModelPickerData(cfg, "support");
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith(cfg, "support");
+    expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(1);
+    expect(buildModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support");
     expect(result).toBe(expected);
   });
 });
