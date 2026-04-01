@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -325,6 +326,58 @@ class GatewaySessionInvokeTest {
         "http://127.0.0.1:${server.port}/__openclaw__/cap/new-cap",
         harness.session.currentCanvasHostUrl(),
       )
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
+  @Test
+  fun disconnect_thenImmediateConnect_reachesOnConnectedAgain() = runBlocking {
+    val json = testJson()
+    val connectCount = AtomicInteger(0)
+    val firstConnected = CompletableDeferred<Unit>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> webSocket.send(connectResponseFrame(id))
+        }
+      }
+
+    val app = RuntimeEnvironment.getApplication()
+    val sessionJob = SupervisorJob()
+    val deviceAuthStore = InMemoryDeviceAuthStore()
+    val session =
+      GatewaySession(
+        scope = CoroutineScope(sessionJob + Dispatchers.Default),
+        identityStore = DeviceIdentityStore(app),
+        deviceAuthStore = deviceAuthStore,
+        onConnected = { _, _, _ ->
+          connectCount.incrementAndGet()
+          if (!firstConnected.isCompleted) {
+            firstConnected.complete(Unit)
+          }
+        },
+        onDisconnected = { message -> lastDisconnect.set(message) },
+        onEvent = { _, _ -> },
+        onInvoke = { GatewaySession.InvokeResult.ok("""{"handled":true}""") },
+      )
+    val harness = NodeHarness(session = session, sessionJob = sessionJob, deviceAuthStore = deviceAuthStore)
+
+    try {
+      connectNodeSession(harness.session, server.port)
+      withTimeout(TEST_TIMEOUT_MS) { firstConnected.await() }
+      assertEquals(1, connectCount.get())
+
+      harness.session.disconnect()
+      connectNodeSession(harness.session, server.port)
+
+      withTimeout(TEST_TIMEOUT_MS) {
+        while (connectCount.get() < 2) {
+          delay(10)
+        }
+      }
+      assertEquals(2, connectCount.get())
     } finally {
       shutdownHarness(harness, server)
     }
