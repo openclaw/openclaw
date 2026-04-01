@@ -47,19 +47,15 @@ describe("resolveExecTarget", () => {
     ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
   });
 
-  it("treats auto as a default strategy rather than a host allowlist", () => {
-    expect(
+  it("rejects host overrides when configured host is auto", () => {
+    expect(() =>
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "node",
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+    ).toThrow("exec host not allowed");
   });
 });
 
