@@ -238,6 +238,91 @@ describe("models-config", () => {
     });
   });
 
+  it("does not overwrite models.json created concurrently during non-main bootstrap", async () => {
+    await withTempHome(async (home) => {
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
+
+        const mainModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              apiKey: "BOTZHIPIN_API_KEY",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        };
+        const concurrentModels = {
+          providers: {
+            workerOnly: {
+              baseUrl: "https://worker-only.example/v1",
+              apiKey: "WORKER_ONLY_KEY",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        };
+
+        const mainAgentDir = resolveOpenClawAgentDir();
+        await fs.mkdir(mainAgentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(mainAgentDir, "models.json"),
+          `${JSON.stringify(mainModels, null, 2)}\n`,
+          "utf8",
+        );
+
+        const secondaryAgentDir = path.join(home, ".openclaw", "agents", "email-expert", "agent");
+        const secondaryModelsPath = path.join(secondaryAgentDir, "models.json");
+
+        vi.resetModules();
+        const planOpenClawModelsJson = vi.fn(async () => ({ action: "skip" as const }));
+        vi.doMock("./models-config.plan.js", () => ({
+          planOpenClawModelsJson,
+        }));
+
+        const linkSpy = vi.spyOn(fs, "link").mockImplementationOnce(async (_source, target) => {
+          const targetPath = typeof target === "string" ? target : target.toString();
+          await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          await fs.writeFile(targetPath, `${JSON.stringify(concurrentModels, null, 2)}\n`, "utf8");
+          const error = new Error("target already exists") as NodeJS.ErrnoException;
+          error.code = "EEXIST";
+          throw error;
+        });
+
+        try {
+          const { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+            await import("./models-config.js");
+          resetModelsJsonReadyCacheForTest();
+
+          const result = await ensureOpenClawModelsJson(
+            { models: { providers: {} } },
+            secondaryAgentDir,
+          );
+          expect(result.wrote).toBe(false);
+          expect(planOpenClawModelsJson).toHaveBeenCalled();
+
+          const existing = JSON.parse(await fs.readFile(secondaryModelsPath, "utf8")) as unknown;
+          expect(existing).toEqual(concurrentModels);
+        } finally {
+          linkSpy.mockRestore();
+          vi.doUnmock("./models-config.plan.js");
+          vi.resetModules();
+        }
+      });
+    });
+  });
+
   it("retries non-main bootstrap when main models.json appears after an initial skip", async () => {
     await withTempHome(async (home) => {
       await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {

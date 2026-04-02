@@ -93,6 +93,57 @@ async function writeModelsFileAtomic(targetPath: string, contents: string): Prom
   await fs.rename(tempPath, targetPath);
 }
 
+function hasErrorCode(error: unknown, expectedCode: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    String(error.code) === expectedCode
+  );
+}
+
+function isLinkUnavailableError(error: unknown): boolean {
+  return (
+    hasErrorCode(error, "EPERM") ||
+    hasErrorCode(error, "ENOTSUP") ||
+    hasErrorCode(error, "EOPNOTSUPP") ||
+    hasErrorCode(error, "EXDEV")
+  );
+}
+
+async function writeModelsFileAtomicIfMissing(targetPath: string, contents: string): Promise<boolean> {
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, contents, { mode: 0o600 });
+  try {
+    try {
+      // link() is an atomic "create if missing" operation that never overwrites targetPath.
+      await fs.link(tempPath, targetPath);
+      return true;
+    } catch (error) {
+      if (hasErrorCode(error, "EEXIST")) {
+        return false;
+      }
+      if (!isLinkUnavailableError(error)) {
+        throw error;
+      }
+      // Fallback for filesystems/platforms where hard-link creation is unavailable.
+      try {
+        await fs.writeFile(targetPath, contents, { mode: 0o600, flag: "wx" });
+        return true;
+      } catch (writeError) {
+        if (hasErrorCode(writeError, "EEXIST")) {
+          return false;
+        }
+        throw writeError;
+      }
+    }
+  } finally {
+    await fs.unlink(tempPath).catch(() => {
+      // best-effort cleanup
+    });
+  }
+}
+
 async function inheritModelsJsonFromMainAgent(params: {
   agentDir: string;
   targetPath: string;
@@ -123,7 +174,11 @@ async function inheritModelsJsonFromMainAgent(params: {
   }
 
   await fs.mkdir(params.agentDir, { recursive: true, mode: 0o700 });
-  await writeModelsFileAtomic(params.targetPath, sourceRaw);
+  const wrote = await writeModelsFileAtomicIfMissing(params.targetPath, sourceRaw);
+  if (!wrote) {
+    return false;
+  }
+  await ensureModelsFileMode(params.targetPath);
   return true;
 }
 
