@@ -838,6 +838,41 @@ describe("tts", () => {
         voice: "agent-voice",
       });
     });
+
+    it("coalesces provider aliases before merging legacy and providers config layers", () => {
+      const config = resolveTtsConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4o-mini" },
+          },
+          list: [
+            {
+              id: "voice-agent",
+              default: true,
+              tts: {
+                providers: {
+                  microsoft: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          ],
+        },
+        messages: {
+          tts: {
+            edge: {
+              apiKey: "edge-key",
+            },
+          },
+        },
+      });
+
+      expect(config.providerConfigs.microsoft).toMatchObject({
+        apiKey: "edge-key",
+        voice: "en-US-JennyNeural",
+      });
+    });
   });
 
   describe("resolveConfiguredTtsMode", () => {
