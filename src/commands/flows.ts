@@ -110,6 +110,22 @@ function summarizeWait(flow: TaskFlowRecord): string {
   return Object.keys(flow.waitJson).toSorted().join(", ") || "object";
 }
 
+function summarizeFlowState(flow: TaskFlowRecord): string | null {
+  if (flow.status === "blocked") {
+    if (flow.blockedSummary) {
+      return flow.blockedSummary;
+    }
+    if (flow.blockedTaskId) {
+      return `blocked by ${flow.blockedTaskId}`;
+    }
+    return "blocked";
+  }
+  if (flow.status === "waiting" && flow.waitJson != null) {
+    return summarizeWait(flow);
+  }
+  return null;
+}
+
 export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
@@ -168,6 +184,7 @@ export async function flowsShowCommand(
   }
   const tasks = listTasksForFlowId(flow.flowId);
   const taskSummary = getFlowTaskSummary(flow.flowId);
+  const stateSummary = summarizeFlowState(flow);
 
   if (opts.json) {
     runtime.log(
@@ -187,20 +204,15 @@ export async function flowsShowCommand(
   const lines = [
     "TaskFlow:",
     `flowId: ${flow.flowId}`,
-    `syncMode: ${flow.syncMode}`,
     `status: ${flow.status}`,
-    `notify: ${flow.notifyPolicy}`,
-    `ownerKey: ${flow.ownerKey}`,
-    `controllerId: ${flow.controllerId ?? "n/a"}`,
-    `revision: ${flow.revision}`,
     `goal: ${flow.goal}`,
     `currentStep: ${flow.currentStep ?? "n/a"}`,
-    `blockedTaskId: ${flow.blockedTaskId ?? "n/a"}`,
-    `blockedSummary: ${flow.blockedSummary ?? "n/a"}`,
-    `wait: ${summarizeWait(flow)}`,
-    `cancelRequestedAt: ${
-      flow.cancelRequestedAt ? new Date(flow.cancelRequestedAt).toISOString() : "n/a"
-    }`,
+    `owner: ${flow.ownerKey}`,
+    `notify: ${flow.notifyPolicy}`,
+    ...(stateSummary ? [`state: ${stateSummary}`] : []),
+    ...(flow.cancelRequestedAt
+      ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
+      : []),
     `createdAt: ${new Date(flow.createdAt).toISOString()}`,
     `updatedAt: ${new Date(flow.updatedAt).toISOString()}`,
     `endedAt: ${flow.endedAt ? new Date(flow.endedAt).toISOString() : "n/a"}`,

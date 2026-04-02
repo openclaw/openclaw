@@ -124,8 +124,9 @@ describe("flows commands", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/flows-command",
         goal: "Investigate a flaky queue",
-        status: "running",
+        status: "blocked",
         currentStep: "spawn_child",
+        blockedSummary: "Waiting on child task output",
         createdAt: 100,
         updatedAt: 100,
       });
@@ -152,10 +153,20 @@ describe("flows commands", () => {
         .join("\n");
       expect(output).toContain("TaskFlow:");
       expect(output).toContain(`flowId: ${flow.flowId}`);
+      expect(output).toContain("status: blocked");
+      expect(output).toContain("goal: Investigate a flaky queue");
       expect(output).toContain("currentStep: spawn_child");
+      expect(output).toContain("owner: agent:main:main");
+      expect(output).toContain("state: Waiting on child task output");
       expect(output).toContain("Linked tasks:");
       expect(output).toContain("run-child-2");
       expect(output).toContain("Collect logs");
+      expect(output).not.toContain("syncMode:");
+      expect(output).not.toContain("controllerId:");
+      expect(output).not.toContain("revision:");
+      expect(output).not.toContain("blockedTaskId:");
+      expect(output).not.toContain("blockedSummary:");
+      expect(output).not.toContain("wait:");
     });
   });
 
