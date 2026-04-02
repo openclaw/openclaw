@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetCommandQueueStateForTest } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest, waitForActiveTasks } from "../process/command-queue.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import type { CronJob, CronJobState } from "./types.js";
@@ -34,10 +34,11 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     useFrozenTime(options?.baseTimeIso ?? "2026-02-06T10:05:00.000Z");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.clearAllTimers();
     vi.restoreAllMocks();
     useRealTime();
+    await waitForActiveTasks(250);
     resetCommandQueueStateForTest();
     clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
@@ -46,6 +47,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
 
   afterAll(async () => {
     useRealTime();
+    await waitForActiveTasks(250);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -127,8 +129,10 @@ export function createDefaultIsolatedRunner(): CronServiceDeps["runIsolatedAgent
 
 export function createAbortAwareIsolatedRunner(summary = "late") {
   let observedAbortSignal: AbortSignal | undefined;
+  const started = createDeferred<void>();
   const runIsolatedAgentJob = vi.fn(async ({ abortSignal }) => {
     observedAbortSignal = abortSignal;
+    started.resolve();
     await new Promise<void>((resolve) => {
       if (!abortSignal) {
         return;
@@ -145,6 +149,7 @@ export function createAbortAwareIsolatedRunner(summary = "late") {
   return {
     runIsolatedAgentJob,
     getObservedAbortSignal: () => observedAbortSignal,
+    waitForStart: () => started.promise,
   };
 }
 
