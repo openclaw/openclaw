@@ -16,6 +16,27 @@ export { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
+const MAX_ERROR_RESPONSE_BYTES = 4096;
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
+const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
+  }
+  return timeoutMs;
+}
+
+function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
+  const cleaned = auditContext
+    ?.replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
+}
 
 export function resolveProviderHttpRequestConfig(params: {
   baseUrl?: string;
@@ -67,24 +88,26 @@ export function resolveProviderHttpRequestConfig(params: {
 export async function fetchWithTimeoutGuarded(
   url: string,
   init: RequestInit,
-  timeoutMs: number,
+  timeoutMs: number | undefined,
   fetchFn: typeof fetch,
   options?: {
     ssrfPolicy?: SsrFPolicy;
     lookupFn?: LookupFn;
     pinDns?: boolean;
     dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
   },
 ): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuard({
     url,
     fetchImpl: fetchFn,
     init,
-    timeoutMs,
+    timeoutMs: resolveGuardedHttpTimeoutMs(timeoutMs),
     policy: options?.ssrfPolicy,
     lookupFn: options?.lookupFn,
     pinDns: options?.pinDns,
     dispatcherPolicy: options?.dispatcherPolicy,
+    auditContext: sanitizeAuditContext(options?.auditContext),
   });
 }
 
@@ -92,10 +115,11 @@ export async function postTranscriptionRequest(params: {
   url: string;
   headers: Headers;
   body: BodyInit;
-  timeoutMs: number;
+  timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -110,6 +134,7 @@ export async function postTranscriptionRequest(params: {
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
         }
       : undefined,
   );
@@ -119,10 +144,11 @@ export async function postJsonRequest(params: {
   url: string;
   headers: Headers;
   body: unknown;
-  timeoutMs: number;
+  timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -137,14 +163,49 @@ export async function postJsonRequest(params: {
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
         }
       : undefined,
   );
 }
 
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const text = await res.text();
+    if (!res.body) {
+      return undefined;
+    }
+    reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let sawBytes = false;
+    while (total < MAX_ERROR_RESPONSE_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.length === 0) {
+        continue;
+      }
+      sawBytes = true;
+      const remaining = MAX_ERROR_RESPONSE_BYTES - total;
+      const chunk = value.length <= remaining ? value : value.subarray(0, remaining);
+      chunks.push(chunk);
+      total += chunk.length;
+      if (chunk.length < value.length) {
+        break;
+      }
+    }
+    if (!sawBytes) {
+      return undefined;
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    const text = new TextDecoder().decode(bytes);
     const collapsed = text.replace(/\s+/g, " ").trim();
     if (!collapsed) {
       return undefined;
@@ -155,6 +216,12 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
     return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
   } catch {
     return undefined;
+  } finally {
+    try {
+      await reader?.cancel();
+    } catch {
+      // Ignore stream-cancel failures while reporting the original HTTP error.
+    }
   }
 }
 
