@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkVersionSkew,
   compareOpenClawVersions,
   isSameOpenClawStableFamily,
   parseOpenClawVersion,
@@ -85,5 +86,64 @@ describe("shouldWarnOnTouchedVersion", () => {
     expect(shouldWarnOnTouchedVersion("2026.3.23-beta.1", "2026.3.23")).toBe(true);
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.24")).toBe(true);
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2027.1.1")).toBe(true);
+  });
+});
+
+describe("checkVersionSkew", () => {
+  it("returns not skewed when touched version is null", () => {
+    const result = checkVersionSkew("2026.3.23", null);
+    expect(result.skewed).toBe(false);
+    expect(result.message).toBeNull();
+    expect(result.guidance).toBeNull();
+    expect(result.configVersion).toBeNull();
+    expect(result.currentVersion).toBe("2026.3.23");
+  });
+
+  it("returns not skewed when touched version is undefined", () => {
+    const result = checkVersionSkew("2026.3.23", undefined);
+    expect(result.skewed).toBe(false);
+    expect(result.configVersion).toBeNull();
+  });
+
+  it("returns not skewed for same-family versions", () => {
+    const result = checkVersionSkew("2026.3.23", "2026.3.23-1");
+    expect(result.skewed).toBe(false);
+    expect(result.message).toBeNull();
+    expect(result.guidance).toBeNull();
+    expect(result.configVersion).toBe("2026.3.23-1");
+  });
+
+  it("returns not skewed when current is newer", () => {
+    const result = checkVersionSkew("2026.3.24", "2026.3.23");
+    expect(result.skewed).toBe(false);
+    expect(result.configVersion).toBe("2026.3.23");
+  });
+
+  it("returns skewed with message and guidance when config is from a newer version", () => {
+    const result = checkVersionSkew("2026.3.23", "2026.3.24");
+    expect(result.skewed).toBe(true);
+    expect(result.message).toBe(
+      "Config was last written by a newer OpenClaw (2026.3.24); current version is 2026.3.23.",
+    );
+    expect(result.guidance).toBe(
+      "Run `openclaw update` to update, or `openclaw doctor` to check compatibility.",
+    );
+    expect(result.configVersion).toBe("2026.3.24");
+    expect(result.currentVersion).toBe("2026.3.23");
+  });
+
+  it("returns skewed when major version differs", () => {
+    const result = checkVersionSkew("2026.3.23", "2027.1.1");
+    expect(result.skewed).toBe(true);
+    expect(result.message).toContain("2027.1.1");
+    expect(result.guidance).toContain("openclaw update");
+    expect(result.guidance).toContain("openclaw doctor");
+  });
+
+  it("returns skewed when beta is older than stable", () => {
+    const result = checkVersionSkew("2026.3.23-beta.1", "2026.3.23");
+    expect(result.skewed).toBe(true);
+    expect(result.message).toContain("2026.3.23");
+    expect(result.guidance).not.toBeNull();
   });
 });

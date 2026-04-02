@@ -123,6 +123,56 @@ export function shouldWarnOnTouchedVersion(
   return cmp !== null && cmp < 0;
 }
 
+/** Structured result from a version skew check at config load time. */
+export type VersionSkewResult = {
+  /** True when the config was last written by a newer OpenClaw version. */
+  skewed: boolean;
+  /** Human-readable warning message (only set when skewed). */
+  message: string | null;
+  /** Actionable guidance for the user (only set when skewed). */
+  guidance: string | null;
+  /** The version that last touched the config (null if unknown). */
+  configVersion: string | null;
+  /** The running binary version. */
+  currentVersion: string;
+};
+
+/**
+ * Check whether the loaded config was written by a newer OpenClaw version
+ * and return a structured result with actionable guidance.
+ */
+export function checkVersionSkew(
+  currentVersion: string,
+  touchedVersion: string | null | undefined,
+): VersionSkewResult {
+  if (!touchedVersion) {
+    return {
+      skewed: false,
+      message: null,
+      guidance: null,
+      configVersion: null,
+      currentVersion,
+    };
+  }
+  const skewed = shouldWarnOnTouchedVersion(currentVersion, touchedVersion);
+  if (!skewed) {
+    return {
+      skewed: false,
+      message: null,
+      guidance: null,
+      configVersion: touchedVersion,
+      currentVersion,
+    };
+  }
+  return {
+    skewed: true,
+    message: `Config was last written by a newer OpenClaw (${touchedVersion}); current version is ${currentVersion}.`,
+    guidance: "Run `openclaw update` to update, or `openclaw doctor` to check compatibility.",
+    configVersion: touchedVersion,
+    currentVersion,
+  };
+}
+
 function releaseRank(version: OpenClawVersion): number {
   if (version.prerelease?.length) {
     return 0;

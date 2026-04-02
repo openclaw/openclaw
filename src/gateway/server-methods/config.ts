@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  checkVersionSkew,
   createConfigIO,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -46,6 +47,7 @@ import {
   validateConfigSetParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
+import { VERSION } from "../../version.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -386,6 +388,10 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
+
+    // Warn when the config was last written by a newer OpenClaw version.
+    const versionSkew = checkVersionSkew(VERSION, snapshot.config.meta?.lastTouchedVersion);
+
     await writeConfigFile(parsed.config, writeOptions);
     respond(
       true,
@@ -393,6 +399,7 @@ export const configHandlers: GatewayRequestHandlers = {
         ok: true,
         path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        ...(versionSkew.skewed ? { versionWarning: versionSkew.message } : {}),
       },
       undefined,
     );
@@ -413,6 +420,10 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // Warn when the config was last written by a newer OpenClaw version.
+    const versionSkew = checkVersionSkew(VERSION, snapshot.config.meta?.lastTouchedVersion);
+
     const rawValue = (params as { raw?: unknown }).raw;
     if (typeof rawValue !== "string") {
       respond(
@@ -492,6 +503,7 @@ export const configHandlers: GatewayRequestHandlers = {
           noop: true,
           path: createConfigIO().configPath,
           config: redactConfigObject(validated.config, schemaPatch.uiHints),
+          ...(versionSkew.skewed ? { versionWarning: versionSkew.message } : {}),
         },
         undefined,
       );
@@ -540,6 +552,7 @@ export const configHandlers: GatewayRequestHandlers = {
           path: sentinelPath,
           payload,
         },
+        ...(versionSkew.skewed ? { versionWarning: versionSkew.message } : {}),
       },
       undefined,
     );

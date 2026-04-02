@@ -46,7 +46,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-import { shouldWarnOnTouchedVersion } from "./version.js";
+import { type VersionSkewResult, checkVersionSkew } from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -1509,16 +1509,23 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
-  const touched = cfg.meta?.lastTouchedVersion;
-  if (!touched) {
-    return;
+/**
+ * Check whether the loaded config was written by a newer OpenClaw version.
+ * Logs a warning with actionable guidance and returns a structured result
+ * so callers (doctor, gateway startup) can surface the skew programmatically.
+ */
+export function warnIfConfigFromFuture(
+  cfg: OpenClawConfig,
+  logger: Pick<typeof console, "warn">,
+): VersionSkewResult {
+  const result = checkVersionSkew(VERSION, cfg.meta?.lastTouchedVersion);
+  if (result.skewed && result.message) {
+    logger.warn(result.message);
+    if (result.guidance) {
+      logger.warn(result.guidance);
+    }
   }
-  if (shouldWarnOnTouchedVersion(VERSION, touched)) {
-    logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
-    );
-  }
+  return result;
 }
 
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
