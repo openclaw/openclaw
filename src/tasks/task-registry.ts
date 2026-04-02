@@ -9,12 +9,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import type { FlowRecord } from "./flow-registry.types.js";
-import {
-  getFlowById,
-  syncFlowFromTask,
-  updateFlowRecordByIdExpectedRevision,
-} from "./flow-runtime-internal.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -24,6 +18,12 @@ import {
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  getTaskFlowById,
+  syncFlowFromTask,
+  updateFlowRecordByIdExpectedRevision,
+} from "./task-flow-runtime-internal.js";
 import {
   getTaskRegistryHooks,
   getTaskRegistryStore,
@@ -81,7 +81,7 @@ export class ParentFlowLinkError extends Error {
     message: string,
     public readonly details?: {
       flowId?: string;
-      status?: FlowRecord["status"];
+      status?: TaskFlowRecord["status"];
     },
   ) {
     super(message);
@@ -97,7 +97,7 @@ function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
 
-function isTerminalFlowStatus(status: FlowRecord["status"]): boolean {
+function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
   return (
     status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
   );
@@ -131,7 +131,7 @@ function assertParentFlowLinkAllowed(params: {
       { flowId },
     );
   }
-  const flow = getFlowById(flowId);
+  const flow = getTaskFlowById(flowId);
   if (!flow) {
     throw new ParentFlowLinkError("parent_flow_not_found", `Parent flow not found: ${flowId}`, {
       flowId,
@@ -727,7 +727,7 @@ function getLinkedFlowForDelivery(task: TaskRecord) {
   if (!flowId || task.scopeKind !== "session") {
     return undefined;
   }
-  const flow = getFlowById(flowId);
+  const flow = getTaskFlowById(flowId);
   if (!flow) {
     return undefined;
   }
@@ -762,7 +762,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
   if (!flowId) {
     return;
   }
-  let flow = getFlowById(flowId);
+  let flow = getTaskFlowById(flowId);
   if (
     !flow ||
     flow.syncMode !== "managed" ||

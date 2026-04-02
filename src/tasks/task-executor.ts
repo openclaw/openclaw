@@ -1,14 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getFlowByIdForOwner } from "./flow-owner-access.js";
-import type { FlowRecord } from "./flow-registry.types.js";
-import {
-  createFlowForTask,
-  deleteFlowRecordById,
-  getFlowById,
-  requestFlowCancel,
-  updateFlowRecordByIdExpectedRevision,
-} from "./flow-runtime-internal.js";
 import {
   cancelTaskById,
   createTaskRecord,
@@ -22,6 +13,15 @@ import {
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
+import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  createTaskFlowForTask,
+  deleteTaskFlowRecordById,
+  getTaskFlowById,
+  requestFlowCancel,
+  updateFlowRecordByIdExpectedRevision,
+} from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
@@ -55,7 +55,7 @@ function ensureSingleTaskFlow(params: {
     return params.task;
   }
   try {
-    const flow = createFlowForTask({
+    const flow = createTaskFlowForTask({
       task: params.task,
       requesterOrigin: params.requesterOrigin,
     });
@@ -64,11 +64,11 @@ function ensureSingleTaskFlow(params: {
       flowId: flow.flowId,
     });
     if (!linked) {
-      deleteFlowRecordById(flow.flowId);
+      deleteTaskFlowRecordById(flow.flowId);
       return params.task;
     }
     if (linked.parentFlowId !== flow.flowId) {
-      deleteFlowRecordById(flow.flowId);
+      deleteTaskFlowRecordById(flow.flowId);
       return linked;
     }
     return linked;
@@ -266,7 +266,7 @@ function resolveRetryableBlockedFlowTask(flowId: string): {
   latestTask?: TaskRecord;
   reason?: string;
 } {
-  const flow = getFlowById(flowId);
+  const flow = getTaskFlowById(flowId);
   if (!flow) {
     return {
       flowFound: false,
@@ -314,7 +314,7 @@ function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowR
       reason: resolved.reason,
     };
   }
-  const flow = getFlowById(params.flowId);
+  const flow = getTaskFlowById(params.flowId);
   if (!flow) {
     return {
       found: false,
@@ -374,7 +374,7 @@ type CancelFlowResult = {
   found: boolean;
   cancelled: boolean;
   reason?: string;
-  flow?: FlowRecord;
+  flow?: TaskFlowRecord;
   tasks?: TaskRecord[];
 };
 
@@ -382,7 +382,7 @@ type RunTaskInFlowResult = {
   found: boolean;
   created: boolean;
   reason?: string;
-  flow?: FlowRecord;
+  flow?: TaskFlowRecord;
   task?: TaskRecord;
 };
 
@@ -390,13 +390,13 @@ function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
 
-function isTerminalFlowStatus(status: FlowRecord["status"]): boolean {
+function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
   return (
     status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
   );
 }
 
-function markFlowCancelRequested(flow: FlowRecord): FlowRecord | FlowUpdateFailure {
+function markFlowCancelRequested(flow: TaskFlowRecord): TaskFlowRecord | FlowUpdateFailure {
   if (flow.cancelRequestedAt != null) {
     return flow;
   }
@@ -412,19 +412,19 @@ function markFlowCancelRequested(flow: FlowRecord): FlowRecord | FlowUpdateFailu
       result.reason === "revision_conflict"
         ? "Flow changed while cancellation was in progress."
         : "Flow not found.",
-    flow: result.current ?? getFlowById(flow.flowId),
+    flow: result.current ?? getTaskFlowById(flow.flowId),
   };
 }
 
 type FlowUpdateFailure = {
   reason: string;
-  flow?: FlowRecord;
+  flow?: TaskFlowRecord;
 };
 
 function cancelManagedFlowAfterChildrenSettle(
-  flow: FlowRecord,
+  flow: TaskFlowRecord,
   endedAt: number,
-): FlowRecord | FlowUpdateFailure {
+): TaskFlowRecord | FlowUpdateFailure {
   const result = updateFlowRecordByIdExpectedRevision({
     flowId: flow.flowId,
     expectedRevision: flow.revision,
@@ -445,7 +445,7 @@ function cancelManagedFlowAfterChildrenSettle(
       result.reason === "revision_conflict"
         ? "Flow changed while cancellation was in progress."
         : "Flow not found.",
-    flow: result.current ?? getFlowById(flow.flowId),
+    flow: result.current ?? getTaskFlowById(flow.flowId),
   };
 }
 
@@ -453,7 +453,7 @@ function mapRunTaskInFlowCreateError(params: {
   error: unknown;
   flowId: string;
 }): RunTaskInFlowResult {
-  const flow = getFlowById(params.flowId);
+  const flow = getTaskFlowById(params.flowId);
   if (isParentFlowLinkError(params.error)) {
     if (params.error.code === "cancel_requested") {
       return {
@@ -501,7 +501,7 @@ export function runTaskInFlow(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
 }): RunTaskInFlowResult {
-  const flow = getFlowById(params.flowId);
+  const flow = getTaskFlowById(params.flowId);
   if (!flow) {
     return {
       found: false,
@@ -572,7 +572,7 @@ export function runTaskInFlow(params: {
   return {
     found: true,
     created: true,
-    flow: getFlowById(flow.flowId) ?? flow,
+    flow: getTaskFlowById(flow.flowId) ?? flow,
     task,
   };
 }
@@ -596,7 +596,7 @@ export function runTaskInFlowForOwner(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
 }): RunTaskInFlowResult {
-  const flow = getFlowByIdForOwner({
+  const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,
   });
@@ -631,7 +631,7 @@ export async function cancelFlowById(params: {
   cfg: OpenClawConfig;
   flowId: string;
 }): Promise<CancelFlowResult> {
-  const flow = getFlowById(params.flowId);
+  const flow = getTaskFlowById(params.flowId);
   if (!flow) {
     return {
       found: false,
@@ -673,12 +673,12 @@ export async function cancelFlowById(params: {
       found: true,
       cancelled: false,
       reason: "One or more child tasks are still active.",
-      flow: getFlowById(flow.flowId) ?? cancelRequestedFlow,
+      flow: getTaskFlowById(flow.flowId) ?? cancelRequestedFlow,
       tasks: refreshedTasks,
     };
   }
   const now = Date.now();
-  const refreshedFlow = getFlowById(flow.flowId) ?? cancelRequestedFlow;
+  const refreshedFlow = getTaskFlowById(flow.flowId) ?? cancelRequestedFlow;
   if (isTerminalFlowStatus(refreshedFlow.status)) {
     return {
       found: true,
@@ -714,7 +714,7 @@ export async function cancelFlowByIdForOwner(params: {
   flowId: string;
   callerOwnerKey: string;
 }): Promise<CancelFlowResult> {
-  const flow = getFlowByIdForOwner({
+  const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,
   });
