@@ -10,12 +10,4 @@ export type OnboardCoreAuthFlag = {
   description: string;
 };
 
-export const CORE_ONBOARD_AUTH_FLAGS: ReadonlyArray<OnboardCoreAuthFlag> = [
-  {
-    optionKey: "litellmApiKey",
-    authChoice: "litellm-api-key",
-    cliFlag: "--litellm-api-key",
-    cliOption: "--litellm-api-key <key>",
-    description: "LiteLLM API key",
-  },
-];
+export const CORE_ONBOARD_AUTH_FLAGS: ReadonlyArray<OnboardCoreAuthFlag> = [];

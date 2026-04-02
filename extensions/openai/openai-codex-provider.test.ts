@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 
@@ -9,10 +9,12 @@ vi.mock("./openai-codex-provider.runtime.js", () => ({
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
 
 describe("openai codex provider", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    refreshOpenAICodexTokenMock.mockReset();
+  beforeAll(async () => {
     ({ buildOpenAICodexProviderPlugin } = await import("./openai-codex-provider.js"));
+  });
+
+  beforeEach(() => {
+    refreshOpenAICodexTokenMock.mockReset();
   });
 
   it("falls back to the cached credential when accountId extraction fails", async () => {
@@ -68,5 +70,20 @@ describe("openai codex provider", () => {
       refresh: "next-refresh",
       expires: expect.any(Number),
     });
+  });
+
+  it("returns deprecated-profile doctor guidance for legacy Codex CLI ids", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.buildAuthDoctorHint?.({
+        provider: "openai-codex",
+        profileId: "openai-codex:codex-cli",
+        config: undefined,
+        store: { version: 1, profiles: {} },
+      }),
+    ).toBe(
+      "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -6,6 +6,7 @@ import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./channel-setup/plugin-install.js";
+import { channelsRemoveCommand } from "./channels.js";
 import { configMocks } from "./channels.mock-harness.js";
 import {
   createMSTeamsCatalogEntry,
@@ -33,13 +34,8 @@ vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
 });
 
 const runtime = createTestRuntime();
-let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
 
 describe("channelsRemoveCommand", () => {
-  beforeAll(async () => {
-    ({ channelsRemoveCommand } = await import("./channels.js"));
-  });
-
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();

@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -12,7 +13,7 @@ import {
   type ResolvedSignalAccount,
 } from "./accounts.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
-import { getChatChannelMeta, normalizeE164, type ChannelPlugin } from "./runtime-api.js";
+import { getChatChannelMeta, type ChannelPlugin } from "./runtime-api.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 export const SIGNAL_CHANNEL = "signal" as const;
@@ -27,9 +28,9 @@ export const signalSetupWizard = createSignalSetupWizardProxy(
 
 export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
-  listAccountIds: listSignalAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveSignalAccount),
-  defaultAccountId: resolveDefaultSignalAccountId,
+  listAccountIds: (cfg) => listSignalAccountIds(cfg),
+  resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
+  defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
   clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>

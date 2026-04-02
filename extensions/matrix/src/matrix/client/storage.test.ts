@@ -1,9 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
+import {
+  maybeMigrateLegacyStorage,
+  resolveMatrixStateFilePath,
+  resolveMatrixStoragePaths,
+} from "./storage.js";
 
 const createBackupArchiveMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({
@@ -19,6 +24,14 @@ const createBackupArchiveMock = vi.hoisted(() =>
   })),
 );
 
+const maybeCreateMatrixMigrationSnapshotMock = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => ({
+    created: true,
+    archivePath: "/tmp/matrix-migration-snapshot.tar.gz",
+    markerPath: "/tmp/matrix-migration-snapshot.json",
+  })),
+);
+
 vi.mock("../../../../../src/infra/backup-create.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../../src/infra/backup-create.js")>();
   return {
@@ -26,11 +39,10 @@ vi.mock("../../../../../src/infra/backup-create.js", async (importOriginal) => {
     createBackupArchive: (params: unknown) => createBackupArchiveMock(params),
   };
 });
-
-let maybeMigrateLegacyStorage: typeof import("./storage.js").maybeMigrateLegacyStorage;
-let resolveMatrixStateFilePath: typeof import("./storage.js").resolveMatrixStateFilePath;
-let resolveMatrixStoragePaths: typeof import("./storage.js").resolveMatrixStoragePaths;
-
+vi.mock("./migration-snapshot.runtime.js", () => ({
+  maybeCreateMatrixMigrationSnapshot: (params: unknown) =>
+    maybeCreateMatrixMigrationSnapshotMock(params),
+}));
 describe("matrix client storage paths", () => {
   const tempDirs: string[] = [];
   const defaultStorageAuth = {
@@ -38,11 +50,6 @@ describe("matrix client storage paths", () => {
     userId: "@bot:example.org",
     accessToken: "secret-token",
   };
-
-  beforeAll(async () => {
-    ({ maybeMigrateLegacyStorage, resolveMatrixStateFilePath, resolveMatrixStoragePaths } =
-      await import("./storage.js"));
-  });
 
   afterEach(() => {
     createBackupArchiveMock.mockReset();
@@ -57,6 +64,11 @@ describe("matrix client storage paths", () => {
       assets: [],
       skipped: [],
     }));
+    maybeCreateMatrixMigrationSnapshotMock.mockReset().mockResolvedValue({
+      created: true,
+      archivePath: "/tmp/matrix-migration-snapshot.tar.gz",
+      markerPath: "/tmp/matrix-migration-snapshot.json",
+    });
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -257,8 +269,11 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(createBackupArchiveMock).toHaveBeenCalledWith(
-      expect.objectContaining({ includeWorkspace: false }),
+    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env,
+        trigger: "matrix-client-fallback",
+      }),
     );
     expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"legacy":true}');
@@ -278,8 +293,11 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(createBackupArchiveMock).toHaveBeenCalledWith(
-      expect.objectContaining({ includeWorkspace: false }),
+    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env,
+        trigger: "matrix-client-fallback",
+      }),
     );
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
     expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
@@ -291,7 +309,7 @@ describe("matrix client storage paths", () => {
     const storagePaths = resolveDefaultStoragePaths();
     const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
     const env = createMigrationEnv(stateDir);
-    createBackupArchiveMock.mockRejectedValueOnce(new Error("snapshot failed"));
+    maybeCreateMatrixMigrationSnapshotMock.mockRejectedValueOnce(new Error("snapshot failed"));
 
     await expect(
       maybeMigrateLegacyStorage({

@@ -1,3 +1,3 @@
-export { resolveDiscordGroupRequireMention } from "../../../extensions/discord/api.js";
-export { resolveSlackGroupRequireMention } from "../../../extensions/slack/api.js";
 export { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+export { resolveDiscordGroupRequireMention } from "../../plugin-sdk/discord-surface.js";
+export { resolveSlackGroupRequireMention } from "../../plugin-sdk/slack.js";

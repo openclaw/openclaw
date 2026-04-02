@@ -22,6 +22,15 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+
+export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
+  providerId: string;
+  authProviderId: string;
+  envVars: string[];
+  transport: "local" | "remote";
+  autoSelectPriority?: number;
+};
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -105,6 +114,10 @@ function supportsGeminiMultimodalEmbeddings(model: string): boolean {
     .replace(/^models\//, "")
     .replace(/^(gemini|google)\//, "");
   return normalized === "gemini-embedding-2-preview";
+}
+
+function resolveMemoryEmbeddingAuthProviderId(providerId: string): string {
+  return providerId === "gemini" ? "google" : providerId;
 }
 
 const openAiAdapter: MemoryEmbeddingProviderAdapter = {
@@ -354,6 +367,36 @@ export function registerBuiltInMemoryEmbeddingProviders(register: {
     }
     register.registerMemoryEmbeddingProvider(adapter);
   }
+}
+
+export function getBuiltinMemoryEmbeddingProviderDoctorMetadata(
+  providerId: string,
+): BuiltinMemoryEmbeddingProviderDoctorMetadata | null {
+  const adapter = getBuiltinMemoryEmbeddingProviderAdapter(providerId);
+  if (!adapter) {
+    return null;
+  }
+  const authProviderId = resolveMemoryEmbeddingAuthProviderId(adapter.id);
+  return {
+    providerId: adapter.id,
+    authProviderId,
+    envVars: getProviderEnvVars(authProviderId),
+    transport: adapter.transport === "local" ? "local" : "remote",
+    autoSelectPriority: adapter.autoSelectPriority,
+  };
+}
+
+export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Array<BuiltinMemoryEmbeddingProviderDoctorMetadata> {
+  return builtinMemoryEmbeddingProviderAdapters
+    .filter((adapter) => typeof adapter.autoSelectPriority === "number")
+    .toSorted((a, b) => (a.autoSelectPriority ?? 0) - (b.autoSelectPriority ?? 0))
+    .map((adapter) => ({
+      providerId: adapter.id,
+      authProviderId: resolveMemoryEmbeddingAuthProviderId(adapter.id),
+      envVars: getProviderEnvVars(resolveMemoryEmbeddingAuthProviderId(adapter.id)),
+      transport: adapter.transport === "local" ? "local" : "remote",
+      autoSelectPriority: adapter.autoSelectPriority,
+    }));
 }
 
 export {

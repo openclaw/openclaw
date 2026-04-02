@@ -153,7 +153,11 @@ export function createSessionsListTool(opts?: {
         const deliveryAccountId =
           typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
         const deliveryThreadId =
-          typeof deliveryContext?.threadId === "string" ? deliveryContext.threadId : undefined;
+          typeof deliveryContext?.threadId === "string" ||
+          (typeof deliveryContext?.threadId === "number" &&
+            Number.isFinite(deliveryContext.threadId))
+            ? deliveryContext.threadId
+            : undefined;
         const lastChannel =
           deliveryChannel ??
           (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
@@ -201,6 +205,15 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          origin:
+            originChannel ||
+            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
+              ? {
+                  provider: originChannel,
+                  accountId:
+                    typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined,
+                }
+              : undefined,
           spawnedBy:
             typeof entry.spawnedBy === "string"
               ? resolveDisplaySessionKey({

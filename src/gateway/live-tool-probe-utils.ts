@@ -56,7 +56,12 @@ function hasMalformedToolOutput(text: string): boolean {
   if (
     lower.includes("try reading the file again") ||
     lower.includes("trying to read the file again") ||
-    lower.includes("try the read tool again")
+    lower.includes("try the read tool again") ||
+    lower.includes("file wasn't found immediately after") ||
+    lower.includes("file wasn't found immediately") ||
+    lower.includes("verify the file exists and read it again") ||
+    lower.includes("file read failed because the file was not found") ||
+    lower.includes("verify the file creation and read it again")
   ) {
     return true;
   }

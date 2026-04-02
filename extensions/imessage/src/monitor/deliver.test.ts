@@ -1,8 +1,11 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({ messageId: "imsg-1" }),
+  vi.fn().mockImplementation(async (_to: string, message: string) => ({
+    messageId: "imsg-1",
+    sentText: message,
+  })),
 );
 const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
 const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
@@ -135,9 +138,15 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("records outbound text and message ids in sent-message cache", async () => {
+  it("records outbound text and message ids in sent-message cache (post-send only)", async () => {
+    // Fix for #47830: remember() is called ONLY after each chunk is sent,
+    // never with the full un-chunked text before sending begins.
+    // Pre-send population widened the false-positive window in self-chat.
     const remember = vi.fn();
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    sendMessageIMessageMock
+      .mockResolvedValueOnce({ messageId: "imsg-1", sentText: "first" })
+      .mockResolvedValueOnce({ messageId: "imsg-2", sentText: "second" });
 
     await deliverReplies({
       replies: [{ text: "first|second" }],
@@ -150,14 +159,39 @@ describe("deliverReplies", () => {
       sentMessageCache: { remember },
     });
 
-    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", { text: "first|second" });
+    // Only the two per-chunk post-send calls — no pre-send full-text call.
+    expect(remember).toHaveBeenCalledTimes(2);
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "first",
       messageId: "imsg-1",
     });
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "second",
-      messageId: "imsg-1",
+      messageId: "imsg-2",
+    });
+  });
+
+  it("records the actual sent placeholder for media-only replies", async () => {
+    const remember = vi.fn();
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-media-1",
+      sentText: "<media:image>",
+    });
+
+    await deliverReplies({
+      replies: [{ mediaUrls: ["https://example.com/a.jpg"] }],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+      sentMessageCache: { remember },
+    });
+
+    expect(remember).toHaveBeenCalledWith("acct-4:chat_id:40", {
+      text: "<media:image>",
+      messageId: "imsg-media-1",
     });
   });
 });

@@ -20,7 +20,11 @@ export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
   enabledByDefault?: boolean;
-  kind?: PluginKind;
+  /** Legacy plugin ids that should normalize to this plugin id. */
+  legacyPluginIds?: string[];
+  /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
+  autoEnableWhenConfiguredProviders?: string[];
+  kind?: PluginKind | PluginKind[];
   channels?: string[];
   providers?: string[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
@@ -63,6 +67,8 @@ export type PluginManifestProviderAuthChoice = {
   /** Optional user-facing choice label/hint for grouped onboarding UI. */
   choiceLabel?: string;
   choiceHint?: string;
+  /** Legacy choice ids that should point users at this replacement choice. */
+  deprecatedChoiceIds?: string[];
   /** Optional grouping metadata for auth-choice pickers. */
   groupId?: string;
   groupLabel?: string;
@@ -151,6 +157,7 @@ function normalizeProviderAuthChoices(
     }
     const choiceLabel = typeof entry.choiceLabel === "string" ? entry.choiceLabel.trim() : "";
     const choiceHint = typeof entry.choiceHint === "string" ? entry.choiceHint.trim() : "";
+    const deprecatedChoiceIds = normalizeStringList(entry.deprecatedChoiceIds);
     const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
     const groupLabel = typeof entry.groupLabel === "string" ? entry.groupLabel.trim() : "";
     const groupHint = typeof entry.groupHint === "string" ? entry.groupHint.trim() : "";
@@ -169,6 +176,7 @@ function normalizeProviderAuthChoices(
       choiceId,
       ...(choiceLabel ? { choiceLabel } : {}),
       ...(choiceHint ? { choiceHint } : {}),
+      ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),
       ...(groupId ? { groupId } : {}),
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
@@ -225,6 +233,16 @@ export function resolvePluginManifestPath(rootDir: string): string {
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
+function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
+  if (typeof raw === "string") {
+    return raw as PluginKind;
+  }
+  if (Array.isArray(raw) && raw.length > 0 && raw.every((k) => typeof k === "string")) {
+    return raw.length === 1 ? (raw[0] as PluginKind) : (raw as PluginKind[]);
+  }
+  return undefined;
+}
+
 export function loadPluginManifest(
   rootDir: string,
   rejectHardlinks = true,
@@ -274,8 +292,12 @@ export function loadPluginManifest(
     return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
   }
 
-  const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
+  const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
+  const legacyPluginIds = normalizeStringList(raw.legacyPluginIds);
+  const autoEnableWhenConfiguredProviders = normalizeStringList(
+    raw.autoEnableWhenConfiguredProviders,
+  );
   const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
   const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
@@ -299,6 +321,10 @@ export function loadPluginManifest(
       id,
       configSchema,
       ...(enabledByDefault ? { enabledByDefault } : {}),
+      ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
+      ...(autoEnableWhenConfiguredProviders.length > 0
+        ? { autoEnableWhenConfiguredProviders }
+        : {}),
       kind,
       channels,
       providers,
@@ -327,12 +353,13 @@ export type PluginPackageChannel = {
   docsLabel?: string;
   blurb?: string;
   order?: number;
-  aliases?: string[];
-  preferOver?: string[];
+  aliases?: readonly string[];
+  preferOver?: readonly string[];
   systemImage?: string;
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
+  selectionExtras?: readonly string[];
+  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;

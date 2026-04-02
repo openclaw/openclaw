@@ -231,18 +231,56 @@ describe("voice-call outbound helpers", () => {
     });
     expect(call).toEqual(
       expect.objectContaining({
-        state: "hangup-bot",
         endReason: "hangup-bot",
+        endedAt: expect.any(Number),
       }),
     );
-    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(ctx, "call-1");
+    expect(transitionStateMock).toHaveBeenCalledWith(call, "hangup-bot");
+    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
+      { maxDurationTimers: ctx.maxDurationTimers },
+      "call-1",
+    );
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      ctx,
+      { transcriptWaiters: ctx.transcriptWaiters },
       "call-1",
       "Call ended: hangup-bot",
     );
     expect(ctx.activeCalls.size).toBe(0);
     expect(ctx.providerCallIdMap.size).toBe(0);
+  });
+
+  it("preserves timeout reasons when ending timed out calls", async () => {
+    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const hangupCall = vi.fn(async () => {});
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map([["provider-1", "call-1"]]),
+      provider: { hangupCall },
+      storePath: "/tmp/voice-call.json",
+      transcriptWaiters: new Map(),
+      maxDurationTimers: new Map(),
+    };
+
+    await expect(endCall(ctx as never, "call-1", { reason: "timeout" })).resolves.toEqual({
+      success: true,
+    });
+    expect(hangupCall).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      reason: "timeout",
+    });
+    expect(call).toEqual(
+      expect.objectContaining({
+        endReason: "timeout",
+        endedAt: expect.any(Number),
+      }),
+    );
+    expect(transitionStateMock).toHaveBeenCalledWith(call, "timeout");
+    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
+      { transcriptWaiters: ctx.transcriptWaiters },
+      "call-1",
+      "Call ended: timeout",
+    );
   });
 
   it("handles missing, disconnected, and already-ended calls", async () => {
