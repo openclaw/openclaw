@@ -663,7 +663,9 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
-    allowFromLower,
+    // Match thread-context filtering to the same sender-gate surfaces used by
+    // inbound routing for the current message.
+    allowFromLower: isDirectMessage ? allowFromLower : [],
     allowNameMatching: ctx.allowNameMatching,
     channelUsers: channelConfig?.users,
     isThreadReply,

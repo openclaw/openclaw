@@ -28,13 +28,12 @@ type SlackThreadContextSender = {
 function isSlackThreadContextSenderAllowed(params: {
   sender: SlackThreadContextSender;
   senderName?: string;
+  hasSenderAllowlist: boolean;
   allowFromLower: string[];
   channelUsers?: Array<string | number>;
   allowNameMatching: boolean;
 }): boolean {
-  const hasSenderAllowlist =
-    params.allowFromLower.length > 0 || (params.channelUsers?.length ?? 0) > 0;
-  if (!hasSenderAllowlist) {
+  if (!params.hasSenderAllowlist) {
     return true;
   }
   if (params.sender.botId) {
@@ -117,6 +116,7 @@ export async function resolveSlackThreadContextData(params: {
     ? isSlackThreadContextSenderAllowed({
         sender: { userId: starter.userId, botId: starter.botId },
         senderName: starterSenderName,
+        hasSenderAllowlist,
         allowFromLower: params.allowFromLower,
         channelUsers: params.channelUsers,
         allowNameMatching: params.allowNameMatching,
@@ -172,6 +172,7 @@ export async function resolveSlackThreadContextData(params: {
         isSlackThreadContextSenderAllowed({
           sender: historyMsg,
           senderName: historyMsg.userId ? userMap.get(historyMsg.userId)?.name : undefined,
+          hasSenderAllowlist,
           allowFromLower: params.allowFromLower,
           channelUsers: params.channelUsers,
           allowNameMatching: params.allowNameMatching,

@@ -484,7 +484,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it("filters non-allowlisted thread context messages from thread history", async () => {
+  it("filters non-allowlisted thread context messages from DM thread history", async () => {
     const { storePath } = makeTmpStorePath();
     const replies = vi
       .fn()
@@ -504,7 +504,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createThreadSlackCtx({
       cfg: {
         session: { store: storePath },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        channels: { slack: { enabled: true, replyToMode: "all" } },
       } as OpenClawConfig,
       replies,
     });
@@ -512,12 +512,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     slackCtx.resolveUserName = async (id: string) => ({
       name: id === "U1" ? "Alice" : "Mallory",
     });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-
-    const prepared = await prepareThreadMessage(slackCtx, {
+    const prepared = await prepareMessageWith(slackCtx, createThreadAccount(), {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
       text: "current message",
       ts: "301.000",
-    });
+      thread_ts: "300.000",
+    } as SlackMessageEvent);
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
@@ -528,7 +530,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it("does not fall back to blocked thread starter text when filtered history is empty", async () => {
+  it("does not fall back to blocked DM thread starter text when filtered history is empty", async () => {
     const { storePath } = makeTmpStorePath();
     const replies = vi
       .fn()
@@ -545,7 +547,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createThreadSlackCtx({
       cfg: {
         session: { store: storePath },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        channels: { slack: { enabled: true, replyToMode: "all" } },
       } as OpenClawConfig,
       replies,
     });
@@ -553,12 +555,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     slackCtx.resolveUserName = async (id: string) => ({
       name: id === "U1" ? "Alice" : "Mallory",
     });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-
-    const prepared = await prepareThreadMessage(slackCtx, {
+    const prepared = await prepareMessageWith(slackCtx, createThreadAccount(), {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
       text: "current message",
       ts: "401.000",
-    });
+      thread_ts: "400.000",
+    } as SlackMessageEvent);
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
@@ -608,6 +612,90 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("allowed by channel users");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("blocked by channel users");
+    expect(prepared!.ctxPayload.ThreadStarterBody).toContain("starter");
+    expect(prepared!.ctxPayload.ThreadStarterBody).not.toContain("blocked by channel users");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses channel users allowlist semantics for room thread context filtering", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U1", ts: "550.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter", user: "U1", ts: "550.000" },
+          { text: "room context from channel user", user: "U1", ts: "550.200" },
+          { text: "current message", user: "U1", ts: "551.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.allowFrom = ["U_OWNER_ONLY"];
+    slackCtx.channelsConfig = {
+      C123: {
+        users: ["U1"],
+      },
+    };
+    slackCtx.channelsConfigKeys = ["C123"];
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "current message",
+      ts: "551.000",
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("room context from channel user");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps bot-started thread starter context when sender allowlists are active", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "assistant started thread", bot_id: "B1", ts: "600.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "assistant started thread", bot_id: "B1", ts: "600.000" },
+          { text: "current message", user: "U1", ts: "601.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.channelsConfig = {
+      C123: {
+        users: ["U1"],
+      },
+    };
+    slackCtx.channelsConfigKeys = ["C123"];
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "current message",
+      ts: "601.000",
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadStarterBody).toContain("assistant started thread");
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
