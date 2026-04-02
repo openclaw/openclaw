@@ -11,6 +11,7 @@ import {
   createPageViaPlaywright,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  gotoPageWithNavigationGuard,
   listPagesViaPlaywright,
 } from "./pw-session.js";
 
@@ -607,5 +608,55 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         targetId: "MISSING_TARGET",
       }),
     ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
+  });
+
+  it("quarantines the actual page when blocked navigation receives a stale target id", async () => {
+    const { pageGoto, pageClose, sessionSend, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+
+    await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "about:blank",
+    });
+
+    const page = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "MISSING_TARGET",
+    });
+
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    // Simulate target-info churn while quarantining so caller target id cannot be trusted.
+    sessionSend.mockRejectedValueOnce(new Error("Target lookup failed"));
+
+    await expect(
+      gotoPageWithNavigationGuard({
+        cdpUrl: "http://127.0.0.1:18792",
+        page,
+        url: "https://93.184.216.34/start",
+        timeoutMs: 1000,
+        targetId: "MISSING_TARGET",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+      }),
+    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
   });
 });
