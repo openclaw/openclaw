@@ -310,6 +310,7 @@ describe("resolvePluginWebSearchProviders", () => {
           ({
             config: params.config,
             changes: [],
+            autoEnabledReasons: {},
           }) as ReturnType<PluginAutoEnableModule["applyPluginAutoEnable"]>,
       );
     loadPluginManifestRegistryMock = vi
@@ -351,7 +352,11 @@ describe("resolvePluginWebSearchProviders", () => {
         allow: ["brave", "perplexity"],
       },
     };
-    applyPluginAutoEnableSpy.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableSpy.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
 
     resolvePluginWebSearchProviders(createSnapshotParams({ config: rawConfig }));
 
@@ -503,13 +508,17 @@ describe("resolvePluginWebSearchProviders", () => {
       name: "reuses a compatible active registry for runtime resolution when config is provided",
       setupRegistry: () => {
         const env = createWebSearchEnv();
-        const { config } = webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
-          config: createBraveAllowConfig(),
-          bundledAllowlistCompat: true,
-          env,
-        });
+        const rawConfig = createBraveAllowConfig();
+        const { config, activationSourceConfig, autoEnabledReasons } =
+          webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
+            config: rawConfig,
+            bundledAllowlistCompat: true,
+            env,
+          });
         const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
           config,
+          activationSourceConfig,
+          autoEnabledReasons,
           workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
           env,
           onlyPluginIds: ["brave"],
@@ -531,7 +540,7 @@ describe("resolvePluginWebSearchProviders", () => {
         );
         setActivePluginRegistry(registry, cacheKey);
         return {
-          config: createBraveAllowConfig(),
+          config: rawConfig,
           bundledAllowlistCompat: true,
           workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
           env,
