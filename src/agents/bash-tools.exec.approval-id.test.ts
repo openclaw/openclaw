@@ -115,7 +115,7 @@ function expectPendingApprovalText(
     expect(pendingText).toContain(
       (options.allowedDecisions ?? "").includes("allow-always")
         ? "Background mode requires pre-approved policy"
-        : "Background mode requires host policy that allows pre-approval",
+        : "Background mode requires an effective policy that allows pre-approval",
     );
   }
   return details;
@@ -339,6 +339,7 @@ describe("exec approvals", () => {
 
     const tool = createExecTool({
       host: "node",
+      security: "allowlist",
       ask: "on-miss",
       approvalRunningNoticeMs: 0,
     });
@@ -1131,7 +1132,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
-      security: "full",
+      security: "allowlist",
       trigger: "cron",
       approvalRunningNoticeMs: 0,
     });
@@ -1211,6 +1212,11 @@ describe("exec approvals", () => {
   });
 
   it("explains cron no-route denials with a host-policy fix hint", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "deny" },
+      agents: {},
+    });
     mockNoApprovalRouteRegistration();
 
     const tool = createExecTool({
