@@ -190,6 +190,32 @@ describe("provider request config", () => {
     });
   });
 
+  it("does not copy target TLS into env proxy TLS", () => {
+    const resolved = resolveProviderRequestConfig({
+      provider: "custom-openai",
+      baseUrl: "https://proxy.example.com/v1",
+      request: {
+        proxy: {
+          mode: "env-proxy",
+        },
+        tls: {
+          cert: "client-cert",
+          key: "client-key",
+          serverName: "gateway.internal",
+        },
+      },
+    });
+
+    expect(buildProviderRequestDispatcherPolicy(resolved)).toEqual({
+      mode: "env-proxy",
+      connect: {
+        cert: "client-cert",
+        key: "client-key",
+        servername: "gateway.internal",
+      },
+    });
+  });
+
   it("rejects insecure TLS transport overrides", () => {
     expect(() =>
       resolveProviderRequestConfig({

@@ -376,7 +376,7 @@ export function buildProviderRequestDispatcherPolicy(
   if (!request.proxy.configured) {
     return targetTls ? { mode: "direct", connect: targetTls } : undefined;
   }
-  const proxiedTls = toTlsConnectOptions(request.proxy.tls) ?? targetTls;
+  const proxiedTls = toTlsConnectOptions(request.proxy.tls);
   if (request.proxy.mode === "env-proxy") {
     return {
       mode: "env-proxy",
