@@ -389,9 +389,22 @@ export class DiscordVoiceManager {
       );
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
       // --- FORK: pre-warm Kyutai TTS model on VC join ---
+      // The MCP TTS server starts on-demand. First prewarm may fail if sidecar isn't up yet.
+      // Retry after 3s to give MCP time to spawn.
       import("./kyutai-streaming.js")
-        .then(({ kyutaiPrewarm }) => kyutaiPrewarm())
-        .then((ok) => ok && logVoiceVerbose(`join: kyutai TTS model pre-warmed`))
+        .then(async ({ kyutaiPrewarm }) => {
+          let ok = await kyutaiPrewarm();
+          if (!ok) {
+            logger.warn("discord voice: prewarm failed (sidecar not up?), retrying in 3s...");
+            await new Promise((r) => setTimeout(r, 3000));
+            ok = await kyutaiPrewarm();
+          }
+          if (ok) {
+            logger.warn("discord voice: kyutai TTS model pre-warmed");
+          } else {
+            logger.warn("discord voice: prewarm failed after retry — first response will be slow");
+          }
+        })
         .catch(() => {}); // best-effort, non-blocking
       // --- END FORK ---
     } catch (err) {
@@ -700,7 +713,7 @@ export class DiscordVoiceManager {
 
             // Pre-buffer: collect PCM chunks until we have >= 1s of audio (24kHz mono s16le = 48KB/s)
             // before piping to FFmpeg. This prevents stuttery playback while Kyutai generates.
-            const PRE_BUFFER_BYTES = 48000; // ~1 second at 24kHz mono s16le
+            const PRE_BUFFER_BYTES = 96000; // ~2 seconds at 24kHz mono s16le
             const buffered: Buffer[] = [];
             let bufferedBytes = 0;
             let preBufferDone = false;
