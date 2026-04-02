@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { ImageGenerationProvider } from "../api.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
@@ -7,11 +8,17 @@ const mocks = vi.hoisted(() => {
   return {
     createSubsystemLogger: vi.fn(() => ({ debug })),
     describeFailoverError: vi.fn(),
-    getImageGenerationProvider: vi.fn(),
-    getProviderEnvVars: vi.fn(() => []),
-    isFailoverError: vi.fn(() => false),
-    listImageGenerationProviders: vi.fn(() => []),
-    parseImageGenerationModelRef: vi.fn((raw?: string) => {
+    getImageGenerationProvider: vi.fn<
+      (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
+    >(() => undefined),
+    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
+    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
+    listImageGenerationProviders: vi.fn<(config?: OpenClawConfig) => ImageGenerationProvider[]>(
+      () => [],
+    ),
+    parseImageGenerationModelRef: vi.fn<
+      (raw?: string) => { provider: string; model: string } | undefined
+    >((raw?: string) => {
       const trimmed = raw?.trim();
       if (!trimmed) {
         return undefined;
@@ -25,8 +32,8 @@ const mocks = vi.hoisted(() => {
         model: trimmed.slice(slash + 1),
       };
     }),
-    resolveAgentModelFallbackValues: vi.fn(() => []),
-    resolveAgentModelPrimaryValue: vi.fn(() => undefined),
+    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
+    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
     debug,
   };
 });
@@ -66,7 +73,12 @@ describe("image-generation runtime", () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
-    mocks.getImageGenerationProvider.mockReturnValue({
+    const provider: ImageGenerationProvider = {
+      id: "image-plugin",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
       async generateImage(req: { authStore?: unknown }) {
         seenAuthStore = req.authStore;
         return {
@@ -80,7 +92,8 @@ describe("image-generation runtime", () => {
           model: "img-v1",
         };
       },
-    });
+    };
+    mocks.getImageGenerationProvider.mockReturnValue(provider);
 
     const result = await generateImage({
       cfg: {
@@ -109,7 +122,7 @@ describe("image-generation runtime", () => {
   });
 
   it("lists runtime image-generation providers through the owner runtime", () => {
-    const providers = [
+    const providers: ImageGenerationProvider[] = [
       {
         id: "image-plugin",
         defaultModel: "img-v1",
@@ -126,6 +139,9 @@ describe("image-generation runtime", () => {
             resolutions: ["1K", "2K"],
           },
         },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        }),
       },
     ];
     mocks.listImageGenerationProviders.mockReturnValue(providers);
@@ -138,8 +154,28 @@ describe("image-generation runtime", () => {
 
   it("explains native image-generation config and provider auth when no model is configured", async () => {
     mocks.listImageGenerationProviders.mockReturnValue([
-      { id: "google", defaultModel: "gemini-3-pro-image-preview" },
-      { id: "openai", defaultModel: "gpt-image-1" },
+      {
+        id: "google",
+        defaultModel: "gemini-3-pro-image-preview",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        }),
+      },
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        }),
+      },
     ]);
     mocks.getProviderEnvVars.mockImplementation((providerId: string) => {
       if (providerId === "google") {
@@ -166,6 +202,13 @@ describe("image-generation runtime", () => {
       {
         id: "__proto__",
         defaultModel: "proto-v1",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        }),
       },
     ]);
 
