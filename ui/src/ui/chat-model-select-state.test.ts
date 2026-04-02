@@ -55,4 +55,67 @@ describe("chat-model-select-state", () => {
     expect(resolved.options.map((option) => option.value)).toContain("openai/gpt-5-mini");
     expect(resolved.options.map((option) => option.value)).not.toContain("gpt-5-mini");
   });
+
+  it("uses catalog names for the default label and matching picker options", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: createModelCatalog({
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5 (NVIDIA)",
+        provider: "nvidia",
+      }),
+      sessionsResult: createSessionsListResult({
+        model: "moonshotai/kimi-k2.5",
+        modelProvider: "nvidia",
+        defaultsModel: "moonshotai/kimi-k2.5",
+        defaultsProvider: "nvidia",
+      }),
+    };
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("nvidia/moonshotai/kimi-k2.5");
+    expect(resolved.defaultLabel).toBe("Default (Kimi K2.5 (NVIDIA))");
+    expect(resolved.options).toContainEqual({
+      value: "nvidia/moonshotai/kimi-k2.5",
+      label: "Kimi K2.5 (NVIDIA)",
+    });
+  });
+
+  it("disambiguates duplicate friendly names in picker options and default labels", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "claude-3-7-sonnet",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+        },
+        {
+          id: "claude-3-7-sonnet",
+          name: "Claude Sonnet",
+          provider: "openrouter",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "claude-3-7-sonnet",
+        modelProvider: "anthropic",
+        defaultsModel: "claude-3-7-sonnet",
+        defaultsProvider: "openrouter",
+      }),
+    };
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
+    expect(resolved.defaultLabel).toBe("Default (Claude Sonnet · openrouter)");
+    expect(resolved.options).toContainEqual({
+      value: "anthropic/claude-3-7-sonnet",
+      label: "Claude Sonnet · anthropic",
+    });
+    expect(resolved.options).toContainEqual({
+      value: "openrouter/claude-3-7-sonnet",
+      label: "Claude Sonnet · openrouter",
+    });
+  });
 });

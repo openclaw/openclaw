@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildChatModelOption,
   createChatModelOverride,
+  formatCatalogChatModelDisplay,
   formatChatModelDisplay,
   normalizeChatModelOverrideValue,
   resolveChatModelOverride,
@@ -22,11 +23,49 @@ const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
 });
 
 describe("chat-model-ref helpers", () => {
-  it("builds provider-qualified option values and labels", () => {
-    expect(buildChatModelOption(catalog[0])).toEqual({
+  it("builds provider-qualified option values and prefers catalog names for labels", () => {
+    expect(buildChatModelOption(catalog[0], catalog)).toEqual({
       value: "openai/gpt-5-mini",
-      label: "gpt-5-mini · openai",
+      label: "GPT-5 Mini",
     });
+  });
+
+  it("uses friendly catalog names for qualified nested model ids", () => {
+    const nestedModel = {
+      id: "moonshotai/kimi-k2.5",
+      name: "Kimi K2.5 (NVIDIA)",
+      provider: "nvidia",
+    };
+    expect(buildChatModelOption(nestedModel, [nestedModel])).toEqual({
+      value: "nvidia/moonshotai/kimi-k2.5",
+      label: "Kimi K2.5 (NVIDIA)",
+    });
+    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [nestedModel])).toBe(
+      "Kimi K2.5 (NVIDIA)",
+    );
+  });
+
+  it("disambiguates duplicate friendly names with the provider", () => {
+    const duplicateNameCatalog = createModelCatalog(
+      {
+        id: "claude-3-7-sonnet",
+        name: "Claude Sonnet",
+        provider: "anthropic",
+      },
+      {
+        id: "claude-3-7-sonnet",
+        name: "Claude Sonnet",
+        provider: "openrouter",
+      },
+    );
+
+    expect(buildChatModelOption(duplicateNameCatalog[0], duplicateNameCatalog)).toEqual({
+      value: "anthropic/claude-3-7-sonnet",
+      label: "Claude Sonnet · anthropic",
+    });
+    expect(
+      formatCatalogChatModelDisplay("openrouter/claude-3-7-sonnet", duplicateNameCatalog),
+    ).toBe("Claude Sonnet · openrouter");
   });
 
   it("normalizes raw overrides when the catalog match is unique", () => {
@@ -97,6 +136,21 @@ describe("chat-model-ref helpers", () => {
       value: "openai/gpt-5-mini",
       source: "server",
       reason: "ambiguous",
+    });
+  });
+
+  it("does not treat slash-containing server model ids as already provider-qualified", () => {
+    expect(
+      resolvePreferredServerChatModel("moonshotai/kimi-k2.5", "nvidia", [
+        {
+          id: "moonshotai/kimi-k2.5",
+          name: "Kimi K2.5 (NVIDIA)",
+          provider: "nvidia",
+        },
+      ]),
+    ).toEqual({
+      value: "nvidia/moonshotai/kimi-k2.5",
+      source: "catalog",
     });
   });
 });
