@@ -1432,21 +1432,6 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       const prePromptMessageCount = activeSession.messages.length;
-      const hookCtx = {
-        agentId: hookAgentId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
-        messageProvider: params.messageProvider ?? undefined,
-        sourceProvider: params.sourceProvider ?? undefined,
-        trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-        senderId: params.senderId ?? null,
-        senderName: params.senderName ?? null,
-        senderIsOwner: params.senderIsOwner,
-        groupId: params.groupId ?? null,
-        spawnedBy: params.spawnedBy ?? null,
-      };
       try {
         const promptStartedAt = Date.now();
 
