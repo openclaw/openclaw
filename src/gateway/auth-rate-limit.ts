@@ -39,6 +39,7 @@ export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
 export const AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET = "shared-secret";
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
+export const AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX = "browser-origin:";
 
 export interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
@@ -89,6 +90,10 @@ const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
  * share one representation (including IPv4-mapped IPv6 forms).
  */
 export function normalizeRateLimitClientIp(ip: string | undefined): string {
+  const trimmed = ip?.trim();
+  if (trimmed?.startsWith(AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX)) {
+    return trimmed;
+  }
   return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
 }
 

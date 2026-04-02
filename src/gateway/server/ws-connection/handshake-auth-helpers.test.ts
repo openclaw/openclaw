@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX } from "../../auth-rate-limit.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import {
-  BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
@@ -19,11 +19,11 @@ function createRateLimiter(): AuthRateLimiter {
 }
 
 describe("handshake auth helpers", () => {
-  it("pins browser-origin loopback clients to the synthetic rate-limit ip", () => {
+  it("keys browser-origin loopback clients by origin for rate limiting", () => {
     const rateLimiter = createRateLimiter();
     const browserRateLimiter = createRateLimiter();
     const resolved = resolveHandshakeBrowserSecurityContext({
-      requestOrigin: "https://app.example",
+      requestOrigin: "https://App.Example:443",
       clientIp: "127.0.0.1",
       rateLimiter,
       browserRateLimiter,
@@ -32,7 +32,7 @@ describe("handshake auth helpers", () => {
     expect(resolved).toMatchObject({
       hasBrowserOriginHeader: true,
       enforceOriginCheckForAnyClient: true,
-      rateLimitClientIp: BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
+      rateLimitClientIp: `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}https://app.example:443`,
       authRateLimiter: browserRateLimiter,
     });
   });

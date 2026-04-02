@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX,
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -171,6 +172,17 @@ describe("auth rate limiter", () => {
     });
     limiter.recordFailure("127.0.0.1");
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
+  });
+
+  it("preserves browser-origin synthetic keys and tracks each origin independently", () => {
+    createLimiter({ maxAttempts: 1 });
+    const trustedUiKey = `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}https://ui.example`;
+    const maliciousPageKey = `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}https://evil.example`;
+
+    limiter.recordFailure(maliciousPageKey);
+
+    expect(limiter.check(maliciousPageKey).allowed).toBe(false);
+    expect(limiter.check(trustedUiKey).allowed).toBe(true);
   });
 
   // ---------- reset ----------

@@ -1,4 +1,5 @@
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
+import { AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX } from "../../auth-rate-limit.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
@@ -6,7 +7,10 @@ import { isLoopbackAddress } from "../../net.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
-export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+function resolveBrowserOriginRateLimitKey(requestOrigin: string): string {
+  const normalizedOrigin = requestOrigin.trim().toLowerCase();
+  return `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}${normalizedOrigin}`;
+}
 
 export type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
@@ -36,7 +40,7 @@ export function resolveHandshakeBrowserSecurityContext(params: {
     enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
     rateLimitClientIp:
       hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
-        ? BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP
+        ? resolveBrowserOriginRateLimitKey(params.requestOrigin ?? "")
         : params.clientIp,
     authRateLimiter:
       hasBrowserOriginHeader && params.browserRateLimiter
