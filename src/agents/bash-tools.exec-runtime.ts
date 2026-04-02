@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { loadConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -12,7 +13,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -335,13 +336,14 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const mainKey = loadConfig().session?.mainKey;
   enqueueSystemEvent(summary, {
-    sessionKey,
+    sessionKey: resolveEventSessionKey(sessionKey, mainKey),
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
   });
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }, mainKey),
   );
 }
 
@@ -413,13 +415,14 @@ export function emitExecSystemEvent(
   if (!sessionKey) {
     return;
   }
+  const mainKey = loadConfig().session?.mainKey;
   enqueueSystemEvent(text, {
-    sessionKey,
+    sessionKey: resolveEventSessionKey(sessionKey, mainKey),
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
   });
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }, mainKey),
   );
 }
 

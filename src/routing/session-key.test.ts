@@ -10,6 +10,8 @@ import {
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  resolveEventSessionKey,
+  scopedHeartbeatWakeOptions,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -155,6 +157,78 @@ describe("session key canonicalization", () => {
     },
   ] as const)("$name", ({ run }) => {
     expectSessionKeyCanonicalizationCase({ run });
+  });
+});
+
+describe("scopedHeartbeatWakeOptions", () => {
+  it("remaps ephemeral cron run sessions to agent main key", () => {
+    const result = scopedHeartbeatWakeOptions("agent:main:cron:backup:run:abc", {
+      reason: "exec:123:exit",
+    });
+    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:main" });
+  });
+
+  it("preserves durable cron base sessions (not remapped)", () => {
+    const result = scopedHeartbeatWakeOptions("agent:main:cron:backup", {
+      reason: "exec:123:exit",
+    });
+    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:cron:backup" });
+  });
+
+  it("preserves sessionKey for regular agent sessions", () => {
+    const result = scopedHeartbeatWakeOptions("agent:main:main", {
+      reason: "exec:123:exit",
+    });
+    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:main" });
+  });
+
+  it("strips sessionKey for non-agent keys", () => {
+    const result = scopedHeartbeatWakeOptions("main", { reason: "test" });
+    expect(result).toEqual({ reason: "test" });
+    expect("sessionKey" in result).toBe(false);
+  });
+
+  it("strips sessionKey for global-scope sessions to preserve unscoped wake behavior", () => {
+    // In session.scope = "global" setups, resolveMainSessionKeyFromConfig() returns "global".
+    // Passing "global" as sessionKey into requestHeartbeatNow would create a targeted wake
+    // that can fail to resolve, breaking hook-triggered heartbeats. scopedHeartbeatWakeOptions
+    // must strip it to preserve the old unscoped behavior.
+    const result = scopedHeartbeatWakeOptions("global", { reason: "hook:wake" });
+    expect(result).toEqual({ reason: "hook:wake" });
+    expect("sessionKey" in result).toBe(false);
+  });
+});
+
+describe("resolveEventSessionKey", () => {
+  it("remaps ephemeral cron run session keys to agent main session key", () => {
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123")).toBe("agent:main:main");
+    expect(resolveEventSessionKey("agent:einstein:cron:job-1:run:xyz")).toBe("agent:einstein:main");
+  });
+
+  it("preserves durable cron base session keys", () => {
+    expect(resolveEventSessionKey("agent:einstein:cron:job-1")).toBe("agent:einstein:cron:job-1");
+    expect(resolveEventSessionKey("agent:main:cron:backup")).toBe("agent:main:cron:backup");
+  });
+
+  it("respects custom mainKey for ephemeral cron session remapping", () => {
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123", "captain")).toBe(
+      "agent:main:captain",
+    );
+    expect(resolveEventSessionKey("agent:einstein:cron:job-1:run:xyz", "captain")).toBe(
+      "agent:einstein:captain",
+    );
+  });
+
+  it("passes through non-cron session keys unchanged", () => {
+    expect(resolveEventSessionKey("agent:main:main")).toBe("agent:main:main");
+    expect(resolveEventSessionKey("agent:main:discord:direct:user1")).toBe(
+      "agent:main:discord:direct:user1",
+    );
+  });
+
+  it("passes through non-agent keys unchanged", () => {
+    expect(resolveEventSessionKey("main")).toBe("main");
+    expect(resolveEventSessionKey("global")).toBe("global");
   });
 });
 

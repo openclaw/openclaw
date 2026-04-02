@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { resolveEventSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -685,7 +686,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const queued = enqueueSystemEvent(text, {
-        sessionKey,
+        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey),
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
       });

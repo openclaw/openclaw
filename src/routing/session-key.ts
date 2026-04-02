@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  parseAgentSessionKey,
+  type ParsedAgentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
@@ -35,8 +39,27 @@ function normalizeToken(value: string | undefined | null): string {
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
   wakeOptions: T,
+  mainKey?: string,
 ): T | (T & { sessionKey: string }) {
-  return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return wakeOptions;
+  }
+  if (isCronRunSessionKey(sessionKey)) {
+    return {
+      ...wakeOptions,
+      sessionKey: buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey }),
+    };
+  }
+  return { ...wakeOptions, sessionKey };
+}
+
+export function resolveEventSessionKey(sessionKey: string, mainKey?: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed || !isCronRunSessionKey(sessionKey)) {
+    return sessionKey;
+  }
+  return buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey });
 }
 
 export function normalizeMainKey(value: string | undefined | null): string {

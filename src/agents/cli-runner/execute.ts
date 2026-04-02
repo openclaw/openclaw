@@ -1,3 +1,4 @@
+import { loadConfig } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
@@ -5,7 +6,7 @@ import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/hear
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
-import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
+import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -486,9 +487,22 @@ export async function executePreparedCliRun(
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+              // Fall back to the runtime config snapshot when the caller omits
+              // params.config so a custom session.mainKey still routes the
+              // watchdog notice to the queue the heartbeat actually drains
+              // (otherwise the remap defaults to "main" and the configured
+              // main-key queue never sees this event).
+              const watchdogMainKey =
+                params.config?.session?.mainKey ?? loadConfig().session?.mainKey;
+              executeDeps.enqueueSystemEvent(stallNotice, {
+                sessionKey: resolveEventSessionKey(params.sessionKey, watchdogMainKey),
+              });
               executeDeps.requestHeartbeatNow(
-                scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
+                scopedHeartbeatWakeOptions(
+                  params.sessionKey,
+                  { reason: "cli:watchdog:stall" },
+                  watchdogMainKey,
+                ),
               );
             }
             throw new FailoverError(timeoutReason, {
