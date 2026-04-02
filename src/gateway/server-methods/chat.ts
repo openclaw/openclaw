@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -1619,9 +1620,18 @@ export const chatHandlers: GatewayRequestHandlers = {
       if (hasImageModelConfig) {
         // Resolve agent's allowlist to check if any image model is allowed
         const agentDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+
+        // Load model catalog for accurate model information
+        let catalog: ModelCatalogEntry[] = [];
+        try {
+          catalog = await context.loadGatewayModelCatalog();
+        } catch {
+          // Catalog load failed, use empty catalog as fallback
+        }
+
         const { allowAny, allowedKeys } = buildAllowedModelSet({
           cfg,
-          catalog: [],
+          catalog,
           defaultProvider: agentDefault.provider,
           defaultModel: agentDefault.model,
           agentId: sessionAgentId,
@@ -1633,8 +1643,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           // When primary has explicit provider (e.g., "openai/gpt-4o"), providerless
           // fallbacks should resolve against that provider, not agent default.
           let imageModelProvider: string | undefined;
-          if (imageModelPrimary) {
-            const primaryTrimmed = imageModelPrimary.trim();
+          const primaryTrimmed = imageModelPrimary?.trim();
+
+          if (primaryTrimmed) {
             if (primaryTrimmed.includes("/")) {
               // Primary has explicit provider - extract it
               const slash = primaryTrimmed.indexOf("/");
@@ -1655,18 +1666,41 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (primaryResolved?.alias && primaryResolved.ref.provider) {
                 imageModelProvider = primaryResolved.ref.provider;
               }
+            }
+          }
 
-              // If alias resolution didn't determine provider, scan fallbacks for provider
-              if (!imageModelProvider) {
-                for (const fb of imageModelConfigFallbacks) {
-                  if (!fb?.trim()) {
-                    continue;
-                  }
-                  const slash = fb.indexOf("/");
-                  if (slash > 0) {
-                    imageModelProvider = fb.slice(0, slash).trim();
-                    break;
-                  }
+          // If primary resolution didn't determine provider, scan fallbacks for provider
+          if (!imageModelProvider) {
+            // First pass: find first fallback with explicit provider prefix
+            for (const fb of imageModelConfigFallbacks) {
+              if (!fb?.trim()) {
+                continue;
+              }
+              const slash = fb.indexOf("/");
+              if (slash > 0) {
+                imageModelProvider = fb.slice(0, slash).trim();
+                break;
+              }
+            }
+
+            // Second pass: if no fallback had explicit provider, try alias resolution
+            if (!imageModelProvider) {
+              for (const fb of imageModelConfigFallbacks) {
+                if (!fb?.trim()) {
+                  continue;
+                }
+                const tempAliasIndex = buildModelAliasIndex({
+                  cfg,
+                  defaultProvider: agentDefault.provider,
+                });
+                const resolved = resolveModelRefFromString({
+                  raw: fb.trim(),
+                  defaultProvider: agentDefault.provider,
+                  aliasIndex: tempAliasIndex,
+                });
+                if (resolved?.alias && resolved.ref.provider) {
+                  imageModelProvider = resolved.ref.provider;
+                  break;
                 }
               }
             }
