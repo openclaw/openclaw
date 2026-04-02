@@ -10,7 +10,8 @@ import {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
-import { resolveConfiguredMatrixBotUserIds, resolveMatrixAccount } from "../accounts.js";
+import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
@@ -82,8 +83,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const effectiveAccountId = authContext.accountId;
 
   // Resolve account-specific config for multi-account support
-  const account = resolveMatrixAccount({ cfg, accountId: effectiveAccountId });
-  const accountConfig = account.config;
+  const accountConfig = resolveMatrixAccountConfig({
+    cfg,
+    accountId: effectiveAccountId,
+  });
 
   const allowlistOnly = accountConfig.allowlistOnly === true;
   const accountAllowBots = accountConfig.allowBots;
@@ -179,7 +182,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "matrix",
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (message) => logVerboseMessage(message),
   });
@@ -190,18 +193,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg,
     channel: "matrix",
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
   });
   const threadBindingMaxAgeMs = resolveThreadBindingMaxAgeMsForChannel({
     cfg,
     channel: "matrix",
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
   });
   const dmConfig = accountConfig.dm;
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", account.accountId);
+  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
@@ -252,7 +255,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     client,
     core,
     cfg,
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
     runtime,
     logger,
     logVerboseMessage,
@@ -291,7 +294,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   try {
     threadBindingManager = await createMatrixThreadBindingManager({
-      accountId: account.accountId,
+      accountId: effectiveAccountId,
       auth,
       client,
       env: process.env,
@@ -315,7 +318,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           .readAllowFromStore({
             channel: "matrix",
             env: process.env,
-            accountId: account.accountId,
+            accountId: effectiveAccountId,
           })
           .catch(() => []),
       directTracker,
@@ -343,7 +346,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     await runMatrixStartupMaintenance({
       client,
       auth,
-      accountId: account.accountId,
+      accountId: effectiveAccountId,
       effectiveAccountId,
       accountConfig,
       logger,
