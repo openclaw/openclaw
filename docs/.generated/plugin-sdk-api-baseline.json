@@ -1422,7 +1422,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"../auto-reply/reply/response-prefix-template.ts\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -2809,7 +2809,7 @@
           "exportName": "hasControlCommand",
           "kind": "function",
           "source": {
-            "line": 11,
+            "line": 116,
             "path": "src/auto-reply/command-detection.ts"
           }
         },
@@ -2818,7 +2818,7 @@
           "exportName": "hasInlineCommandTokens",
           "kind": "function",
           "source": {
-            "line": 80,
+            "line": 206,
             "path": "src/auto-reply/command-detection.ts"
           }
         },
@@ -2845,7 +2845,7 @@
           "exportName": "isControlCommandMessage",
           "kind": "function",
           "source": {
-            "line": 53,
+            "line": 179,
             "path": "src/auto-reply/command-detection.ts"
           }
         },
@@ -3097,7 +3097,7 @@
           "exportName": "shouldComputeCommandAuthorized",
           "kind": "function",
           "source": {
-            "line": 88,
+            "line": 214,
             "path": "src/auto-reply/command-detection.ts"
           }
         },
@@ -3788,7 +3788,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"../channels/plugins/types.core.js\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
@@ -5474,7 +5474,7 @@
           }
         },
         {
-          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getAuthHeader: () => string | null; };",
+          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect & typeof fetch; getAuthHeader: () => string | null; };",
           "exportName": "createAuthCaptureJsonFetch",
           "kind": "function",
           "source": {
@@ -5501,7 +5501,7 @@
           }
         },
         {
-          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getRequest: () => { ...; }; };",
+          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect & typeof fetch; getRequest: () => { ...; }; };",
           "exportName": "createRequestCaptureJsonFetch",
           "kind": "function",
           "source": {
