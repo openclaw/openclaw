@@ -538,7 +538,6 @@ export async function registerSlackMonitorSlashCommands(params: {
         isRoomish,
         channelInfo,
         channelConfig,
-        globalSystemPrompt: account.config?.systemPrompt ?? cfg.channels?.slack?.systemPrompt,
       });
 
       const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({

@@ -30462,16 +30462,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.slack.accounts.*.systemPrompt",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.accounts.*.textChunkLimit",
       "kind": "channel",
       "type": "integer",
@@ -32019,16 +32009,6 @@
       ],
       "label": "Slack Stream Mode (Legacy)",
       "help": "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.slack.systemPrompt",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
       "hasChildren": false
     },
     {

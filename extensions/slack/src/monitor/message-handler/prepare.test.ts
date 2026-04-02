@@ -366,20 +366,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(untrusted).toContain("Do dangerous things");
   });
 
-  it("applies account system prompts to direct messages", async () => {
-    const prepared = await prepareMessageWith(
-      createDmScopeMainSlackCtx(),
-      createSlackAccount({
-        systemPrompt: "Global prompt",
-      }),
-      createMainScopedDmMessage({}),
-    );
-
-    expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.GroupSystemPrompt).toBe("Global prompt");
-    expect(prepared!.ctxPayload.UntrustedContext).toBeUndefined();
-  });
-
   it("classifies D-prefix DMs correctly even when channel_type is wrong", async () => {
     const prepared = await prepareMessageWith(
       createDmScopeMainSlackCtx(),

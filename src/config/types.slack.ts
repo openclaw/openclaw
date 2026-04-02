@@ -103,8 +103,6 @@ export type SlackThreadConfig = {
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Optional system prompt applied to all Slack conversations for this account. */
-  systemPrompt?: string;
   /** Slack connection mode (socket|http). Default: socket. */
   mode?: "socket" | "http";
   /** Slack signing secret (required for HTTP mode). */

@@ -651,7 +651,6 @@ export async function prepareSlackMessage(params: {
     isRoomish,
     channelInfo,
     channelConfig,
-    globalSystemPrompt: account.config?.systemPrompt ?? cfg.channels?.slack?.systemPrompt,
   });
 
   const {
