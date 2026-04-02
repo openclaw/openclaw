@@ -6,6 +6,7 @@ import {
   type MattermostFetch,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type Result = { ok: true } | { ok: false; error: string };
 type ReactionParams = {
@@ -102,7 +103,7 @@ async function runMattermostReaction(
       emojiName: params.emojiName,
     });
   } catch (err) {
-    return { ok: false, error: `Mattermost ${options.action} reaction failed: ${String(err)}` };
+    return { ok: false, error: `Mattermost ${options.action} reaction failed: ${formatErrorMessage(err)}` };
   }
 
   return { ok: true };

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
@@ -454,7 +455,7 @@ export function createMattermostInteractionHandler(params: {
       const raw = await readInteractionBody(req);
       payload = JSON.parse(raw) as MattermostInteractionPayload;
     } catch (err) {
-      log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
+      log?.(`mattermost interaction: failed to parse body: ${formatErrorMessage(err)}`);
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Invalid request body" }));
@@ -550,7 +551,7 @@ export function createMattermostInteractionHandler(params: {
         return;
       }
     } catch (err) {
-      log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${String(err)}`);
+      log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${formatErrorMessage(err)}`);
       res.statusCode = 500;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Failed to validate interaction" }));
@@ -589,7 +590,7 @@ export function createMattermostInteractionHandler(params: {
           return;
         }
       } catch (err) {
-        log?.(`mattermost interaction: authorization failed: ${String(err)}`);
+        log?.(`mattermost interaction: authorization failed: ${formatErrorMessage(err)}`);
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ error: "Interaction authorization failed" }));
@@ -615,7 +616,7 @@ export function createMattermostInteractionHandler(params: {
           return;
         }
       } catch (err) {
-        log?.(`mattermost interaction: custom handler failed: ${String(err)}`);
+        log?.(`mattermost interaction: custom handler failed: ${formatErrorMessage(err)}`);
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ error: "Interaction handler failed" }));
@@ -645,7 +646,7 @@ export function createMattermostInteractionHandler(params: {
         contextKey: `mattermost:interaction:${payload.post_id}:${actionId}`,
       });
     } catch (err) {
-      log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
+      log?.(`mattermost interaction: system event dispatch failed: ${formatErrorMessage(err)}`);
     }
 
     // Update the post via API to replace buttons with a completion indicator.
@@ -661,7 +662,7 @@ export function createMattermostInteractionHandler(params: {
         },
       });
     } catch (err) {
-      log?.(`mattermost interaction: failed to update post ${payload.post_id}: ${String(err)}`);
+      log?.(`mattermost interaction: failed to update post ${payload.post_id}: ${formatErrorMessage(err)}`);
     }
 
     // Respond with empty JSON — the post update is handled above
@@ -682,7 +683,7 @@ export function createMattermostInteractionHandler(params: {
           post: originalPost,
         });
       } catch (err) {
-        log?.(`mattermost interaction: dispatchButtonClick failed: ${String(err)}`);
+        log?.(`mattermost interaction: dispatchButtonClick failed: ${formatErrorMessage(err)}`);
       }
     }
   };

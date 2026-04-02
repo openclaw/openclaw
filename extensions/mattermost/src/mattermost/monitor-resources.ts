@@ -8,6 +8,7 @@ import {
   type MattermostUser,
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
@@ -92,7 +93,7 @@ export function createMattermostMonitorResources(params: {
           kind: mediaKindFromMime(contentType) ?? "unknown",
         });
       } catch (err) {
-        logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
+        logger.debug?.(`mattermost: failed to download file ${fileId}: ${formatErrorMessage(err)}`);
       }
     }
     return out;
@@ -115,7 +116,7 @@ export function createMattermostMonitorResources(params: {
       });
       return info;
     } catch (err) {
-      logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);
+      logger.debug?.(`mattermost: channel lookup failed: ${formatErrorMessage(err)}`);
       channelCache.set(channelId, {
         value: null,
         expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
@@ -137,7 +138,7 @@ export function createMattermostMonitorResources(params: {
       });
       return info;
     } catch (err) {
-      logger.debug?.(`mattermost: user lookup failed: ${String(err)}`);
+      logger.debug?.(`mattermost: user lookup failed: ${formatErrorMessage(err)}`);
       userCache.set(userId, {
         value: null,
         expiresAt: Date.now() + USER_CACHE_TTL_MS,

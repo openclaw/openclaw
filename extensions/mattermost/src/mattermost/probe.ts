@@ -1,5 +1,6 @@
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type MattermostProbe = BaseProbeResult & {
   status?: number | null;
@@ -46,7 +47,7 @@ export async function probeMattermost(
       bot,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = err instanceof Error ? err.message : formatErrorMessage(err);
     return {
       ok: false,
       status: null,

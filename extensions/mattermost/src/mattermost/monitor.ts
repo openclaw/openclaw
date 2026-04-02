@@ -85,6 +85,7 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export {
   evaluateMattermostMentionGate,
@@ -291,8 +292,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       jitterRatio: 0.2,
       shouldReconnect: ({ outcome }) => outcome === "rejected",
       onError: (err) => {
-        runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
-        opts.statusSink?.({ lastError: String(err), connected: false });
+        runtime.error?.(`mattermost: API auth failed: ${formatErrorMessage(err)}`);
+        opts.statusSink?.({ lastError: formatErrorMessage(err), connected: false });
       },
       onReconnect: (delayMs) => {
         runtime.log?.(`mattermost: API not accessible, retrying in ${Math.round(delayMs / 1000)}s`);
@@ -538,7 +539,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               runtime.log?.(`delivered button-click reply to ${to}`);
             },
             onError: (err, info) => {
-              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
+              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${formatErrorMessage(err)}`);
             },
             onReplyStart: typingCallbacks?.onReplyStart,
           });
@@ -745,7 +746,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           });
         },
         onError: (err, info) => {
-          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
+          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${formatErrorMessage(err)}`);
         },
         onReplyStart: typingCallbacks?.onReplyStart,
       });
@@ -981,7 +982,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           buttons: view.buttons,
         });
       } catch (err) {
-        runtime.error?.(`mattermost model picker select failed: ${String(err)}`);
+        runtime.error?.(`mattermost model picker select failed: ${formatErrorMessage(err)}`);
       }
     })();
 
@@ -1127,7 +1128,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
-              logVerboseMessage(`mattermost: pairing reply failed for ${senderId}: ${String(err)}`);
+              logVerboseMessage(`mattermost: pairing reply failed for ${senderId}: ${formatErrorMessage(err)}`);
             }
           }
           return;
@@ -1456,7 +1457,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           runtime.log?.(`delivered reply to ${to}`);
         },
         onError: (err, info) => {
-          runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
+          runtime.error?.(`mattermost ${info.kind} reply failed: ${formatErrorMessage(err)}`);
         },
       });
 
@@ -1657,7 +1658,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       await handlePost(mergedPost, last.payload, ids.length > 0 ? ids : undefined);
     },
     onError: (err) => {
-      runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
+      runtime.error?.(`mattermost debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
 
@@ -1703,7 +1704,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         commands,
         log: (msg) => runtime.log?.(msg),
       }).catch((err) => {
-        runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
+        runtime.error?.(`mattermost: slash cleanup failed: ${formatErrorMessage(err)}`);
       });
     };
 
@@ -1719,8 +1720,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       abortSignal: opts.abortSignal,
       jitterRatio: 0.2,
       onError: (err) => {
-        runtime.error?.(`mattermost connection failed: ${String(err)}`);
-        opts.statusSink?.({ lastError: String(err), connected: false });
+        runtime.error?.(`mattermost connection failed: ${formatErrorMessage(err)}`);
+        opts.statusSink?.({ lastError: formatErrorMessage(err), connected: false });
       },
       onReconnect: (delayMs) => {
         runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);

@@ -43,6 +43,7 @@ import {
   resolveCommandText,
   type MattermostSlashCommandResponse,
 } from "./slash-commands.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
@@ -108,7 +109,7 @@ async function authorizeSlashInvocation(params: {
   try {
     channelInfo = await fetchMattermostChannel(client, channelId);
   } catch (err) {
-    log?.(`mattermost: slash channel lookup failed for ${channelId}: ${String(err)}`);
+    log?.(`mattermost: slash channel lookup failed for ${channelId}: ${formatErrorMessage(err)}`);
   }
 
   if (!channelInfo) {
@@ -313,7 +314,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         log,
       });
     } catch (err) {
-      log?.(`mattermost: slash command handler error: ${String(err)}`);
+      log?.(`mattermost: slash command handler error: ${formatErrorMessage(err)}`);
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
@@ -507,7 +508,7 @@ async function handleSlashCommandAsync(params: {
         runtime.log?.(`delivered slash reply to ${to}`);
       },
       onError: (err, info) => {
-        runtime.error?.(`mattermost slash ${info.kind} reply failed: ${String(err)}`);
+        runtime.error?.(`mattermost slash ${info.kind} reply failed: ${formatErrorMessage(err)}`);
       },
       onReplyStart: typingCallbacks?.onReplyStart,
     });

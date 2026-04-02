@@ -23,6 +23,7 @@ import {
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type MattermostSendOpts = {
   cfg?: OpenClawConfig;
@@ -428,10 +429,10 @@ export async function sendMessageMattermost(
       });
       fileIds = [fileInfo.id];
     } catch (err) {
-      uploadError = err instanceof Error ? err : new Error(String(err));
+      uploadError = err instanceof Error ? err : new Error(formatErrorMessage(err));
       if (core.logging.shouldLogVerbose()) {
         logger.debug?.(
-          `mattermost send: media upload failed, falling back to URL text: ${String(err)}`,
+          `mattermost send: media upload failed, falling back to URL text: ${formatErrorMessage(err)}`,
         );
       }
       message = normalizeMessage(message, isHttpUrl(mediaUrl) ? mediaUrl : "");

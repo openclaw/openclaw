@@ -21,6 +21,7 @@ import {
   type MattermostSlashCommandConfig,
 } from "./slash-commands.js";
 import { activateSlashCommands } from "./slash-state.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
@@ -50,7 +51,7 @@ function buildSlashCommands(params: {
       });
     }
   } catch (err) {
-    params.runtime.error?.(`mattermost: failed to list skill commands: ${String(err)}`);
+    params.runtime.error?.(`mattermost: failed to list skill commands: ${formatErrorMessage(err)}`);
   }
   return commandsToRegister;
 }
@@ -124,7 +125,7 @@ async function registerSlashCommandsAcrossTeams(params: {
     } catch (err) {
       teamRegistrationFailures += 1;
       params.runtime.error?.(
-        `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
+        `mattermost: failed to register slash commands for team ${team.id}: ${formatErrorMessage(err)}`,
       );
     }
   }
@@ -206,6 +207,6 @@ export async function registerMattermostMonitorSlashCommands(params: {
       `mattermost: slash commands registered (${registered.length} commands across ${teams.length} teams, callback=${slashCallbackUrl})`,
     );
   } catch (err) {
-    params.runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
+    params.runtime.error?.(`mattermost: failed to register slash commands: ${formatErrorMessage(err)}`);
   }
 }

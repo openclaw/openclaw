@@ -4,6 +4,7 @@ import WebSocket from "ws";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type MattermostEventPayload = {
   event?: string;
@@ -202,7 +203,7 @@ export function createMattermostConnectOnce(
               initialUpdateAt === undefined
                 ? "mattermost: failed to get initial update_at"
                 : "mattermost: health check error";
-            opts.runtime.error?.(`${label}: ${String(err)}`);
+            opts.runtime.error?.(`${label}: ${formatErrorMessage(err)}`);
           } finally {
             healthCheckInFlight = false;
             scheduleHealthCheck();
@@ -265,7 +266,7 @@ export function createMattermostConnectOnce(
             try {
               await opts.onReaction(payload);
             } catch (err) {
-              opts.runtime.error?.(`mattermost reaction handler failed: ${String(err)}`);
+              opts.runtime.error?.(`mattermost reaction handler failed: ${formatErrorMessage(err)}`);
             }
             return;
           }
@@ -280,7 +281,7 @@ export function createMattermostConnectOnce(
           try {
             await opts.onPosted(parsed.post, parsed.payload);
           } catch (err) {
-            opts.runtime.error?.(`mattermost handler failed: ${String(err)}`);
+            opts.runtime.error?.(`mattermost handler failed: ${formatErrorMessage(err)}`);
           }
         });
 
@@ -303,9 +304,9 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("error", (err) => {
-          opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
+          opts.runtime.error?.(`mattermost websocket error: ${formatErrorMessage(err)}`);
           opts.statusSink?.({
-            lastError: String(err),
+            lastError: formatErrorMessage(err),
           });
           try {
             ws.close();

@@ -13,6 +13,7 @@
  */
 
 import type { MattermostClient } from "./client.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -262,7 +263,7 @@ export async function registerSlashCommands(params: {
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {
-    log?.(`mattermost: failed to list existing commands: ${String(err)}`);
+    log?.(`mattermost: failed to list existing commands: ${formatErrorMessage(err)}`);
     // Fail closed: if we can't list existing commands, we should not attempt to
     // create/update anything because we may create duplicates and end up with an
     // empty/partial token set (causing callbacks to be rejected until restart).
@@ -343,7 +344,7 @@ export async function registerSlashCommands(params: {
         continue;
       } catch (err) {
         log?.(
-          `mattermost: failed to update command /${spec.trigger} (id=${existingCmd.id}): ${String(err)}`,
+          `mattermost: failed to update command /${spec.trigger} (id=${existingCmd.id}): ${formatErrorMessage(err)}`,
         );
         // Fallback: try delete+recreate for commands owned by this bot user.
         try {
@@ -380,7 +381,7 @@ export async function registerSlashCommands(params: {
         managed: true,
       });
     } catch (err) {
-      log?.(`mattermost: failed to register command /${spec.trigger}: ${String(err)}`);
+      log?.(`mattermost: failed to register command /${spec.trigger}: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -404,7 +405,7 @@ export async function cleanupSlashCommands(params: {
       await deleteMattermostCommand(client, cmd.id);
       log?.(`mattermost: deleted command /${cmd.trigger} (id=${cmd.id})`);
     } catch (err) {
-      log?.(`mattermost: failed to delete command /${cmd.trigger}: ${String(err)}`);
+      log?.(`mattermost: failed to delete command /${cmd.trigger}: ${formatErrorMessage(err)}`);
     }
   }
 }

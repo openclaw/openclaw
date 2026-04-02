@@ -1,5 +1,6 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -311,7 +312,7 @@ export async function createMattermostDirectChannelWithRetry(
         clearTimeout(timeoutId);
       }
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
 
       // Don't retry on the last attempt
       if (attempt >= maxRetries) {
