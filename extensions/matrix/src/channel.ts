@@ -41,6 +41,7 @@ import {
   resolveMatrixGroupRequireMention,
   resolveMatrixGroupToolPolicy,
 } from "./group-mentions.js";
+import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
   listMatrixAccountIds,
   resolveMatrixAccountConfig,
@@ -289,6 +290,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     base: {
       id: "matrix",
       meta,
+      setupWizard: matrixOnboardingAdapter,
       capabilities: {
         chatTypes: ["direct", "group", "thread"],
         polls: true,

@@ -135,6 +135,11 @@ describe("matrix setup post-write bootstrap", () => {
     installMatrixTestRuntime();
   });
 
+  it("exposes the Matrix guided setup wizard on the channel plugin", () => {
+    expect(matrixPlugin.setupWizard?.channel).toBe("matrix");
+    expect(matrixPlugin.setupWizard?.configureInteractive).toBeTypeOf("function");
+  });
+
   it("bootstraps verification for newly added encrypted accounts", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
     mockBootstrapResult({ success: true, backupVersion: "7" });
