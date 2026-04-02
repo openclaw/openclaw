@@ -2927,6 +2927,7 @@ td.data-table-key-col {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
 }
 
 .exec-approval-title {
@@ -2955,6 +2956,7 @@ td.data-table-key-col {
   gap: 12px;
   min-height: 0;
   overflow-y: auto;
+  padding-bottom: 4px;
 }
 
 .exec-approval-command {
