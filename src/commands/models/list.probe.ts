@@ -11,11 +11,14 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { runCliAgent } from "../../agents/cli-runner.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   findNormalizedProviderValue,
+  isCliProvider,
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
@@ -448,6 +451,7 @@ async function probeTarget(params: {
   const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
+  const sessionKey = `agent:${agentId}:${sessionId}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
   await fs.mkdir(sessionDir, { recursive: true });
 
@@ -464,29 +468,53 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
-      sessionId,
-      sessionFile,
-      agentId,
-      workspaceDir,
-      agentDir,
-      config: cfg,
-      prompt: PROBE_PROMPT,
-      provider: target.model.provider,
-      model: target.model.model,
-      authProfileId: target.profileId,
-      authProfileIdSource: target.profileId ? "user" : undefined,
-      timeoutMs,
-      runId: `probe-${crypto.randomUUID()}`,
-      lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
-      thinkLevel: "off",
-      reasoningLevel: "off",
-      verboseLevel: "off",
-      streamParams: { maxTokens },
-      disableTools: true,
-      cleanupBundleMcpOnRunEnd: true,
-    });
+    const cliExecutionProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider: target.model.provider,
+        cfg,
+        agentId,
+      }) ?? target.model.provider;
+    if (isCliProvider(cliExecutionProvider, cfg)) {
+      await runCliAgent({
+        sessionId,
+        sessionKey,
+        sessionFile,
+        agentId,
+        workspaceDir,
+        config: cfg,
+        prompt: PROBE_PROMPT,
+        provider: cliExecutionProvider,
+        model: target.model.model,
+        authProfileId: target.profileId,
+        timeoutMs,
+        runId: `probe-${crypto.randomUUID()}`,
+        streamParams: { maxTokens },
+      });
+    } else {
+      const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
+      await runEmbeddedPiAgent({
+        sessionId,
+        sessionFile,
+        agentId,
+        workspaceDir,
+        agentDir,
+        config: cfg,
+        prompt: PROBE_PROMPT,
+        provider: target.model.provider,
+        model: target.model.model,
+        authProfileId: target.profileId,
+        authProfileIdSource: target.profileId ? "user" : undefined,
+        timeoutMs,
+        runId: `probe-${crypto.randomUUID()}`,
+        lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
+        thinkLevel: "off",
+        reasoningLevel: "off",
+        verboseLevel: "off",
+        streamParams: { maxTokens },
+        disableTools: true,
+        cleanupBundleMcpOnRunEnd: true,
+      });
+    }
     return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);

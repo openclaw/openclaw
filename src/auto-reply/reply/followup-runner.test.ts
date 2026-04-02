@@ -8,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const runCliAgentMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -265,6 +266,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
   }));
+  vi.doMock("../../agents/cli-runner.js", () => ({
+    runCliAgent: (params: unknown) => runCliAgentMock(params),
+  }));
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
@@ -366,6 +370,7 @@ beforeAll(async () => {
 beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
+  runCliAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
@@ -1000,6 +1005,50 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
+  });
+});
+
+describe("createFollowupRunner CLI backend dispatch", () => {
+  it("routes CLI-backed followups through runCliAgent", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cli reply" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "opus",
+          cliSessionBinding: { sessionId: "cli-session" },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "claude-cli/opus",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        provider: "claude-cli",
+        model: "opus",
+      },
+    });
+
+    await runner(queued);
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "opus",
+        prompt: queued.prompt,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalled();
   });
 });
 

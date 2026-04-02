@@ -4,6 +4,8 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { runCliAgent } from "../../agents/cli-runner.js";
+import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -271,6 +273,37 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
             try {
+              if (isCliProvider(provider, queued.run.config)) {
+                const cliSessionBinding = getCliSessionBinding(sessionEntry, provider);
+                const cliResult = await runCliAgent({
+                  sessionId: queued.run.sessionId,
+                  sessionKey: queued.run.sessionKey,
+                  agentId: queued.run.agentId,
+                  sessionFile: queued.run.sessionFile,
+                  workspaceDir: queued.run.workspaceDir,
+                  config: queued.run.config,
+                  prompt: queued.prompt,
+                  provider,
+                  model,
+                  thinkLevel: queued.run.thinkLevel,
+                  timeoutMs: queued.run.timeoutMs,
+                  runId,
+                  extraSystemPrompt: queued.run.extraSystemPrompt,
+                  ownerNumbers: queued.run.ownerNumbers,
+                  cliSessionId: cliSessionBinding?.sessionId,
+                  cliSessionBinding,
+                  authProfileId: authProfile.authProfileId,
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature:
+                    bootstrapPromptWarningSignaturesSeen[
+                      bootstrapPromptWarningSignaturesSeen.length - 1
+                    ],
+                });
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  cliResult.meta?.systemPromptReport,
+                );
+                return cliResult;
+              }
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
