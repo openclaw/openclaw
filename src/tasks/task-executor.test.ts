@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   cancelFlowById,
@@ -58,12 +59,14 @@ vi.mock("../agents/subagent-control.js", () => ({
 async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
+    resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
     try {
       await run(root);
     } finally {
+      resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests();
       resetTaskFlowRegistryForTests();
@@ -78,6 +81,7 @@ describe("task-executor", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
