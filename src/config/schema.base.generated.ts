@@ -12656,42 +12656,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
     },
-    "tools.web.x_search.enabled": {
-      label: "Enable X Search Tool",
-      help: "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
-      tags: ["tools"],
-    },
-    "tools.web.x_search.apiKey": {
-      label: "xAI API Key",
-      help: "xAI API key for X search (fallback: XAI_API_KEY env var).",
-      tags: ["security", "auth", "tools"],
-      sensitive: true,
-    },
-    "tools.web.x_search.model": {
-      label: "X Search Model",
-      help: 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
-      tags: ["models", "tools"],
-    },
-    "tools.web.x_search.inlineCitations": {
-      label: "X Search Inline Citations",
-      help: "Keep inline citations from xAI in x_search responses when available (default: false).",
-      tags: ["tools"],
-    },
-    "tools.web.x_search.maxTurns": {
-      label: "X Search Max Turns",
-      help: "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
-      tags: ["performance", "tools"],
-    },
-    "tools.web.x_search.timeoutSeconds": {
-      label: "X Search Timeout (sec)",
-      help: "Timeout in seconds for x_search requests.",
-      tags: ["performance", "tools"],
-    },
-    "tools.web.x_search.cacheTtlMinutes": {
-      label: "X Search Cache TTL (min)",
-      help: "Cache TTL in minutes for x_search results.",
-      tags: ["performance", "storage", "tools"],
-    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -15254,6 +15218,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth", "tools"],
     },
     "tools.web.fetch.firecrawl.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "tools"],
+    },
+    "tools.web.x_search.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
