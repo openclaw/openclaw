@@ -117,8 +117,8 @@ await api.runtime.subagent.deleteSession({
 
 ### `api.runtime.taskFlow`
 
-Bind a TaskFlow runtime to an existing OpenClaw session key or trusted tool
-context, then create and manage TaskFlows without passing an owner on every call.
+Bind a Task Flow runtime to an existing OpenClaw session key or trusted tool
+context, then create and manage Task Flows without passing an owner on every call.
 
 ```typescript
 const taskFlow = api.runtime.taskFlow.fromToolContext(ctx);
