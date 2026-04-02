@@ -198,7 +198,8 @@ function extractScriptTargetFromCommand(
     return tokens;
   };
   const shouldUseWindowsPathTokenizer =
-    process.platform === "win32" && /(?:^|[\s"'`])(?:[A-Za-z]:\\|\.\\|\.\.\\|\\\\)/.test(raw);
+    process.platform === "win32" &&
+    /(?:^|[\s"'`])(?:[A-Za-z]:\\|\\\\|[^\s"'`|&;()<>]+\\[^\s"'`|&;()<>]+)/.test(raw);
   const candidateArgv = shouldUseWindowsPathTokenizer
     ? [splitShellArgsPreservingBackslashes(raw)]
     : [splitShellArgs(raw)];
@@ -502,12 +503,14 @@ function shouldFailClosedInterpreterPreflight(command: string): {
         hasProcessSubstitution: false,
         hasScriptHint: false,
       };
-  const hasShellWrappedInterpreter = nested.hasPython || nested.hasNode;
+  const hasShellWrappedInterpreterInvocation =
+    (nested.hasPython || nested.hasNode) &&
+    (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);
 
   return {
     hasPython: topLevel.hasPython || nested.hasPython || isDirectPythonExecutable,
     hasNode: topLevel.hasNode || nested.hasNode || isDirectNodeExecutable,
-    hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreter,
+    hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreterInvocation,
     hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
     hasScriptHint: topLevel.hasScriptHint || nested.hasScriptHint,
     isDirectInterpreterCommand,

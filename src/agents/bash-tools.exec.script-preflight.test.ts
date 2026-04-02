@@ -242,6 +242,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed for shell-wrapped payloads that only echo interpreter words", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-shell-wrap-echo-text", {
+        command: 'bash -c "echo python"',
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("python");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("fails closed for shell-wrapped interpreter invocations inside control-flow payloads", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
@@ -513,6 +527,21 @@ describeWin("exec script preflight on windows path syntax", () => {
       await expect(
         tool.execute("call-win-python-absolute", {
           command: `python "${winAbsPath}"`,
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("preserves windows-style nested relative path separators during script extraction", async () => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
+      await fs.mkdir(path.join(tmp, "subdir"), { recursive: true });
+      await fs.writeFile(path.join(tmp, "subdir", "bad.py"), "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-win-python-subdir-relative", {
+          command: "python subdir\\bad.py",
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
