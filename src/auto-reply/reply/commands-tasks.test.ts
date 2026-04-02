@@ -72,6 +72,36 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("approval denied");
   });
 
+  it("sanitizes leaked internal runtime context from visible task details", async () => {
+    createRunningTaskRun({
+      runtime: "acp",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:acp:tasks-sanitized-failed",
+      runId: "run-tasks-sanitized-failed",
+      task: "Visible failed task",
+      progressSummary: "still working",
+    });
+    failTaskRunByRunId({
+      runId: "run-tasks-sanitized-failed",
+      endedAt: Date.now(),
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      terminalSummary: "Needs a login refresh.",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("Visible failed task");
+    expect(reply.text).toContain("Needs a login refresh.");
+    expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(reply.text).not.toContain("Internal task completion event");
+  });
+
   it("hides stale completed tasks from the task board", async () => {
     createQueuedTaskRun({
       runtime: "cron",

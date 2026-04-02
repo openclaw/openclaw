@@ -62,6 +62,63 @@ describe("task-executor-policy", () => {
     );
   });
 
+  it("sanitizes leaked internal runtime context from terminal and progress copy", () => {
+    const leaked = [
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: subagent",
+    ].join("\n");
+    const blockedTask = createTask({
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      terminalSummary: leaked,
+      runId: "run-1234567890",
+      label: leaked,
+    });
+    const failedTask = createTask({
+      status: "failed",
+      error: leaked,
+      terminalSummary: "Needs manual approval.",
+      runId: "run-2234567890",
+      label: leaked,
+    });
+    const progressEvent: TaskEventRecord = {
+      at: 10,
+      kind: "progress",
+      summary: leaked,
+    };
+
+    expect(formatTaskTerminalMessage(blockedTask)).toBe(
+      "Background task blocked: Background task (run run-1234).",
+    );
+    expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
+      "Task needs follow-up: Background task (run run-1234). Task is blocked and needs follow-up.",
+    );
+    expect(formatTaskTerminalMessage(failedTask)).toBe(
+      "Background task failed: Background task (run run-2234). Needs manual approval.",
+    );
+    expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBeNull();
+  });
+
+  it("redacts raw exec denial text from blocked task updates", () => {
+    const blockedTask = createTask({
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
+      runId: "run-1234567890",
+      label: "ACP import",
+    });
+
+    expect(formatTaskTerminalMessage(blockedTask)).toBe(
+      "Background task blocked: ACP import (run run-1234). Command did not run: approval timed out.",
+    );
+    expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
+      "Task needs follow-up: ACP import (run run-1234). Command did not run: approval timed out.",
+    );
+  });
+
   it("keeps delivery policy decisions explicit", () => {
     expect(
       shouldAutoDeliverTaskTerminalUpdate(
