@@ -226,7 +226,7 @@ export async function POST(req: Request) {
 						controller.enqueue(encoder.encode(`data: ${json}\n\n`));
 					} catch { /* ignore */ }
 				},
-				{ replay: false },
+				{ replay: false, replayTerminalBuffer: true },
 			);
 
 			if (!unsubscribe) {

@@ -100,6 +100,8 @@ export type ComposioMcpHealth = {
 
 const COMPOSIO_MCP_STATUS_FILE = "composio-mcp-status.json";
 const GATEWAY_TOOLS_CACHE_TTL_MS = 5 * 60_000;
+const LIVE_AGENT_NOT_CHECKED_DETAIL = "Live agent visibility has not been checked yet.";
+const LIVE_AGENT_REPAIR_PENDING_DETAIL = "Configuration repaired. Run live agent verification to confirm MCP visibility.";
 
 const COMPOSIO_LIVE_PROBE_PROMPT = [
   "You are running a Composio MCP availability probe.",
@@ -124,7 +126,10 @@ function isFresh(checkedAt: string | undefined, ttlMs: number): boolean {
 }
 
 function resolveStatusFilePath(workspaceDir: string | null): string | null {
-  return workspaceDir ? join(workspaceDir, COMPOSIO_MCP_STATUS_FILE) : null;
+  if (workspaceDir) {
+    return join(workspaceDir, COMPOSIO_MCP_STATUS_FILE);
+  }
+  return join(resolveOpenClawStateDir(), COMPOSIO_MCP_STATUS_FILE);
 }
 
 function writeHealthFile(health: ComposioMcpHealth): void {
@@ -376,6 +381,16 @@ function buildSummary(params: {
     };
   }
 
+  if (params.liveAgent.detail && params.liveAgent.detail !== LIVE_AGENT_NOT_CHECKED_DETAIL) {
+    return {
+      level: "warning",
+      verified: false,
+      message: params.liveAgent.detail === LIVE_AGENT_REPAIR_PENDING_DETAIL
+        ? "Composio MCP was repaired, but live agent visibility still needs to be verified."
+        : `Composio MCP verification was inconclusive: ${params.liveAgent.detail}`,
+    };
+  }
+
   return {
     level: "warning",
     verified: false,
@@ -481,7 +496,7 @@ export async function getComposioMcpHealth(options?: {
 
   let liveAgent: ComposioMcpHealth["liveAgent"] = persisted?.liveAgent ?? {
     status: "unknown",
-    detail: "Live agent visibility has not been checked yet.",
+    detail: LIVE_AGENT_NOT_CHECKED_DETAIL,
     checkedAt: generatedAt,
     visible: null,
     evidence: [],
@@ -493,7 +508,7 @@ export async function getComposioMcpHealth(options?: {
   } else if (options?.repairConfig) {
     liveAgent = {
       status: "unknown",
-      detail: "Configuration repaired. Run live agent verification to confirm MCP visibility.",
+      detail: LIVE_AGENT_REPAIR_PENDING_DETAIL,
       checkedAt: generatedAt,
       visible: null,
       evidence: [],

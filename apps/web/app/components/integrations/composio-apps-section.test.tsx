@@ -6,39 +6,58 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposioAppsSection } from "./composio-apps-section";
 import { extractComposioToolkits } from "@/lib/composio-client";
 
-const toolkitsPayload = {
-  items: [
-    {
-      slug: "gmail",
-      name: "Gmail",
-      description: "Read and send email",
-      logo: null,
-      categories: ["Email"],
-      auth_schemes: ["oauth2"],
-      tools_count: 4,
-    },
-    {
-      slug: "github",
-      name: "GitHub",
-      description: "Work with repositories",
-      logo: null,
-      categories: ["Developer tools"],
-      auth_schemes: ["oauth2"],
-      tools_count: 6,
-    },
-    {
-      slug: "notion",
-      name: "Notion",
-      description: "Search docs and databases",
-      logo: null,
-      categories: ["Knowledge"],
-      auth_schemes: ["oauth2"],
-      tools_count: 3,
-    },
-  ],
+const gmailToolkit = {
+  slug: "gmail",
+  name: "Gmail",
+  description: "Read and send email",
+  logo: null,
+  categories: ["Email"],
+  auth_schemes: ["oauth2"],
+  tools_count: 4,
+};
+
+const githubToolkit = {
+  slug: "github",
+  name: "GitHub",
+  description: "Work with repositories",
+  logo: null,
+  categories: ["Developer tools"],
+  auth_schemes: ["oauth2"],
+  tools_count: 6,
+};
+
+const notionToolkit = {
+  slug: "notion",
+  name: "Notion",
+  description: "Search docs and databases",
+  logo: null,
+  categories: ["Knowledge"],
+  auth_schemes: ["oauth2"],
+  tools_count: 3,
+};
+
+const slackToolkit = {
+  slug: "slack",
+  name: "Slack",
+  description: "Send messages to channels",
+  logo: null,
+  categories: ["Communication"],
+  auth_schemes: ["oauth2"],
+  tools_count: 5,
+};
+
+const marketplacePageOne = {
+  items: [notionToolkit],
+  cursor: "page-2",
+  total: 2,
+  categories: ["Knowledge", "Communication", "Email"],
+};
+
+const marketplacePageTwo = {
+  items: [slackToolkit],
   cursor: null,
-  total: 3,
-  categories: ["Email", "Developer tools", "Knowledge"],
+  total: 2,
+  categories: ["Knowledge", "Communication", "Email"],
 };
 
 const connectionsPayload = {
@@ -98,7 +117,27 @@ const connectionsPayload = {
   ],
 };
 
-const statusPayload = {
+const statusPayload: {
+  summary: {
+    level: "healthy" | "warning" | "error";
+    verified: boolean;
+    message: string;
+  };
+  config: {
+    status: "pass" | "fail" | "unknown";
+    detail: string;
+  };
+  gatewayTools: {
+    status: "pass" | "fail" | "unknown";
+    detail: string;
+    toolCount: number;
+  };
+  liveAgent: {
+    status: "pass" | "fail" | "unknown";
+    detail: string;
+    evidence: string[];
+  };
+} = {
   summary: {
     level: "healthy" as const,
     verified: true,
@@ -120,28 +159,66 @@ const statusPayload = {
   },
 };
 
+let intersectionHandler: IntersectionObserverCallback | null = null;
+
+function installFetchMock(statusOverride = statusPayload) {
+  global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+
+    if (url === "/api/composio/connections") {
+      return new Response(JSON.stringify(connectionsPayload));
+    }
+
+    if (url === "/api/composio/status") {
+      return new Response(JSON.stringify(statusOverride));
+    }
+
+    if (url.startsWith("/api/composio/toolkits")) {
+      const parsed = new URL(url, "http://localhost");
+      const search = parsed.searchParams.get("search");
+      const cursor = parsed.searchParams.get("cursor");
+
+      if (search === "gmail") {
+        return new Response(JSON.stringify({ items: [gmailToolkit], cursor: null, total: 1, categories: ["Email"] }));
+      }
+
+      if (search === "github") {
+        return new Response(JSON.stringify({ items: [githubToolkit], cursor: null, total: 1, categories: ["Developer tools"] }));
+      }
+
+      if (cursor === "page-2") {
+        return new Response(JSON.stringify(marketplacePageTwo));
+      }
+
+      return new Response(JSON.stringify(marketplacePageOne));
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+}
+
 describe("ComposioAppsSection", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url === "/api/composio/toolkits") {
-        return new Response(JSON.stringify(toolkitsPayload));
+    intersectionHandler = null;
+    global.IntersectionObserver = class MockIntersectionObserver implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly thresholds = [];
+
+      constructor(callback: IntersectionObserverCallback) {
+        intersectionHandler = callback;
       }
-      if (url === "/api/composio/connections") {
-        return new Response(JSON.stringify(connectionsPayload));
-      }
-      if (url === "/api/composio/status") {
-        return new Response(JSON.stringify(statusPayload));
-      }
-      if (url === "/api/composio/tool-index") {
-        return new Response(JSON.stringify({ ok: true }));
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    }) as typeof fetch;
+
+      disconnect() {}
+      observe() {}
+      takeRecords() { return []; }
+      unobserve() {}
+    };
+    installFetchMock();
   });
 
-  it("shows connected apps in the Connected tab and available apps in Marketplace", async () => {
+  it("shows connected apps in the Connected tab and paged apps in Marketplace", async () => {
     const user = userEvent.setup();
     render(<ComposioAppsSection eligible lockBadge={null} />);
 
@@ -156,6 +233,18 @@ describe("ComposioAppsSection", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Notion")).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: "All" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Knowledge" })).toBeInTheDocument();
+
+    intersectionHandler?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Slack")).toBeInTheDocument();
     });
   });
 
@@ -182,25 +271,24 @@ describe("ComposioAppsSection", () => {
       summary: {
         level: "warning" as const,
         verified: false,
-        message: "MCP needs attention.",
+        message: "Composio MCP verification was inconclusive: Live agent probe timed out before returning a result.",
+      },
+      liveAgent: {
+        status: "unknown" as const,
+        detail: "Live agent probe timed out before returning a result.",
+        evidence: ["GMAIL_FETCH_EMAILS"],
       },
     };
-
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url === "/api/composio/toolkits") return new Response(JSON.stringify(toolkitsPayload));
-      if (url === "/api/composio/connections") return new Response(JSON.stringify(connectionsPayload));
-      if (url === "/api/composio/status") return new Response(JSON.stringify(warningStatus));
-      if (url === "/api/composio/tool-index") return new Response(JSON.stringify({ ok: true }));
-      throw new Error(`Unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    installFetchMock(warningStatus);
 
     render(<ComposioAppsSection eligible lockBadge={null} />);
 
     await waitFor(() => {
-      expect(screen.getByText("MCP needs attention.")).toBeInTheDocument();
+      expect(screen.getByText("Composio MCP verification was inconclusive: Live agent probe timed out before returning a result.")).toBeInTheDocument();
     });
 
+    expect(screen.getAllByText("Live agent probe timed out before returning a result.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Evidence: GMAIL_FETCH_EMAILS")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair" })).toBeInTheDocument();
   });
 

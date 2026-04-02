@@ -140,6 +140,14 @@ describe("Chat API routes", () => {
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toBe("text/event-stream");
       expect(startRun).toHaveBeenCalled();
+      expect(subscribeToRun).toHaveBeenCalledWith(
+        "s1",
+        expect.any(Function),
+        expect.objectContaining({
+          replay: false,
+          replayTerminalBuffer: true,
+        }),
+      );
     });
 
     it("forwards a chat model override to the run starter", async () => {

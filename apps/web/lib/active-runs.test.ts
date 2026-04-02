@@ -261,6 +261,100 @@ describe("active-runs", () => {
 			).toBe(true);
 		});
 
+		it("replays buffered events to a late subscriber when the run already completed", async () => {
+			const { child, startRun, subscribeToRun } = await setup();
+
+			startRun({
+				sessionId: "s-late",
+				message: "hello",
+				agentSessionId: "s-late",
+			});
+
+			child._writeLine({
+				event: "agent",
+				stream: "assistant",
+				data: { delta: "Fast reply" },
+			});
+			await new Promise((r) => setTimeout(r, 50));
+
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+
+			const events: SseEvent[] = [];
+			subscribeToRun(
+				"s-late",
+				(event) => {
+					if (event) {events.push(event);}
+				},
+				{ replay: false, replayTerminalBuffer: true },
+			);
+
+			expect(events.some((e) => e.type === "text-start")).toBe(true);
+			expect(
+				events.some(
+					(e) => e.type === "text-delta" && e.delta === "Fast reply",
+				),
+			).toBe(true);
+		});
+
+		it("does not emit the generic no-response fallback after tool-visible activity", async () => {
+			const { child, startRun, subscribeToRun } = await setup();
+
+			const events: SseEvent[] = [];
+
+			startRun({
+				sessionId: "s-tool",
+				message: "use a tool",
+				agentSessionId: "s-tool",
+			});
+
+			subscribeToRun(
+				"s-tool",
+				(event) => {
+					if (event) {events.push(event);}
+				},
+				{ replay: false },
+			);
+
+			child._writeLine({
+				event: "agent",
+				stream: "tool",
+				data: {
+					phase: "start",
+					toolCallId: "tool-1",
+					name: "searchDocs",
+					args: { query: "chat bug" },
+				},
+			});
+			child._writeLine({
+				event: "agent",
+				stream: "tool",
+				data: {
+					phase: "result",
+					toolCallId: "tool-1",
+					name: "searchDocs",
+					result: { text: "found it" },
+				},
+			});
+			await new Promise((r) => setTimeout(r, 50));
+
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+
+			expect(events.some((e) => e.type === "tool-input-start")).toBe(true);
+			expect(events.some((e) => e.type === "tool-output-available")).toBe(true);
+			expect(
+				events.some(
+					(e) =>
+						e.type === "text-delta" &&
+						typeof e.delta === "string" &&
+						e.delta.includes("No response"),
+				),
+			).toBe(false);
+		});
+
 		it("streams assistant text events for agent assistant output", async () => {
 			const { child, startRun, subscribeToRun } = await setup();
 

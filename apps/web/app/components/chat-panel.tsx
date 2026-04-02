@@ -1716,10 +1716,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// so we only refresh the file sessions list and notify the parent
 		// when the file content may have changed.
 		const prevStatusRef = useRef(status);
+		const previousStatus = prevStatusRef.current;
 		useEffect(() => {
 			const wasStreaming =
-				prevStatusRef.current === "streaming" ||
-				prevStatusRef.current === "submitted";
+				previousStatus === "streaming" ||
+				previousStatus === "submitted";
 			const isNowReady = status === "ready";
 
 			if (wasStreaming && isNowReady && currentSessionId) {
@@ -1752,8 +1753,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 				onSessionsChange?.();
 			}
-			prevStatusRef.current = status;
 		}, [
+			previousStatus,
 			status,
 			messages,
 			currentSessionId,
@@ -1768,8 +1769,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// the request was lost.
 		useEffect(() => {
 			const wasActive =
-				prevStatusRef.current === "streaming" ||
-				prevStatusRef.current === "submitted";
+				previousStatus === "streaming" ||
+				previousStatus === "submitted";
 			const isNowReady = status === "ready";
 
 			if (wasActive && isNowReady) {
@@ -1790,7 +1791,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			if (status === "submitted") {
 				setStreamError(null);
 			}
-		}, [status, messages, error]);
+		}, [previousStatus, status, messages, error]);
+
+		useEffect(() => {
+			prevStatusRef.current = status;
+		}, [status]);
 
 		// ── Actions ──
 

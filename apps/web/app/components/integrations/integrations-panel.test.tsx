@@ -47,16 +47,24 @@ describe("IntegrationsPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the integrations heading and shows tabs", async () => {
+  function mockFetch() {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : (input as URL).href;
       if (url === "/api/integrations") return new Response(JSON.stringify(eligiblePayload));
-      if (url === "/api/composio/toolkits") return new Response(JSON.stringify(toolkitsPayload));
       if (url === "/api/composio/connections") return new Response(JSON.stringify(connectionsPayload));
       if (url === "/api/composio/status") return new Response(JSON.stringify(statusPayload));
-      if (url === "/api/composio/tool-index") return new Response(JSON.stringify({ ok: true }));
+      if (url.startsWith("/api/composio/toolkits?search=gmail")) {
+        return new Response(JSON.stringify(toolkitsPayload));
+      }
+      if (url.startsWith("/api/composio/toolkits")) {
+        return new Response(JSON.stringify(toolkitsPayload));
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;
+  }
+
+  it("renders the integrations heading and shows tabs", async () => {
+    mockFetch();
 
     render(<IntegrationsPanel />);
 
@@ -71,16 +79,7 @@ describe("IntegrationsPanel", () => {
 
   it("shows the Marketplace tab with apps", async () => {
     const user = userEvent.setup();
-
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : (input as URL).href;
-      if (url === "/api/integrations") return new Response(JSON.stringify(eligiblePayload));
-      if (url === "/api/composio/toolkits") return new Response(JSON.stringify(toolkitsPayload));
-      if (url === "/api/composio/connections") return new Response(JSON.stringify(connectionsPayload));
-      if (url === "/api/composio/status") return new Response(JSON.stringify(statusPayload));
-      if (url === "/api/composio/tool-index") return new Response(JSON.stringify({ ok: true }));
-      throw new Error(`Unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    mockFetch();
 
     render(<IntegrationsPanel />);
 

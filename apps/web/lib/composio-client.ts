@@ -121,8 +121,12 @@ export function extractComposioToolkits(
   return {
     items,
     categories,
-    cursor: response.cursor ?? null,
-    total: typeof response.total === "number" ? response.total : items.length,
+    cursor: response.cursor ?? response.next_cursor ?? response.nextCursor ?? null,
+    total: typeof response.total === "number"
+      ? response.total
+      : typeof response.total_items === "number"
+        ? response.total_items
+        : items.length,
   };
 }
 

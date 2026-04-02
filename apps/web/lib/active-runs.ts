@@ -45,6 +45,11 @@ export type SseEvent = Record<string, unknown> & { type: string };
 /** Subscriber callback. Receives SSE events, or `null` when the run completes. */
 export type RunSubscriber = (event: SseEvent | null) => void;
 
+type SubscribeToRunOptions = {
+	replay?: boolean;
+	replayTerminalBuffer?: boolean;
+};
+
 type AccumulatedPart =
 	| { type: "reasoning"; text: string }
 	| {
@@ -369,12 +374,13 @@ export async function hasRunningSubagentsForParent(parentWebSessionId: string): 
 export function subscribeToRun(
 	sessionId: string,
 	callback: RunSubscriber,
-	options?: { replay?: boolean },
+	options?: SubscribeToRunOptions,
 ): (() => void) | null {
 	const run = activeRuns.get(sessionId);
 	if (!run) {return null;}
 
 	const replay = options?.replay ?? true;
+	const replayTerminalBuffer = options?.replayTerminalBuffer ?? false;
 
 	// Replay buffered events synchronously (safe — no event-loop yield).
 	if (replay) {
@@ -394,7 +400,7 @@ export function subscribeToRun(
 	// Always replay buffered events for errored runs so error messages
 	// are never silently dropped due to replay:false timing.
 	if (run.status !== "running" && run.status !== "waiting-for-subagents") {
-		if (!replay && run.status === "error") {
+		if (!replay && (run.status === "error" || replayTerminalBuffer)) {
 			for (const event of run.eventBuffer) {
 				callback(event);
 			}
@@ -1065,6 +1071,7 @@ function wireSubscribeOnlyProcess(
 		const toolCallId = typeof ev.data?.toolCallId === "string" ? ev.data.toolCallId : "";
 		const toolName = typeof ev.data?.name === "string" ? ev.data.name : "";
 			if (phase === "start") {
+				everSentResponseActivity = true;
 				liveStats.toolStartCount += 1;
 				closeReasoning();
 				closeText();
@@ -1076,10 +1083,12 @@ function wireSubscribeOnlyProcess(
 			} else if (phase === "update") {
 				const partialResult = extractToolResult(ev.data?.partialResult);
 				if (partialResult) {
+					everSentResponseActivity = true;
 					const output = buildToolOutput(partialResult);
 					emit({ type: "tool-output-partial", toolCallId, output });
 				}
 			} else if (phase === "result") {
+				everSentResponseActivity = true;
 				const isError = ev.data?.isError === true;
 				const result = extractToolResult(ev.data?.result);
 				if (isError) {
@@ -1498,7 +1507,7 @@ function wireChildProcess(run: ActiveRun): void {
 	let currentStatusReasoningLabel: string | null = null;
 	let textStarted = false;
 	let reasoningStarted = false;
-	let everSentText = false;
+	let everSentResponseActivity = false;
 	let statusReasoningActive = false;
 	let waitingStatusAnnounced = false;
 	let agentErrorReported = false;
@@ -1596,7 +1605,7 @@ function wireChildProcess(run: ActiveRun): void {
 		emit({ type: "text-end", id: tid });
 		accAppendText(`[error] ${message}`);
 		accTextIdx = -1; // error text is self-contained
-		everSentText = true;
+		everSentResponseActivity = true;
 	};
 
 	const emitAssistantFinalText = (text: string) => {
@@ -1609,7 +1618,7 @@ function wireChildProcess(run: ActiveRun): void {
 			emit({ type: "text-start", id: currentTextId });
 			textStarted = true;
 		}
-		everSentText = true;
+		everSentResponseActivity = true;
 		emit({ type: "text-delta", id: currentTextId, delta: text });
 		accAppendText(text);
 		closeText();
@@ -1690,7 +1699,7 @@ function wireChildProcess(run: ActiveRun): void {
 					emit({ type: "text-start", id: currentTextId });
 					textStarted = true;
 				}
-				everSentText = true;
+				everSentResponseActivity = true;
 				emit({ type: "text-delta", id: currentTextId, delta: chunk });
 				accAppendText(chunk);
 			}
@@ -1708,7 +1717,7 @@ function wireChildProcess(run: ActiveRun): void {
 							});
 							textStarted = true;
 						}
-						everSentText = true;
+						everSentResponseActivity = true;
 						const md = `\n![media](${url.trim()})\n`;
 						emit({
 							type: "text-delta",
@@ -1747,6 +1756,7 @@ function wireChildProcess(run: ActiveRun): void {
 				typeof ev.data?.name === "string" ? ev.data.name : "";
 
 			if (phase === "start") {
+				everSentResponseActivity = true;
 				closeReasoning();
 				closeText();
 				const args =
@@ -1770,10 +1780,12 @@ function wireChildProcess(run: ActiveRun): void {
 			} else if (phase === "update") {
 				const partialResult = extractToolResult(ev.data?.partialResult);
 				if (partialResult) {
+					everSentResponseActivity = true;
 					const output = buildToolOutput(partialResult);
 					emit({ type: "tool-output-partial", toolCallId, output });
 				}
 			} else if (phase === "result") {
+				everSentResponseActivity = true;
 				const isError = ev.data?.isError === true;
 				const result = extractToolResult(ev.data?.result);
 				if (isError) {
@@ -2030,14 +2042,14 @@ function wireChildProcess(run: ActiveRun): void {
 
 		const exitedClean = code === 0 || code === null;
 
-		if (!everSentText && !exitedClean) {
+		if (!everSentResponseActivity && !exitedClean) {
 			const tid = nextId("text");
 			emit({ type: "text-start", id: tid });
 			const errMsg = `[error] Agent exited with code ${code}. Check server logs for details.`;
 			emit({ type: "text-delta", id: tid, delta: errMsg });
 			emit({ type: "text-end", id: tid });
 			accAppendText(errMsg);
-		} else if (!everSentText && exitedClean) {
+		} else if (!everSentResponseActivity && exitedClean) {
 			emitError("No response from agent.");
 		} else {
 			closeText();

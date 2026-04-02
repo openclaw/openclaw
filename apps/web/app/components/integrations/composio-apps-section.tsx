@@ -32,7 +32,9 @@ const FEATURED_SLUGS = [
   "discord",
 ];
 
-const MAX_CATEGORY_PILLS = 8;
+const MAX_CATEGORY_PILLS = 6;
+const MARKETPLACE_PAGE_SIZE = 24;
+const CONNECTED_TOOLKIT_LOOKUP_LIMIT = 8;
 
 type IntegrationsTab = "connected" | "marketplace";
 
@@ -64,13 +66,38 @@ const TABS: { id: IntegrationsTab; label: string; icon: () => React.JSX.Element 
 ];
 
 type ComposioAppsState = {
-  toolkits: ComposioToolkit[];
+  connectedToolkits: ComposioToolkit[];
+  marketplaceToolkits: ComposioToolkit[];
+  marketplaceCursor: string | null;
   connections: ComposioConnection[];
   categories: string[];
   loading: boolean;
+  marketplaceLoading: boolean;
+  marketplaceReady: boolean;
+  loadingMore: boolean;
   error: string | null;
   connectionsError: string | null;
 };
+
+function dedupeToolkits(toolkits: ComposioToolkit[]): ComposioToolkit[] {
+  const bySlug = new Map<string, ComposioToolkit>();
+  for (const toolkit of toolkits) {
+    bySlug.set(normalizeComposioToolkitSlug(toolkit.slug), toolkit);
+  }
+  return Array.from(bySlug.values());
+}
+
+function createToolkitPlaceholder(slug: string, name: string): ComposioToolkit {
+  return {
+    slug,
+    name,
+    description: "",
+    logo: null,
+    categories: [],
+    auth_schemes: [],
+    tools_count: 0,
+  };
+}
 
 type ComposioMcpStatus = {
   summary: {
@@ -109,10 +136,15 @@ export function ComposioAppsSection({
 }) {
   const [activeTab, setActiveTab] = useState<IntegrationsTab>("connected");
   const [state, setState] = useState<ComposioAppsState>({
-    toolkits: [],
+    connectedToolkits: [],
+    marketplaceToolkits: [],
+    marketplaceCursor: null,
     connections: [],
     categories: [],
     loading: true,
+    marketplaceLoading: false,
+    marketplaceReady: false,
+    loadingMore: false,
     error: null,
     connectionsError: null,
   });
@@ -124,6 +156,58 @@ export function ComposioAppsSection({
   const [statusError, setStatusError] = useState<string | null>(null);
   const [repairingMcp, setRepairingMcp] = useState(false);
   const initialFetchStartedRef = useRef(false);
+  const marketplaceRequestKeyRef = useRef("");
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchToolkitsPage = useCallback(async (params?: {
+    search?: string;
+    category?: string;
+    cursor?: string | null;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.search) query.set("search", params.search);
+    if (params?.category) query.set("category", params.category);
+    if (params?.cursor) query.set("cursor", params.cursor);
+    if (params?.limit) query.set("limit", String(params.limit));
+    const suffix = query.toString();
+    const response = await fetch(`/api/composio/toolkits${suffix ? `?${suffix}` : ""}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(
+        (err as { error?: string }).error ?? `Failed to load apps (${response.status})`,
+      );
+    }
+    return extractComposioToolkits(
+      (await response.json()) as ComposioToolkitsResponse,
+    );
+  }, []);
+
+  const fetchConnectedToolkits = useCallback(async (connections: ComposioConnection[]) => {
+    const activeSlugs = Array.from(new Set(
+      normalizeComposioConnections(connections)
+        .filter((connection) => connection.is_active)
+        .map((connection) => normalizeComposioToolkitSlug(connection.normalized_toolkit_slug)),
+    ));
+
+    if (activeSlugs.length === 0) {
+      return [];
+    }
+
+    const toolkits = await Promise.all(activeSlugs.map(async (slug) => {
+      const result = await fetchToolkitsPage({
+        search: slug,
+        limit: CONNECTED_TOOLKIT_LOOKUP_LIMIT,
+      }).catch(() => ({ items: [] as ComposioToolkit[] }));
+      const exact = result.items.find((toolkit) =>
+        normalizeComposioToolkitSlug(toolkit.slug) === slug);
+      const fallbackName = connections.find((connection) =>
+        normalizeComposioToolkitSlug(connection.toolkit_slug) === slug)?.toolkit_name ?? slug;
+      return exact ?? createToolkitPlaceholder(slug, fallbackName);
+    }));
+
+    return dedupeToolkits(toolkits).sort((left, right) => left.name.localeCompare(right.name));
+  }, [fetchToolkitsPage]);
 
   const fetchMcpStatus = useCallback(async () => {
     try {
@@ -146,24 +230,17 @@ export function ComposioAppsSection({
   }, []);
 
   const fetchData = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null, connectionsError: null }));
+    setState((prev) => ({
+      ...prev,
+      connectedToolkits: [],
+      connections: [],
+      loading: true,
+      error: null,
+      connectionsError: null,
+    }));
     setStatusError(null);
     try {
-      const [toolkitsRes, connectionsRes] = await Promise.all([
-        fetch("/api/composio/toolkits"),
-        fetch("/api/composio/connections"),
-      ]);
-
-      if (!toolkitsRes.ok) {
-        const err = await toolkitsRes.json().catch(() => ({}));
-        throw new Error(
-          (err as { error?: string }).error ?? `Failed to load apps (${toolkitsRes.status})`,
-        );
-      }
-
-      const toolkitsData = extractComposioToolkits(
-        (await toolkitsRes.json()) as ComposioToolkitsResponse,
-      );
+      const connectionsRes = await fetch("/api/composio/connections");
       let connectionsData: ComposioConnectionsResponse = { items: [] };
       let connectionsError: string | null = null;
 
@@ -175,11 +252,19 @@ export function ComposioAppsSection({
           ?? `Failed to load connections (${connectionsRes.status})`;
       }
 
+      const extractedConnections = extractComposioConnections(connectionsData);
+      const connectedToolkits = await fetchConnectedToolkits(extractedConnections);
+
       setState({
-        toolkits: toolkitsData.items,
-        connections: extractComposioConnections(connectionsData),
-        categories: toolkitsData.categories,
+        connectedToolkits,
+        marketplaceToolkits: [],
+        marketplaceCursor: null,
+        connections: extractedConnections,
+        categories: [],
         loading: false,
+        marketplaceLoading: false,
+        marketplaceReady: false,
+        loadingMore: false,
         error: null,
         connectionsError,
       });
@@ -193,7 +278,81 @@ export function ComposioAppsSection({
         error: err instanceof Error ? err.message : "Failed to load apps.",
       }));
     }
-  }, [fetchMcpStatus]);
+  }, [fetchConnectedToolkits, fetchMcpStatus]);
+
+  const loadMarketplace = useCallback(async (options?: { reset?: boolean }) => {
+    const reset = options?.reset ?? false;
+    const queryKey = `${search.trim().toLowerCase()}::${activeCategory ?? ""}`;
+
+    if (reset) {
+      marketplaceRequestKeyRef.current = queryKey;
+      setState((prev) => ({
+        ...prev,
+        marketplaceToolkits: [],
+        marketplaceCursor: null,
+        categories: [],
+        marketplaceLoading: true,
+        marketplaceReady: false,
+        loadingMore: false,
+        error: activeTab === "marketplace" ? null : prev.error,
+      }));
+    } else {
+      setState((prev) => ({ ...prev, loadingMore: true }));
+    }
+
+    try {
+      const currentCursor = reset ? null : state.marketplaceCursor;
+      const result = await fetchToolkitsPage({
+        search: search.trim() || undefined,
+        category: activeCategory ?? undefined,
+        cursor: currentCursor,
+        limit: MARKETPLACE_PAGE_SIZE,
+      });
+
+      if (marketplaceRequestKeyRef.current !== queryKey) {
+        return;
+      }
+
+      setState((prev) => {
+        const combined = reset
+          ? result.items
+          : dedupeToolkits([...prev.marketplaceToolkits, ...result.items]);
+        const featuredSet = new Set(FEATURED_SLUGS);
+        const ordered = (search.trim() || activeCategory)
+          ? combined
+          : [
+              ...combined
+                .filter((toolkit) => featuredSet.has(toolkit.slug))
+                .sort((left, right) => FEATURED_SLUGS.indexOf(left.slug) - FEATURED_SLUGS.indexOf(right.slug)),
+              ...combined.filter((toolkit) => !featuredSet.has(toolkit.slug)),
+            ];
+
+        return {
+          ...prev,
+          marketplaceToolkits: ordered,
+          marketplaceCursor: result.cursor,
+          categories: result.categories,
+          marketplaceLoading: false,
+          marketplaceReady: true,
+          loadingMore: false,
+          error: activeTab === "marketplace" ? null : prev.error,
+        };
+      });
+    } catch (err) {
+      if (marketplaceRequestKeyRef.current !== queryKey) {
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        marketplaceLoading: false,
+        marketplaceReady: true,
+        loadingMore: false,
+        error: activeTab === "marketplace"
+          ? (err instanceof Error ? err.message : "Failed to load apps.")
+          : prev.error,
+      }));
+    }
+  }, [activeCategory, activeTab, fetchToolkitsPage, search, state.marketplaceCursor]);
 
   useEffect(() => {
     if (eligible) {
@@ -207,6 +366,25 @@ export function ComposioAppsSection({
       setState((prev) => ({ ...prev, loading: false }));
     }
   }, [eligible, fetchData]);
+
+  useEffect(() => {
+    if (!eligible || state.loading || activeTab !== "marketplace") {
+      return;
+    }
+
+    const queryKey = `${search.trim().toLowerCase()}::${activeCategory ?? ""}`;
+    if (!state.marketplaceReady || marketplaceRequestKeyRef.current !== queryKey) {
+      void loadMarketplace({ reset: true });
+    }
+  }, [
+    activeCategory,
+    activeTab,
+    eligible,
+    loadMarketplace,
+    search,
+    state.loading,
+    state.marketplaceReady,
+  ]);
 
   const normalizedConnections = useMemo(
     () => normalizeComposioConnections(state.connections),
@@ -251,47 +429,27 @@ export function ComposioAppsSection({
     return map;
   }, [activeConnectionsByToolkit]);
 
-  const filteredToolkits = useMemo(() => {
-    let list = [...state.toolkits].sort((left, right) => left.name.localeCompare(right.name));
-    if (activeCategory) {
-      list = list.filter((t) =>
-        t.categories.some((c) => c.toLowerCase() === activeCategory.toLowerCase()),
-      );
-    }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(
-        (t) =>
-          t.name.toLowerCase().includes(q) ||
-          t.slug.toLowerCase().includes(q) ||
-          t.description?.toLowerCase().includes(q),
-      );
-    }
-    return list;
-  }, [state.toolkits, search, activeCategory]);
-
   const connectedToolkits = useMemo(
-    () => filteredToolkits.filter((toolkit) =>
-      activeAccountsByToolkit.has(normalizeComposioToolkitSlug(toolkit.slug))),
-    [activeAccountsByToolkit, filteredToolkits],
-  );
-
-  const availableToolkits = useMemo(
-    () => filteredToolkits.filter((toolkit) =>
-      !activeAccountsByToolkit.has(normalizeComposioToolkitSlug(toolkit.slug))),
-    [activeAccountsByToolkit, filteredToolkits],
+    () => {
+      const q = search.trim().toLowerCase();
+      return state.connectedToolkits
+        .filter((toolkit) => activeAccountsByToolkit.has(normalizeComposioToolkitSlug(toolkit.slug)))
+        .filter((toolkit) => {
+          if (!q) {
+            return true;
+          }
+          return toolkit.name.toLowerCase().includes(q)
+            || toolkit.slug.toLowerCase().includes(q)
+            || toolkit.description.toLowerCase().includes(q);
+        });
+    },
+    [activeAccountsByToolkit, search, state.connectedToolkits],
   );
 
   const marketplaceToolkits = useMemo(() => {
-    if (search.trim() || activeCategory) {
-      return availableToolkits;
-    }
-    const featuredSet = new Set(FEATURED_SLUGS);
-    const featured = availableToolkits.filter((t) => featuredSet.has(t.slug));
-    featured.sort((a, b) => FEATURED_SLUGS.indexOf(a.slug) - FEATURED_SLUGS.indexOf(b.slug));
-    const rest = availableToolkits.filter((t) => !featuredSet.has(t.slug));
-    return [...featured, ...rest];
-  }, [activeCategory, availableToolkits, search]);
+    return state.marketplaceToolkits.filter((toolkit) =>
+      !activeAccountsByToolkit.has(normalizeComposioToolkitSlug(toolkit.slug)));
+  }, [activeAccountsByToolkit, state.marketplaceToolkits]);
 
   const displayCategories = useMemo(
     () => state.categories.slice(0, MAX_CATEGORY_PILLS),
@@ -309,7 +467,10 @@ export function ComposioAppsSection({
 
   const handleConnectionChange = useCallback(() => {
     void fetchData();
-  }, [fetchData]);
+    if (activeTab === "marketplace") {
+      void loadMarketplace({ reset: true });
+    }
+  }, [activeTab, fetchData, loadMarketplace]);
 
   const handleRepairMcp = useCallback(async () => {
     setRepairingMcp(true);
@@ -334,6 +495,40 @@ export function ComposioAppsSection({
       setRepairingMcp(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (
+      !eligible
+      || activeTab !== "marketplace"
+      || state.loading
+      || state.marketplaceLoading
+      || state.loadingMore
+      || !state.marketplaceReady
+      || !state.marketplaceCursor
+      || !loadMoreRef.current
+    ) {
+      return;
+    }
+
+    const node = loadMoreRef.current;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        void loadMarketplace();
+      }
+    }, { rootMargin: "160px 0px" });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [
+    activeTab,
+    eligible,
+    loadMarketplace,
+    state.loading,
+    state.loadingMore,
+    state.marketplaceCursor,
+    state.marketplaceLoading,
+    state.marketplaceReady,
+  ]);
 
   if (!eligible) {
     return (
@@ -447,16 +642,28 @@ export function ComposioAppsSection({
       {/* MCP status (collapsed into a small bar) */}
       {(statusError || (mcpStatus && mcpStatus.summary.level !== "healthy")) && (
         <div
-          className="mb-4 flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-xs"
+          className="mb-4 flex items-start justify-between gap-3 rounded-xl px-3 py-2 text-xs"
           style={{
             background: "color-mix(in srgb, var(--color-error, #ef4444) 8%, transparent)",
             color: "var(--color-error, #ef4444)",
             border: "1px solid color-mix(in srgb, var(--color-error, #ef4444) 20%, transparent)",
           }}
         >
-          <span className="truncate">
-            {statusError ?? mcpStatus?.summary.message ?? "MCP needs attention"}
-          </span>
+          <div className="min-w-0">
+            <p className="truncate">
+              {statusError ?? mcpStatus?.summary.message ?? "MCP needs attention"}
+            </p>
+            {!statusError && mcpStatus?.liveAgent.detail && mcpStatus.summary.level !== "healthy" && (
+              <p className="mt-1 text-[11px] opacity-80">
+                {mcpStatus.liveAgent.detail}
+              </p>
+            )}
+            {!statusError && (mcpStatus?.liveAgent.evidence?.length ?? 0) > 0 && (
+              <p className="mt-1 truncate text-[11px] opacity-70">
+                Evidence: {mcpStatus?.liveAgent.evidence.slice(0, 3).join(", ")}
+              </p>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => void handleRepairMcp()}
@@ -471,7 +678,7 @@ export function ComposioAppsSection({
         </div>
       )}
 
-      {state.loading && (
+      {(state.loading || (activeTab === "marketplace" && state.marketplaceLoading && !state.marketplaceReady)) && (
         <div className="flex items-center justify-center py-16">
           <div
             className="w-6 h-6 border-2 rounded-full animate-spin"
@@ -480,7 +687,7 @@ export function ComposioAppsSection({
         </div>
       )}
 
-      {!state.loading && state.error && (
+      {!state.loading && !(activeTab === "marketplace" && state.marketplaceLoading && !state.marketplaceReady) && state.error && (
         <div
           className="p-8 text-center rounded-2xl"
           style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
@@ -506,6 +713,9 @@ export function ComposioAppsSection({
       {!state.loading && !state.error && activeTab === "marketplace" && (
         <MarketplaceTab
           toolkits={marketplaceToolkits}
+          hasMore={Boolean(state.marketplaceCursor)}
+          loadingMore={state.loadingMore}
+          loadMoreRef={loadMoreRef}
           onAppClick={handleAppClick}
         />
       )}
@@ -568,9 +778,15 @@ function ConnectedTab({
 
 function MarketplaceTab({
   toolkits,
+  hasMore,
+  loadingMore,
+  loadMoreRef,
   onAppClick,
 }: {
   toolkits: ComposioToolkit[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreRef: { current: HTMLDivElement | null };
   onAppClick: (toolkit: ComposioToolkit) => void;
 }) {
   if (toolkits.length === 0) {
@@ -587,16 +803,23 @@ function MarketplaceTab({
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {toolkits.map((toolkit) => (
-        <ComposioAppCard
-          key={toolkit.slug}
-          toolkit={toolkit}
-          activeConnections={0}
-          mode="marketplace"
-          onClick={() => onAppClick(toolkit)}
-        />
-      ))}
+    <div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {toolkits.map((toolkit) => (
+          <ComposioAppCard
+            key={toolkit.slug}
+            toolkit={toolkit}
+            activeConnections={0}
+            mode="marketplace"
+            onClick={() => onAppClick(toolkit)}
+          />
+        ))}
+      </div>
+      {(hasMore || loadingMore) && (
+        <div ref={loadMoreRef} className="flex items-center justify-center py-6 text-xs" style={{ color: "var(--color-text-muted)" }}>
+          {loadingMore ? "Loading more apps..." : "Scroll to load more"}
+        </div>
+      )}
     </div>
   );
 }
