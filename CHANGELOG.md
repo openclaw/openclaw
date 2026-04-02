@@ -152,7 +152,7 @@ Docs: https://docs.openclaw.ai
 - CLI/onboarding: reset the remote gateway URL prompt to the safe loopback default after declining a discovered endpoint, so onboarding does not keep a previously rejected remote URL. (#57828)
 - Agents/exec defaults: honor per-agent `tools.exec` defaults when no inline directive or session override is present, so configured exec host, security, ask, and node settings actually apply. (#57689)
 - Sandbox/networking: sanitize SSH subprocess env vars through the shared sandbox policy and route marketplace archive downloads plus Ollama discovery, auth, and pull requests through the guarded fetch path so sandboxed execution and remote fetches follow the repo's trust boundaries. (#57848, #57850)
-- Plugins/TinyFish: add bundled TinyFish plugin (default-off) with a `tinyfish_automation` tool for hosted browser automation of complex public web workflows, including SSE streaming, SSRF guards, and proxy/stealth support.
+- Plugins/TinyFish: add bundled TinyFish plugin (default-off) with a `tinyfish_automation` tool for hosted browser automation of complex public web workflows, including SSE streaming, SSRF guards, and proxy/stealth support. (#58645) Thanks @simantak-dabhade.
 
 ### Fixes
 
