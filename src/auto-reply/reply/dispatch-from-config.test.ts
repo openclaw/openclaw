@@ -517,6 +517,83 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("dispatches bound conversation messages through the ACP runtime with the bound session key", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "done" }]);
+    const inboundSessionKey = "agent:main:mattermost:channel:CHAN1:thread:post-root";
+    const boundAcpSessionKey = "agent:codex-acp:session-bound-1";
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-acp-dispatch-1",
+      targetSessionKey: boundAcpSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "channel:CHAN1",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {},
+    } satisfies SessionBindingRecord);
+    acpMocks.readAcpSessionEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { sessionKey?: string } | undefined;
+      if (params?.sessionKey !== boundAcpSessionKey) {
+        return null;
+      }
+      return {
+        sessionKey: boundAcpSessionKey,
+        storeSessionKey: boundAcpSessionKey,
+        cfg: {},
+        storePath: "/tmp/mock-sessions.json",
+        entry: {},
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "runtime:bound-1",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: inboundSessionKey,
+      AccountId: "default",
+      BodyForAgent: "hello from bound chat",
+      OriginatingChannel: "mattermost",
+      OriginatingTo: "channel:CHAN1",
+      To: "channel:CHAN1",
+      ExplicitDeliverRoute: true,
+    });
+    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(runtime.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: boundAcpSessionKey,
+        agent: "codex",
+        mode: "persistent",
+      }),
+    );
+    expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
