@@ -1,12 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  createManagedFlow,
-  getFlowById,
-  listFlowRecords,
-  resetFlowRegistryForTests,
-} from "./flow-registry.js";
-import {
   cancelFlowById,
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
@@ -21,6 +15,12 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
+import {
+  createManagedTaskFlow,
+  getTaskFlowById,
+  listTaskFlowRecords,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
 import {
   getTaskById,
   findLatestTaskForFlowId,
@@ -60,13 +60,13 @@ async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): P
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
-    resetFlowRegistryForTests();
+    resetTaskFlowRegistryForTests();
     try {
       await run(root);
     } finally {
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests();
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
     }
   });
 }
@@ -80,7 +80,7 @@ describe("task-executor", () => {
     }
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
-    resetFlowRegistryForTests();
+    resetTaskFlowRegistryForTests();
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -178,7 +178,7 @@ describe("task-executor", () => {
       });
 
       expect(created.parentFlowId).toEqual(expect.any(String));
-      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
         flowId: created.parentFlowId,
         ownerKey: "agent:main:main",
         status: "running",
@@ -193,7 +193,7 @@ describe("task-executor", () => {
         terminalSummary: "Done.",
       });
 
-      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
         flowId: created.parentFlowId,
         status: "succeeded",
         endedAt: 40,
@@ -217,7 +217,7 @@ describe("task-executor", () => {
       });
 
       expect(created.parentFlowId).toBeUndefined();
-      expect(listFlowRecords()).toEqual([]);
+      expect(listTaskFlowRecords()).toEqual([]);
     });
   });
 
@@ -252,7 +252,7 @@ describe("task-executor", () => {
         terminalOutcome: "blocked",
         terminalSummary: "Writable session required.",
       });
-      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
         flowId: created.parentFlowId,
         status: "blocked",
         blockedTaskId: created.taskId,
@@ -279,7 +279,7 @@ describe("task-executor", () => {
           runId: "run-executor-retry",
         }),
       });
-      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
         flowId: created.parentFlowId,
         status: "queued",
       });
@@ -299,7 +299,7 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Inspect PR batch",
@@ -329,7 +329,7 @@ describe("task-executor", () => {
         taskId: child.taskId,
         status: "cancelled",
       });
-      expect(getFlowById(flow.flowId)).toMatchObject({
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
         flowId: flow.flowId,
         status: "cancelled",
       });
@@ -338,7 +338,7 @@ describe("task-executor", () => {
 
   it("runs child tasks under managed TaskFlows", async () => {
     await withTaskExecutorStateDir(async () => {
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Inspect PR batch",
@@ -380,7 +380,7 @@ describe("task-executor", () => {
 
   it("refuses to add child tasks once cancellation is requested on a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Protected flow",
@@ -416,7 +416,7 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockRejectedValue(new Error("still shutting down"));
 
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Long running batch",
@@ -460,7 +460,7 @@ describe("task-executor", () => {
         taskId: child.taskId,
         status: "cancelled",
       });
-      expect(getFlowById(flow.flowId)).toMatchObject({
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
         flowId: flow.flowId,
         cancelRequestedAt: expect.any(Number),
         status: "cancelled",
@@ -471,7 +471,7 @@ describe("task-executor", () => {
 
   it("denies cross-owner flow cancellation through the owner-scoped wrapper", async () => {
     await withTaskExecutorStateDir(async () => {
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Protected flow",
@@ -488,7 +488,7 @@ describe("task-executor", () => {
         cancelled: false,
         reason: "Flow not found.",
       });
-      expect(getFlowById(flow.flowId)).toMatchObject({
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
         flowId: flow.flowId,
         status: "queued",
       });
@@ -497,7 +497,7 @@ describe("task-executor", () => {
 
   it("denies cross-owner managed TaskFlow child spawning through the owner-scoped wrapper", async () => {
     await withTaskExecutorStateDir(async () => {
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Protected flow",
