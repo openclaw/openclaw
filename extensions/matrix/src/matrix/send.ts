@@ -1,10 +1,8 @@
-import {
-  loadOutboundMediaFromUrl,
-  type MarkdownTableMode,
-  type PollInput,
-} from "../runtime-api.js";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
+import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
 import type { MatrixClient } from "./sdk.js";

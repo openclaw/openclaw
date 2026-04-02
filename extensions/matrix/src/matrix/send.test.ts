@@ -24,13 +24,9 @@ const resolveTextChunkLimitMock = vi.fn<
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
 
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...actual,
-    loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
-  };
-});
+vi.mock("./outbound-media-runtime.js", () => ({
+  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+}));
 
 const runtimeStub = {
   config: {
