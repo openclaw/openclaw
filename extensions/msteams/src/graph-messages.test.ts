@@ -199,7 +199,7 @@ describe("pinMessageMSTeams", () => {
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
-  it("pins a message in a chat", async () => {
+  it("pins a message in a chat using message@odata.bind", async () => {
     mockState.postGraphJson.mockResolvedValue({ id: "pinned-1" });
 
     const result = await pinMessageMSTeams({
@@ -212,25 +212,20 @@ describe("pinMessageMSTeams", () => {
     expect(mockState.postGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages`,
-      body: { message: { id: "msg-1" } },
+      body: {
+        "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1`,
+      },
     });
   });
 
-  it("pins a message in a channel", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
-
-    const result = await pinMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHANNEL_TO,
-      messageId: "msg-2",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(mockState.postGraphJson).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/pinnedMessages",
-      body: { message: { id: "msg-2" } },
-    });
+  it("throws for channel pin (not supported on Graph v1.0)", async () => {
+    await expect(
+      pinMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHANNEL_TO,
+        messageId: "msg-2",
+      }),
+    ).rejects.toThrow("not supported for channel messages");
   });
 });
 
@@ -256,20 +251,14 @@ describe("unpinMessageMSTeams", () => {
     });
   });
 
-  it("unpins a message from a channel", async () => {
-    mockState.deleteGraphRequest.mockResolvedValue(undefined);
-
-    const result = await unpinMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHANNEL_TO,
-      pinnedMessageId: "pinned-2",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/pinnedMessages/pinned-2",
-    });
+  it("throws for channel unpin (not supported on Graph v1.0)", async () => {
+    await expect(
+      unpinMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHANNEL_TO,
+        pinnedMessageId: "pinned-2",
+      }),
+    ).rejects.toThrow("not supported for channel messages");
   });
 });
 
@@ -372,6 +361,15 @@ describe("listPinsMSTeams", () => {
     // fetchGraphAbsoluteUrl should be called 9 times (pages 2-10)
     expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(9);
   });
+
+  it("throws for channel list-pins (not supported on Graph v1.0)", async () => {
+    await expect(
+      listPinsMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHANNEL_TO,
+      }),
+    ).rejects.toThrow("not supported for channels");
+  });
 });
 
 describe("reactMessageMSTeams", () => {
@@ -433,15 +431,32 @@ describe("reactMessageMSTeams", () => {
     });
   });
 
-  it("rejects invalid reaction type", async () => {
+  it("passes through unknown reaction types (Unicode emoji)", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    await reactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "\u{1F44D}",
+    });
+
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      body: { reactionType: "\u{1F44D}" },
+    });
+  });
+
+  it("rejects empty reaction type", async () => {
     await expect(
       reactMessageMSTeams({
         cfg: {} as OpenClawConfig,
         to: CHAT_ID,
         messageId: "msg-1",
-        reactionType: "thumbsup",
+        reactionType: "",
       }),
-    ).rejects.toThrow('Invalid reaction type "thumbsup"');
+    ).rejects.toThrow("Reaction type is required");
   });
 
   it("resolves user: target through conversation store", async () => {
@@ -509,15 +524,32 @@ describe("unreactMessageMSTeams", () => {
     });
   });
 
-  it("rejects invalid reaction type", async () => {
+  it("passes through unknown reaction types", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    await unreactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "clap",
+    });
+
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
+      body: { reactionType: "clap" },
+    });
+  });
+
+  it("rejects empty reaction type", async () => {
     await expect(
       unreactMessageMSTeams({
         cfg: {} as OpenClawConfig,
         to: CHAT_ID,
         messageId: "msg-1",
-        reactionType: "clap",
+        reactionType: "  ",
       }),
-    ).rejects.toThrow('Invalid reaction type "clap"');
+    ).rejects.toThrow("Reaction type is required");
   });
 });
 
@@ -547,6 +579,8 @@ describe("listReactionsMSTeams", () => {
     expect(result.reactions).toEqual([
       {
         reactionType: "like",
+        name: "like",
+        emoji: "\u{1F44D}",
         count: 2,
         users: [
           { id: "u1", displayName: "Alice" },
@@ -555,6 +589,8 @@ describe("listReactionsMSTeams", () => {
       },
       {
         reactionType: "heart",
+        name: "heart",
+        emoji: "\u2764\uFE0F",
         count: 1,
         users: [{ id: "u1", displayName: "Alice" }],
       },
@@ -598,11 +634,15 @@ describe("listReactionsMSTeams", () => {
     expect(result.reactions).toEqual([
       {
         reactionType: "like",
+        name: "like",
+        emoji: "\u{1F44D}",
         count: 4,
         users: [{ id: "u1", displayName: "Alice" }],
       },
       {
         reactionType: "heart",
+        name: "heart",
+        emoji: "\u2764\uFE0F",
         count: 1,
         users: [{ id: "u2", displayName: "Bob" }],
       },
@@ -623,7 +663,13 @@ describe("listReactionsMSTeams", () => {
     });
 
     expect(result.reactions).toEqual([
-      { reactionType: "surprised", count: 1, users: [{ id: "u3", displayName: "Carol" }] },
+      {
+        reactionType: "surprised",
+        name: "surprised",
+        emoji: "\u{1F62E}",
+        count: 1,
+        users: [{ id: "u3", displayName: "Carol" }],
+      },
     ]);
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,

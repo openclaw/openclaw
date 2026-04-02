@@ -116,6 +116,11 @@ function resolveConversationPath(to: string): {
       channelId,
     };
   }
+  // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
+  // or channel threads. Without a teamId/channelId pair (format "teamId/channelId")
+  // we route through /chats/{id} which works for group chats and 1:1 DMs.
+  // Channel operations that require /teams/{teamId}/channels/{channelId} paths
+  // must be called with the explicit teamId/channelId target format.
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
@@ -180,25 +185,22 @@ export async function pinMessageMSTeams(
   const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
-    // Channel pin endpoint: /teams/{teamId}/channels/{channelId}/pinnedMessages
-    // This endpoint may only be available in the beta API or require specific
-    // tenant/admin permissions. It uses the same request shape as chat pinning
-    // but GA availability is uncertain.
-    console.warn(
-      "[msteams] Channel pin operations use an endpoint that may require beta API access or tenant-level permissions.",
+    // Graph v1.0 does not expose pinnedMessages on channels — only on chats.
+    // Attempting this would 404.
+    throw new Error(
+      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
     );
-    await postGraphJson<unknown>({
-      token,
-      path: `${conv.basePath}/pinnedMessages`,
-      body: { message: { id: params.messageId } },
-    });
-    return { ok: true };
   }
 
+  // Graph API expects message@odata.bind with the full message resource URI
+  const body = {
+    "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(params.messageId)}`,
+  };
   const result = await postGraphJson<{ id?: string }>({
     token,
     path: `${conv.basePath}/pinnedMessages`,
-    body: { message: { id: params.messageId } },
+    body,
   });
   return { ok: true, pinnedMessageId: result.id };
 }
@@ -225,8 +227,9 @@ export async function unpinMessageMSTeams(
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
   if (conv.kind === "channel") {
-    console.warn(
-      "[msteams] Channel unpin operations use an endpoint that may require beta API access or tenant-level permissions.",
+    throw new Error(
+      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
     );
   }
   const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
@@ -261,8 +264,9 @@ export async function listPinsMSTeams(
   const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
-    console.warn(
-      "[msteams] Channel list-pins operations use an endpoint that may require beta API access or tenant-level permissions.",
+    throw new Error(
+      "Listing pinned messages is not supported for channels on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
     );
   }
 
@@ -332,8 +336,22 @@ export type ListReactionsMSTeamsParams = {
   messageId: string;
 };
 
+/** Map well-known reaction type names to representative emoji for CLI display. */
+const REACTION_TYPE_EMOJI: Record<string, string> = {
+  like: "\u{1F44D}",
+  heart: "\u2764\uFE0F",
+  laugh: "\u{1F606}",
+  surprised: "\u{1F62E}",
+  sad: "\u{1F622}",
+  angry: "\u{1F621}",
+};
+
 export type ReactionSummary = {
   reactionType: string;
+  /** Display name for the reaction (matches reactionType for known types). */
+  name: string;
+  /** Emoji representation when available. */
+  emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;
 };
@@ -342,14 +360,23 @@ export type ListReactionsMSTeamsResult = {
   reactions: ReactionSummary[];
 };
 
-function validateReactionType(raw: string): TeamsReactionType {
-  const normalized = raw.toLowerCase().trim();
-  if (!TEAMS_REACTION_TYPES.includes(normalized as TeamsReactionType)) {
-    throw new Error(
-      `Invalid reaction type "${raw}". Valid types: ${TEAMS_REACTION_TYPES.join(", ")}`,
-    );
+/**
+ * Normalize a reaction type string. Graph setReaction/unsetReaction accepts
+ * the well-known legacy names (like, heart, laugh, surprised, sad, angry)
+ * as well as Unicode emoji values — so we pass unknown types through rather
+ * than rejecting them.
+ */
+function normalizeReactionType(raw: string): string {
+  const normalized = raw.trim();
+  if (!normalized) {
+    throw new Error(`Reaction type is required. Common types: ${TEAMS_REACTION_TYPES.join(", ")}`);
   }
-  return normalized as TeamsReactionType;
+  // Lowercase only the well-known names; Unicode emoji should pass through as-is
+  const lowered = normalized.toLowerCase();
+  if (TEAMS_REACTION_TYPES.includes(lowered as TeamsReactionType)) {
+    return lowered;
+  }
+  return normalized;
 }
 
 /**
@@ -358,7 +385,7 @@ function validateReactionType(raw: string): TeamsReactionType {
 export async function reactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const reactionType = validateReactionType(params.reactionType);
+  const reactionType = normalizeReactionType(params.reactionType);
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
@@ -373,7 +400,7 @@ export async function reactMessageMSTeams(
 export async function unreactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const reactionType = validateReactionType(params.reactionType);
+  const reactionType = normalizeReactionType(params.reactionType);
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
@@ -418,6 +445,8 @@ export async function listReactionsMSTeams(
 
   const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
+    name: type,
+    emoji: REACTION_TYPE_EMOJI[type],
     count: group.count,
     users: group.users,
   }));
