@@ -447,7 +447,6 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - `main` 是规范的私聊键；global/unknown 是隐藏的。
 - `messageLimit > 0` 获取每个会话的最后 N 条消息（工具消息被过滤）。
 - 当 `timeoutSeconds > 0` 时，`sessions_send` 等待最终完成。
-- `sessions_send` 已拿到 `sessionKey` / `sessionId` 时不要再传 `label`；若两者同时出现，运行时会以 `sessionKey` 为准并忽略 `label`。
 - 递送/宣告发生在完成后，是尽力而为的；`status: "ok"` 确认智能体运行完成，而不是宣告已递送。
 - `sessions_spawn` 启动子智能体运行并将宣告回复发送回请求者聊天。
 - `sessions_spawn` 是非阻塞的，立即返回 `status: "accepted"`。
