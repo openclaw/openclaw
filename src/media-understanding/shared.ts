@@ -17,6 +17,26 @@ export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
+const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
+  }
+  return timeoutMs;
+}
+
+function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
+  const cleaned = auditContext
+    ?.replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
+}
 
 export function resolveProviderHttpRequestConfig(params: {
   baseUrl?: string;
@@ -82,12 +102,12 @@ export async function fetchWithTimeoutGuarded(
     url,
     fetchImpl: fetchFn,
     init,
-    timeoutMs,
+    timeoutMs: resolveGuardedHttpTimeoutMs(timeoutMs),
     policy: options?.ssrfPolicy,
     lookupFn: options?.lookupFn,
     pinDns: options?.pinDns,
     dispatcherPolicy: options?.dispatcherPolicy,
-    auditContext: options?.auditContext,
+    auditContext: sanitizeAuditContext(options?.auditContext),
   });
 }
 
