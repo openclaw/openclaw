@@ -152,6 +152,22 @@ type TaskSystemAuditFinding = {
   flow?: TaskFlowRecord;
 };
 
+function compareSystemAuditFindings(left: TaskSystemAuditFinding, right: TaskSystemAuditFinding) {
+  const severityRank = (severity: TaskSystemAuditSeverity) => (severity === "error" ? 0 : 1);
+  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
+  if (severityDiff !== 0) {
+    return severityDiff;
+  }
+  const leftAge = left.ageMs ?? -1;
+  const rightAge = right.ageMs ?? -1;
+  if (leftAge !== rightAge) {
+    return rightAge - leftAge;
+  }
+  const leftCreatedAt = left.task?.createdAt ?? left.flow?.createdAt ?? 0;
+  const rightCreatedAt = right.task?.createdAt ?? right.flow?.createdAt ?? 0;
+  return leftCreatedAt - rightCreatedAt;
+}
+
 function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
   const header = [
     "Scope".padEnd(8),
@@ -225,14 +241,17 @@ function toSystemAuditFindings(params: {
       return false;
     }
     return true;
-  });
+  }).toSorted(compareSystemAuditFindings);
+  const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
   return {
-    allFindings,
+    allFindings: sortedAllFindings,
     filteredFindings,
+    taskFindings,
+    flowFindings,
     summary: {
-      total: allFindings.length,
-      errors: allFindings.filter((finding) => finding.severity === "error").length,
-      warnings: allFindings.filter((finding) => finding.severity !== "error").length,
+      total: sortedAllFindings.length,
+      errors: sortedAllFindings.filter((finding) => finding.severity === "error").length,
+      warnings: sortedAllFindings.filter((finding) => finding.severity !== "error").length,
       tasks: summarizeTaskAuditFindings(taskFindings),
       taskFlows: summarizeTaskFlowAuditFindings(flowFindings),
     },
@@ -395,7 +414,7 @@ export async function tasksAuditCommand(
 ) {
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
-  const { allFindings, filteredFindings, summary } = toSystemAuditFindings({
+  const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
     severityFilter,
     codeFilter,
   });
@@ -403,6 +422,7 @@ export async function tasksAuditCommand(
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
 
   if (opts.json) {
+    const legacySummary = summarizeTaskAuditFindings(taskFindings);
     runtime.log(
       JSON.stringify(
         {
@@ -414,7 +434,15 @@ export async function tasksAuditCommand(
             code: codeFilter ?? null,
             limit: limit ?? null,
           },
-          summary,
+          summary: {
+            ...legacySummary,
+            taskFlows: summary.taskFlows,
+            combined: {
+              total: summary.total,
+              errors: summary.errors,
+              warnings: summary.warnings,
+            },
+          },
           findings: displayed,
         },
         null,
@@ -481,11 +509,11 @@ export async function tasksMaintenanceCommand(
           },
           tasks: summary,
           auditBefore: {
-            tasks: auditBefore,
+            ...auditBefore,
             taskFlows: flowAuditBefore,
           },
           auditAfter: {
-            tasks: auditAfter,
+            ...auditAfter,
             taskFlows: flowAuditAfter,
           },
         },

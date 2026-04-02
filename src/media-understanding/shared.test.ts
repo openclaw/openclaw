@@ -65,6 +65,40 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
+  it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {
+    const resolved = resolveProviderHttpRequestConfig({
+      baseUrl: "https://api.deepgram.com/v1",
+      defaultBaseUrl: "https://api.deepgram.com/v1",
+      defaultHeaders: {
+        authorization: "Token test-key",
+      },
+      request: {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+          tls: {
+            ca: "proxy-ca",
+          },
+        },
+        tls: {
+          cert: "client-cert",
+          key: "client-key",
+        },
+      },
+      provider: "deepgram",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+
+    expect(resolved.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://proxy.internal:8443",
+      proxyTls: {
+        ca: "proxy-ca",
+      },
+    });
+  });
+
   it("fails fast when no base URL can be resolved", () => {
     expect(() =>
       resolveProviderHttpRequestConfig({

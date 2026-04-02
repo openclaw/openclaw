@@ -56,16 +56,8 @@ type GatewaySecretsResolveResult = {
   inactiveRefPaths?: string[];
 };
 
-const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
-  "tools.web.search",
-  "plugins.entries.",
-  "tools.web.x_search",
-] as const;
-const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
-  "tools.web.search.",
-  "plugins.entries.",
-  "tools.web.x_search.",
-] as const;
+const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
+const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
 
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
@@ -110,10 +102,6 @@ function classifyRuntimeWebTargetPathState(params: {
   config: OpenClawConfig;
   path: string;
 }): "active" | "inactive" | "unknown" {
-  if (params.path === "tools.web.x_search.apiKey") {
-    return params.config.tools?.web?.x_search?.enabled !== false ? "active" : "inactive";
-  }
-
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
   }
@@ -169,12 +157,6 @@ function describeInactiveRuntimeWebTargetPath(params: {
   config: OpenClawConfig;
   path: string;
 }): string | undefined {
-  if (params.path === "tools.web.x_search.apiKey") {
-    return params.config.tools?.web?.x_search?.enabled === false
-      ? "tools.web.x_search is disabled."
-      : undefined;
-  }
-
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled === false
       ? "tools.web.search is disabled."
@@ -377,7 +359,6 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
     /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
-    path === "tools.web.x_search.apiKey" ||
     /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
   );
 }

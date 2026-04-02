@@ -162,9 +162,11 @@ function hasPluginOwnedWebFetchConfig(cfg: OpenClawConfig, pluginId: string): bo
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
   if (pluginId === "xai") {
     const pluginConfig = cfg.plugins?.entries?.xai?.config;
+    const web = cfg.tools?.web as Record<string, unknown> | undefined;
     return Boolean(
-      isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined) ||
-      (isRecord(pluginConfig) && isRecord(pluginConfig.codeExecution)),
+      isRecord(web?.x_search) ||
+      (isRecord(pluginConfig) &&
+        (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))),
     );
   }
   return false;
@@ -384,7 +386,8 @@ function configMayNeedPluginAutoEnable(cfg: OpenClawConfig, env: NodeJS.ProcessE
   if (collectModelRefs(cfg).length > 0) {
     return true;
   }
-  if (isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined)) {
+  const web = cfg.tools?.web as Record<string, unknown> | undefined;
+  if (isRecord(web?.x_search)) {
     return true;
   }
   if (
@@ -642,7 +645,7 @@ function formatAutoEnableChange(entry: PluginEnableChange): string {
 }
 
 export function applyPluginAutoEnable(params: {
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   /** Pre-loaded manifest registry. When omitted, the registry is loaded from
    *  the installed plugins on disk. Pass an explicit registry in tests to
@@ -650,20 +653,21 @@ export function applyPluginAutoEnable(params: {
   manifestRegistry?: PluginManifestRegistry;
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
-  if (!configMayNeedPluginAutoEnable(params.config, env)) {
-    return { config: params.config, changes: [], autoEnabledReasons: {} };
+  const config = params.config ?? ({} as OpenClawConfig);
+  if (!configMayNeedPluginAutoEnable(config, env)) {
+    return { config, changes: [], autoEnabledReasons: {} };
   }
   const registry =
     params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config)
-      ? loadPluginManifestRegistry({ config: params.config, env })
+    (configMayNeedPluginManifestRegistry(config)
+      ? loadPluginManifestRegistry({ config, env })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY);
-  const configured = resolveConfiguredPlugins(params.config, env, registry);
+  const configured = resolveConfiguredPlugins(config, env, registry);
   if (configured.length === 0) {
-    return { config: params.config, changes: [], autoEnabledReasons: {} };
+    return { config, changes: [], autoEnabledReasons: {} };
   }
 
-  let next = params.config;
+  let next = config;
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
 
