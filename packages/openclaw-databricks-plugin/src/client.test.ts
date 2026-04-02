@@ -90,15 +90,8 @@ describe("databricks sql client", () => {
   });
 
   it("raises timeout error when submit request aborts", async () => {
-    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-      const signal = init?.signal;
-      return new Promise<Response>((_resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new DOMException("aborted", "AbortError"));
-          return;
-        }
-        signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-      });
+    const fetchImpl = vi.fn(async () => {
+      throw new DOMException("aborted", "AbortError");
     });
 
     const client = new DatabricksSqlClient({
