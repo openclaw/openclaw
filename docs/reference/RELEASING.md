@@ -10,7 +10,7 @@ read_when:
 
 OpenClaw has three public release lanes:
 
-- stable: tagged releases that publish to npm `latest` and mirror the same version onto `beta` unless `beta` already points at a newer prerelease
+- stable: tagged releases that publish to npm `beta` by default, or to npm `latest` when explicitly requested
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
@@ -23,9 +23,9 @@ OpenClaw has three public release lanes:
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
-- `latest` means the current stable npm release
-- `beta` means the current beta install target, which may point to either the active prerelease or the latest promoted stable build
-- Stable and stable correction releases publish to npm `latest` and also retag npm `beta` to that same non-beta version after promotion, unless `beta` already points at a newer prerelease
+- `latest` means the current promoted stable npm release
+- `beta` means the current beta install target
+- Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
@@ -49,6 +49,9 @@ OpenClaw has three public release lanes:
   install path in a fresh temp prefix
 - Maintainer release automation now uses preflight-then-promote:
   - real npm publish must pass a successful npm `preflight_run_id`
+  - stable npm releases default to `beta`
+  - stable npm publish can target `latest` explicitly via workflow input
+  - stable npm promotion from `beta` to `latest` is still available as a separate manual workflow step
   - public `macOS Release` is validation-only
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
@@ -75,6 +78,7 @@ OpenClaw has three public release lanes:
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
+- [`.github/workflows/openclaw-npm-promote-beta.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-promote-beta.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
