@@ -84,6 +84,7 @@ export function createTelegramInboundBufferRuntime(params: {
     runtime,
     telegramTransport,
   } = params;
+  const telegramCfg = cfg.channels?.telegram;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&

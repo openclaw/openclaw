@@ -71,7 +71,13 @@ function isRetryableGetFileError(err: unknown): boolean {
 }
 
 interface MediaMetadata {
-  fileRef?: unknown;
+  fileRef?:
+    | NonNullable<TelegramContext["message"]["photo"]>[number]
+    | TelegramContext["message"]["video"]
+    | TelegramContext["message"]["video_note"]
+    | TelegramContext["message"]["document"]
+    | TelegramContext["message"]["audio"]
+    | TelegramContext["message"]["voice"];
   fileName?: string;
   mimeType?: string;
 }
