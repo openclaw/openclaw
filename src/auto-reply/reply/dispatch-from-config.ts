@@ -122,7 +122,7 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   return AUDIO_HEADER_RE.test(trimmed);
 };
 
-const getCurrentSessionKey = (
+const resolveAcpDispatchSessionKey = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): string | undefined => {
@@ -158,7 +158,9 @@ const resolveSessionStoreLookup = (
   sessionKey?: string;
   entry?: SessionEntry;
 } => {
-  const sessionKey = getCurrentSessionKey(ctx, cfg);
+  const targetSessionKey =
+    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
   if (!sessionKey) {
     return {};
   }
@@ -251,7 +253,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
-  const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const acpDispatchSessionKey = resolveAcpDispatchSessionKey(ctx, cfg) ?? sessionKey;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
