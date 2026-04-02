@@ -184,6 +184,7 @@ const PNPM_FLAG_OPTIONS = new Set([
   "--workspace-root",
   "-r",
   "-s",
+  "-w",
 ]);
 
 const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);

@@ -534,6 +534,20 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 3,
     },
     {
+      name: "pnpm workspace-root exec tsx file",
+      argv: ["pnpm", "-w", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
+      name: "pnpm workspace-root dlx tsx file",
+      argv: ["pnpm", "-w", "dlx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
       name: "pnpm dlx tsx file",
       argv: ["pnpm", "dlx", "tsx", "./run.ts"],
       scriptName: "run.ts",
