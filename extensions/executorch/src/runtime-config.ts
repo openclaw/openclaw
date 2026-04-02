@@ -27,6 +27,20 @@ export type ResolvedExecuTorchRuntimeConfig = {
   warnings: string[];
 };
 
+/**
+ * Expands leading `~` / `~/` (Node does not) and resolves to an absolute path for fs access.
+ */
+export function normalizeExecuTorchPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const expanded = trimmed.startsWith("~")
+    ? trimmed.replace(/^~(?=$|[\\/])/, os.homedir())
+    : trimmed;
+  return path.resolve(expanded);
+}
+
 export function resolveExecuTorchRuntimeConfig(
   rawConfig: ExecuTorchPluginConfig,
 ): ResolvedExecuTorchRuntimeConfig {
@@ -38,25 +52,32 @@ export function resolveExecuTorchRuntimeConfig(
   const modelPlugin = resolvedModelPlugin.plugin;
 
   const backend = resolveBackend(rawConfig.backend, modelPlugin, warnings);
-  const runtimeLibraryPath =
+  const runtimeFromConfigOrEnv =
     rawConfig.runtimeLibraryPath?.trim() ||
     process.env.OPENCLAW_EXECUTORCH_RUNTIME_LIBRARY?.trim() ||
-    path.join(
-      os.homedir(),
-      ".openclaw/lib",
-      modelPlugin.runtimeLibraryFileNameForPlatform(os.platform()),
-    );
+    "";
+  const runtimeLibraryPath = runtimeFromConfigOrEnv
+    ? normalizeExecuTorchPath(runtimeFromConfigOrEnv)!
+    : path.join(
+        os.homedir(),
+        ".openclaw/lib",
+        modelPlugin.runtimeLibraryFileNameForPlatform(os.platform()),
+      );
 
-  const modelRoot =
-    process.env.OPENCLAW_EXECUTORCH_MODEL_ROOT?.trim() ||
-    path.join(os.homedir(), ".openclaw/models", modelPlugin.modelRootDirName);
+  const modelRootEnv = process.env.OPENCLAW_EXECUTORCH_MODEL_ROOT?.trim() || "";
+  const modelRoot = modelRootEnv
+    ? normalizeExecuTorchPath(modelRootEnv)!
+    : path.join(os.homedir(), ".openclaw/models", modelPlugin.modelRootDirName);
   const modelDir =
-    rawConfig.modelDir?.trim() || path.join(modelRoot, modelPlugin.defaultModelDirName);
+    normalizeExecuTorchPath(rawConfig.modelDir?.trim()) ??
+    path.join(modelRoot, modelPlugin.defaultModelDirName);
   const modelPath =
-    rawConfig.modelPath?.trim() || path.join(modelDir, modelPlugin.defaultModelFileName);
+    normalizeExecuTorchPath(rawConfig.modelPath?.trim()) ??
+    path.join(modelDir, modelPlugin.defaultModelFileName);
   const tokenizerPath =
-    rawConfig.tokenizerPath?.trim() || path.join(modelDir, modelPlugin.defaultTokenizerFileName);
-  const dataPath = rawConfig.dataPath?.trim() || undefined;
+    normalizeExecuTorchPath(rawConfig.tokenizerPath?.trim()) ??
+    path.join(modelDir, modelPlugin.defaultTokenizerFileName);
+  const dataPath = normalizeExecuTorchPath(rawConfig.dataPath) ?? undefined;
 
   return {
     modelPlugin,

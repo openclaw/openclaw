@@ -5,6 +5,7 @@ import type { PluginLogger } from "openclaw/plugin-sdk/executorch";
 import type { ExecuTorchModelPlugin } from "./models/types.js";
 import type { RunnerBackend } from "./native-addon.js";
 import { RunnerManager } from "./runner-manager.js";
+import { normalizeExecuTorchPath } from "./runtime-config.js";
 import { ensureRuntimeLibraryLoadable } from "./runtime-library.js";
 
 export type ExecuTorchCliOptions = {
@@ -130,7 +131,8 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
     .option("--model-dir <dir>", "Target directory for model files", defaultModelDir)
     .action(async (opts: { modelDir: string; backend: string }) => {
       const { logger } = options;
-      const targetDir = opts.modelDir;
+      const targetDir =
+        normalizeExecuTorchPath(opts.modelDir) ?? path.resolve(opts.modelDir.trim());
       const backend = opts.backend.trim() as RunnerBackend;
       if (!options.modelPlugin.supportedBackends.includes(backend)) {
         logger.error(
