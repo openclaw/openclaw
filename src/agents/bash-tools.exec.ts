@@ -103,6 +103,15 @@ function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
 }
 
+function isEnvExecutableToken(token: string | undefined): boolean {
+  if (!token) {
+    return false;
+  }
+  const base = token.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+  const normalizedBase = base.endsWith(".exe") ? base.slice(0, -4) : base;
+  return normalizedBase === "env";
+}
+
 function stripPreflightEnvPrefix(argv: string[]): string[] {
   if (argv.length === 0) {
     return argv;
@@ -111,7 +120,7 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
   while (idx < argv.length && isShellEnvAssignmentToken(argv[idx])) {
     idx += 1;
   }
-  if ((argv[idx] ?? "").toLowerCase() !== "env") {
+  if (!isEnvExecutableToken(argv[idx])) {
     return argv;
   }
   idx += 1;
@@ -521,38 +530,134 @@ function shouldFailClosedInterpreterPreflight(command: string): {
         hasProcessSubstitution: false,
         hasScriptHint: false,
       };
+  const splitShellSegmentsOutsideQuotes = (
+    rawText: string,
+    params: { splitPipes: boolean },
+  ): string[] => {
+    const segments: string[] = [];
+    let buf = "";
+    let inSingle = false;
+    let inDouble = false;
+    let escaped = false;
+
+    const pushSegment = () => {
+      if (buf.trim().length > 0) {
+        segments.push(buf);
+      }
+      buf = "";
+    };
+
+    for (let i = 0; i < rawText.length; i += 1) {
+      const ch = rawText[i];
+      const next = rawText[i + 1];
+
+      if (escaped) {
+        buf += ch;
+        escaped = false;
+        continue;
+      }
+
+      if (!inSingle && ch === "\\") {
+        buf += ch;
+        escaped = true;
+        continue;
+      }
+
+      if (inSingle) {
+        buf += ch;
+        if (ch === "'") {
+          inSingle = false;
+        }
+        continue;
+      }
+
+      if (inDouble) {
+        buf += ch;
+        if (ch === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+
+      if (ch === "'") {
+        inSingle = true;
+        buf += ch;
+        continue;
+      }
+
+      if (ch === '"') {
+        inDouble = true;
+        buf += ch;
+        continue;
+      }
+
+      if (ch === "\n" || ch === "\r") {
+        pushSegment();
+        continue;
+      }
+      if (ch === ";") {
+        pushSegment();
+        continue;
+      }
+      if (ch === "&" && next === "&") {
+        pushSegment();
+        i += 1;
+        continue;
+      }
+      if (ch === "|" && next === "|") {
+        pushSegment();
+        i += 1;
+        continue;
+      }
+      if (params.splitPipes && ch === "|") {
+        pushSegment();
+        continue;
+      }
+
+      buf += ch;
+    }
+    pushSegment();
+    return segments;
+  };
+  const hasInterpreterInvocationInSegment = (rawSegment: string): boolean => {
+    const segment = extractUnquotedShellText(rawSegment) ?? rawSegment;
+    return /(?:^\s*|\b(?:if|then|do|elif|else|while|until|time)\s+)\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+      segment,
+    );
+  };
+  const hasScriptHintInSegment = (segment: string): boolean =>
+    /(?:^|[\s()<>])(?:"[^"\n\r`|&;()<>]*\.(?:py|js)"|'[^'\n\r`|&;()<>]*\.(?:py|js)'|[^"'`\s|&;()<>]+\.(?:py|js))(?=$|[\s()<>])/i.test(
+      segment,
+    );
   const hasInterpreterAndScriptHintInSameSegment = (rawText: string): boolean => {
-    const segments = rawText.split(/(?<!\\)\|\||(?<!\\)&&|(?<!\\)[|;\n\r]/u);
+    const segments = splitShellSegmentsOutsideQuotes(rawText, { splitPipes: true });
     return segments.some((segment) => {
-      const hasInterpreterInvocationInSegment =
-        /(?:^|\b(?:if|then|do|elif|else|while|until|time)\s+)\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
-          segment,
-        );
-      if (!hasInterpreterInvocationInSegment) {
+      if (!hasInterpreterInvocationInSegment(segment)) {
         return false;
       }
-      return /(?:^|[\s()<>])[^"'`\s|&;()<>]+\.(?:py|js)(?=$|[\s()<>])/i.test(segment);
+      return hasScriptHintInSegment(segment);
     });
   };
   const hasInterpreterPipelineScriptHintInSameSegment = (rawText: string): boolean => {
-    const commandSegments = rawText.split(/(?<!\\)\|\||(?<!\\)&&|(?<!\\);|\n|\r/u);
+    const commandSegments = splitShellSegmentsOutsideQuotes(rawText, { splitPipes: false });
     return commandSegments.some((segment) => {
       const hasInterpreterPipelineCarrierInSegment =
         /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
-          segment,
+          extractUnquotedShellText(segment) ?? segment,
         );
       if (!hasInterpreterPipelineCarrierInSegment) {
         return false;
       }
-      return /(?:^|[\s()<>])[^"'`\s|&;()<>]+\.(?:py|js)(?=$|[\s()<>])/i.test(segment);
+      return hasScriptHintInSegment(segment);
     });
   };
   const hasInterpreterSegmentScriptHint =
-    hasInterpreterAndScriptHintInSameSegment(unquotedRaw) ||
-    (nestedUnquoted.length > 0 && hasInterpreterAndScriptHintInSameSegment(nestedUnquoted));
+    hasInterpreterAndScriptHintInSameSegment(raw) ||
+    (shellWrappedPayload !== null && hasInterpreterAndScriptHintInSameSegment(shellWrappedPayload));
   const hasInterpreterPipelineScriptHint =
-    hasInterpreterPipelineScriptHintInSameSegment(unquotedRaw) ||
-    (nestedUnquoted.length > 0 && hasInterpreterPipelineScriptHintInSameSegment(nestedUnquoted));
+    hasInterpreterPipelineScriptHintInSameSegment(raw) ||
+    (shellWrappedPayload !== null &&
+      hasInterpreterPipelineScriptHintInSameSegment(shellWrappedPayload));
   const hasShellWrappedInterpreterInvocation =
     (nested.hasPython || nested.hasNode) &&
     (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);

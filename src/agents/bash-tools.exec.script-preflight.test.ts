@@ -89,6 +89,21 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates python scripts when interpreter is prefixed with path-qualified env", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-abs-env-python", {
+          command: "/usr/bin/env python bad.py",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates node scripts when interpreter is prefixed with env", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");
@@ -295,6 +310,38 @@ describeNonWin("exec script preflight", () => {
       await expect(
         tool.execute("call-top-level-control-flow-multiline", {
           command: "if true; then\npython bad.py\nfi",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
+  it("fails closed for shell-wrapped interpreter invocations with quoted script paths", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-quoted-script", {
+          command: `bash -c "python '${path.basename(pyPath)}'"`,
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
+  it("fails closed for top-level control-flow with quoted interpreter script paths", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-top-level-control-flow-quoted-script", {
+          command: 'if true; then python "bad.py"; fi',
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
