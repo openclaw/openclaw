@@ -2,6 +2,7 @@ import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/appr
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
@@ -124,6 +125,9 @@ export class TelegramExecApprovalHandler {
                 cwd: (request as ExecApprovalRequest).request.cwd ?? undefined,
                 host: (request as ExecApprovalRequest).request.host === "node" ? "node" : "gateway",
                 nodeId: (request as ExecApprovalRequest).request.nodeId ?? undefined,
+                allowedDecisions: resolveExecApprovalRequestAllowedDecisions(
+                  (request as ExecApprovalRequest).request,
+                ),
                 expiresAtMs: request.expiresAtMs,
                 nowMs,
               } satisfies ExecApprovalPendingReplyParams);

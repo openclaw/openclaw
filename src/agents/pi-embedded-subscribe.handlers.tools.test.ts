@@ -281,6 +281,46 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
+  it("preserves filtered approval decisions from tool details", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-ask-always",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            command: "npm view diver name version description",
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("allow-always"),
+        channelData: {
+          execApproval: {
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        },
+      }),
+    );
+  });
+
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

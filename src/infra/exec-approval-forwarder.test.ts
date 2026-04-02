@@ -495,6 +495,25 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
+  it("omits allow-always from forwarded fallback text when ask=always", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          ask: "always",
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+    expect(text).toContain("Allow Always is unavailable");
+  });
+
   it.each([
     {
       command: "bash safe\u200B.sh",
