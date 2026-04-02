@@ -395,6 +395,52 @@ function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
   });
 }
 
+function isPinnedDiscordAllowlistPosture(
+  channelId: string,
+  section: Record<string, unknown>,
+): boolean {
+  if (channelId !== "discord") {
+    return false;
+  }
+  if (section.groupPolicy !== "allowlist") {
+    return false;
+  }
+
+  const guilds = section.guilds;
+  const hasGuildTargets = Boolean(
+    guilds && typeof guilds === "object" && Object.keys(guilds).length > 0,
+  );
+  if (!hasGuildTargets) {
+    return false;
+  }
+
+  const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
+  if (dmPolicy === "open") {
+    return false;
+  }
+
+  const dm = section.dm;
+  if (dm && typeof dm === "object") {
+    const dmSection = dm as Record<string, unknown>;
+    const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
+    if (dmLegacyPolicy === "open") {
+      return false;
+    }
+    if (dmSection.enabled === true || dmSection.groupEnabled === true) {
+      return false;
+    }
+  }
+
+  for (const key of ["groups", "channels", "rooms"]) {
+    const value = section[key];
+    if (value && typeof value === "object" && Object.keys(value).length > 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
   const out = new Set<string>();
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -402,11 +448,19 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     return [];
   }
 
-  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
+  const inspectSection = (
+    channelId: string,
+    section: Record<string, unknown>,
+    basePath: string,
+  ) => {
     const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
     if (groupPolicy === "open") {
       out.add(`${basePath}.groupPolicy="open"`);
-    } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
+    } else if (
+      groupPolicy === "allowlist" &&
+      hasConfiguredGroupTargets(section) &&
+      !isPinnedDiscordAllowlistPosture(channelId, section)
+    ) {
       out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
     }
 
@@ -444,7 +498,7 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
       continue;
     }
     const section = value as Record<string, unknown>;
-    inspectSection(section, `channels.${channelId}`);
+    inspectSection(channelId, section, `channels.${channelId}`);
     const accounts = section.accounts;
     if (!accounts || typeof accounts !== "object") {
       continue;
@@ -454,6 +508,7 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
         continue;
       }
       inspectSection(
+        channelId,
         accountValue as Record<string, unknown>,
         `channels.${channelId}.accounts.${accountId}`,
       );

@@ -3792,7 +3792,7 @@ description: test skill
         },
       },
       {
-        name: "warns when config heuristics suggest a likely multi-user setup",
+        name: "does not warn for the sanctioned pinned Discord allowlist posture",
         cfg: {
           channels: {
             discord: {
@@ -3804,6 +3804,32 @@ description: test skill
                   },
                 },
               },
+              dmPolicy: "disabled",
+              dm: {
+                policy: "disabled",
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expectNoFinding(res, "security.trust_model.multi_user_heuristic");
+        },
+      },
+      {
+        name: "warns when Discord allowlist posture still exposes broader ingress",
+        cfg: {
+          channels: {
+            discord: {
+              groupPolicy: "allowlist",
+              guilds: {
+                "1234567890": {
+                  channels: {
+                    "7777777777": { allow: true },
+                  },
+                },
+              },
+              dmPolicy: "open",
             },
           },
           tools: { elevated: { enabled: false } },
@@ -3813,9 +3839,7 @@ description: test skill
             (f) => f.checkId === "security.trust_model.multi_user_heuristic",
           );
           expect(finding?.severity).toBe("warn");
-          expect(finding?.detail).toContain(
-            'channels.discord.groupPolicy="allowlist" with configured group targets',
-          );
+          expect(finding?.detail).toContain('channels.discord.dmPolicy="open"');
           expect(finding?.detail).toContain("personal-assistant");
           expect(finding?.remediation).toContain('agents.defaults.sandbox.mode="all"');
         },
