@@ -35,6 +35,19 @@ describe("parseBooleanValue", () => {
     ).toBe(true);
   });
 
+  it("handles case-insensitive custom truthy/falsy lists", () => {
+    expect(
+      parseBooleanValue("yes", {
+        truthy: ["YES"],
+      }),
+    ).toBe(true);
+    expect(
+      parseBooleanValue("NO", {
+        falsy: ["no"],
+      }),
+    ).toBe(false);
+  });
+
   it("returns undefined for unsupported values", () => {
     expect(parseBooleanValue("")).toBeUndefined();
     expect(parseBooleanValue("maybe")).toBeUndefined();
