@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
   buildPluginStatusReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
-  listFlowRecords: vi.fn<() => unknown[]>(() => []),
+  listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
 }));
 
@@ -32,8 +32,8 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/flow-runtime-internal.js", () => ({
-  listFlowRecords: () => mocks.listFlowRecords(),
+vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
+  listTaskFlowRecords: () => mocks.listTaskFlowRecords(),
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => ({
@@ -58,7 +58,7 @@ async function runNoteWorkspaceStatusForTest(
     ...loadResult,
   });
   mocks.buildPluginCompatibilityWarnings.mockReturnValue(compatibilityWarnings);
-  mocks.listFlowRecords.mockReturnValue(opts?.flows ?? []);
+  mocks.listTaskFlowRecords.mockReturnValue(opts?.flows ?? []);
   mocks.listTasksForFlowId.mockImplementation((flowId: string) =>
     opts?.tasksByFlowId ? opts.tasksByFlowId(flowId) : [],
   );

@@ -1,25 +1,25 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  findLatestFlowForOwner,
-  getFlowByIdForOwner,
-  listFlowsForOwner,
-  resolveFlowForLookupTokenForOwner,
-} from "../../tasks/flow-owner-access.js";
-import type { FlowRecord, JsonValue } from "../../tasks/flow-registry.types.js";
-import {
-  createManagedFlow,
-  failFlow,
-  finishFlow,
-  type FlowUpdateResult,
-  requestFlowCancel,
-  resumeFlow,
-  setFlowWaiting,
-} from "../../tasks/flow-runtime-internal.js";
-import {
   cancelFlowByIdForOwner,
   getFlowTaskSummary,
   runTaskInFlowForOwner,
 } from "../../tasks/task-executor.js";
+import {
+  findLatestTaskFlowForOwner,
+  getTaskFlowByIdForOwner,
+  listTaskFlowsForOwner,
+  resolveTaskFlowForLookupTokenForOwner,
+} from "../../tasks/task-flow-owner-access.js";
+import type { TaskFlowRecord, JsonValue } from "../../tasks/task-flow-registry.types.js";
+import {
+  createManagedTaskFlow,
+  failFlow,
+  finishFlow,
+  type TaskFlowUpdateResult,
+  requestFlowCancel,
+  resumeFlow,
+  setFlowWaiting,
+} from "../../tasks/task-flow-runtime-internal.js";
 import type {
   TaskDeliveryStatus,
   TaskDeliveryState,
@@ -31,7 +31,7 @@ import type {
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { OpenClawPluginToolContext } from "../types.js";
 
-export type ManagedTaskFlowRecord = FlowRecord & {
+export type ManagedTaskFlowRecord = TaskFlowRecord & {
   syncMode: "managed";
   controllerId: string;
 };
@@ -46,7 +46,7 @@ export type ManagedTaskFlowMutationResult =
   | {
       applied: false;
       code: ManagedTaskFlowMutationErrorCode;
-      current?: FlowRecord;
+      current?: TaskFlowRecord;
     };
 
 export type BoundTaskFlowTaskRunResult =
@@ -59,7 +59,7 @@ export type BoundTaskFlowTaskRunResult =
       created: false;
       reason: string;
       found: boolean;
-      flow?: FlowRecord;
+      flow?: TaskFlowRecord;
     };
 
 export type BoundTaskFlowCancelResult = Awaited<ReturnType<typeof cancelFlowByIdForOwner>>;
@@ -80,10 +80,10 @@ export type BoundTaskFlowRuntime = {
     updatedAt?: number;
     endedAt?: number | null;
   }) => ManagedTaskFlowRecord;
-  get: (flowId: string) => FlowRecord | undefined;
-  list: () => FlowRecord[];
-  findLatest: () => FlowRecord | undefined;
-  resolve: (token: string) => FlowRecord | undefined;
+  get: (flowId: string) => TaskFlowRecord | undefined;
+  list: () => TaskFlowRecord[];
+  findLatest: () => TaskFlowRecord | undefined;
+  resolve: (token: string) => TaskFlowRecord | undefined;
   getTaskSummary: (flowId: string) => TaskRegistrySummary | undefined;
   setWaiting: (params: {
     flowId: string;
@@ -163,7 +163,9 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
   return normalized;
 }
 
-function asManagedTaskFlowRecord(flow: FlowRecord | undefined): ManagedTaskFlowRecord | undefined {
+function asManagedTaskFlowRecord(
+  flow: TaskFlowRecord | undefined,
+): ManagedTaskFlowRecord | undefined {
   if (!flow || flow.syncMode !== "managed" || !flow.controllerId) {
     return undefined;
   }
@@ -175,8 +177,8 @@ function resolveManagedFlowForOwner(params: {
   ownerKey: string;
 }):
   | { ok: true; flow: ManagedTaskFlowRecord }
-  | { ok: false; code: "not_found" | "not_managed"; current?: FlowRecord } {
-  const flow = getFlowByIdForOwner({
+  | { ok: false; code: "not_found" | "not_managed"; current?: TaskFlowRecord } {
+  const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.ownerKey,
   });
@@ -190,7 +192,7 @@ function resolveManagedFlowForOwner(params: {
   return { ok: true, flow: managed };
 }
 
-function mapFlowUpdateResult(result: FlowUpdateResult): ManagedTaskFlowMutationResult {
+function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutationResult {
   if (result.applied) {
     const managed = asManagedTaskFlowRecord(result.flow);
     if (!managed) {
@@ -228,7 +230,7 @@ function createBoundTaskFlowRuntime(params: {
     sessionKey: ownerKey,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     createManaged: (input) =>
-      createManagedFlow({
+      createManagedTaskFlow({
         ownerKey,
         controllerId: input.controllerId,
         requesterOrigin,
@@ -244,25 +246,25 @@ function createBoundTaskFlowRuntime(params: {
         endedAt: input.endedAt,
       }) as ManagedTaskFlowRecord,
     get: (flowId) =>
-      getFlowByIdForOwner({
+      getTaskFlowByIdForOwner({
         flowId,
         callerOwnerKey: ownerKey,
       }),
     list: () =>
-      listFlowsForOwner({
+      listTaskFlowsForOwner({
         callerOwnerKey: ownerKey,
       }),
     findLatest: () =>
-      findLatestFlowForOwner({
+      findLatestTaskFlowForOwner({
         callerOwnerKey: ownerKey,
       }),
     resolve: (token) =>
-      resolveFlowForLookupTokenForOwner({
+      resolveTaskFlowForLookupTokenForOwner({
         token,
         callerOwnerKey: ownerKey,
       }),
     getTaskSummary: (flowId) => {
-      const flow = getFlowByIdForOwner({
+      const flow = getTaskFlowByIdForOwner({
         flowId,
         callerOwnerKey: ownerKey,
       });
