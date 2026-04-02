@@ -1,3 +1,4 @@
+export { resolveAckReaction } from "../agents/identity.js";
 export {
   removeAckReactionAfterReply,
   shouldAckReaction,
