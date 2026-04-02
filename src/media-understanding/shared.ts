@@ -1,6 +1,7 @@
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveProviderRequestAttributionHeaders } from "../agents/provider-attribution.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 const MAX_ERROR_CHARS = 300;
@@ -8,6 +9,33 @@ const MAX_ERROR_CHARS = 300;
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
   const raw = baseUrl?.trim() || fallback;
   return raw.replace(/\/+$/, "");
+}
+
+export function applyProviderRequestHeaders(params: {
+  headers?: HeadersInit;
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+  capability?: "audio" | "image" | "video" | "other";
+  transport?: "http" | "media-understanding";
+}): Headers {
+  const headers = new Headers(params.headers);
+  const attributionHeaders = resolveProviderRequestAttributionHeaders({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: params.capability ?? "other",
+    transport: params.transport ?? "http",
+  });
+  if (!attributionHeaders) {
+    return headers;
+  }
+  for (const [key, value] of Object.entries(attributionHeaders)) {
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
+  }
+  return headers;
 }
 
 export async function fetchWithTimeoutGuarded(
