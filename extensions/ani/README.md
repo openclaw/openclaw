@@ -1,156 +1,144 @@
-# ANI OpenClaw Plugin
+# @openclaw/ani
 
-OpenClaw channel plugin for Agent-Native IM (ANI), a messaging platform built for human and AI bot collaboration.
+ANI channel plugin for OpenClaw.
 
-## Features
+This plugin connects OpenClaw to Agent-Native IM (ANI) so that ANI direct chats and group chats behave like a normal OpenClaw channel:
 
-- **Bidirectional messaging** -- receive messages via WebSocket, send replies immediately via REST API (not buffered)
-- **Tools**: `ani_send_file`, `ani_fetch_chat_history_messages`, `ani_list_conversation_tasks`, `ani_get_task`, `ani_create_task`, `ani_update_task`, `ani_delete_task`
-- **Streaming progress** -- long-running tasks show real-time status in chat via status layers with typing indicators
-- **Artifact rendering** -- `<artifact>` tags in model output sent as structured content (HTML, code, mermaid)
-- **File handling** -- send/receive images, documents, audio, video, archives (up to 32 MB); small text files inlined for AI, protected binary files downloaded with ANI auth and saved to local media paths
-- **Multi-bot collaboration** -- group conversations with multiple bots, @mention routing, conversation context injection
-- **Message revoke listener** -- detects `message.revoked` events and aborts in-flight delivery for that message
-- **Stream cancel abort** -- `stream.cancel` / `task.cancel` events abort the active agent dispatch via AbortController
-- **Reactions** -- ack-reaction on message receipt (configurable via `messages.ackReaction`)
-- **Interactive cards** -- approval/selection UI via ANI's interaction layer
-- **Slash/control commands** -- `/approve`, `/exec`, and other OpenClaw text commands are routed through native command sessions instead of normal chat prompting
-- **Message chunking** -- long replies split at markdown boundaries (configurable limit)
-- **Auto-reconnecting WebSocket** -- ping/pong keepalive with exponential backoff
-- **Retry with exponential backoff** -- REST calls retry on transient failures (502/503/504) with jitter
-- **Config hot reload** -- changes under `channels.ani` auto-detected; most take effect without restart
-- **Multi-agent routing** -- route specific conversations to dedicated OpenClaw agents with separate workspaces
+- inbound ANI messages enter ordinary OpenClaw sessions
+- final replies are delivered back into the same ANI conversation
+- protected ANI attachments remain authenticated resources
+- OpenClaw text control commands such as `/approve`, `/exec`, and `/status` work from ANI chats
 
-## Recommended Install
-
-Install ANI through the installer package:
+## Install (local checkout)
 
 ```bash
-npx -y openclaw-ani-installer install
+openclaw plugins install ./extensions/ani
 ```
 
-Update an existing installation:
-
-```bash
-npx -y openclaw-ani-installer update
-```
-
-Run a health check:
-
-```bash
-npx -y openclaw-ani-installer doctor
-```
-
-This is the recommended path for end users. Older OpenClaw releases can have compatibility issues when installing third-party scoped npm plugins directly.
-
-## Advanced Install Paths
-
-### Option A: Install from npm
+## Install (npm)
 
 ```bash
 openclaw plugins install @openclaw/ani
 ```
 
-Use this only if your OpenClaw version already supports direct third-party npm plugin installs.
+Onboarding: select Agent-Native IM and confirm the install prompt to fetch the plugin automatically.
 
-### Option B: Install from local extension
+## Requirements
 
-```bash
-# From the OpenClaw repo with extensions/ani/ present
-openclaw plugins install ./extensions/ani
+- A reachable ANI server exposing the standard ANI REST and WebSocket APIs
+- A permanent ANI API key with the `aim_` prefix
+- A recent OpenClaw build compatible with the plugin SDK subpaths used by this plugin
+
+## Config
+
+Minimal config:
+
+```json5
+{
+  channels: {
+    ani: {
+      enabled: true,
+      serverUrl: "https://your-ani-server.example.com",
+      apiKey: "aim_your_api_key",
+    },
+  },
+}
 ```
 
-### Configure
+Recommended tool allowlist if you want ANI task/file/history features:
 
 ```bash
-# 1. Set ANI server and API key (create a Bot in ANI Web to get the key)
-openclaw config set channels.ani.serverUrl "https://your-ani-server.example.com"
-openclaw config set channels.ani.apiKey "aim_your_api_key"
-
-# 2. Enable the tools
-openclaw config set tools.alsoAllow '["ani_send_file","ani_fetch_chat_history_messages","ani_list_conversation_tasks","ani_get_task","ani_create_task","ani_update_task","ani_delete_task"]' --strict-json
-
-# 3. Check the gateway status
-openclaw gateway status
+openclaw config set tools.alsoAllow '[
+  "ani_send_file",
+  "ani_fetch_chat_history_messages",
+  "ani_list_conversation_tasks",
+  "ani_get_task",
+  "ani_create_task",
+  "ani_update_task",
+  "ani_delete_task"
+]' --strict-json
 ```
 
-If ANI does not appear online after updating the config, reconnect or restart the OpenClaw gateway.
+Config reference:
 
-## Configuration
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Enable or disable the ANI channel |
+| `name` | string | none | Optional display name shown in status output |
+| `serverUrl` | string | none | ANI server base URL without trailing slash |
+| `apiKey` | string | none | Permanent ANI API key with `aim_` prefix |
+| `entityId` | number | auto-detected | Legacy numeric override; usually leave unset |
+| `textChunkLimit` | number | `4000` | Maximum characters per outbound text chunk |
+| `dm.policy` | `"open" \| "disabled"` | `"open"` | Whether ANI direct messages are accepted |
 
-All settings live under `channels.ani` in your OpenClaw config.
+Restart or reconnect the gateway after config changes if ANI does not come online immediately.
 
-| Field            | Type    | Required | Default       | Description                                                          |
-| ---------------- | ------- | -------- | ------------- | -------------------------------------------------------------------- |
-| `serverUrl`      | string  | yes      | --            | ANI server base URL (no trailing slash)                              |
-| `apiKey`         | string  | yes      | --            | Permanent API key (`aim_` prefix). Legacy `aimb_` keys are rejected. |
-| `entityId`       | number  | no       | auto-detected | Legacy numeric override. Usually leave empty.                        |
-| `enabled`        | boolean | no       | `true`        | Enable/disable the channel                                           |
-| `textChunkLimit` | number  | no       | `4000`        | Max chars per outbound message chunk                                 |
-| `dm.policy`      | string  | no       | `"open"`      | DM routing: `"open"` or `"disabled"`                                 |
-| `name`           | string  | no       | --            | Display name for status output                                       |
+## What It Supports
 
-## How It Works
+- inbound ANI delivery over WebSocket
+- outbound replies over ANI REST APIs
+- direct and group conversation routing
+- reply-to context preservation
+- protected attachment download and authenticated upload
+- long reply chunking at markdown-friendly boundaries
+- `<artifact>` rendering for HTML, code, and Mermaid content
+- ANI task tools
+- multi-agent routing via standard OpenClaw bindings
+- native slash/control command routing for ANI chats
 
-**Inbound (ANI -> OpenClaw):** WebSocket connection to `/api/v1/ws`. On `message.new`, fetches conversation context (title, participants, memories), formats an agent envelope, dispatches through the reply pipeline. Revoked messages and cancelled streams are detected and aborted in-flight.
+## Routing Model
 
-Control commands such as `/approve ...` and `/exec ...` are treated specially:
+### Ordinary conversation traffic
 
-- they bypass ANI's inbound debounce logic
-- they are routed through a synthetic `ani:slash` session instead of the normal conversation transcript session
-- the target conversation session remains attached as the command target so approvals and session-scoped command state apply to the correct ANI conversation
-- execution commands still obey OpenClaw's host approval / allowlist policy; ANI only ensures the slash command reaches the native command session correctly
+ANI group and direct messages are routed into ordinary OpenClaw sessions based on ANI conversation identity.
 
-**Outbound (OpenClaw -> ANI):** REST API `POST /api/v1/messages/send`. Parses `<artifact>` tags into structured content. Plain text chunked at markdown boundaries. Files uploaded via multipart then sent as attachments.
+### Slash / control commands
 
-**Authentication:** On startup, calls `GET /api/v1/me` to verify the API key and auto-discover bot identity. Only permanent keys (`aim_`) are accepted.
+ANI control commands such as `/approve`, `/exec`, and `/status` are not treated as ordinary chat text. They:
 
-## Task Roadmap Tools
+- bypass ANI's inbound debounce logic
+- route through a synthetic `ani:slash:<senderId>` command session
+- retain the original ANI conversation session as `CommandTargetSessionKey`
+- execute through OpenClaw's native command system
 
-The ANI plugin can now read and mutate the current conversation task roadmap through dedicated tools:
+This gives ANI the same high-level control-command behavior expected from mature OpenClaw channels.
 
+Important boundary:
+
+- ANI routes the command correctly
+- OpenClaw still decides whether the command is allowed
+- `/exec` still obeys OpenClaw host approval, allowlist, and security policy
+
+If you want `/exec` to run without interactive prompts, configure OpenClaw approvals and exec policy accordingly.
+
+## Attachments
+
+ANI attachments are treated as conversation-scoped protected resources.
+
+Behavior:
+
+- small text files may be inlined for the model
+- binary/media files are downloaded with ANI authentication
+- local saved media paths are attached to the inbound OpenClaw context
+- outbound uploads are bound to the current ANI conversation
+
+Attachment understanding still depends on the selected model/runtime. Transport support does not guarantee image, audio, video, or document understanding.
+
+## ANI Tools
+
+- `ani_send_file`
+- `ani_fetch_chat_history_messages`
 - `ani_list_conversation_tasks`
 - `ani_get_task`
 - `ani_create_task`
 - `ani_update_task`
 - `ani_delete_task`
 
-These tools reuse ANI's backend permissions:
-
-- the bot must be a member of the conversation
-- create/list/get require conversation participation
-- update/delete still follow ANI's existing creator / assignee / admin rules
-
-Planned but not implemented yet:
-
-- approval workflow for task mutations in group chats
-- member-submitted task edits entering a pending-review queue for group admins
-
-## Attachment Behavior
-
-This plugin now follows ANI's protected attachment model:
-
-- conversation files stay as protected ANI resources
-- the plugin downloads them with ANI auth
-- binary/media files are saved locally and passed via `MediaPath` / `MediaPaths`
-- small text files may be inlined into the model prompt
-- the plugin should not expose naked protected `/files/...` URLs to the agent as if they were public downloads
-
-Practical implication:
-
-- transport can succeed even if the model cannot truly understand the file contents
-- image/audio/video understanding still depends on the selected model/runtime
-- PDF / office docs are transport-supported, but parser experience is still incomplete
-
-Current support levels:
-
-- text files: most reliable, small files may be inlined for the model
-- images / audio / video: transport works, understanding still depends on the selected model/runtime
-- PDF / Office documents: transport works, parser experience is still incomplete
-
-If you need a fuller attachment capability breakdown, document it in your ANI deployment docs rather than relying on private local paths.
+These tools operate against the current ANI conversation and reuse ANI's own permissions. The plugin does not define a separate task authorization model.
 
 ## Multi-Agent Routing
+
+ANI works with standard OpenClaw bindings. Example:
 
 ```yaml
 agents:
@@ -166,25 +154,80 @@ bindings:
       channel: ani
       peer:
         kind: channel
-        id: "2920436443328762" # ANI conversation ID
+        id: "2920436443328762"
 ```
 
-Find conversation IDs in: ANI web URL bar, gateway logs (`ani: inbound conv=<id>`), or the bot's system prompt.
+You can obtain ANI conversation ids from ANI web URLs, gateway logs such as `ani: inbound conv=<id>`, or ANI bot/system prompt context.
 
-## Limitations
+## Limits
 
-- **Single account** -- one ANI account per OpenClaw instance
-- **No threads** -- ANI uses a flat conversation model
-- **No polls** -- not supported by ANI
-- **Model-dependent multimodality** -- successful attachment delivery does not guarantee image/audio/video understanding
-
-## Development
-
-```bash
-# From OpenClaw repo root
-npx vitest run --config vitest.extensions.config.ts extensions/ani/
-```
+- one ANI account per OpenClaw instance
+- ANI uses a flat conversation model, not native subthreads
+- no poll support
+- attachment comprehension remains model-dependent
 
 ## Validation
 
+Validation matrix:
+
 - [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md)
+
+Local validation from the OpenClaw repo root:
+
+```bash
+pnpm test:extension ani
+pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
+```
+
+## Troubleshooting
+
+### ANI does not come online
+
+Check:
+
+- `channels.ani.serverUrl`
+- `channels.ani.apiKey`
+- `openclaw plugins inspect ani`
+- `openclaw status`
+
+The plugin authenticates by calling `GET /api/v1/me` on startup. Legacy `aimb_` keys are not supported.
+
+### Final replies or command results do not appear
+
+Check:
+
+- ANI channel connectivity in gateway logs
+- that the ANI conversation still exists and the bot is a participant
+- OpenClaw exec approvals if the task uses `/exec`
+- plugin health with `openclaw plugins inspect ani`
+
+### Control commands reach the chat but still request approval
+
+That usually means ANI routing is working, but OpenClaw host exec policy is still blocking the underlying command. Review:
+
+- `openclaw approvals get --json`
+- your allowlist entries
+- the session's `/exec ...` policy
+
+### Final replies do not return
+
+Check:
+
+- gateway logs for ANI reconnect / send failures
+- ANI conversation membership and bot permissions
+- whether the final reply was generated locally but failed during outbound delivery
+
+### Attachments upload but cannot be downloaded
+
+Check whether uploaded files were bound to the correct ANI conversation. Outbound ANI uploads should include the target `conversation_id`.
+
+## Development Notes
+
+ANI follows the same general OpenClaw channel principles used by mature channels such as Telegram, Discord, Signal, and Feishu:
+
+- channel-owned reply delivery
+- session-aware command routing
+- explicit command/auth boundaries
+- testable behavior for inbound, outbound, and control paths
+
+The goal is to keep ANI aligned with standard OpenClaw channel patterns rather than inventing private routing behavior.
