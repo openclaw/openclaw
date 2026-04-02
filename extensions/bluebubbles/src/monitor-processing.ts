@@ -44,6 +44,7 @@ import {
   createChannelPairingController,
   createChannelReplyPipeline,
   evictOldHistoryKeys,
+  evaluateSupplementalContextVisibility,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
@@ -51,6 +52,7 @@ import {
   readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   resolveAckReaction,
+  resolveChannelContextVisibilityMode,
   resolveDmGroupAccessWithLists,
   resolveControlCommandGate,
   stripMarkdown,
@@ -844,6 +846,11 @@ export async function processMessage(
     chatGuid,
     chatIdentifier,
   });
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: config,
+    channel: "bluebubbles",
+    accountId: account.accountId,
+  });
 
   // Mention gating for group chats (parity with iMessage/WhatsApp)
   const messageText = text;
@@ -1048,11 +1055,45 @@ export async function processMessage(
   if (replyToId && !replyToShortId) {
     replyToShortId = getShortIdForUuid(replyToId);
   }
+  const hasReplyContext = Boolean(replyToId || replyToBody || replyToSender);
+  const replySenderAllowed =
+    !isGroup || effectiveGroupAllowFrom.length === 0
+      ? true
+      : replyToSender
+        ? isAllowedBlueBubblesSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender: replyToSender,
+            chatId: message.chatId ?? undefined,
+            chatGuid: message.chatGuid ?? undefined,
+            chatIdentifier: message.chatIdentifier ?? undefined,
+          })
+        : false;
+  const includeReplyContext =
+    !hasReplyContext ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: replySenderAllowed,
+    }).include;
+  if (hasReplyContext && !includeReplyContext && isGroup) {
+    logVerbose(
+      core,
+      runtime,
+      `bluebubbles: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
+    );
+  }
+  const visibleReplyToId = includeReplyContext ? replyToId : undefined;
+  const visibleReplyToShortId = includeReplyContext ? replyToShortId : undefined;
+  const visibleReplyToBody = includeReplyContext ? replyToBody : undefined;
+  const visibleReplyToSender = includeReplyContext ? replyToSender : undefined;
 
   // Use inline [[reply_to:N]] tag format
   // For tapbacks/reactions: append at end (e.g., "reacted with ❤️ [[reply_to:4]]")
   // For regular replies: prepend at start (e.g., "[[reply_to:4]] Awesome")
-  const replyTag = formatReplyTag({ replyToId, replyToShortId });
+  const replyTag = formatReplyTag({
+    replyToId: visibleReplyToId,
+    replyToShortId: visibleReplyToShortId,
+  });
   const baseBody = replyTag
     ? isTapbackMessage
       ? `${rawBody} ${replyTag}`
@@ -1345,10 +1386,10 @@ export async function processMessage(
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
     // Use short ID for token savings (agent can use this to reference the message)
-    ReplyToId: replyToShortId || replyToId,
-    ReplyToIdFull: replyToId,
-    ReplyToBody: replyToBody,
-    ReplyToSender: replyToSender,
+    ReplyToId: visibleReplyToShortId || visibleReplyToId,
+    ReplyToIdFull: visibleReplyToId,
+    ReplyToBody: visibleReplyToBody,
+    ReplyToSender: visibleReplyToSender,
     GroupSubject: groupSubject,
     GroupMembers: groupMembers,
     SenderName: message.senderName || undefined,

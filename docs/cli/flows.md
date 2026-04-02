@@ -1,43 +1,18 @@
 ---
-summary: "CLI reference for `openclaw flows` commands"
+summary: "Redirect: flow commands live under `openclaw tasks flow`"
 read_when:
-  - You want to list, inspect, or cancel TaskFlow flows from the CLI
-  - You encounter openclaw flows in release notes or docs
-title: "flows"
+  - You encounter openclaw flows in older docs or release notes
+title: "flows (redirect)"
 ---
 
-# `openclaw flows`
+# `openclaw tasks flow`
 
-Inspect and manage [TaskFlow](/automation/taskflow) flows from the command line.
-
-## Commands
-
-### `flows list`
+Flow commands are subcommands of `openclaw tasks`, not a standalone `flows` command.
 
 ```bash
-openclaw flows list [--json]
+openclaw tasks flow list [--json]
+openclaw tasks flow show <lookup>
+openclaw tasks flow cancel <lookup>
 ```
 
-List active and recent flows with status and sync mode.
-
-### `flows show`
-
-```bash
-openclaw flows show <lookup>
-```
-
-Show details for a specific flow by flow id or lookup key, including state, revision history, and associated tasks.
-
-### `flows cancel`
-
-```bash
-openclaw flows cancel <lookup>
-```
-
-Cancel a running flow and its active tasks.
-
-## Related
-
-- [TaskFlow](/automation/taskflow) — flow orchestration overview
-- [Background Tasks](/automation/tasks) — the detached work ledger
-- [CLI reference](/cli/index) — full command tree
+For full documentation see [Task Flow](/automation/taskflow) and the [tasks CLI reference](/cli/index#tasks).
