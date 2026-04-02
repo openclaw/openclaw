@@ -28,6 +28,11 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   return normalizeExecHost(normalized);
 }
 
+/** Coerce a raw JSON field to string, returning undefined for non-string types. */
+function toStringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
@@ -291,6 +296,17 @@ function stripAllowlistCommandText(
   return changed ? next : allowlist;
 }
 
+function sanitizeExecApprovalPolicy(
+  policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
+): ExecApprovalsDefaults {
+  return {
+    security: normalizeExecSecurity(toStringOrUndefined(policy?.security)) ?? undefined,
+    ask: normalizeExecAsk(toStringOrUndefined(policy?.ask)) ?? undefined,
+    askFallback: normalizeExecSecurity(toStringOrUndefined(policy?.askFallback)) ?? undefined,
+    autoAllowSkills: policy?.autoAllowSkills,
+  };
+}
+
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
@@ -305,10 +321,23 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     const coerced = coerceAllowlistEntries(agent.allowlist);
     const withIds = ensureAllowlistIds(coerced);
     const allowlist = stripAllowlistCommandText(withIds);
-    if (allowlist !== agent.allowlist) {
-      agents[key] = { ...agent, allowlist };
+    const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
+    const agentChanged =
+      allowlist !== agent.allowlist ||
+      sanitizedPolicy.security !== agent.security ||
+      sanitizedPolicy.ask !== agent.ask ||
+      sanitizedPolicy.askFallback !== agent.askFallback;
+    if (agentChanged) {
+      agents[key] = {
+        ...agent,
+        allowlist,
+        security: sanitizedPolicy.security,
+        ask: sanitizedPolicy.ask,
+        askFallback: sanitizedPolicy.askFallback,
+      };
     }
   }
+  const sanitizedDefaults = sanitizeExecApprovalPolicy(file.defaults);
   const normalized: ExecApprovalsFile = {
     version: 1,
     socket: {
@@ -316,10 +345,7 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       token: token && token.length > 0 ? token : undefined,
     },
     defaults: {
-      security: file.defaults?.security,
-      ask: file.defaults?.ask,
-      askFallback: file.defaults?.askFallback,
-      autoAllowSkills: file.defaults?.autoAllowSkills,
+      ...sanitizedDefaults,
     },
     agents,
   };
