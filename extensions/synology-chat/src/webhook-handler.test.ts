@@ -213,6 +213,26 @@ describe("createWebhookHandler", () => {
     expect(res._status).toBe(401);
   });
 
+  it("does not pre-auth lock valid tokens when rateLimitPerMinute is zero", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "zero-invalid-token-budget-" + Date.now(),
+        rateLimitPerMinute: 0,
+      }),
+      deliver,
+      log,
+    });
+
+    const validReq = makeReq("POST", validBody);
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.30";
+    const validRes = makeRes();
+    await handler(validReq, validRes);
+
+    expect(validRes._status).toBe(204);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("locks invalid-token guesses when the configured budget is exhausted", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({
