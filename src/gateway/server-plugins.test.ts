@@ -306,6 +306,38 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
+  test("re-derives auto-enable reasons when only activationSourceConfig is provided", async () => {
+    const rawConfig = { channels: { slack: { enabled: true } } };
+    const resolvedConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
+    applyPluginAutoEnable.mockReturnValue({
+      config: resolvedConfig,
+      changes: [],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
+    });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest({
+      cfg: resolvedConfig,
+      activationSourceConfig: rawConfig,
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: {
+          slack: ["slack configured"],
+        },
+      }),
+    );
+  });
+
   test("provides subagent runtime with sessions.get method aliases", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayPluginsForTest();

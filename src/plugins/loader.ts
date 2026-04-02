@@ -548,6 +548,15 @@ function markPluginActivationDisabled(record: PluginRecord, reason?: string): vo
   record.activationReason = reason;
 }
 
+function formatAutoEnabledActivationReason(
+  reasons: readonly string[] | undefined,
+): string | undefined {
+  if (!reasons || reasons.length === 0) {
+    return undefined;
+  }
+  return reasons.join("; ");
+}
+
 function recordPluginError(params: {
   logger: PluginLogger;
   registry: PluginRegistry;
@@ -1068,7 +1077,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       enabledByDefault: manifestRecord.enabledByDefault,
       sourceConfig: activationSourceNormalized,
       sourceRootConfig: activationSourceConfig,
-      autoEnabledReason: autoEnabledReasons[pluginId]?.[0],
+      autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {
@@ -1585,7 +1594,7 @@ export async function loadOpenClawPluginCliRegistry(
       enabledByDefault: manifestRecord.enabledByDefault,
       sourceConfig: activationSourceNormalized,
       sourceRootConfig: activationSourceConfig,
-      autoEnabledReason: autoEnabledReasons[pluginId]?.[0],
+      autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {

@@ -1097,6 +1097,47 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("preserves all auto-enable reasons in activation metadata", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        enabled: true,
+      },
+    } satisfies PluginLoadConfig;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        ...rawConfig,
+        plugins: {
+          enabled: true,
+          entries: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: {
+        telegram: ["telegram configured", "telegram selected for startup"],
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured; telegram selected for startup",
+    });
+  });
+
   it("keeps explicit plugin enablement distinct from derived activation", () => {
     const { bundledDir } = writeBundledPlugin({
       id: "demo",
