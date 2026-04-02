@@ -146,6 +146,7 @@ export function resolveSession(opts: {
     sessionCfg,
     resetType,
     resetOverride: channelReset,
+    userTimezone: opts.cfg.agents?.defaults?.userTimezone,
   });
   const fresh = sessionEntry
     ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })

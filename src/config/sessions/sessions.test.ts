@@ -21,7 +21,11 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import {
+  evaluateSessionFreshness,
+  resolveDailyResetAtMs,
+  resolveSessionResetPolicy,
+} from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -175,6 +179,157 @@ describe("resolveSessionResetPolicy", () => {
       dailyResetAt: undefined,
       idleExpiresAt: undefined,
     });
+  });
+});
+
+describe("resolveDailyResetAtMs with timezone", () => {
+  it("computes reset boundary in the specified timezone", () => {
+    // 2026-04-02T03:30:00Z = 2026-04-02T11:30 in Asia/Shanghai (UTC+8)
+    const now = Date.parse("2026-04-02T03:30:00Z");
+    // atHour=4 in Asia/Shanghai: today's 4AM Shanghai = 2026-04-01T20:00Z
+    const resetAt = resolveDailyResetAtMs(now, 4, "Asia/Shanghai");
+    expect(resetAt).toBe(Date.parse("2026-04-01T20:00:00Z"));
+  });
+
+  it("uses yesterday when atHour has not occurred yet today in the timezone", () => {
+    // 2026-04-02T19:30:00Z = 2026-04-03T03:30 in Asia/Shanghai
+    // atHour=4 hasn't happened yet today (3:30 < 4:00)
+    const now = Date.parse("2026-04-02T19:30:00Z");
+    const resetAt = resolveDailyResetAtMs(now, 4, "Asia/Shanghai");
+    // Yesterday's 4:00 Shanghai = 2026-04-01T20:00Z
+    expect(resetAt).toBe(Date.parse("2026-04-01T20:00:00Z"));
+  });
+
+  it("falls back to server-local time when no timezone is provided", () => {
+    const now = Date.now();
+    const withoutTz = resolveDailyResetAtMs(now, 4);
+    const withUndefined = resolveDailyResetAtMs(now, 4, undefined);
+    expect(withoutTz).toBe(withUndefined);
+  });
+});
+
+describe("resolveSessionResetPolicy: timezone and idleGuard", () => {
+  it("picks up timezone from reset config", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {
+        reset: { timezone: "America/New_York" },
+      } as unknown as SessionConfig,
+      resetType: "direct",
+    });
+    expect(policy.timezone).toBe("America/New_York");
+  });
+
+  it("falls back to userTimezone when reset config has no timezone", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {} as unknown as SessionConfig,
+      resetType: "direct",
+      userTimezone: "Europe/London",
+    });
+    expect(policy.timezone).toBe("Europe/London");
+  });
+
+  it("prefers reset config timezone over userTimezone", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {
+        reset: { timezone: "Asia/Tokyo" },
+      } as unknown as SessionConfig,
+      resetType: "direct",
+      userTimezone: "Europe/London",
+    });
+    expect(policy.timezone).toBe("Asia/Tokyo");
+  });
+
+  it("resolves idleGuard from reset config", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {
+        reset: { mode: "daily", idleMinutes: 60, idleGuard: true },
+      } as unknown as SessionConfig,
+      resetType: "direct",
+    });
+    expect(policy.idleGuard).toBe(true);
+    expect(policy.idleMinutes).toBe(60);
+  });
+
+  it("defaults idleGuard to false", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {} as unknown as SessionConfig,
+      resetType: "direct",
+    });
+    expect(policy.idleGuard).toBe(false);
+  });
+});
+
+describe("evaluateSessionFreshness: idleGuard AND logic", () => {
+  it("resets only when BOTH daily and idle conditions are met (idleGuard=true)", () => {
+    const policy = {
+      mode: "daily" as const,
+      atHour: 4,
+      idleMinutes: 60,
+      idleGuard: true,
+    };
+    // Session updated at 3:00 AM, now is 5:00 AM (daily boundary crossed)
+    // Idle is 2 hours = 120 min > 60 min → both conditions met → stale
+    const updated = Date.parse("2026-04-02T03:00:00");
+    const now = Date.parse("2026-04-02T05:00:00");
+    const result = evaluateSessionFreshness({ updatedAt: updated, now, policy });
+    expect(result.fresh).toBe(false);
+  });
+
+  it("stays fresh when daily crossed but idle NOT exceeded (idleGuard=true)", () => {
+    const policy = {
+      mode: "daily" as const,
+      atHour: 4,
+      idleMinutes: 60,
+      idleGuard: true,
+    };
+    // Session updated at 3:50 AM, now is 4:10 AM → daily crossed, but only 20 min idle
+    const updated = Date.parse("2026-04-02T03:50:00");
+    const now = Date.parse("2026-04-02T04:10:00");
+    const result = evaluateSessionFreshness({ updatedAt: updated, now, policy });
+    expect(result.fresh).toBe(true);
+  });
+
+  it("stays fresh when idle exceeded but daily NOT crossed (idleGuard=true)", () => {
+    const policy = {
+      mode: "daily" as const,
+      atHour: 4,
+      idleMinutes: 60,
+      idleGuard: true,
+    };
+    // Session updated at 1:00 AM, now is 3:00 AM → idle 2h > 60min, but daily (4AM) not crossed
+    const updated = Date.parse("2026-04-02T01:00:00");
+    const now = Date.parse("2026-04-02T03:00:00");
+    const result = evaluateSessionFreshness({ updatedAt: updated, now, policy });
+    expect(result.fresh).toBe(true);
+  });
+
+  it("uses OR logic when idleGuard is false (default behavior)", () => {
+    const policy = {
+      mode: "daily" as const,
+      atHour: 4,
+      idleMinutes: 60,
+      idleGuard: false,
+    };
+    // Session updated at 3:50 AM, now is 5:10 AM → daily crossed, idle 80 min
+    const updated = Date.parse("2026-04-02T03:50:00");
+    const now = Date.parse("2026-04-02T05:10:00");
+    const result = evaluateSessionFreshness({ updatedAt: updated, now, policy });
+    expect(result.fresh).toBe(false);
+  });
+
+  it("uses OR logic when idleGuard is undefined", () => {
+    const policy = {
+      mode: "daily" as const,
+      atHour: 4,
+      idleMinutes: 60,
+    };
+    // Daily crossed alone should trigger reset
+    const updated = Date.parse("2026-04-02T03:50:00");
+    const now = Date.parse("2026-04-02T04:10:00");
+    const result = evaluateSessionFreshness({ updatedAt: updated, now, policy });
+    // Daily is crossed (updatedAt 3:50 < daily boundary 4:00), idle only 20 min < 60 min
+    // With OR: daily alone makes it stale
+    expect(result.fresh).toBe(false);
   });
 });
 

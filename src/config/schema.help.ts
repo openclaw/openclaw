@@ -1188,6 +1188,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets local-hour boundary (0-23) for daily reset mode so sessions roll over at predictable times. Use with mode=daily and align to operator timezone expectations for human-readable behavior.",
   "session.reset.idleMinutes":
     "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
+  "session.reset.timezone":
+    'IANA timezone string (e.g. "Asia/Shanghai", "America/New_York") for interpreting the atHour boundary. When omitted, the host machine\'s local timezone is used. Set this when the user is in a different timezone than the server.',
+  "session.reset.idleGuard":
+    "When true and mode is daily, the idleMinutes window acts as an AND guard: the session resets only when BOTH the daily boundary has passed AND the user has been idle for at least idleMinutes. Default false preserves the legacy OR behavior where either condition alone triggers a reset.",
   "session.resetByType":
     "Overrides reset behavior by chat type (direct, group, thread) when defaults are not sufficient. Use this when group/thread traffic needs different reset cadence than direct messages.",
   "session.resetByType.direct":
