@@ -1,14 +1,21 @@
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import {
+  comparableChannelTargetsShareRoute,
+  parseExplicitTargetForChannel,
+  resolveComparableTargetForChannel,
+} from "../../channels/plugins/target-parsing.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
-import { parseDiscordTarget } from "../../discord/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { parseTelegramTarget, resolveTelegramTargetChatType } from "../../telegram/targets.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
@@ -18,7 +25,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
@@ -61,6 +67,22 @@ export type SessionDeliveryTarget = {
   lastThreadId?: string | number;
 };
 
+function parseExplicitTargetWithPlugin(params: {
+  channel?: DeliverableMessageChannel;
+  fallbackChannel?: DeliverableMessageChannel;
+  raw?: string;
+}) {
+  const raw = params.raw?.trim();
+  if (!raw) {
+    return null;
+  }
+  const provider = params.channel ?? params.fallbackChannel;
+  if (!provider) {
+    return null;
+  }
+  return parseExplicitTargetForChannel(provider, raw);
+}
+
 export function resolveSessionDeliveryTarget(params: {
   entry?: SessionEntry;
   requestedChannel?: GatewayMessageChannel | "last";
@@ -92,14 +114,46 @@ export function resolveSessionDeliveryTarget(params: {
   const context = deliveryContextFromSession(params.entry);
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
+  const parsedSessionTarget = sessionLastChannel
+    ? resolveComparableTargetForChannel({
+        channel: sessionLastChannel,
+        rawTarget: context?.to,
+        fallbackThreadId: context?.threadId,
+      })
+    : null;
 
   // When a turn-source channel is provided, use only turn-scoped metadata.
   // Falling back to mutable session fields would re-introduce routing races.
   const hasTurnSourceChannel = params.turnSourceChannel != null;
+  const parsedTurnSourceTarget =
+    hasTurnSourceChannel && params.turnSourceChannel
+      ? resolveComparableTargetForChannel({
+          channel: params.turnSourceChannel,
+          rawTarget: params.turnSourceTo,
+          fallbackThreadId: params.turnSourceThreadId,
+        })
+      : null;
+  const hasTurnSourceThreadId = parsedTurnSourceTarget?.threadId != null;
   const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
   const lastTo = hasTurnSourceChannel ? params.turnSourceTo : context?.to;
   const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
-  const lastThreadId = hasTurnSourceChannel ? params.turnSourceThreadId : context?.threadId;
+  // Fall back to the session's stored threadId only when the turn-source channel AND destination
+  // match the session context. This avoids mixing a turn-scoped `to` with a stale session-scoped
+  // threadId from a different chat/topic in shared-session scenarios.
+  const turnToMatchesSession =
+    !params.turnSourceTo ||
+    !context?.to ||
+    (params.turnSourceChannel === sessionLastChannel &&
+      comparableChannelTargetsShareRoute({
+        left: parsedTurnSourceTarget,
+        right: parsedSessionTarget,
+      }));
+  const lastThreadId = hasTurnSourceThreadId
+    ? parsedTurnSourceTarget?.threadId
+    : hasTurnSourceChannel &&
+        (params.turnSourceChannel !== sessionLastChannel || !turnToMatchesSession)
+      ? undefined
+      : parsedSessionTarget?.threadId;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
@@ -120,22 +174,19 @@ export function resolveSessionDeliveryTarget(params: {
     channel = params.fallbackChannel;
   }
 
-  // Parse :topic:NNN from explicitTo (Telegram topic syntax).
-  // Only applies when we positively know the channel is Telegram.
-  // When channel is unknown, the downstream send path (resolveTelegramSession)
-  // handles :topic: parsing independently.
-  const isTelegramContext = channel === "telegram" || (!channel && lastChannel === "telegram");
   let explicitTo = rawExplicitTo;
-  let parsedThreadId: number | undefined;
-  if (isTelegramContext && rawExplicitTo && rawExplicitTo.includes(":topic:")) {
-    const parsed = parseTelegramTarget(rawExplicitTo);
-    explicitTo = parsed.chatId;
-    parsedThreadId = parsed.messageThreadId;
+  const parsedExplicitTarget = parseExplicitTargetWithPlugin({
+    channel,
+    fallbackChannel: !channel ? lastChannel : undefined,
+    raw: rawExplicitTo,
+  });
+  if (parsedExplicitTarget?.to) {
+    explicitTo = parsedExplicitTarget.to;
   }
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""
       ? params.explicitThreadId
-      : parsedThreadId;
+      : parsedExplicitTarget?.threadId;
 
   let to = explicitTo;
   if (!to && lastTo) {
@@ -149,7 +200,13 @@ export function resolveSessionDeliveryTarget(params: {
   const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");
   const accountId = channel && channel === lastChannel ? lastAccountId : undefined;
   const threadId =
-    mode !== "heartbeat" && channel && channel === lastChannel ? lastThreadId : undefined;
+    channel && channel === lastChannel
+      ? mode === "heartbeat"
+        ? hasTurnSourceThreadId
+          ? params.turnSourceThreadId
+          : undefined
+        : lastThreadId
+      : undefined;
 
   const resolvedThreadId = explicitThreadId ?? threadId;
   return {
@@ -203,7 +260,7 @@ export function resolveOutboundTarget(params: {
           accountId: params.accountId ?? undefined,
         })
       : undefined);
-  const allowFrom = allowFromRaw?.map((entry) => String(entry));
+  const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
 
   // Fall back to per-channel defaultTo when no explicit target is provided.
   const effectiveTo =
@@ -240,6 +297,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -263,11 +321,28 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  const resolvedTurnSource =
+    target === "last"
+      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      : undefined;
+
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
     mode: "heartbeat",
+    turnSourceChannel:
+      resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
+        ? resolvedTurnSource.channel
+        : undefined,
+    turnSourceTo: resolvedTurnSource?.to,
+    turnSourceAccountId: resolvedTurnSource?.accountId,
+    // Only pass threadId from an explicit turn source (e.g., restart sentinel's
+    // delivery context). Do NOT fall back to session-stored threadId here —
+    // heartbeat mode intentionally drops inherited thread IDs to avoid replying
+    // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
+    // carries the correct topic/thread ID when present.
+    turnSourceThreadId: params.turnSource?.threadId,
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -383,70 +458,6 @@ function buildNoHeartbeatDeliveryTarget(params: {
   };
 }
 
-function inferDiscordTargetChatType(to: string): ChatType | undefined {
-  try {
-    const target = parseDiscordTarget(to, { defaultKind: "channel" });
-    if (!target) {
-      return undefined;
-    }
-    return target.kind === "user" ? "direct" : "channel";
-  } catch {
-    return undefined;
-  }
-}
-
-function inferSlackTargetChatType(to: string): ChatType | undefined {
-  const target = parseSlackTarget(to, { defaultKind: "channel" });
-  if (!target) {
-    return undefined;
-  }
-  return target.kind === "user" ? "direct" : "channel";
-}
-
-function inferTelegramTargetChatType(to: string): ChatType | undefined {
-  const chatType = resolveTelegramTargetChatType(to);
-  return chatType === "unknown" ? undefined : chatType;
-}
-
-function inferWhatsAppTargetChatType(to: string): ChatType | undefined {
-  const normalized = normalizeWhatsAppTarget(to);
-  if (!normalized) {
-    return undefined;
-  }
-  return isWhatsAppGroupJid(normalized) ? "group" : "direct";
-}
-
-function inferSignalTargetChatType(rawTo: string): ChatType | undefined {
-  let to = rawTo.trim();
-  if (!to) {
-    return undefined;
-  }
-  if (/^signal:/i.test(to)) {
-    to = to.replace(/^signal:/i, "").trim();
-  }
-  if (!to) {
-    return undefined;
-  }
-  const lower = to.toLowerCase();
-  if (lower.startsWith("group:")) {
-    return "group";
-  }
-  if (lower.startsWith("username:") || lower.startsWith("u:")) {
-    return "direct";
-  }
-  return "direct";
-}
-
-const HEARTBEAT_TARGET_CHAT_TYPE_INFERERS: Partial<
-  Record<DeliverableMessageChannel, (to: string) => ChatType | undefined>
-> = {
-  discord: inferDiscordTargetChatType,
-  slack: inferSlackTargetChatType,
-  telegram: inferTelegramTargetChatType,
-  whatsapp: inferWhatsAppTargetChatType,
-  signal: inferSignalTargetChatType,
-};
-
 function inferChatTypeFromTarget(params: {
   channel: DeliverableMessageChannel;
   to: string;
@@ -465,7 +476,11 @@ function inferChatTypeFromTarget(params: {
   if (/^group:/i.test(to)) {
     return "group";
   }
-  return HEARTBEAT_TARGET_CHAT_TYPE_INFERERS[params.channel]?.(to);
+  return (
+    resolveOutboundChannelPlugin({
+      channel: params.channel,
+    })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
+  );
 }
 
 function resolveHeartbeatDeliveryChatType(params: {
@@ -496,9 +511,7 @@ function resolveHeartbeatSenderId(params: {
     provider && lastTo ? `${provider}:${lastTo}` : undefined,
   ].filter((val): val is string => Boolean(val?.trim()));
 
-  const allowList = allowFrom
-    .map((entry) => String(entry))
-    .filter((entry) => entry && entry !== "*");
+  const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
     return candidates[0] ?? "heartbeat";
   }
@@ -536,7 +549,7 @@ export function resolveHeartbeatSenderContext(params: {
         accountId,
       }) ?? [])
     : [];
-  const allowFrom = allowFromRaw.map((entry) => String(entry));
+  const allowFrom = mapAllowFromEntries(allowFromRaw);
 
   const sender = resolveHeartbeatSenderId({
     allowFrom,

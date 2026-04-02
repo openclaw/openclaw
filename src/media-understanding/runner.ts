@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -44,7 +44,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
-} from "./providers/index.js";
+} from "./provider-registry.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -75,8 +75,9 @@ export type RunCapabilityResult = {
 
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
+  cfg?: OpenClawConfig,
 ): ProviderRegistry {
-  return buildMediaUnderstandingRegistry(overrides);
+  return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
 export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
@@ -362,12 +363,16 @@ async function resolveKeyEntry(params: {
     if (capability === "video" && !provider.describeVideo) {
       return null;
     }
-    try {
-      await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
-      return { type: "provider" as const, provider: providerId, model };
-    } catch {
+    if (
+      !(await hasAvailableAuthForProvider({
+        provider: providerId,
+        cfg,
+        agentDir,
+      }))
+    ) {
       return null;
     }
+    return { type: "provider" as const, provider: providerId, model };
   };
 
   if (capability === "image") {
@@ -489,7 +494,7 @@ export async function resolveAutoImageModel(params: {
   agentDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry();
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;
@@ -553,13 +558,12 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  try {
-    await resolveApiKeyForProvider({
-      provider: providerId,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    });
-  } catch {
+  const hasAuth = await hasAvailableAuthForProvider({
+    provider: providerId,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
+  if (!hasAuth) {
     return null;
   }
   return {

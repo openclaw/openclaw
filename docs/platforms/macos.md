@@ -31,6 +31,8 @@ capabilities to the agent as a node.
   a local process.
   The app starts the local **node host service** so the remote Gateway can reach this Mac.
   The app does not spawn the Gateway as a child process.
+  Gateway discovery now prefers Tailscale MagicDNS names over raw tailnet IPs,
+  so the Mac app recovers more reliably when tailnet IPs change.
 
 ## Launchd control
 
@@ -142,6 +144,25 @@ Safety:
 2. Complete the permissions checklist (TCC prompts).
 3. Ensure **Local** mode is active and the Gateway is running.
 4. Install the CLI if you want terminal access.
+
+## State dir placement (macOS)
+
+Avoid putting your OpenClaw state dir in iCloud or other cloud-synced folders.
+Sync-backed paths can add latency and occasionally cause file-lock/sync races for
+sessions and credentials.
+
+Prefer a local non-synced state path such as:
+
+```bash
+OPENCLAW_STATE_DIR=~/.openclaw
+```
+
+If `openclaw doctor` detects state under:
+
+- `~/Library/Mobile Documents/com~apple~CloudDocs/...`
+- `~/Library/CloudStorage/...`
+
+it will warn and recommend moving back to a local path.
 
 ## Build & dev workflow (native)
 

@@ -12,7 +12,7 @@ OpenClaw can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
 streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
 not an API key.
 
-## What pi‑ai supports
+## What pi-ai supports
 
 - Provider: `amazon-bedrock`
 - API: `bedrock-converse-stream`
@@ -174,3 +174,44 @@ openclaw models list
   current capabilities.
 - If you prefer a managed key flow, you can also place an OpenAI‑compatible
   proxy in front of Bedrock and configure it as an OpenAI provider instead.
+
+## Guardrails
+
+You can apply [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html)
+to all Bedrock model invocations by adding a `guardrail` object to the
+`amazon-bedrock` plugin config. Guardrails let you enforce content filtering,
+topic denial, word filters, sensitive information filters, and contextual
+grounding checks.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "amazon-bedrock": {
+        config: {
+          guardrail: {
+            guardrailIdentifier: "abc123", // guardrail ID or full ARN
+            guardrailVersion: "1", // version number or "DRAFT"
+            streamProcessingMode: "sync", // optional: "sync" or "async"
+            trace: "enabled", // optional: "enabled", "disabled", or "enabled_full"
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+- `guardrailIdentifier` (required) accepts a guardrail ID (e.g. `abc123`) or a
+  full ARN (e.g. `arn:aws:bedrock:us-east-1:123456789012:guardrail/abc123`).
+- `guardrailVersion` (required) specifies which published version to use, or
+  `"DRAFT"` for the working draft.
+- `streamProcessingMode` (optional) controls whether guardrail evaluation runs
+  synchronously (`"sync"`) or asynchronously (`"async"`) during streaming. If
+  omitted, Bedrock uses its default behavior.
+- `trace` (optional) enables guardrail trace output in the API response. Set to
+  `"enabled"` or `"enabled_full"` for debugging; omit or set `"disabled"` for
+  production.
+
+The IAM principal used by the gateway must have the `bedrock:ApplyGuardrail`
+permission in addition to the standard invoke permissions.

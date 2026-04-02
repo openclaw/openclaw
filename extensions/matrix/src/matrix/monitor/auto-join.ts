@@ -1,15 +1,14 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { AutojoinRoomsMixin } from "@vector-im/matrix-bot-sdk";
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig } from "../../types.js";
+import type { MatrixConfig } from "../../types.js";
+import type { MatrixClient } from "../sdk.js";
+import type { RuntimeEnv } from "./runtime-api.js";
 
 export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
-  cfg: CoreConfig;
+  accountConfig: Pick<MatrixConfig, "autoJoin" | "autoJoinAllowlist">;
   runtime: RuntimeEnv;
 }) {
-  const { client, cfg, runtime } = params;
+  const { client, accountConfig, runtime } = params;
   const core = getMatrixRuntime();
   const logVerbose = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
@@ -17,48 +16,63 @@ export function registerMatrixAutoJoin(params: {
     }
     runtime.log?.(message);
   };
-  const autoJoin = cfg.channels?.matrix?.autoJoin ?? "always";
-  const autoJoinAllowlist = cfg.channels?.matrix?.autoJoinAllowlist ?? [];
+  const autoJoin = accountConfig.autoJoin ?? "off";
+  const rawAllowlist = (accountConfig.autoJoinAllowlist ?? [])
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
+  const autoJoinAllowlist = new Set(rawAllowlist);
+  const allowedRoomIds = new Set(rawAllowlist.filter((entry) => entry.startsWith("!")));
+  const allowedAliases = rawAllowlist.filter((entry) => entry.startsWith("#"));
+  const resolvedAliasRoomIds = new Map<string, string>();
 
   if (autoJoin === "off") {
     return;
   }
 
   if (autoJoin === "always") {
-    // Use the built-in autojoin mixin for "always" mode
-    AutojoinRoomsMixin.setupOnClient(client);
     logVerbose("matrix: auto-join enabled for all invites");
-    return;
+  } else {
+    logVerbose("matrix: auto-join enabled for allowlist invites");
   }
 
-  // For "allowlist" mode, handle invites manually
+  const resolveAllowedAliasRoomId = async (alias: string): Promise<string | null> => {
+    if (resolvedAliasRoomIds.has(alias)) {
+      return resolvedAliasRoomIds.get(alias) ?? null;
+    }
+    const resolved = await params.client.resolveRoom(alias);
+    if (resolved) {
+      resolvedAliasRoomIds.set(alias, resolved);
+    }
+    return resolved;
+  };
+
+  const resolveAllowedAliasRoomIds = async (): Promise<string[]> => {
+    const resolved = await Promise.all(
+      allowedAliases.map(async (alias) => {
+        try {
+          return await resolveAllowedAliasRoomId(alias);
+        } catch (err) {
+          runtime.error?.(`matrix: failed resolving allowlisted alias ${alias}: ${String(err)}`);
+          return null;
+        }
+      }),
+    );
+    return resolved.filter((roomId): roomId is string => Boolean(roomId));
+  };
+
+  // Handle invites directly so both "always" and "allowlist" modes share the same path.
   client.on("room.invite", async (roomId: string, _inviteEvent: unknown) => {
-    if (autoJoin !== "allowlist") {
-      return;
-    }
+    if (autoJoin === "allowlist") {
+      const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
+      const allowed =
+        autoJoinAllowlist.has("*") ||
+        allowedRoomIds.has(roomId) ||
+        allowedAliasRoomIds.some((resolvedRoomId) => resolvedRoomId === roomId);
 
-    // Get room alias if available
-    let alias: string | undefined;
-    let altAliases: string[] = [];
-    try {
-      const aliasState = await client
-        .getRoomStateEvent(roomId, "m.room.canonical_alias", "")
-        .catch(() => null);
-      alias = aliasState?.alias;
-      altAliases = Array.isArray(aliasState?.alt_aliases) ? aliasState.alt_aliases : [];
-    } catch {
-      // Ignore errors
-    }
-
-    const allowed =
-      autoJoinAllowlist.includes("*") ||
-      autoJoinAllowlist.includes(roomId) ||
-      (alias ? autoJoinAllowlist.includes(alias) : false) ||
-      altAliases.some((value) => autoJoinAllowlist.includes(value));
-
-    if (!allowed) {
-      logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
-      return;
+      if (!allowed) {
+        logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
+        return;
+      }
     }
 
     try {

@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { printCronList } from "./shared.js";
+import { getCronChannelOptions, printCronList } from "./shared.js";
+
+const hoisted = vi.hoisted(() => ({
+  listChannelPluginsMock: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  listChannelPlugins: hoisted.listChannelPluginsMock,
+}));
 
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
@@ -31,6 +39,11 @@ function createBaseJob(overrides: Partial<CronJob>): CronJob {
 }
 
 describe("printCronList", () => {
+  beforeEach(() => {
+    hoisted.listChannelPluginsMock.mockReset();
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
+  });
+
   it("handles job with undefined sessionTarget (#9649)", () => {
     const { logs, runtime } = createRuntimeLogCapture();
 
@@ -75,6 +88,83 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
   });
 
+  it("shows dash for unset agentId instead of default", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "no-agent-job",
+      name: "No Agent",
+      agentId: undefined,
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", model: "sonnet" },
+    });
+
+    printCronList([job], runtime);
+    // Header should say "Agent ID" not "Agent"
+    expect(logs[0]).toContain("Agent ID");
+    // Data row should show "-" for missing agentId, not "default"
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).not.toContain("default");
+  });
+
+  it("shows Model column with payload.model for agentTurn jobs", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "model-job",
+      name: "With Model",
+      agentId: "ops",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", model: "sonnet" },
+    });
+
+    printCronList([job], runtime);
+    expect(logs[0]).toContain("Model");
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).toContain("sonnet");
+  });
+
+  it("shows dash in Model column for systemEvent jobs", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "sys-event-job",
+      name: "System Event",
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    printCronList([job], runtime);
+    expect(logs[0]).toContain("Model");
+  });
+
+  it("shows dash in Model column for agentTurn jobs without model override", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "no-model-job",
+      name: "No Model",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime);
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).not.toContain("undefined");
+  });
+
+  it("shows explicit agentId when set", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "agent-set-job",
+      name: "Agent Set",
+      agentId: "ops",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", model: "opus" },
+    });
+
+    printCronList([job], runtime);
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).toContain("ops");
+    expect(dataLine).toContain("opus");
+  });
+
   it("shows exact label for cron schedules with stagger disabled", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -88,5 +178,17 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+  });
+});
+
+describe("getCronChannelOptions", () => {
+  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
+    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+  });
+
+  it("lists discovered channel plugin ids when plugins are available", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
+    expect(getCronChannelOptions()).toBe("last|telegram|signal");
   });
 });

@@ -34,9 +34,21 @@ openclaw daemon uninstall
 
 ## Common options
 
-- `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--deep`, `--json`
+- `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
 - `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
 - lifecycle (`uninstall|start|stop|restart`): `--json`
+
+Notes:
+
+- `status` resolves configured auth SecretRefs for probe auth when possible.
+- If a required auth SecretRef is unresolved in this command path, `daemon status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
+- If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
+- On Linux systemd installs, `status` token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
+- Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
+- If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
+- When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
+- If token auth requires a token and the configured token SecretRef is unresolved, install fails closed.
+- If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
 
 ## Prefer
 

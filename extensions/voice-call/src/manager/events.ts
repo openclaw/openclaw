@@ -2,16 +2,12 @@ import crypto from "node:crypto";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import {
-  clearMaxDurationTimer,
-  rejectTranscriptWaiter,
-  resolveTranscriptWaiter,
-  startMaxDurationTimer,
-} from "./timers.js";
+import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -59,9 +55,10 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
-function createInboundCall(params: {
+function createWebhookCall(params: {
   ctx: EventContext;
   providerCallId: string;
+  direction: "inbound" | "outbound";
   from: string;
   to: string;
 }): CallRecord {
@@ -71,7 +68,7 @@ function createInboundCall(params: {
     callId,
     providerCallId: params.providerCallId,
     provider: params.ctx.provider?.name || "twilio",
-    direction: "inbound",
+    direction: params.direction,
     state: "ringing",
     from: params.from,
     to: params.to,
@@ -79,7 +76,10 @@ function createInboundCall(params: {
     transcript: [],
     processedEventIds: [],
     metadata: {
-      initialMessage: params.ctx.config.inboundGreeting || "Hello! How can I help you today?",
+      initialMessage:
+        params.direction === "inbound"
+          ? params.ctx.config.inboundGreeting || "Hello! How can I help you today?"
+          : undefined,
     },
   };
 
@@ -87,7 +87,9 @@ function createInboundCall(params: {
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
   persistCallRecord(params.ctx.storePath, callRecord);
 
-  console.log(`[voice-call] Created inbound call record: ${callId} from ${params.from}`);
+  console.log(
+    `[voice-call] Created ${params.direction} call record: ${callId} from ${params.from}`,
+  );
   return callRecord;
 }
 
@@ -104,9 +106,18 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     callIdOrProviderCallId: event.callId,
   });
 
-  if (!call && event.direction === "inbound" && event.providerCallId) {
-    if (!shouldAcceptInbound(ctx.config, event.from)) {
-      const pid = event.providerCallId;
+  const providerCallId = event.providerCallId;
+  const eventDirection =
+    event.direction === "inbound" || event.direction === "outbound" ? event.direction : undefined;
+
+  // Auto-register untracked calls arriving via webhook. This covers both
+  // true inbound calls and externally-initiated outbound-api calls (e.g. calls
+  // placed directly via the Twilio REST API pointing at our webhook URL).
+  if (!call && providerCallId && eventDirection) {
+    // Apply inbound policy for true inbound calls; external outbound-api calls
+    // are implicitly trusted because the caller controls the webhook URL.
+    if (eventDirection === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
+      const pid = providerCallId;
       if (!ctx.provider) {
         console.warn(
           `[voice-call] Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, from: ${event.from}); call will time out on provider side.`,
@@ -132,9 +143,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       return;
     }
 
-    call = createInboundCall({
+    call = createWebhookCall({
       ctx,
-      providerCallId: event.providerCallId,
+      providerCallId,
+      direction: eventDirection === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
     });
@@ -177,7 +189,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         ctx,
         callId: call.callId,
         onTimeout: async (callId) => {
-          await endCall(ctx, callId);
+          await endCall(ctx, callId, { reason: "timeout" });
         },
       });
       ctx.onCallAnswered?.(call);
@@ -212,28 +224,24 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
 
     case "call.ended":
-      call.endedAt = event.timestamp;
-      call.endReason = event.reason;
-      transitionState(call, event.reason as CallState);
-      clearMaxDurationTimer(ctx, call.callId);
-      rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${event.reason}`);
-      ctx.activeCalls.delete(call.callId);
-      if (call.providerCallId) {
-        ctx.providerCallIdMap.delete(call.providerCallId);
-      }
-      break;
+      finalizeCall({
+        ctx,
+        call,
+        endReason: event.reason,
+        endedAt: event.timestamp,
+      });
+      return;
 
     case "call.error":
       if (!event.retryable) {
-        call.endedAt = event.timestamp;
-        call.endReason = "error";
-        transitionState(call, "error");
-        clearMaxDurationTimer(ctx, call.callId);
-        rejectTranscriptWaiter(ctx, call.callId, `Call error: ${event.error}`);
-        ctx.activeCalls.delete(call.callId);
-        if (call.providerCallId) {
-          ctx.providerCallIdMap.delete(call.providerCallId);
-        }
+        finalizeCall({
+          ctx,
+          call,
+          endReason: "error",
+          endedAt: event.timestamp,
+          transcriptRejectReason: `Call error: ${event.error}`,
+        });
+        return;
       }
       break;
   }

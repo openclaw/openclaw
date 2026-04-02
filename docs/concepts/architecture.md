@@ -7,8 +7,6 @@ title: "Gateway Architecture"
 
 # Gateway architecture
 
-Last updated: 2026-01-22
-
 ## Overview
 
 - A single long‑lived **Gateway** owns all messaging surfaces (WhatsApp via
@@ -98,6 +96,9 @@ sequenceDiagram
 - **Local** connects (loopback or the gateway host’s own tailnet address) can be
   auto‑approved to keep same‑host UX smooth.
 - All connects must sign the `connect.challenge` nonce.
+- Signature payload `v3` also binds `platform` + `deviceFamily`; the gateway
+  pins paired metadata on reconnect and requires repair pairing for metadata
+  changes.
 - **Non‑local** connects still require explicit approval.
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.
@@ -134,3 +135,10 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 - Exactly one Gateway controls a single Baileys session per host.
 - Handshake is mandatory; any non‑JSON or non‑connect first frame is a hard close.
 - Events are not replayed; clients must refresh on gaps.
+
+## Related
+
+- [Agent Loop](/concepts/agent-loop) — detailed agent execution cycle
+- [Gateway Protocol](/gateway/protocol) — WebSocket protocol contract
+- [Queue](/concepts/queue) — command queue and concurrency
+- [Security](/gateway/security) — trust model and hardening

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedParsedChatSender, isNormalizedSenderAllowed } from "./allow-from.js";
+import {
+  formatAllowFromLowercase,
+  formatNormalizedAllowFromEntries,
+  isAllowedParsedChatSender,
+  isNormalizedSenderAllowed,
+  mapAllowlistResolutionInputs,
+} from "./allow-from.js";
 
 function parseAllowTarget(
   entry: string,
@@ -26,79 +32,132 @@ function parseAllowTarget(
 }
 
 describe("isAllowedParsedChatSender", () => {
-  it("denies when allowFrom is empty", () => {
-    const allowed = isAllowedParsedChatSender({
-      allowFrom: [],
-      sender: "+15551234567",
-      normalizeSender: (sender) => sender,
-      parseAllowTarget,
-    });
-
-    expect(allowed).toBe(false);
-  });
-
-  it("allows wildcard entries", () => {
-    const allowed = isAllowedParsedChatSender({
-      allowFrom: ["*"],
-      sender: "user@example.com",
-      normalizeSender: (sender) => sender.toLowerCase(),
-      parseAllowTarget,
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("matches normalized handles", () => {
-    const allowed = isAllowedParsedChatSender({
-      allowFrom: ["User@Example.com"],
-      sender: "user@example.com",
-      normalizeSender: (sender) => sender.toLowerCase(),
-      parseAllowTarget,
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("matches chat IDs when provided", () => {
-    const allowed = isAllowedParsedChatSender({
-      allowFrom: ["chat_id:42"],
-      sender: "+15551234567",
-      chatId: 42,
-      normalizeSender: (sender) => sender,
-      parseAllowTarget,
-    });
-
-    expect(allowed).toBe(true);
+  it.each([
+    {
+      name: "denies when allowFrom is empty",
+      input: {
+        allowFrom: [],
+        sender: "+15551234567",
+        normalizeSender: (sender: string) => sender,
+        parseAllowTarget,
+      },
+      expected: false,
+    },
+    {
+      name: "allows wildcard entries",
+      input: {
+        allowFrom: ["*"],
+        sender: "user@example.com",
+        normalizeSender: (sender: string) => sender.toLowerCase(),
+        parseAllowTarget,
+      },
+      expected: true,
+    },
+    {
+      name: "matches normalized handles",
+      input: {
+        allowFrom: ["User@Example.com"],
+        sender: "user@example.com",
+        normalizeSender: (sender: string) => sender.toLowerCase(),
+        parseAllowTarget,
+      },
+      expected: true,
+    },
+    {
+      name: "matches chat IDs when provided",
+      input: {
+        allowFrom: ["chat_id:42"],
+        sender: "+15551234567",
+        chatId: 42,
+        normalizeSender: (sender: string) => sender,
+        parseAllowTarget,
+      },
+      expected: true,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(isAllowedParsedChatSender(input)).toBe(expected);
   });
 });
 
 describe("isNormalizedSenderAllowed", () => {
-  it("allows wildcard", () => {
-    expect(
-      isNormalizedSenderAllowed({
+  it.each([
+    {
+      name: "allows wildcard",
+      input: {
         senderId: "attacker",
         allowFrom: ["*"],
-      }),
-    ).toBe(true);
-  });
-
-  it("normalizes case and strips prefixes", () => {
-    expect(
-      isNormalizedSenderAllowed({
+      },
+      expected: true,
+    },
+    {
+      name: "normalizes case and strips prefixes",
+      input: {
         senderId: "12345",
         allowFrom: ["ZALO:12345", "zl:777"],
         stripPrefixRe: /^(zalo|zl):/i,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects when sender is missing", () => {
-    expect(
-      isNormalizedSenderAllowed({
+      },
+      expected: true,
+    },
+    {
+      name: "rejects when sender is missing",
+      input: {
         senderId: "999",
         allowFrom: ["zl:12345"],
         stripPrefixRe: /^(zalo|zl):/i,
+      },
+      expected: false,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(isNormalizedSenderAllowed(input)).toBe(expected);
+  });
+});
+
+describe("formatAllowFromLowercase", () => {
+  it("trims, strips prefixes, and lowercases entries", () => {
+    expect(
+      formatAllowFromLowercase({
+        allowFrom: [" Telegram:UserA ", "tg:UserB", "  "],
+        stripPrefixRe: /^(telegram|tg):/i,
       }),
-    ).toBe(false);
+    ).toEqual(["usera", "userb"]);
+  });
+});
+
+describe("formatNormalizedAllowFromEntries", () => {
+  it.each([
+    {
+      name: "applies custom normalization after trimming",
+      input: {
+        allowFrom: ["  @Alice ", "", " @Bob "],
+        normalizeEntry: (entry: string) => entry.replace(/^@/, "").toLowerCase(),
+      },
+      expected: ["alice", "bob"],
+    },
+    {
+      name: "filters empty normalized entries",
+      input: {
+        allowFrom: ["@", "valid"],
+        normalizeEntry: (entry: string) => entry.replace(/^@$/, ""),
+      },
+      expected: ["valid"],
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(formatNormalizedAllowFromEntries(input)).toEqual(expected);
+  });
+});
+
+describe("mapAllowlistResolutionInputs", () => {
+  it("maps inputs sequentially and preserves order", async () => {
+    const visited: string[] = [];
+    const result = await mapAllowlistResolutionInputs({
+      inputs: ["one", "two", "three"],
+      mapInput: async (input) => {
+        visited.push(input);
+        return input.toUpperCase();
+      },
+    });
+
+    expect(visited).toEqual(["one", "two", "three"]);
+    expect(result).toEqual(["ONE", "TWO", "THREE"]);
   });
 });

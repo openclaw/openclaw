@@ -22,6 +22,56 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type SessionAcpIdentitySource = "ensure" | "status" | "event";
+
+export type SessionAcpIdentityState = "pending" | "resolved";
+
+export type SessionAcpIdentity = {
+  state: SessionAcpIdentityState;
+  acpxRecordId?: string;
+  acpxSessionId?: string;
+  agentSessionId?: string;
+  source: SessionAcpIdentitySource;
+  lastUpdatedAt: number;
+};
+
+export type SessionAcpMeta = {
+  backend: string;
+  agent: string;
+  runtimeSessionName: string;
+  identity?: SessionAcpIdentity;
+  mode: "persistent" | "oneshot";
+  runtimeOptions?: AcpSessionRuntimeOptions;
+  cwd?: string;
+  state: "idle" | "running" | "error";
+  lastActivityAt: number;
+  lastError?: string;
+};
+
+export type AcpSessionRuntimeOptions = {
+  /**
+   * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
+   */
+  runtimeMode?: string;
+  /** ACP runtime config option: model id. */
+  model?: string;
+  /** Working directory override for ACP session turns. */
+  cwd?: string;
+  /** ACP runtime config option: permission profile id. */
+  permissionProfile?: string;
+  /** ACP runtime config option: per-turn timeout in seconds. */
+  timeoutSeconds?: number;
+  /** Backend-specific option bag mapped through session/set_config_option. */
+  backendExtras?: Record<string, string>;
+};
+
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -35,14 +85,39 @@ export type SessionEntry = {
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
+  spawnedWorkspaceDir?: string;
+  /** Explicit parent session linkage for dashboard-created child sessions. */
+  parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
   spawnDepth?: number;
+  /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
+  subagentRole?: "orchestrator" | "leaf";
+  /** Explicit control scope assigned at spawn time for subagent control decisions. */
+  subagentControlScope?: "children" | "none";
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Stable first-run start time for subagent sessions, persisted after completion. */
+  startedAt?: number;
+  /** Latest completed run end time for subagent sessions, persisted after completion. */
+  endedAt?: number;
+  /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
+  runtimeMs?: number;
+  /** Final persisted subagent run status, used after in-memory run archival. */
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  /**
+   * Session-level stop cutoff captured when /stop is received.
+   * Messages at/before this boundary are skipped to avoid replaying
+   * queued pre-stop backlog.
+   */
+  abortCutoffMessageSid?: string;
+  /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
+  abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -80,6 +155,7 @@ export type SessionEntry = {
    * totalTokens as stale/unknown for context-utilization displays.
    */
   totalTokensFresh?: boolean;
+  estimatedCostUsd?: number;
   cacheRead?: number;
   cacheWrite?: number;
   modelProvider?: string;
@@ -95,7 +171,9 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
@@ -112,6 +190,7 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  acp?: SessionAcpMeta;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
@@ -173,12 +252,31 @@ export function setSessionRuntimeModel(
   return true;
 }
 
-export function mergeSessionEntry(
+export type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
+
+type MergeSessionEntryOptions = {
+  policy?: SessionEntryMergePolicy;
+  now?: number;
+};
+
+function resolveMergedUpdatedAt(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
+  options?: MergeSessionEntryOptions,
+): number {
+  if (options?.policy === "preserve-activity" && existing) {
+    return existing.updatedAt ?? patch.updatedAt ?? options.now ?? Date.now();
+  }
+  return Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, options?.now ?? Date.now());
+}
+
+export function mergeSessionEntryWithPolicy(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+  options?: MergeSessionEntryOptions,
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
+  const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
     return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
   }
@@ -194,6 +292,22 @@ export function mergeSessionEntry(
     }
   }
   return normalizeSessionRuntimeModelFields(next);
+}
+
+export function mergeSessionEntry(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+): SessionEntry {
+  return mergeSessionEntryWithPolicy(existing, patch);
+}
+
+export function mergeSessionEntryPreserveActivity(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+): SessionEntry {
+  return mergeSessionEntryWithPolicy(existing, patch, {
+    policy: "preserve-activity",
+  });
 }
 
 export function resolveFreshSessionTotalTokens(
@@ -241,6 +355,15 @@ export type SessionSystemPromptReport = {
   workspaceDir?: string;
   bootstrapMaxChars?: number;
   bootstrapTotalMaxChars?: number;
+  bootstrapTruncation?: {
+    warningMode?: "off" | "once" | "always";
+    warningShown?: boolean;
+    promptWarningSignature?: string;
+    warningSignaturesSeen?: string[];
+    truncatedFiles?: number;
+    nearLimitFiles?: number;
+    totalNearLimit?: boolean;
+  };
   sandbox?: {
     mode?: string;
     sandboxed?: boolean;
@@ -276,4 +399,4 @@ export type SessionSystemPromptReport = {
 
 export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
-export const DEFAULT_IDLE_MINUTES = 60;
+export const DEFAULT_IDLE_MINUTES = 0;

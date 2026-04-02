@@ -26,7 +26,6 @@ function buildMediaLocalRoots(
   return [
     preferredTmpDir,
     path.join(resolvedStateDir, "media"),
-    path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
   ];
@@ -53,4 +52,26 @@ export function getAgentScopedMediaLocalRoots(
     roots.push(normalizedWorkspaceDir);
   }
   return roots;
+}
+
+/**
+ * @deprecated Kept for plugin-sdk compatibility. Media sources no longer widen allowed roots.
+ */
+export function appendLocalMediaParentRoots(
+  roots: readonly string[],
+  _mediaSources?: readonly string[],
+): string[] {
+  return Array.from(new Set(roots.map((root) => path.resolve(root))));
+}
+
+export function getAgentScopedMediaLocalRootsForSources({
+  cfg,
+  agentId,
+  mediaSources: _mediaSources,
+}: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  mediaSources?: readonly string[];
+}): readonly string[] {
+  return getAgentScopedMediaLocalRoots(cfg, agentId);
 }

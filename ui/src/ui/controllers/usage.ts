@@ -1,6 +1,11 @@
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type UsageState = {
   client: GatewayBrowserClient | null;
@@ -39,14 +44,7 @@ const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 let legacyUsageDateParamsCache: Set<string> | null = null;
 
 function getLocalStorage(): Storage | null {
-  // Support browser runtime and node tests (when localStorage is stubbed globally).
-  if (typeof window !== "undefined" && window.localStorage) {
-    return window.localStorage;
-  }
-  if (typeof localStorage !== "undefined") {
-    return localStorage;
-  }
-  return null;
+  return getSafeLocalStorage();
 }
 
 function loadLegacyUsageDateParamsCache(): Set<string> {
@@ -248,7 +246,13 @@ export async function loadUsage(
       }
     }
   } catch (err) {
-    state.usageError = toErrorMessage(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.usageResult = null;
+      state.usageCostSummary = null;
+      state.usageError = formatMissingOperatorReadScopeMessage("usage");
+    } else {
+      state.usageError = toErrorMessage(err);
+    }
   } finally {
     state.usageLoading = false;
   }

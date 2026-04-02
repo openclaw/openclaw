@@ -40,11 +40,11 @@ Use `remindctl` to manage Apple Reminders directly from the terminal.
 
 ❌ **DON'T use this skill when:**
 
-- Scheduling Clawdbot tasks or alerts → use `cron` tool with systemEvent instead
+- Scheduling OpenClaw tasks or alerts → use `cron` tool with systemEvent instead
 - Calendar events or appointments → use Apple Calendar
 - Project/work task management → use Notion, GitHub Issues, or task queue
 - One-time notifications → use `cron` tool for timed alerts
-- User says "remind me" but means a Clawdbot alert → clarify first
+- User says "remind me" but means an OpenClaw alert → clarify first
 
 ## Setup
 
@@ -112,7 +112,7 @@ Accepted by `--due` and date filters:
 
 User: "Remind me to check on the deploy in 2 hours"
 
-**Ask:** "Do you want this in Apple Reminders (syncs to your phone) or as a Clawdbot alert (I'll message you here)?"
+**Ask:** "Do you want this in Apple Reminders (syncs to your phone) or as an OpenClaw alert (I'll message you here)?"
 
 - Apple Reminders → use this skill
-- Clawdbot alert → use `cron` tool with systemEvent
+- OpenClaw alert → use `cron` tool with systemEvent

@@ -1,48 +1,121 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const run = (cwd: string, cmd: string, args: string[] = []) => {
-  return execFileSync(cmd, args, { cwd, encoding: "utf8" }).trim();
+const baseGitEnv = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_TERMINAL_PROMPT: "0",
+};
+const baseRunEnv: NodeJS.ProcessEnv = { ...process.env, ...baseGitEnv };
+
+const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
+  return execFileSync(cmd, args, {
+    cwd,
+    encoding: "utf8",
+    env: env ? { ...baseRunEnv, ...env } : baseRunEnv,
+  }).trim();
 };
 
-describe("git-hooks/pre-commit (integration)", () => {
-  it("does not treat staged filenames as git-add flags (e.g. --all)", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-pre-commit-"));
-    run(dir, "git", ["init", "-q"]);
+function writeExecutable(dir: string, name: string, contents: string): void {
+  writeFileSync(path.join(dir, name), contents, {
+    encoding: "utf8",
+    mode: 0o755,
+  });
+}
 
-    // Copy the hook + helpers so the test exercises real on-disk wiring.
-    await mkdir(path.join(dir, "git-hooks"), { recursive: true });
-    await mkdir(path.join(dir, "scripts", "pre-commit"), { recursive: true });
-    copyFileSync(
+describe("git-hooks/pre-commit (integration)", () => {
+  it("does not treat staged filenames as git-add flags (e.g. --all)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    // Use the real hook script and lightweight helper stubs.
+    mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
+    mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
+    symlinkSync(
       path.join(process.cwd(), "git-hooks", "pre-commit"),
       path.join(dir, "git-hooks", "pre-commit"),
     );
-    copyFileSync(
-      path.join(process.cwd(), "scripts", "pre-commit", "run-node-tool.sh"),
+    writeFileSync(
       path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
+      "#!/usr/bin/env bash\nexit 0\n",
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
     );
-    copyFileSync(
-      path.join(process.cwd(), "scripts", "pre-commit", "filter-staged-files.mjs"),
+    writeFileSync(
       path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
+      "process.exit(0);\n",
+      "utf8",
     );
-    chmodSync(path.join(dir, "git-hooks", "pre-commit"), 0o755);
-    chmodSync(path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"), 0o755);
+    const fakeBinDir = path.join(dir, "bin");
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
+    // The hook ends with `pnpm check`, but this fixture is only exercising staged-file handling.
+    // Stub pnpm too so Windows CI does not invoke a real package-manager command in the temp repo.
+    writeExecutable(fakeBinDir, "pnpm", "#!/usr/bin/env bash\nexit 0\n");
 
     // Create an untracked file that should NOT be staged by the hook.
-    await writeFile(path.join(dir, "secret.txt"), "do-not-stage\n");
+    writeFileSync(path.join(dir, "secret.txt"), "do-not-stage\n", "utf8");
 
     // Stage a maliciously-named file. Older hooks using `xargs git add` could run `git add --all`.
-    await writeFile(path.join(dir, "--all"), "flag\n");
+    writeFileSync(path.join(dir, "--all"), "flag\n", "utf8");
     run(dir, "git", ["add", "--", "--all"]);
 
     // Run the hook directly (same logic as when installed via core.hooksPath).
-    run(dir, "bash", ["git-hooks/pre-commit"]);
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
 
     const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
     expect(staged).toEqual(["--all"]);
+  });
+
+  it("skips pnpm check when FAST_COMMIT is enabled", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-yolo-"));
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
+    mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
+    symlinkSync(
+      path.join(process.cwd(), "git-hooks", "pre-commit"),
+      path.join(dir, "git-hooks", "pre-commit"),
+    );
+    writeFileSync(
+      path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"),
+      "#!/usr/bin/env bash\nexit 0\n",
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
+    writeFileSync(
+      path.join(dir, "scripts", "pre-commit", "filter-staged-files.mjs"),
+      "process.exit(0);\n",
+      "utf8",
+    );
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+
+    const fakeBinDir = path.join(dir, "bin");
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/usr/bin/env bash\necho 'pnpm should not run when FAST_COMMIT is enabled' >&2\nexit 99\n",
+    );
+
+    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
+    run(dir, "git", ["add", "--", "tracked.txt"]);
+
+    const output = run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      FAST_COMMIT: "1",
+    });
+
+    expect(output).toContain("FAST_COMMIT enabled: skipping pnpm check in pre-commit hook.");
   });
 });

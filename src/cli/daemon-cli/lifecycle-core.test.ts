@@ -1,6 +1,15 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  defaultRuntime,
+  resetLifecycleRuntimeLogs,
+  resetLifecycleServiceMocks,
+  runtimeLogs,
+  service,
+  stubEmptyGatewayEnv,
+} from "./test-helpers/lifecycle-core-harness.js";
 
-const loadConfig = vi.fn(() => ({
+const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
   gateway: {
     auth: {
       token: "config-token",
@@ -8,30 +17,9 @@ const loadConfig = vi.fn(() => ({
   },
 }));
 
-const runtimeLogs: string[] = [];
-const defaultRuntime = {
-  log: (message: string) => runtimeLogs.push(message),
-  error: vi.fn(),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
-
-const service = {
-  label: "TestService",
-  loadedText: "loaded",
-  notLoadedText: "not loaded",
-  install: vi.fn(),
-  uninstall: vi.fn(),
-  stop: vi.fn(),
-  isLoaded: vi.fn(),
-  readCommand: vi.fn(),
-  readRuntime: vi.fn(),
-  restart: vi.fn(),
-};
-
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
+  readBestEffortConfig: async () => loadConfig(),
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -39,14 +27,31 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
+let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+
+function readJsonLog<T extends object>() {
+  const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+  return JSON.parse(jsonLine ?? "{}") as T;
+}
+
+function createServiceRunArgs(checkTokenDrift?: boolean) {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: () => [],
+    opts: { json: true as const },
+    ...(checkTokenDrift ? { checkTokenDrift } : {}),
+  };
+}
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
+    resetLifecycleRuntimeLogs();
     loadConfig.mockReset();
     loadConfig.mockReturnValue({
       gateway: {
@@ -55,35 +60,45 @@ describe("runServiceRestart token drift", () => {
         },
       },
     });
-    service.isLoaded.mockClear();
-    service.readCommand.mockClear();
-    service.restart.mockClear();
-    service.isLoaded.mockResolvedValue(true);
+    resetLifecycleServiceMocks();
     service.readCommand.mockResolvedValue({
+      programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
-    service.restart.mockResolvedValue(undefined);
-    vi.unstubAllEnvs();
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
+    stubEmptyGatewayEnv();
   });
 
-  it("emits drift warning when enabled", async () => {
+  it("prints the container restart hint when restart is requested for a not-loaded service", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "openclaw-demo-container");
+
     await runServiceRestart({
       serviceNoun: "Gateway",
       service,
-      renderStartHints: () => [],
-      opts: { json: true },
-      checkTokenDrift: true,
+      renderStartHints: () => [
+        "Restart the container or the service that manages it for openclaw-demo-container.",
+        "openclaw gateway install",
+      ],
+      opts: { json: false },
     });
 
-    expect(loadConfig).toHaveBeenCalledTimes(1);
-    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
-    expect(payload.warnings?.[0]).toContain("gateway install --force");
+    expect(runtimeLogs).toContain("Gateway service not loaded.");
+    expect(runtimeLogs).toContain(
+      "Start with: Restart the container or the service that manages it for openclaw-demo-container.",
+    );
   });
 
-  it("uses env-first token precedence when checking drift", async () => {
+  it("emits drift warning when enabled", async () => {
+    await runServiceRestart(createServiceRunArgs(true));
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    );
+  });
+
+  it("compares restart drift against config token even when caller env is set", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         auth: {
@@ -92,20 +107,81 @@ describe("runServiceRestart token drift", () => {
       },
     });
     service.readCommand.mockResolvedValue({
+      programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
     });
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
 
-    await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-      checkTokenDrift: true,
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    );
+  });
+
+  it("resolves config token SecretRefs using service command env before drift checks", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "SERVICE_GATEWAY_TOKEN",
+          },
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "service-token",
+        SERVICE_GATEWAY_TOKEN: "service-token",
+      },
     });
 
-    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("prefers service command env over process env for SecretRef token drift resolution", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "SERVICE_GATEWAY_TOKEN",
+          },
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "service-token",
+        SERVICE_GATEWAY_TOKEN: "service-token",
+      },
+    });
+    vi.stubEnv("SERVICE_GATEWAY_TOKEN", "process-token");
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
     expect(payload.warnings).toBeUndefined();
   });
 
@@ -119,8 +195,127 @@ describe("runServiceRestart token drift", () => {
 
     expect(loadConfig).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
-    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
+    const payload = readJsonLog<{ warnings?: string[] }>();
     expect(payload.warnings).toBeUndefined();
+  });
+
+  it("emits stopped when an unmanaged process handles stop", async () => {
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "stopped",
+        message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+      }),
+    });
+
+    const payload = readJsonLog<{ result?: string; message?: string }>();
+    expect(payload.result).toBe("stopped");
+    expect(payload.message).toContain("unmanaged process");
+    expect(service.stop).not.toHaveBeenCalled();
+  });
+
+  it("runs restart health checks after an unmanaged restart signal", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        message: "Gateway restart signal sent to unmanaged process on port 18789: 4200.",
+      }),
+      postRestartCheck,
+    });
+
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.readCommand).not.toHaveBeenCalled();
+    const payload = readJsonLog<{ result?: string; message?: string }>();
+    expect(payload.result).toBe("restarted");
+    expect(payload.message).toContain("unmanaged process");
+  });
+
+  it("skips restart health checks when restart is only scheduled", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+    const result = await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      postRestartCheck,
+    });
+
+    expect(result).toBe(true);
+    expect(postRestartCheck).not.toHaveBeenCalled();
+    const payload = readJsonLog<{ result?: string; message?: string }>();
+    expect(payload.result).toBe("scheduled");
+    expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("emits scheduled when service start routes through a scheduled restart", async () => {
+    service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.isLoaded).toHaveBeenCalled();
+    const payload = readJsonLog<{ result?: string; message?: string }>();
+    expect(payload.result).toBe("scheduled");
+    expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("fails start when restarting a stopped installed service errors", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.restart.mockRejectedValue(new Error("launchctl kickstart failed: permission denied"));
+
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    const payload = readJsonLog<{ ok?: boolean; error?: string }>();
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain("launchctl kickstart failed: permission denied");
+  });
+
+  it("falls back to not-loaded hints when start finds no install artifacts", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    const payload = readJsonLog<{
+      ok?: boolean;
+      result?: string;
+      hints?: string[];
+      hintItems?: Array<{ kind: string; text: string }>;
+    }>();
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
+    expect(payload.hintItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "install",
+          text: "openclaw gateway install",
+        }),
+      ]),
+    );
+    expect(service.restart).not.toHaveBeenCalled();
   });
 });

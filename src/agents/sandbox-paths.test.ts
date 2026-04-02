@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
@@ -163,6 +163,11 @@ describe("resolveSandboxedMediaSource", () => {
       expected: /sandbox/i,
     },
     {
+      name: "file:// URLs with remote hosts",
+      media: "file://attacker/share/photo.png",
+      expected: /remote hosts are not allowed/i,
+    },
+    {
       name: "invalid file:// URLs",
       media: "file://not a valid url\x00",
       expected: /Invalid file:\/\/ URL/,
@@ -191,6 +196,26 @@ describe("resolveSandboxedMediaSource", () => {
         await expectSandboxRejection(symlinkPath, sandboxDir, /symlink|sandbox/i);
       } finally {
         await fs.unlink(symlinkPath).catch(() => {});
+      }
+    });
+  });
+
+  it("rejects sandbox symlink escapes when the outside leaf does not exist yet", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSandboxRoot(async (sandboxDir) => {
+      const outsideDir = await fs.mkdtemp(
+        path.join(process.cwd(), "sandbox-media-outside-missing-"),
+      );
+      const linkDir = path.join(sandboxDir, "escape-link");
+      await fs.symlink(outsideDir, linkDir);
+      try {
+        const missingOutsidePath = path.join(linkDir, "new-file.txt");
+        await expectSandboxRejection(missingOutsidePath, sandboxDir, /symlink|sandbox/i);
+      } finally {
+        await fs.rm(linkDir, { force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
       }
     });
   });
@@ -256,5 +281,20 @@ describe("resolveSandboxedMediaSource", () => {
       sandboxRoot: "/any/path",
     });
     expect(result).toBe("");
+  });
+
+  it("rejects Windows network paths before sandbox resolution", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await expect(
+        resolveSandboxedMediaSource({
+          media: "\\\\attacker\\share\\photo.png",
+          sandboxRoot: "/any/path",
+        }),
+      ).rejects.toThrow(/network paths/i);
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

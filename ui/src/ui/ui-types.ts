@@ -10,6 +10,9 @@ export type ChatQueueItem = {
   createdAt: number;
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  localCommandArgs?: string;
+  localCommandName?: string;
+  pendingRunId?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";
@@ -18,6 +21,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;
   deleteAfterRun: boolean;
@@ -30,15 +34,24 @@ export type CronFormState = {
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
-  sessionTarget: "main" | "isolated";
+  sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
   payloadKind: "systemEvent" | "agentTurn";
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;
+  payloadLightContext: boolean;
   deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
+  deliveryAccountId: string;
   deliveryBestEffort: boolean;
+  failureAlertMode: "inherit" | "disabled" | "custom";
+  failureAlertAfter: string;
+  failureAlertCooldownSeconds: string;
+  failureAlertChannel: string;
+  failureAlertTo: string;
+  failureAlertDeliveryMode: "announce" | "webhook";
+  failureAlertAccountId: string;
   timeoutSeconds: string;
 };

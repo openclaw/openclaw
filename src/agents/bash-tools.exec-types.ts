@@ -1,14 +1,17 @@
-import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 export type ExecToolDefaults = {
-  host?: ExecHost;
+  host?: ExecTarget;
   security?: ExecSecurity;
   ask?: ExecAsk;
+  trigger?: string;
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];
+  strictInlineEval?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   agentId?: string;
@@ -21,6 +24,9 @@ export type ExecToolDefaults = {
   scopeKey?: string;
   sessionKey?: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  accountId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
@@ -53,8 +59,24 @@ export type ExecToolDetails =
       approvalId: string;
       approvalSlug: string;
       expiresAtMs: number;
+      allowedDecisions?: readonly ExecApprovalDecision[];
       host: ExecHost;
       command: string;
       cwd?: string;
       nodeId?: string;
+      warningText?: string;
+    }
+  | {
+      status: "approval-unavailable";
+      reason:
+        | "initiating-platform-disabled"
+        | "initiating-platform-unsupported"
+        | "no-approval-route";
+      channelLabel?: string;
+      sentApproverDms?: boolean;
+      host: ExecHost;
+      command: string;
+      cwd?: string;
+      nodeId?: string;
+      warningText?: string;
     };

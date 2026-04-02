@@ -1,4 +1,4 @@
-import { isAbortRequestText } from "../auto-reply/reply/abort.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
@@ -6,6 +6,8 @@ export type ChatAbortControllerEntry = {
   sessionKey: string;
   startedAtMs: number;
   expiresAtMs: number;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
 };
 
 export function isChatStopCommandText(text: string): boolean {
@@ -31,6 +33,7 @@ export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (
     sessionId: string,
@@ -94,6 +97,7 @@ export function abortChatRunById(
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
+  ops.chatDeltaLastBroadcastLen.delete(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   ops.agentRunSeq.delete(runId);

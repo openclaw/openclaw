@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
-  messageCommand,
-  onboardCommand,
   runTui,
   runtime,
   setupCommand,
+  setupWizardCommand,
 } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
@@ -24,35 +24,27 @@ vi.mock("./config-cli.js", () => ({
   runConfigUnset: vi.fn(),
 }));
 
-const { buildProgram } = await import("./program.js");
-
 describe("cli program (smoke)", () => {
+  let program = createProgram();
+
   function createProgram() {
     return buildProgram();
   }
 
   async function runProgram(argv: string[]) {
-    const program = createProgram();
     await program.parseAsync(argv, { from: "user" });
   }
 
   beforeEach(() => {
+    program = createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("runs message command with required options", async () => {
-    await expect(
-      runProgram(["message", "send", "--target", "+1", "--message", "hi"]),
-    ).rejects.toThrow("exit");
-    expect(messageCommand).toHaveBeenCalled();
-  });
-
-  it("registers memory + status commands", () => {
-    const program = createProgram();
+  it("registers message + status commands", () => {
     const names = program.commands.map((command) => command.name());
-    expect(names).toContain("memory");
+    expect(names).toContain("message");
     expect(names).toContain("status");
   });
 
@@ -71,6 +63,6 @@ describe("cli program (smoke)", () => {
     await runProgram(["setup", "--remote-url", "ws://example"]);
 
     expect(setupCommand).not.toHaveBeenCalled();
-    expect(onboardCommand).toHaveBeenCalledTimes(1);
+    expect(setupWizardCommand).toHaveBeenCalledTimes(1);
   });
 });
