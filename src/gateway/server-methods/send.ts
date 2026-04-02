@@ -15,6 +15,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   ErrorCodes,
   errorShape,
@@ -225,8 +226,17 @@ export const sendHandlers: GatewayRequestHandlers = {
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
           : undefined;
+        const routedAgentId =
+          !explicitAgentId && !sessionAgentId && accountId
+            ? resolveAgentRoute({
+                cfg,
+                channel,
+                accountId,
+              }).agentId
+            : undefined;
         const defaultAgentId = resolveSessionAgentId({ config: cfg });
-        const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+        const effectiveAgentId =
+          explicitAgentId ?? sessionAgentId ?? routedAgentId ?? defaultAgentId;
         // If callers omit sessionKey, derive a target session key from the outbound route.
         const derivedRoute = !providedSessionKey
           ? await resolveOutboundSessionRoute({
