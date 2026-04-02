@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  applyProviderRequestHeaders,
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postTranscriptionRequest,
@@ -10,6 +11,7 @@ import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./type
 type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
   defaultBaseUrl: string;
   defaultModel: string;
+  provider?: string;
 };
 
 function resolveModel(model: string | undefined, fallback: string): string {
@@ -41,7 +43,14 @@ export async function transcribeOpenAiCompatibleAudio(
     form.append("prompt", params.prompt.trim());
   }
 
-  const headers = new Headers(params.headers);
+  const headers = applyProviderRequestHeaders({
+    headers: params.headers,
+    provider: params.provider,
+    api: "openai-audio-transcriptions",
+    baseUrl,
+    capability: "audio",
+    transport: "media-understanding",
+  });
   if (!headers.has("authorization")) {
     headers.set("authorization", `Bearer ${params.apiKey}`);
   }

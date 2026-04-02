@@ -12,6 +12,7 @@ export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
 export async function transcribeOpenAiAudio(params: AudioTranscriptionRequest) {
   return await transcribeOpenAiCompatibleAudio({
     ...params,
+    provider: "openai",
     defaultBaseUrl: DEFAULT_OPENAI_AUDIO_BASE_URL,
     defaultModel: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
   });
