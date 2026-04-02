@@ -178,7 +178,7 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  it("adds ClawFlow recovery hints for broken blocked flows", async () => {
+  it("adds TaskFlow recovery hints for broken blocked flows", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(createPluginLoadResult(), [], {
       flows: [
         {
@@ -197,7 +197,7 @@ describe("noteWorkspaceStatus", () => {
       tasksByFlowId: () => [],
     });
     try {
-      const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "ClawFlow recovery");
+      const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
       expect(recoveryCalls).toHaveLength(1);
       expect(String(recoveryCalls[0]?.[0])).toContain("flow-123");
       expect(String(recoveryCalls[0]?.[0])).toContain("openclaw flows show <flow-id>");

@@ -57,7 +57,7 @@ function formatFlowStatusCell(status: FlowStatus, rich: boolean) {
 
 function formatFlowRows(flows: FlowRecord[], rich: boolean) {
   const header = [
-    "Flow".padEnd(ID_PAD),
+    "TaskFlow".padEnd(ID_PAD),
     "Mode".padEnd(MODE_PAD),
     "Status".padEnd(STATUS_PAD),
     "Rev".padEnd(REV_PAD),
@@ -141,13 +141,13 @@ export async function flowsListCommand(
     return;
   }
 
-  runtime.log(info(`Flows: ${flows.length}`));
-  runtime.log(info(`Flow pressure: ${formatFlowListSummary(flows)}`));
+  runtime.log(info(`TaskFlows: ${flows.length}`));
+  runtime.log(info(`TaskFlow pressure: ${formatFlowListSummary(flows)}`));
   if (statusFilter) {
     runtime.log(info(`Status filter: ${statusFilter}`));
   }
   if (flows.length === 0) {
-    runtime.log("No flows found.");
+    runtime.log("No TaskFlows found.");
     return;
   }
   const rich = isRich();
@@ -162,7 +162,7 @@ export async function flowsShowCommand(
 ) {
   const flow = resolveFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(`Flow not found: ${opts.lookup}`);
+    runtime.error(`TaskFlow not found: ${opts.lookup}`);
     runtime.exit(1);
     return;
   }
@@ -185,7 +185,7 @@ export async function flowsShowCommand(
   }
 
   const lines = [
-    "Flow:",
+    "TaskFlow:",
     `flowId: ${flow.flowId}`,
     `syncMode: ${flow.syncMode}`,
     `status: ${flow.status}`,
@@ -238,7 +238,7 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     return;
   }
   if (!result.cancelled) {
-    runtime.error(result.reason ?? `Could not cancel flow: ${opts.lookup}`);
+    runtime.error(result.reason ?? `Could not cancel TaskFlow: ${opts.lookup}`);
     runtime.exit(1);
     return;
   }

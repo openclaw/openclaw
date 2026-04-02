@@ -45,7 +45,7 @@ function noteFlowRecoveryHints() {
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n"),
-    "ClawFlow recovery",
+    "TaskFlow recovery",
   );
 }
 
