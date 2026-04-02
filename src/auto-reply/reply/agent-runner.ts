@@ -641,7 +641,7 @@ export async function runReplyAgent(params: {
         triggerSenderName: followupRun.run.senderName,
         thinkLevel: followupRun.run.thinkLevel,
         status: "ok",
-        triggerText: followupRun.prompt
+        triggerText: followupRun.summaryLine
           ?.replace(/[\r\n\t]+/g, " ")
           .trim()
           .slice(0, 240),
