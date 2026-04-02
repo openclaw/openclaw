@@ -138,6 +138,8 @@ struct OpenClawChatComposer: View {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
                 Text(session.displayName ?? session.key)
                     .font(.system(.caption, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .tag(session.key)
             }
         }
@@ -145,6 +147,8 @@ struct OpenClawChatComposer: View {
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 160, alignment: .leading)
+        .lineLimit(1)
+        .truncationMode(.tail)
         .help("Session")
     }
 
