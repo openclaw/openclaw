@@ -5,6 +5,8 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -424,6 +426,14 @@ export function loadGatewayPlugins(params: {
       workspaceDir: params.workspaceDir,
       env: process.env,
     });
+  if (pluginIds.length === 0) {
+    const pluginRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable");
+    return {
+      pluginRegistry,
+      gatewayMethods: [...params.baseMethods],
+    };
+  }
   const pluginRegistry = loadOpenClawPlugins({
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,

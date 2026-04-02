@@ -5,6 +5,7 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -26,6 +27,7 @@ type LastToolError = {
   toolName: string;
   meta?: string;
   error?: string;
+  timedOut?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
 };
@@ -58,13 +60,20 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  isCronTrigger?: boolean;
+  sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const isCronTimedOutExecToolError =
+    (normalizedToolName === "exec" || normalizedToolName === "bash") &&
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey));
+  const includeDetails =
+    isVerboseToolDetailEnabled(params.verboseLevel) || isCronTimedOutExecToolError;
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
   if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
@@ -94,6 +103,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
   config?: OpenClawConfig;
+  isCronTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -289,6 +299,8 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      isCronTrigger: params.isCronTrigger,
+      sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
 
