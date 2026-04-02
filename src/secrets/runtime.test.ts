@@ -2752,4 +2752,42 @@ describe("secrets runtime snapshot", () => {
       },
     });
   });
+
+  it("still migrates legacy x_search auth when general legacy migration returns an invalid config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+            groups: [],
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      (snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
+    ).toBeUndefined();
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key-invalid-config",
+      },
+      xSearch: {
+        enabled: true,
+      },
+    });
+  });
 });

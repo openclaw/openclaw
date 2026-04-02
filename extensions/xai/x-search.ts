@@ -99,11 +99,6 @@ function resolveXSearchApiKey(params: {
   sourceConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
 }): string | undefined {
-  const sourceXSearchConfig = resolveXSearchConfig(params.sourceConfig);
-  const runtimeXSearchConfig =
-    params.runtimeConfig && params.runtimeConfig !== params.sourceConfig
-      ? resolveXSearchConfig(params.runtimeConfig)
-      : undefined;
   return (
     resolveFallbackXaiApiKey(params.runtimeConfig) ??
     resolveFallbackXaiApiKey(params.sourceConfig) ??
