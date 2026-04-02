@@ -8,8 +8,8 @@
  * Checks performed:
  *   1. Runtime summary — Node version, executable path, version-manager hint
  *   2. Version-manager detection — nvm / fnm / volta / asdf / n / nodenv / nodebrew / nvs
- *   3. EOL proximity warning — Node 22 enters maintenance Oct 2026, EOL Apr 2027
- *   4. Recommended version nudge — suggest Node 24 when running Node 22
+ *   3. EOL proximity warning — Node 22 enters maintenance Oct 2025, EOL Apr 2027
+ *   4. Recommended version nudge — suggest Node 24 when running an older LTS
  *
  * Registered as a Doctor health contribution. Always runs (Node is the
  * only supported runtime), but keeps output to a single informational
@@ -139,6 +139,13 @@ const NODE_RELEASE_SCHEDULE: ReadonlyArray<{
 const RECOMMENDED_NODE_MAJOR = 24;
 
 /**
+ * Set of major versions tracked in NODE_RELEASE_SCHEDULE.
+ * Used to distinguish "known older LTS" from "unknown/non-LTS" majors
+ * when deciding whether to show an upgrade nudge.
+ */
+const KNOWN_RELEASE_MAJORS = new Set(NODE_RELEASE_SCHEDULE.map((s) => s.major));
+
+/**
  * Build user-facing diagnostic notes from Node.js runtime diagnostics.
  * Returns an empty array when everything looks healthy.
  *
@@ -195,9 +202,16 @@ export function buildNodeRuntimeWarnings(
     }
 
     // ── Recommended version nudge ──
-    // Only shown when not already warned about EOL/maintenance,
-    // and only when running an older-than-recommended LTS.
-    if (warnings.length === 0 && diag.major < RECOMMENDED_NODE_MAJOR) {
+    // Only shown when:
+    //   - not already warned about EOL/maintenance above
+    //   - running a known older LTS (tracked in NODE_RELEASE_SCHEDULE)
+    //   - NOT shown for unknown/non-LTS majors (e.g. Node 23) to avoid
+    //     incorrectly labeling them as "supported"
+    if (
+      warnings.length === 0 &&
+      diag.major < RECOMMENDED_NODE_MAJOR &&
+      KNOWN_RELEASE_MAJORS.has(diag.major)
+    ) {
       warnings.push(
         `Node ${diag.major} is supported, but Node ${RECOMMENDED_NODE_MAJOR} is recommended for best performance and longest support window.`,
       );
@@ -210,7 +224,7 @@ export function buildNodeRuntimeWarnings(
 /**
  * Build a one-line Node.js runtime summary for Doctor output.
  *
- * Example: "Node 24.14.0 · /home/user/.nvm/versions/node/v24.14.0/bin/node · nvm"
+ * Example: "Node 24.14.0 · ~/.nvm/versions/node/v24.14.0/bin/node · nvm"
  */
 export function buildNodeRuntimeSummary(diag: NodeRuntimeDiagnostics): string {
   const parts: string[] = [];
@@ -222,7 +236,10 @@ export function buildNodeRuntimeSummary(diag: NodeRuntimeDiagnostics): string {
   if (diag.execPath) {
     const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
     let displayPath = diag.execPath;
-    if (homeDir && displayPath.startsWith(homeDir)) {
+    // Ensure directory-boundary match: homeDir must be an exact prefix
+    // followed by "/" (or be an exact match). Without this guard,
+    // HOME=/home/alice would incorrectly match /home/alice2/...
+    if (homeDir && (displayPath === homeDir || displayPath.startsWith(homeDir + "/"))) {
       displayPath = "~" + displayPath.slice(homeDir.length);
     }
     parts.push(displayPath);
