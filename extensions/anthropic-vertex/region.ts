@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 
 const ANTHROPIC_VERTEX_DEFAULT_REGION = "global";
 const ANTHROPIC_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
@@ -47,21 +48,8 @@ export function resolveAnthropicVertexProjectId(
 }
 
 export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  try {
-    const host = new URL(trimmed).hostname.toLowerCase();
-    if (host === "aiplatform.googleapis.com") {
-      return "global";
-    }
-    const match = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/.exec(host);
-    return match?.[1];
-  } catch {
-    return undefined;
-  }
+  const endpoint = resolveProviderEndpoint(baseUrl);
+  return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;
 }
 
 export function resolveAnthropicVertexClientRegion(params?: {

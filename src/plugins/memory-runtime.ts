@@ -8,8 +8,12 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   if (current || !cfg) {
     return current;
   }
-  const resolvedConfig = applyPluginAutoEnable({ config: cfg, env: process.env }).config;
-  resolveRuntimePluginRegistry({ config: resolvedConfig });
+  const autoEnabled = applyPluginAutoEnable({ config: cfg, env: process.env });
+  resolveRuntimePluginRegistry({
+    config: autoEnabled.config,
+    activationSourceConfig: cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+  });
   return getMemoryRuntime();
 }
 

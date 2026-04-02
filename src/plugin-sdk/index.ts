@@ -59,6 +59,21 @@ export type {
   SubagentRunParams,
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
+export type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
+} from "../plugins/runtime/runtime-tasks.js";
+export type {
+  TaskFlowDetail,
+  TaskFlowView,
+  TaskRunAggregateSummary,
+  TaskRunCancelResult,
+  TaskRunDetail,
+  TaskRunView,
+} from "../plugins/runtime/task-domain-types.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";

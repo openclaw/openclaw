@@ -5,12 +5,12 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
-type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
+type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistry;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 
-const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
+const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
@@ -56,8 +56,8 @@ function setOwningProviderManifestPlugins() {
   ]);
 }
 
-function getLastLoadPluginsCall(): Record<string, unknown> {
-  const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
+function getLastRuntimeRegistryCall(): Record<string, unknown> {
+  const call = resolveRuntimePluginRegistryMock.mock.calls.at(-1)?.[0];
   expect(call).toBeDefined();
   return (call ?? {}) as Record<string, unknown>;
 }
@@ -70,11 +70,11 @@ function expectResolvedProviders(providers: unknown, expected: unknown[]) {
   expect(providers).toEqual(expected);
 }
 
-function expectLastLoadPluginsCall(params?: {
+function expectLastRuntimeRegistryLoad(params?: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
 }) {
-  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
       cache: false,
       activate: false,
@@ -85,7 +85,7 @@ function expectLastLoadPluginsCall(params?: {
 }
 
 function getLastResolvedPluginConfig() {
-  return getLastLoadPluginsCall().config as
+  return getLastRuntimeRegistryCall().config as
     | {
         plugins?: {
           allow?: string[];
@@ -127,7 +127,7 @@ function expectAutoEnabledProviderLoad(params: { rawConfig: unknown; autoEnabled
     config: params.rawConfig,
     env: process.env,
   });
-  expectBundledProviderLoad({ config: params.autoEnabledConfig });
+  expectProviderRuntimeRegistryLoad({ config: params.autoEnabledConfig });
 }
 
 function expectResolvedAllowlistState(params?: {
@@ -136,7 +136,7 @@ function expectResolvedAllowlistState(params?: {
   expectedEntries?: Record<string, { enabled?: boolean }>;
   expectedOnlyPluginIds?: readonly string[];
 }) {
-  expectLastLoadPluginsCall(
+  expectLastRuntimeRegistryLoad(
     params?.expectedOnlyPluginIds ? { onlyPluginIds: params.expectedOnlyPluginIds } : undefined,
   );
 
@@ -158,8 +158,8 @@ function expectOwningPluginIds(provider: string, expectedPluginIds?: readonly st
   expect(resolveOwningPluginIdsForProvider({ provider })).toEqual(expectedPluginIds);
 }
 
-function expectBundledProviderLoad(params?: { config?: unknown; env?: NodeJS.ProcessEnv }) {
-  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+function expectProviderRuntimeRegistryLoad(params?: { config?: unknown; env?: NodeJS.ProcessEnv }) {
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ...(params?.config ? { config: params.config } : {}),
       ...(params?.env ? { env: params.env } : {}),
@@ -171,8 +171,8 @@ describe("resolvePluginProviders", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./loader.js", () => ({
-      loadOpenClawPlugins: (...args: Parameters<LoadOpenClawPlugins>) =>
-        loadOpenClawPluginsMock(...args),
+      resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
+        resolveRuntimePluginRegistryMock(...args),
     }));
     vi.doMock("../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: (...args: Parameters<ApplyPluginAutoEnable>) =>
@@ -187,7 +187,7 @@ describe("resolvePluginProviders", () => {
   });
 
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockReset();
     const provider: ProviderPlugin = {
       id: "demo-provider",
       label: "Demo Provider",
@@ -195,13 +195,14 @@ describe("resolvePluginProviders", () => {
     };
     const registry = createEmptyPluginRegistry();
     registry.providers.push({ pluginId: "google", provider, source: "bundled" });
-    loadOpenClawPluginsMock.mockReturnValue(registry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(
       (params): PluginAutoEnableResult => ({
-        config: params.config,
+        config: params.config ?? ({} as OpenClawConfig),
         changes: [],
+        autoEnabledReasons: {},
       }),
     );
     setManifestPlugins([
@@ -229,7 +230,7 @@ describe("resolvePluginProviders", () => {
     expectResolvedProviders(providers, [
       { id: "demo-provider", label: "Demo Provider", auth: [], pluginId: "google" },
     ]);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/explicit",
         env,
@@ -292,7 +293,7 @@ describe("resolvePluginProviders", () => {
       bundledProviderVitestCompat: true,
     });
 
-    expectLastLoadPluginsCall();
+    expectLastRuntimeRegistryLoad();
     expect(getLastResolvedPluginConfig()).toEqual(
       expect.objectContaining({
         plugins: expect.objectContaining({
@@ -316,7 +317,7 @@ describe("resolvePluginProviders", () => {
         onlyPluginIds: ["google"],
       });
 
-      expectLastLoadPluginsCall({
+      expectLastRuntimeRegistryLoad({
         onlyPluginIds: ["google"],
       });
       expect(getLastResolvedPluginConfig()).toEqual(
@@ -348,7 +349,7 @@ describe("resolvePluginProviders", () => {
         bundledProviderVitestCompat: true,
       });
 
-      expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
         expect.objectContaining({
           config: undefined,
           env: {},
@@ -368,14 +369,20 @@ describe("resolvePluginProviders", () => {
       bundledProviderAllowlistCompat: true,
     });
 
-    expectLastLoadPluginsCall({
+    expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
     });
   });
 
   it("loads provider plugins from the auto-enabled config snapshot", () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledProviderConfig();
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        google: ["google auth configured"],
+      },
+    });
 
     resolvePluginProviders({ config: rawConfig });
 
@@ -383,6 +390,26 @@ describe("resolvePluginProviders", () => {
       rawConfig,
       autoEnabledConfig,
     });
+  });
+
+  it("routes provider runtime resolution through the compatible active-registry seam", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["google"],
+        },
+      },
+      onlyPluginIds: ["google"],
+      workspaceDir: "/workspace/runtime",
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/workspace/runtime",
+        cache: false,
+        activate: false,
+      }),
+    );
   });
 
   it.each([

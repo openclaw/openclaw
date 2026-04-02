@@ -15,7 +15,11 @@
 
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
-import { resolveProviderRequestHeaders } from "./provider-request-config.js";
+import {
+  buildProviderRequestTlsClientOptions,
+  resolveProviderRequestPolicyConfig,
+  type ProviderRequestTransportOverrides,
+} from "./provider-request-config.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket Event Types (Server → Client)
@@ -268,6 +272,8 @@ export interface OpenAIWebSocketManagerOptions {
   backoffDelaysMs?: readonly number[];
   /** Custom socket factory for tests. */
   socketFactory?: (url: string, options: ClientOptions) => WebSocket;
+  /** Optional transport overrides for provider-owned auth or TLS wiring. */
+  request?: ProviderRequestTransportOverrides;
 }
 
 type InternalEvents = {
@@ -308,6 +314,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private readonly maxRetries: number;
   private readonly backoffDelaysMs: readonly number[];
   private readonly socketFactory: (url: string, options: ClientOptions) => WebSocket;
+  private readonly request?: ProviderRequestTransportOverrides;
 
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
@@ -316,6 +323,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this.backoffDelaysMs = options.backoffDelaysMs ?? BACKOFF_DELAYS_MS;
     this.socketFactory =
       options.socketFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions));
+    this.request = options.request;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -402,19 +410,22 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         return;
       }
 
+      const requestConfig = resolveProviderRequestPolicyConfig({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: this.wsUrl,
+        capability: "llm",
+        transport: "websocket",
+        providerHeaders: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "OpenAI-Beta": "responses-websocket=v1",
+        },
+        precedence: "defaults-win",
+        request: this.request,
+      });
       const socket = this.socketFactory(this.wsUrl, {
-        headers: resolveProviderRequestHeaders({
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: this.wsUrl,
-          capability: "llm",
-          transport: "websocket",
-          defaultHeaders: {
-            Authorization: `Bearer ${this.apiKey}`,
-            "OpenAI-Beta": "responses-websocket=v1",
-          },
-          precedence: "defaults-win",
-        }),
+        headers: requestConfig.headers,
+        ...buildProviderRequestTlsClientOptions(requestConfig),
       });
 
       this.ws = socket;

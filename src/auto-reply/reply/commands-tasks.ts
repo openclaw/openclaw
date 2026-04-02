@@ -7,7 +7,11 @@ import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
 } from "../../tasks/task-status-access.js";
-import { buildTaskStatusSnapshot } from "../../tasks/task-status.js";
+import {
+  buildTaskStatusSnapshot,
+  formatTaskStatusDetail,
+  formatTaskStatusTitle,
+} from "../../tasks/task-status.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -58,14 +62,11 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
 }
 
 function formatTaskDetail(task: TaskRecord): string | undefined {
-  if (task.status === "running" || task.status === "queued") {
-    return task.progressSummary?.trim();
-  }
-  return task.error?.trim() || task.terminalSummary?.trim();
+  return formatTaskStatusDetail(task);
 }
 
 function formatVisibleTask(task: TaskRecord, index: number): string {
-  const title = task.label?.trim() || task.task.trim();
+  const title = formatTaskStatusTitle(task);
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);

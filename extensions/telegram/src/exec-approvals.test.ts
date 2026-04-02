@@ -28,7 +28,7 @@ function buildConfig(
 }
 
 describe("telegram exec approvals", () => {
-  it("requires enablement and an explicit or inferred approver", () => {
+  it("auto-enables when approvers resolve and disables only when forced off", () => {
     expect(isTelegramExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
@@ -37,18 +37,23 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+        cfg: buildConfig(undefined, { allowFrom: ["123"] }),
       }),
     ).toBe(true);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+        cfg: buildConfig({ approvers: ["123"] }),
       }),
     ).toBe(true);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
+      }),
+    ).toBe(false);
   });
 
   it("matches approvers by normalized sender id", () => {
-    const cfg = buildConfig({ enabled: true, approvers: [123, "456"] });
+    const cfg = buildConfig({ approvers: [123, "456"] });
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "123" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);

@@ -94,25 +94,33 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     const tool = createWebFetchTool({
       config: {
-        tools: {
-          web: {
-            fetch: {
-              firecrawl: {
-                enabled: true,
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "MISSING_FIRECRAWL_KEY_REF",
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_FIRECRAWL_KEY_REF",
+                  },
                 },
               },
             },
           },
         },
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
       },
       sandboxed: false,
-      runtimeFirecrawl: {
-        active: false,
-        apiKeySource: "secretRef", // pragma: allowlist secret
+      runtimeWebFetch: {
+        providerConfigured: "firecrawl",
+        providerSource: "configured",
         diagnostics: [],
       },
     });
