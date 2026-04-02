@@ -749,16 +749,50 @@ function stripFinalTagsFromText(text: unknown): string {
   return normalized.replace(FINAL_TAG_RE, "");
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findDelimitedTokenIndex(text: string, token: string, from: number): number {
+  const tokenRe = new RegExp(`(?:^|\\r?\\n)${escapeRegExp(token)}(?=\\r?\\n|$)`, "g");
+  tokenRe.lastIndex = Math.max(0, from);
+  const match = tokenRe.exec(text);
+  if (!match) {
+    return -1;
+  }
+  const prefixLength = match[0].length - token.length;
+  return match.index + prefixLength;
+}
+
 function stripDelimitedBlock(text: string, begin: string, end: string): string {
   let next = text;
   for (;;) {
-    const start = next.indexOf(begin);
+    const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
       return next;
     }
-    const finish = next.indexOf(end, start + begin.length);
+
+    let cursor = start + begin.length;
+    let depth = 1;
+    let finish = -1;
+    while (depth > 0) {
+      const nextBegin = findDelimitedTokenIndex(next, begin, cursor);
+      const nextEnd = findDelimitedTokenIndex(next, end, cursor);
+      if (nextEnd === -1) {
+        break;
+      }
+      if (nextBegin !== -1 && nextBegin < nextEnd) {
+        depth += 1;
+        cursor = nextBegin + begin.length;
+        continue;
+      }
+      depth -= 1;
+      finish = nextEnd;
+      cursor = nextEnd + end.length;
+    }
+
     const before = next.slice(0, start).trimEnd();
-    if (finish === -1) {
+    if (finish === -1 || depth !== 0) {
       return before;
     }
     const after = next.slice(finish + end.length).trimStart();

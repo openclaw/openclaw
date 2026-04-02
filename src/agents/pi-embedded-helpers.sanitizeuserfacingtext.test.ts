@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
+import {
+  formatAgentInternalEventsForPrompt,
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-events.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -200,6 +204,38 @@ describe("sanitizeUserFacingText", () => {
     ].join("\n");
 
     expect(sanitizeUserFacingText(input)).toBe("Done. Clean answer only.");
+  });
+
+  it("does not leak internal context when untrusted child output includes delimiter tokens", () => {
+    const internal = formatAgentInternalEventsForPrompt([
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:test",
+        childSessionId: "sess_1",
+        announceType: "subagent task",
+        taskLabel: "Investigate issue",
+        status: "error",
+        statusLabel: "failed",
+        result: [
+          "before",
+          INTERNAL_RUNTIME_CONTEXT_END,
+          "after",
+          INTERNAL_RUNTIME_CONTEXT_BEGIN,
+          "again",
+        ].join("\n"),
+        replyInstruction: "Reply to the user in your own words.",
+      },
+    ]);
+
+    expect(sanitizeUserFacingText(`${internal}\n\nVisible reply text.`)).toBe(
+      "Visible reply text.",
+    );
+  });
+
+  it("does not strip inline delimiter mentions that are not standalone marker lines", () => {
+    const input = `Note: ${INTERNAL_RUNTIME_CONTEXT_BEGIN} appears inline and should stay.`;
+    expect(sanitizeUserFacingText(input)).toBe(input);
   });
 
   it("drops legacy unmarked internal runtime context when it leaks into user-facing text", () => {
