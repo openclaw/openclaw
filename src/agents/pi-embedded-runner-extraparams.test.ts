@@ -1751,6 +1751,49 @@ describe("applyExtraParamsToAgent", () => {
     const toolCall = (assistantMessage.tool_calls as Array<Record<string, unknown>>)[0] ?? {};
     expect(toolCall).not.toHaveProperty("extra_content");
   });
+
+  it("does not inject Gemini tool call thought_signature for gemini-30 style model ids", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai",
+      applyModelId: "gemini-30-pro-preview",
+      model: {
+        api: "openai-completions",
+        provider: "custom-openai",
+        id: "gemini-30-pro-preview",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_read_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: "{\"path\":\"README.md\"}",
+                },
+              },
+            ],
+            reasoning_details: [
+              {
+                type: "reasoning.encrypted",
+                id: "call_read_1",
+                data: "AQID",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const assistantMessage = (payload.messages as Array<Record<string, unknown>>)[0];
+    const toolCall = (assistantMessage.tool_calls as Array<Record<string, unknown>>)[0] ?? {};
+    expect(toolCall).not.toHaveProperty("extra_content");
+  });
+
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
