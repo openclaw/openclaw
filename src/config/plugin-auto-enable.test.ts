@@ -140,6 +140,12 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.allow).toBeUndefined();
   });
 
+  it("stores auto-enable reasons in a null-prototype dictionary", () => {
+    const result = applyWithSlackConfig();
+
+    expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
+  });
+
   it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
     const result = applyPluginAutoEnable({
       config: {

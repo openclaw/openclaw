@@ -333,6 +333,15 @@ export function resolvePluginActivationState(params: {
       reason: "selected memory slot",
     };
   }
+  if (params.config.allow.length > 0 && !explicitlyAllowed) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "not in allowlist",
+    };
+  }
   if (explicitSelection.explicitlyEnabled) {
     return {
       enabled: true,
@@ -351,6 +360,15 @@ export function resolvePluginActivationState(params: {
       reason: params.autoEnabledReason,
     };
   }
+  if (entry?.enabled === true) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "enabled by effective config",
+    };
+  }
   if (
     params.origin === "bundled" &&
     isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
@@ -361,15 +379,6 @@ export function resolvePluginActivationState(params: {
       explicitlyEnabled: false,
       source: "auto",
       reason: "channel configured",
-    };
-  }
-  if (params.config.allow.length > 0 && !explicitlyAllowed) {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: explicitSelection.explicitlyEnabled,
-      source: "disabled",
-      reason: "not in allowlist",
     };
   }
   if (params.origin === "bundled" && params.enabledByDefault === true) {

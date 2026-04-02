@@ -1016,7 +1016,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "loads bundled channel plugins when channels.<id>.enabled=true even under restrictive plugins.allow",
+      name: "blocks bundled channel plugins when channels.<id>.enabled=true but plugins.allow excludes them",
       config: {
         channels: {
           telegram: {
@@ -1028,7 +1028,9 @@ describe("loadOpenClawPlugins", () => {
         },
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        expectTelegramLoaded(registry);
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("disabled");
+        expect(telegram?.error).toBe("not in allowlist");
       },
     },
     {
@@ -4226,6 +4228,34 @@ describe("getCompatibleActivePluginRegistry", () => {
         runtimeOptions: undefined,
       }),
     ).toBeUndefined();
+  });
+
+  it("does not embed activation secrets in the loader cache key", () => {
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      activationSourceConfig: {
+        plugins: {
+          allow: ["telegram"],
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "secret-token",
+          },
+        },
+      },
+      autoEnabledReasons: {
+        telegram: ["telegram configured"],
+      },
+    });
+
+    expect(cacheKey).not.toContain("secret-token");
+    expect(cacheKey).not.toContain("botToken");
+    expect(cacheKey).not.toContain("telegram configured");
   });
 
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {

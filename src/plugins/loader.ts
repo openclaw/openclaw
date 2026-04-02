@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
@@ -309,6 +310,44 @@ function resolveRuntimeSubagentMode(
   return "default";
 }
 
+function buildActivationMetadataHash(params: {
+  sourcePlugins: NormalizedPluginsConfig;
+  sourceConfig?: OpenClawConfig;
+  autoEnabledReasons: Readonly<Record<string, string[]>>;
+}): string {
+  const enabledSourceChannels = Object.entries(
+    (params.sourceConfig?.channels as Record<string, unknown>) ?? {},
+  )
+    .filter(([, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return false;
+      }
+      return (value as { enabled?: unknown }).enabled === true;
+    })
+    .map(([channelId]) => channelId)
+    .toSorted((left, right) => left.localeCompare(right));
+  const pluginEntryStates = Object.entries(params.sourcePlugins.entries)
+    .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
+    .map(([pluginId, reasons]) => [pluginId, [...reasons]] as const)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        enabled: params.sourcePlugins.enabled,
+        allow: params.sourcePlugins.allow,
+        deny: params.sourcePlugins.deny,
+        memorySlot: params.sourcePlugins.slots.memory,
+        entries: pluginEntryStates,
+        enabledChannels: enabledSourceChannels,
+        autoEnabledReasons: autoEnableReasonEntries,
+      }),
+    )
+    .digest("hex");
+}
+
 function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
   return Boolean(
     options.config !== undefined ||
@@ -338,9 +377,9 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
-    activationMetadataKey: JSON.stringify({
-      plugins: activationSourceConfig.plugins ?? {},
-      channels: activationSourceConfig.channels ?? {},
+    activationMetadataKey: buildActivationMetadataHash({
+      sourcePlugins: activationSourceNormalized,
+      sourceConfig: activationSourceConfig,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),
     installs: cfg.plugins?.installs,

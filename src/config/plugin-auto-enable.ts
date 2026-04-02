@@ -19,6 +19,7 @@ import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { OpenClawConfig } from "./config.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 
 type PluginEnableChange = {
   pluginId: string;
@@ -713,5 +714,13 @@ export function applyPluginAutoEnable(params: {
     changes.push(formatAutoEnableChange(entry));
   }
 
-  return { config: next, changes, autoEnabledReasons: Object.fromEntries(autoEnabledReasons) };
+  const autoEnabledReasonRecord: Record<string, string[]> = Object.create(null);
+  for (const [pluginId, reasons] of autoEnabledReasons) {
+    if (isBlockedObjectKey(pluginId)) {
+      continue;
+    }
+    autoEnabledReasonRecord[pluginId] = [...reasons];
+  }
+
+  return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
 }

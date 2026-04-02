@@ -177,7 +177,10 @@ describe("resolveEffectiveEnableState", () => {
 
   it.each([
     [{ enabled: true }, { enabled: true }],
-    [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
+    [
+      { enabled: true, allow: ["browser"] as string[] },
+      { enabled: false, reason: "not in allowlist" },
+    ],
     [
       {
         enabled: true,
@@ -288,6 +291,124 @@ describe("resolveEffectivePluginActivationState", () => {
       explicitlyEnabled: false,
       source: "default",
       reason: "bundled default enablement",
+    });
+  });
+
+  it("keeps allowlists authoritative over explicit bundled plugin enablement", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("keeps allowlists authoritative over bundled channel activation", () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("does not let auto-enable reasons bypass the allowlist", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["browser"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+        autoEnabledReason: "telegram configured",
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("preserves activation when only the effective config enables a bundled plugin", () => {
+    const sourceConfig = {
+      plugins: {},
+    };
+    const effectiveConfig = {
+      plugins: {
+        entries: {
+          openai: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "openai",
+        origin: "bundled",
+        config: normalizePluginsConfig(effectiveConfig.plugins),
+        rootConfig: effectiveConfig,
+        sourceConfig: normalizePluginsConfig(sourceConfig.plugins),
+        sourceRootConfig: sourceConfig,
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "enabled by effective config",
     });
   });
 });

@@ -24,6 +24,7 @@ import {
 } from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
@@ -146,7 +147,7 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
     parts.push(`  activation source: ${plugin.activationSource}`);
   }
   if (plugin.activationReason) {
-    parts.push(`  activation reason: ${plugin.activationReason}`);
+    parts.push(`  activation reason: ${sanitizeTerminalText(plugin.activationReason)}`);
   }
   if (plugin.providerIds.length > 0) {
     parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
