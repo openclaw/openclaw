@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Tasks/TaskFlow: restore the core TaskFlow substrate with managed-vs-mirrored sync modes, durable flow state/revision tracking, and `openclaw flows` inspection/recovery primitives so background orchestration can persist and be operated separately from plugin authoring layers. (#58930) Thanks @mbelinky.
 - Tasks/TaskFlow: add managed child task spawning plus sticky cancel intent, so external orchestrators can stop scheduling immediately and let parent TaskFlows settle to `cancelled` once active child tasks finish. (#59610) Thanks @mbelinky.
 - Plugins/TaskFlow: add a bound `api.runtime.taskFlow` seam so plugins and trusted authoring layers can create and drive managed TaskFlows from host-resolved OpenClaw context without passing owner identifiers on each call. (#59622) Thanks @mbelinky.
+- Android/assistant: add assistant-role entrypoints plus Google Assistant App Actions metadata so Android can launch OpenClaw from the assistant trigger and hand prompts into the chat composer. (#59596) Thanks @obviyus.
 
 ### Fixes
 
