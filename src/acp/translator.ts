@@ -1088,6 +1088,17 @@ export class AcpGatewayAgent implements Agent {
     pending.disconnectContext = undefined;
   }
 
+  private shouldRejectPendingAtDisconnectDeadline(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): boolean {
+    return (
+      pending.disconnectContext === disconnectContext &&
+      (!pending.sendAccepted ||
+        this.activeDisconnectContext?.generation === disconnectContext.generation)
+    );
+  }
+
   private async reconcilePendingPrompts(
     observedDisconnectGeneration: number,
     deadlineExpired: boolean,
@@ -1101,8 +1112,6 @@ export class AcpGatewayAgent implements Agent {
 
     const pendingEntries = [...this.pendingPrompts.entries()];
     let keepDisconnectTimer = false;
-    const shouldRejectPending =
-      deadlineExpired && this.activeDisconnectContext?.generation === observedDisconnectGeneration;
     for (const [sessionId, pending] of pendingEntries) {
       if (this.pendingPrompts.get(sessionId) !== pending) {
         continue;
@@ -1114,7 +1123,6 @@ export class AcpGatewayAgent implements Agent {
         sessionId,
         pending,
         deadlineExpired,
-        shouldRejectPending,
       );
       if (shouldKeepPending) {
         keepDisconnectTimer = true;
@@ -1130,7 +1138,6 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     pending: PendingPrompt,
     deadlineExpired: boolean,
-    shouldRejectPending: boolean,
   ): Promise<boolean> {
     const disconnectContext = pending.disconnectContext;
     if (!disconnectContext) {
@@ -1149,7 +1156,7 @@ export class AcpGatewayAgent implements Agent {
     } catch (err) {
       this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
       if (deadlineExpired) {
-        if (shouldRejectPending) {
+        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
           this.rejectPendingPrompt(
             pending,
             new Error(`Gateway disconnected: ${disconnectContext.reason}`),
@@ -1175,7 +1182,7 @@ export class AcpGatewayAgent implements Agent {
       return false;
     }
     if (deadlineExpired) {
-      if (shouldRejectPending) {
+      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
         const currentDisconnectContext = currentPending.disconnectContext;
         if (!currentDisconnectContext) {
           return false;
