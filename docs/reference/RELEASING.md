@@ -52,7 +52,7 @@ OpenClaw has three public release lanes:
   - stable npm releases default to `beta`
   - stable npm publish can target `latest` explicitly via workflow input
   - stable npm promotion from `beta` to `latest` is still available as an explicit manual mode on the trusted `OpenClaw NPM Release` workflow
-  - that promotion mode exchanges the GitHub Actions OIDC token for a short-lived npm registry token instead of depending on a stored `NPM_TOKEN`
+  - that promotion mode still needs a valid `NPM_TOKEN` in the `npm-release` environment because npm `dist-tag` management is separate from trusted publishing
   - public `macOS Release` is validation-only
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
@@ -98,8 +98,8 @@ Rules:
   the workflow verifies that metadata before publish continues
 - Promotion mode must use a stable or correction tag, `preflight_only=false`,
   an empty `preflight_run_id`, and `npm_dist_tag=beta`
-- Promotion stays inside the trusted `OpenClaw NPM Release` workflow file
-  because npm trusted publishing is bound to that workflow identity
+- Promotion mode also requires a valid `NPM_TOKEN` in the `npm-release`
+  environment because `npm dist-tag add` still needs regular npm auth
 
 ## Stable npm release sequence
 
@@ -116,8 +116,8 @@ When cutting a stable npm release:
    `preflight_run_id` empty, and `npm_dist_tag=beta` when you want to move that
    published build to `latest`
 
-The promotion mode still requires the `npm-release` environment approval,
-but it no longer depends on a long-lived npm publish token.
+The promotion mode still requires the `npm-release` environment approval and a
+valid `NPM_TOKEN` in that environment.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
@@ -125,7 +125,6 @@ documented and operator-visible.
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
-- [`scripts/npm-oidc-exchange-token.mjs`](https://github.com/openclaw/openclaw/blob/main/scripts/npm-oidc-exchange-token.mjs)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
