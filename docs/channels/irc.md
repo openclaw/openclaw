@@ -24,14 +24,15 @@ IRC ships as an extension plugin, but it is configured in the main config under 
     irc: {
       enabled: true,
       host: "localhost",
-      port: 6697,
-      tls: true,
+      port: 6667,
       nick: "openclaw-bot",
       channels: ["#openclaw"],
     },
   },
 }
 ```
+
+Note: This configuration does not use TLS. Before attempting to connect with TLS, add `TLS: true` and switch the `port` value to `6697`
 
 3. Start/restart gateway:
 
