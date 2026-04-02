@@ -358,13 +358,13 @@ async function isVerificationNoticeAuthorized(params: {
   if (params.dmPolicy === "open") {
     return true;
   }
-  if (params.dmPolicy === "silent" || params.dmPolicy === "allowlist") {
+  if (params.dmPolicy === "silent") {
     params.logVerboseMessage(
       `matrix: blocked verification sender ${params.senderId} (dmPolicy=${params.dmPolicy})`,
     );
     return false;
   }
-  const storeAllowFrom = await params.readStoreAllowFrom();
+  const storeAllowFrom = params.dmPolicy === "pairing" ? await params.readStoreAllowFrom() : [];
   const accessState = resolveMatrixMonitorAccessState({
     allowFrom: params.allowFrom,
     storeAllowFrom,

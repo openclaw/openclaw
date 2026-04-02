@@ -427,6 +427,33 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(readStoreAllowFrom).toHaveBeenCalled();
   });
 
+  it("allows verification notices for explicit allowlisted DM senders without store fallback", async () => {
+    const { sendMessage, roomMessageListener, readStoreAllowFrom } = createHarness({
+      dmPolicy: "allowlist",
+      allowFrom: ["@alice:example.org"],
+      storeAllowFrom: ["@not-used:example.org"],
+    });
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+
+    roomMessageListener("!room:example.org", {
+      event_id: "$req-allowlist-allowed",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.key.verification.request",
+        body: "verification request",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(readStoreAllowFrom).not.toHaveBeenCalled();
+  });
+
   it("does not consult the allow store when dmPolicy is open", async () => {
     const { sendMessage, roomMessageListener, readStoreAllowFrom } = createHarness({
       dmPolicy: "open",

@@ -223,6 +223,33 @@ describe("matrix monitor handler pairing account scope", () => {
     });
   });
 
+  it("preserves store-backed command auth for room control commands", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const { handler, readAllowFromStore } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      dmPolicy: "pairing",
+      readAllowFromStore: vi.fn(async () => ["@paired:example.org"]),
+      shouldHandleTextCommands: () => true,
+      hasControlCommand: () => true,
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$room-command-paired",
+        sender: "@paired:example.org",
+        body: "/status",
+      }),
+    );
+
+    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyFromConfig).toHaveBeenCalled();
+  });
+
   it("passes accountId into route resolution for inbound dm messages", async () => {
     const resolveAgentRoute = vi.fn(() => ({
       agentId: "ops",
