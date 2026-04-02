@@ -6,7 +6,7 @@
 ## Setup
 
 ```bash
-openclaw configure --yandex-api-key <key>
+openclaw onboard --auth-choice yandex-api-key
 ```
 
 Or set the `YANDEX_API_KEY` environment variable.
@@ -15,7 +15,7 @@ Get an API key from [Yandex AI Studio](https://aistudio.yandex.ru/).
 
 ## Models
 
-| Model ID               | Name             | Context Window |
+| Model ID                | Name             | Context Window |
 | ----------------------- | ---------------- | -------------- |
 | `yandexgpt/latest`      | YandexGPT Pro    | 32 768         |
 | `yandexgpt/rc`          | YandexGPT Pro RC | 32 768         |
