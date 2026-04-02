@@ -1,6 +1,11 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import {
+  BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
+  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
+  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
+} from "../plugins/bundled-capability-metadata.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
@@ -8,7 +13,10 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
@@ -32,6 +40,12 @@ import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+
+type KnownPluginIdMetadata = {
+  providerAliases: Readonly<Record<string, string>>;
+  legacyAliases: Readonly<Record<string, string>>;
+  autoEnableProviderPluginIds: Readonly<Record<string, string>>;
+};
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -245,6 +259,27 @@ function collectAllowedValuesFromIssueList(
     collected.push(...branch.values);
   }
   return { values: collected, incomplete: false, hasValues };
+}
+
+function resolveKnownPluginIds(params: {
+  registry: PluginManifestRegistry;
+  bundledMetadata: KnownPluginIdMetadata;
+}): Set<string> {
+  const knownIds = new Set(params.registry.plugins.map((record) => record.id));
+  // Do not rely on the manifest registry alone: cold-start or missing plugin directories can
+  // temporarily hide bundled manifests, but config validation still needs to recognize bundled
+  // aliases and auto-enable provider ids so startup remains resilient during upgrades/recovery.
+  for (const aliasMap of [
+    params.bundledMetadata.providerAliases,
+    params.bundledMetadata.legacyAliases,
+    params.bundledMetadata.autoEnableProviderPluginIds,
+  ]) {
+    for (const [aliasId, pluginId] of Object.entries(aliasMap)) {
+      knownIds.add(aliasId);
+      knownIds.add(pluginId);
+    }
+  }
+  return knownIds;
 }
 
 function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
@@ -650,7 +685,14 @@ function validateConfigObjectWithPluginsBase(
   const ensureKnownIds = (): Set<string> => {
     const info = ensureRegistry();
     if (!info.knownIds) {
-      info.knownIds = new Set(info.registry.plugins.map((record) => record.id));
+      info.knownIds = resolveKnownPluginIds({
+        registry: info.registry,
+        bundledMetadata: {
+          providerAliases: BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
+          legacyAliases: BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
+          autoEnableProviderPluginIds: BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
+        },
+      });
     }
     return info.knownIds;
   };

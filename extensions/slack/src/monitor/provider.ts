@@ -311,6 +311,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           token: botToken,
           appToken,
           socketMode: true,
+          // Slack Bolt's default ignoreSelf middleware can suppress reaction
+          // events on bot-authored messages (item_user is the bot). Keep it
+          // disabled and rely on OpenClaw's explicit message-level filtering.
+          ignoreSelf: false,
           clientOptions,
         }
       : {

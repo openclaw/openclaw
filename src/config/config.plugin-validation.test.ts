@@ -308,6 +308,101 @@ describe("config plugin validation", () => {
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
+  it("treats bundled provider auto-enable plugin ids as known during validation", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        plugins: {
+          allow: ["google"],
+          entries: {
+            google: { enabled: true },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(
+      res.warnings.some(
+        (warning) =>
+          warning.path.includes("google") && warning.message.includes("plugin not found: google"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "plugins.allow",
+      buildPluginsConfig: (pluginId: string) => ({
+        allow: [pluginId],
+      }),
+      expectedWarningPath: "plugins.allow",
+    },
+    {
+      label: "plugins.entries.*",
+      buildPluginsConfig: (pluginId: string) => ({
+        entries: { [pluginId]: { enabled: true } },
+      }),
+      expectedWarningPath: (pluginId: string) => `plugins.entries.${pluginId}`,
+    },
+    {
+      label: "plugins.slots.memory",
+      buildPluginsConfig: (pluginId: string) => ({
+        slots: { memory: pluginId },
+      }),
+      expectedIssuePath: "plugins.slots.memory",
+    },
+  ])(
+    "keeps severity consistent for known vs unknown ids at $label",
+    ({ buildPluginsConfig, expectedWarningPath, expectedIssuePath }) => {
+      const knownId = "google";
+      const unknownId = "missing-plugin-id";
+      const missingBundledEnv = {
+        ...suiteEnv(),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+      };
+      const knownResult = validateConfigObjectWithPlugins(
+        { plugins: buildPluginsConfig(knownId) },
+        { env: missingBundledEnv },
+      );
+      expect(knownResult.ok).toBe(true);
+      if (!knownResult.ok) {
+        return;
+      }
+
+      const unknownResult = validateConfigObjectWithPlugins(
+        { plugins: buildPluginsConfig(unknownId) },
+        { env: missingBundledEnv },
+      );
+      expect(unknownResult.ok).toBe(expectedIssuePath === undefined);
+      if (!unknownResult.ok) {
+        expect(
+          unknownResult.issues.some(
+            (issue) => issue.path === expectedIssuePath && issue.message.includes(unknownId),
+          ),
+        ).toBe(true);
+      } else {
+        const warningPath =
+          typeof expectedWarningPath === "function"
+            ? expectedWarningPath(unknownId)
+            : expectedWarningPath;
+        expect(
+          unknownResult.warnings.some(
+            (warning) => warning.path === warningPath && warning.message.includes(unknownId),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
       plugins: {

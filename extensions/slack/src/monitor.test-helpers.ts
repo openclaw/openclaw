@@ -54,14 +54,17 @@ type SlackClient = {
 export const getSlackHandlers = () => ensureSlackTestRuntime().handlers;
 
 export const getSlackClient = () => ensureSlackTestRuntime().client;
+export const getLastSlackAppOptions = () => ensureSlackTestRuntime().lastAppOptions;
 
 function ensureSlackTestRuntime(): {
   handlers: Map<string, SlackHandler>;
   client: SlackClient;
+  lastAppOptions: unknown;
 } {
   const globalState = globalThis as {
     __slackHandlers?: Map<string, SlackHandler>;
     __slackClient?: SlackClient;
+    __slackLastAppOptions?: unknown;
   };
   if (!globalState.__slackHandlers) {
     globalState.__slackHandlers = new Map<string, SlackHandler>();
@@ -95,6 +98,7 @@ function ensureSlackTestRuntime(): {
   return {
     handlers: globalState.__slackHandlers,
     client: globalState.__slackClient,
+    lastAppOptions: globalState.__slackLastAppOptions,
   };
 }
 
@@ -263,6 +267,10 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
 vi.mock("@slack/bolt", () => {
   const { handlers, client: slackClient } = ensureSlackTestRuntime();
   class App {
+    constructor(options: unknown) {
+      const globalState = globalThis as { __slackLastAppOptions?: unknown };
+      globalState.__slackLastAppOptions = options;
+    }
     client = slackClient;
     event(name: string, handler: SlackHandler) {
       handlers.set(name, handler);
