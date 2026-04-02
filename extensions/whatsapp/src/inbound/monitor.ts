@@ -433,6 +433,8 @@ export async function monitorWebInbox(options: {
       replyToSender: enriched.replyContext?.sender?.label ?? undefined,
       replyToSenderJid: enriched.replyContext?.sender?.jid ?? undefined,
       replyToSenderE164: enriched.replyContext?.sender?.e164 ?? undefined,
+      replyToMediaPath: enriched.replyToMediaPath,
+      replyToMediaType: enriched.replyToMediaType,
       groupSubject: inbound.groupSubject,
       groupParticipants: inbound.groupParticipants,
       mentions: mentionedJids ?? undefined,

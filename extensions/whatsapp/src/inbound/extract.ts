@@ -465,9 +465,13 @@ export function describeReplyContext(
     jid: senderJid,
     label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
   });
+  // Attach the quoted message proto when it contains media so the monitor can
+  // download and forward the attachment path to the ACP session context.
+  const quotedMediaMessage = extractMediaPlaceholder(quoted) ? quoted : undefined;
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
     body,
     sender,
+    ...(quotedMediaMessage ? { quotedMediaMessage } : {}),
   };
 }

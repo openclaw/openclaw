@@ -1,4 +1,8 @@
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -65,8 +69,9 @@ export function createWebOnMessageHandler(params: {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
-    const route = resolveAgentRoute({
-      cfg: loadConfig(),
+    const freshCfg = loadConfig();
+    let route = resolveAgentRoute({
+      cfg: freshCfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -74,6 +79,31 @@ export function createWebOnMessageHandler(params: {
         id: peerId,
       },
     });
+
+    // Resolve configured ACP bindings (session routing for bound conversations).
+    const configuredRoute = resolveConfiguredBindingRoute({
+      cfg: freshCfg,
+      route,
+      conversation: {
+        channel: "whatsapp",
+        accountId: msg.accountId,
+        conversationId: peerId,
+        parentConversationId: msg.chatType === "group" ? conversationId : undefined,
+      },
+    });
+    const configuredBinding = configuredRoute.bindingResolution;
+    route = configuredRoute.route;
+    if (configuredBinding) {
+      const ready = await ensureConfiguredBindingRouteReady({
+        cfg: freshCfg,
+        bindingResolution: configuredBinding,
+      });
+      if (!ready.ok) {
+        logVerbose(`whatsapp: configured binding target not ready: ${ready.error}`);
+        return;
+      }
+    }
+
     const groupHistoryKey =
       msg.chatType === "group"
         ? buildGroupHistoryKey({

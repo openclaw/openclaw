@@ -71,12 +71,17 @@ const AcpBindingSchema = z
       return;
     }
     const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
+    if (
+      channel !== "discord" &&
+      channel !== "telegram" &&
+      channel !== "feishu" &&
+      channel !== "whatsapp"
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "channel"],
         message:
-          'ACP bindings currently support only "discord", "telegram", and "feishu" channels.',
+          'ACP bindings currently support only "discord", "telegram", "feishu", and "whatsapp" channels.',
       });
       return;
     }
@@ -87,6 +92,19 @@ const AcpBindingSchema = z
         message:
           "Telegram ACP bindings require canonical topic IDs in the form -1001234567890:topic:42.",
       });
+    }
+    if (channel === "whatsapp") {
+      // E.164 phone (direct) or group JID (12345-67890@g.us)
+      const isE164 = /^\+\d{7,15}$/.test(peerId);
+      const isGroupJid = /^[0-9]+(-[0-9]+)*@g\.us$/.test(peerId);
+      if (!isE164 && !isGroupJid) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["match", "peer", "id"],
+          message:
+            "WhatsApp ACP bindings require an E.164 phone number (e.g. +1234567890) or a group JID (e.g. 12345-67890@g.us).",
+        });
+      }
     }
     if (channel === "feishu") {
       const peerKind = value.match.peer?.kind;

@@ -58,6 +58,39 @@ function normalizeWhatsAppPayloadText(text: string | undefined): string {
   return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
 }
 
+// --- ACP bindings helpers ---
+
+function normalizeWhatsAppAcpConversationId(conversationId: string) {
+  const normalized = normalizeWhatsAppTarget(conversationId);
+  return normalized ? { conversationId: normalized } : null;
+}
+
+function matchWhatsAppAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  // Normalize the inbound conversation ID for comparison
+  const normalizedInbound = normalizeWhatsAppTarget(params.conversationId);
+  if (!normalizedInbound) {
+    return null;
+  }
+  if (params.bindingConversationId === normalizedInbound) {
+    return { conversationId: normalizedInbound, matchPriority: 2 };
+  }
+  // Fallback: match on parent conversation (group-level match for a DM inside a group context)
+  if (params.parentConversationId && params.parentConversationId !== params.conversationId) {
+    const normalizedParent = normalizeWhatsAppTarget(params.parentConversationId);
+    if (normalizedParent && params.bindingConversationId === normalizedParent) {
+      return {
+        conversationId: normalizedParent,
+        matchPriority: 1,
+      };
+    }
+  }
+  return null;
+}
+
 function parseWhatsAppExplicitTarget(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
   if (!normalized) {
@@ -276,6 +309,16 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             cfg,
           );
         },
+      },
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) =>
+          normalizeWhatsAppAcpConversationId(conversationId),
+        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+          matchWhatsAppAcpConversation({
+            bindingConversationId: compiledBinding.conversationId,
+            conversationId,
+            parentConversationId,
+          }),
       },
       auth: {
         ...whatsappApprovalAuth,
