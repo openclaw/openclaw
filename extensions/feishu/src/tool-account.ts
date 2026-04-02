@@ -30,30 +30,33 @@ function resolveImplicitToolAccountId(params: {
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
 }): string | undefined {
+  // 1. Explicit accountId from tool call parameters (highest priority)
   const explicitAccountId = normalizeOptionalAccountId(params.executeParams?.accountId);
   if (explicitAccountId) {
     return explicitAccountId;
   }
 
+  // 2. Contextual accountId from message source (e.g., which bot received the message)
+  // This takes priority over configured default to ensure correct multi-tenant behavior.
+  // See: https://github.com/openclaw/openclaw/issues/59399
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  if (contextualAccountId && listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
+    const contextualAccount = resolveFeishuAccount({
+      cfg: params.api.config,
+      accountId: contextualAccountId,
+    });
+    if (contextualAccount.enabled) {
+      return contextualAccountId;
+    }
+  }
+
+  // 3. Configured defaultAccount as fallback (lowest priority)
   const configuredDefaultAccountId = readConfiguredDefaultAccountId(params.api.config);
   if (configuredDefaultAccountId) {
     return configuredDefaultAccountId;
   }
 
-  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
-  if (!contextualAccountId) {
-    return undefined;
-  }
-
-  if (!listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
-    return undefined;
-  }
-
-  const contextualAccount = resolveFeishuAccount({
-    cfg: params.api.config,
-    accountId: contextualAccountId,
-  });
-  return contextualAccount.enabled ? contextualAccountId : undefined;
+  return undefined;
 }
 
 export function resolveFeishuToolAccount(params: {
