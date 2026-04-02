@@ -1081,12 +1081,12 @@ export function resolveSessionModelIdentityRef(
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
     }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    const inferred = inferUniqueProviderFromConfiguredModels({
       cfg,
       model: runtimeModel,
     });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: runtimeModel };
+    if (inferred) {
+      return { provider: inferred.provider, model: inferred.configuredModelId };
     }
     if (runtimeModel.includes("/")) {
       const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER);
@@ -1103,12 +1103,12 @@ export function resolveSessionModelIdentityRef(
     if (parsedFallback) {
       return { provider: parsedFallback.provider, model: parsedFallback.model };
     }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    const inferred = inferUniqueProviderFromConfiguredModels({
       cfg,
       model: fallbackRef,
     });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: fallbackRef };
+    if (inferred) {
+      return { provider: inferred.provider, model: inferred.configuredModelId };
     }
     return { model: fallbackRef };
   }

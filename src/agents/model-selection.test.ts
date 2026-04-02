@@ -327,12 +327,14 @@ describe("model-selection", () => {
         },
       } as unknown as OpenClawConfig;
 
-      expect(
-        inferUniqueProviderFromConfiguredModels({
-          cfg,
-          model: "claude-sonnet-4-6",
-        }),
-      ).toBe("anthropic");
+      const result = inferUniqueProviderFromConfiguredModels({
+        cfg,
+        model: "claude-sonnet-4-6",
+      });
+      expect(result).toEqual({
+        provider: "anthropic",
+        configuredModelId: "claude-sonnet-4-6",
+      });
     });
 
     it("returns undefined when configured matches are ambiguous", () => {
@@ -385,12 +387,14 @@ describe("model-selection", () => {
         },
       } as unknown as OpenClawConfig;
 
-      expect(
-        inferUniqueProviderFromConfiguredModels({
-          cfg,
-          model: "anthropic/claude-sonnet-4-6",
-        }),
-      ).toBe("vercel-ai-gateway");
+      const result = inferUniqueProviderFromConfiguredModels({
+        cfg,
+        model: "anthropic/claude-sonnet-4-6",
+      });
+      expect(result).toEqual({
+        provider: "vercel-ai-gateway",
+        configuredModelId: "anthropic/claude-sonnet-4-6",
+      });
     });
 
     it("infers provider from configured provider catalogs when allowlist is absent", () => {
@@ -404,12 +408,14 @@ describe("model-selection", () => {
         },
       } as unknown as OpenClawConfig;
 
-      expect(
-        inferUniqueProviderFromConfiguredModels({
-          cfg,
-          model: "qwen-max",
-        }),
-      ).toBe("qwen-dashscope");
+      const result = inferUniqueProviderFromConfiguredModels({
+        cfg,
+        model: "qwen-max",
+      });
+      expect(result).toEqual({
+        provider: "qwen-dashscope",
+        configuredModelId: "qwen-max",
+      });
     });
 
     it("returns undefined when provider catalog matches are ambiguous", () => {
@@ -432,6 +438,27 @@ describe("model-selection", () => {
           model: "qwen-max",
         }),
       ).toBeUndefined();
+    });
+
+    it("matches via space-to-hyphen normalization", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = inferUniqueProviderFromConfiguredModels({
+        cfg,
+        model: "gpt 5.4",
+      });
+      expect(result).toEqual({
+        provider: "openai-codex",
+        configuredModelId: "gpt-5.4",
+      });
     });
   });
 
@@ -459,6 +486,107 @@ describe("model-selection", () => {
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+    });
+
+    it("stores alias keys with spaces normalized to hyphens", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": { alias: "gpt-5.4" },
+            },
+          },
+        },
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+      });
+
+      // Normalized key is stored and retrievable
+      expect(index.byAlias.has("gpt-5.4")).toBe(true);
+      expect(index.byAlias.get("gpt-5.4")?.ref).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      });
+      // Raw space variant does not directly hit the map
+      // (callers must normalizeAliasKey before lookup)
+      expect(index.byAlias.has("gpt 5.4")).toBe(false);
+    });
+
+    it("warns when normalized alias keys collide", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-4o": { alias: "gpt 5" },
+                "anthropic/claude-sonnet-4-6": { alias: "gpt-5" },
+              },
+            },
+          },
+        };
+
+        const index = buildModelAliasIndex({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+        });
+
+        // The last entry wins ("gpt-5" overwrites "gpt 5" since both normalize to "gpt-5")
+        expect(index.byAlias.get("gpt-5")?.ref).toEqual({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        });
+        // A warning should have been emitted about the collision
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("conflicts with existing alias"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
+    it("keeps byKey consistent when normalized alias keys collide", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-4o": { alias: "gpt 5" },
+                "anthropic/claude-sonnet-4-6": { alias: "gpt-5" },
+              },
+            },
+          },
+        };
+
+        const index = buildModelAliasIndex({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+        });
+
+        // byAlias: "gpt-5" → anthropic/claude-sonnet-4-6 (last wins)
+        expect(index.byAlias.get("gpt-5")?.ref).toEqual({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        });
+        // byKey for the overwritten model should no longer contain the stale alias
+        const gpt4oAliases = index.byKey.get("openai/gpt-4o") ?? [];
+        expect(gpt4oAliases).not.toContain("gpt 5");
+        // byKey for the winner should contain its alias
+        const sonnetAliases = index.byKey.get("anthropic/claude-sonnet-4-6") ?? [];
+        expect(sonnetAliases).toContain("gpt-5");
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
     });
   });
 
@@ -601,6 +729,189 @@ describe("model-selection", () => {
         ref: { provider: "opencode-go", model: "kimi-k2.5" },
       });
     });
+
+    it("resolves cross-provider alias when input matches alias exactly", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai-codex/gpt-5.4": { alias: "gpt-5.4" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { provider: "openai-codex", id: "gpt-5.4", name: "GPT 5.4" },
+        ],
+        raw: "gpt-5.4",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "openai-codex/gpt-5.4",
+        ref: { provider: "openai-codex", model: "gpt-5.4" },
+      });
+    });
+
+    it("resolves cross-provider alias when input uses spaces instead of hyphens", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai-codex/gpt-5.4": { alias: "gpt-5.4" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { provider: "openai-codex", id: "gpt-5.4", name: "GPT 5.4" },
+        ],
+        raw: "gpt 5.4",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "openai-codex/gpt-5.4",
+        ref: { provider: "openai-codex", model: "gpt-5.4" },
+      });
+    });
+
+    it("infers unique provider from allowlist when alias is not configured", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { provider: "openai-codex", id: "gpt-5.4", name: "GPT 5.4" },
+        ],
+        raw: "gpt-5.4",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "openai-codex/gpt-5.4",
+        ref: { provider: "openai-codex", model: "gpt-5.4" },
+      });
+    });
+
+    it("infers provider from allowlist with space-to-hyphen normalization", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { provider: "openai-codex", id: "gpt-5.4", name: "GPT 5.4" },
+        ],
+        raw: "gpt 5.4",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "openai-codex/gpt-5.4",
+        ref: { provider: "openai-codex", model: "gpt-5.4" },
+      });
+    });
+
+    it("resolves underscore model IDs via hyphen aliases", () => {
+      // "my_model" normalizes to "my-model" and matches alias "my-model",
+      // resolving to "openai/gpt-4o".
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "anthropic/my_model": {},
+              "openai/gpt-4o": { alias: "my-model" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          { provider: "anthropic", id: "my_model", name: "My Model" },
+          { provider: "openai", id: "gpt-4o", name: "GPT 4o" },
+        ],
+        raw: "my_model",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      // "my_model" normalizes to "my-model" which matches the alias → openai/gpt-4o.
+      expect(result).toEqual({
+        key: "openai/gpt-4o",
+        ref: { provider: "openai", model: "gpt-4o" },
+      });
+    });
+
+    it("includes available aliases in error message when model is not allowed", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "nonexistent-model",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toHaveProperty("error");
+      if ("error" in result) {
+        expect(result.error).toContain("model not allowed");
+        expect(result.error).toContain("available aliases");
+        expect(result.error).toContain("sonnet");
+      }
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -700,6 +1011,44 @@ describe("model-selection", () => {
         model: "moonshotai/kimi-k2.5",
       });
       expect(resolved?.alias).toBe("kimi");
+    });
+
+    it("matches alias with spaces normalized to hyphens", () => {
+      const index = {
+        byAlias: new Map([
+          ["gpt-5.4", { alias: "gpt-5.4", ref: { provider: "openai-codex", model: "gpt-5.4" } }],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "gpt 5.4",
+        defaultProvider: "anthropic",
+        aliasIndex: index,
+      });
+
+      expect(resolved?.ref).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+      expect(resolved?.alias).toBe("gpt-5.4");
+    });
+
+    it("matches alias when input differs only by underscore vs hyphen", () => {
+      // "my_model" normalizes to "my-model" and matches alias "my-model"
+      const index = {
+        byAlias: new Map([
+          ["my-model", { alias: "my-model", ref: { provider: "openai", model: "gpt-4o" } }],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "my_model",
+        defaultProvider: "anthropic",
+        aliasIndex: index,
+      });
+
+      // Should resolve via alias since underscores are normalized to hyphens.
+      expect(resolved?.alias).toBe("my-model");
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
     });
   });
 
@@ -883,6 +1232,29 @@ describe("model-selection", () => {
         setLoggerOverride(null);
         resetLogger();
       }
+    });
+
+    it("resolves spaced alias in model.primary", () => {
+      // model.primary = "gpt 5.4" should normalize to "gpt-5.4" and match the alias.
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "gpt 5.4" },
+            models: {
+              "openai-codex/gpt-5.4": { alias: "gpt-5.4" },
+            },
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+
+      // "gpt 5.4" normalizes to "gpt-5.4" alias → openai-codex/gpt-5.4.
+      expect(result).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
     });
   });
 

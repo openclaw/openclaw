@@ -69,7 +69,10 @@ export type ModelAliasIndex = {
 };
 
 function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
 }
 
 export function modelKey(provider: string, model: string) {
@@ -196,19 +199,24 @@ export function resolvePersistedModelRef(params: {
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
-}): string | undefined {
+}): { provider: string; configuredModelId: string } | undefined {
   const model = params.model.trim();
   if (!model) {
     return undefined;
   }
   const normalized = model.toLowerCase();
+  // Also compare against the alias-normalized form so that inputs like
+  // "gpt 5.4" can match allowlist entries with "gpt-5.4" (spaces → hyphens).
+  const aliasNormalized = normalizeAliasKey(model);
   const providers = new Set<string>();
-  const addProvider = (provider: string) => {
+  let matchedModelId: string | undefined;
+  const addMatch = (provider: string, modelId: string) => {
     const normalizedProvider = normalizeProviderId(provider);
     if (!normalizedProvider) {
       return;
     }
     providers.add(normalizedProvider);
+    matchedModelId = modelId;
   };
   const configuredModels = params.cfg.agents?.defaults?.models;
   if (configuredModels) {
@@ -223,8 +231,10 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       if (!parsed) {
         continue;
       }
-      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
-        addProvider(parsed.provider);
+      const parsedModelLower = parsed.model.toLowerCase();
+      const parsedModelNormalized = normalizeAliasKey(parsed.model);
+      if (parsedModelLower === normalized || parsedModelNormalized === aliasNormalized) {
+        addMatch(parsed.provider, parsed.model);
         if (providers.size > 1) {
           return undefined;
         }
@@ -243,19 +253,21 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || modelId.toLowerCase() === normalized) {
-          addProvider(providerId);
+        const entryLower = modelId.toLowerCase();
+        const entryNormalized = normalizeAliasKey(modelId);
+        if (entryLower === normalized || entryNormalized === aliasNormalized) {
+          addMatch(providerId, modelId);
+          if (providers.size > 1) {
+            return undefined;
+          }
         }
-      }
-      if (providers.size > 1) {
-        return undefined;
       }
     }
   }
-  if (providers.size !== 1) {
+  if (providers.size !== 1 || !matchedModelId) {
     return undefined;
   }
-  return providers.values().next().value;
+  return { provider: providers.values().next().value!, configuredModelId: matchedModelId };
 }
 
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
@@ -306,6 +318,25 @@ export function buildModelAliasIndex(params: {
       continue;
     }
     const aliasKey = normalizeAliasKey(alias);
+    const existingAlias = byAlias.get(aliasKey);
+    if (existingAlias) {
+      getLog().warn(
+        `Alias "${sanitizeForLog(alias)}" (normalized: "${sanitizeForLog(aliasKey)}") conflicts with existing alias "${sanitizeForLog(existingAlias.alias)}" — overwriting. ` +
+          `Consider using distinct alias names to avoid ambiguity.`,
+      );
+      // Remove the stale alias from the old model's byKey entry to keep
+      // byAlias and byKey consistent after the overwrite.
+      const oldKey = modelKey(existingAlias.ref.provider, existingAlias.ref.model);
+      const oldAliases = byKey.get(oldKey);
+      if (oldAliases) {
+        const filtered = oldAliases.filter((a) => a !== existingAlias.alias);
+        if (filtered.length > 0) {
+          byKey.set(oldKey, filtered);
+        } else {
+          byKey.delete(oldKey);
+        }
+      }
+    }
     byAlias.set(aliasKey, { alias, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
@@ -696,7 +727,44 @@ export function resolveAllowedModelRef(params: {
     defaultModel: params.defaultModel,
   });
   if (!status.allowed) {
-    return { error: `model not allowed: ${status.key}` };
+    // When the input had no provider prefix and was not resolved via alias,
+    // try inferring the provider from the configured model allowlist.
+    if (!resolved.alias && !trimmed.includes("/")) {
+      const inferred = inferUniqueProviderFromConfiguredModels({
+        cfg: params.cfg,
+        model: trimmed,
+      });
+      if (inferred) {
+        // Use the matched configured model ID (not the user's raw input) so
+        // that the ref exactly matches the allowlist entry.  For example,
+        // input "gpt 5.4" may match configured "gpt-5.4", and we must use
+        // "gpt-5.4" for the ref to pass the allowlist check.
+        const inferredRef = parseModelRef(
+          `${inferred.provider}/${inferred.configuredModelId}`,
+          inferred.provider,
+        );
+        if (inferredRef) {
+          const inferredStatus = getModelRefStatus({
+            cfg: params.cfg,
+            catalog: params.catalog,
+            ref: inferredRef,
+            defaultProvider: params.defaultProvider,
+            defaultModel: params.defaultModel,
+          });
+          if (inferredStatus.allowed) {
+            getLog().info(
+              `Inferred provider "${sanitizeForLog(inferred.provider)}" for model "${sanitizeForLog(inferred.configuredModelId)}" from configured allowlist`,
+            );
+            return { ref: inferredRef, key: inferredStatus.key };
+          }
+        }
+      }
+    }
+
+    // Build a hint listing available aliases when present.
+    const aliases = [...aliasIndex.byAlias.values()].map((v) => v.alias);
+    const hint = aliases.length > 0 ? ` (available aliases: ${aliases.join(", ")})` : "";
+    return { error: `model not allowed: ${status.key}${hint}` };
   }
 
   return { ref: resolved.ref, key: status.key };
