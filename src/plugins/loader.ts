@@ -442,6 +442,12 @@ export function resolveRuntimePluginRegistry(
   return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
 }
 
+export function resolveCompatibleRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  return getCompatibleActivePluginRegistry(options);
+}
+
 function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
