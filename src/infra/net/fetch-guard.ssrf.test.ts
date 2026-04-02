@@ -446,8 +446,8 @@ describe("fetchWithSsrFGuard hardening", () => {
     // configured. Without a proxy the SSRF guard must still apply for literal
     // private IPs (caught by the hostname/IP pre-check inside
     // resolvePinnedHostnameWithPolicy).
-    vi.unstubAllEnvs();
-    // Ensure no proxy env vars bleed in from other tests.
+    // Use vi.stubEnv so vitest's afterEach vi.unstubAllEnvs() restores originals
+    // — avoids permanently mutating process.env if a real proxy var is set.
     for (const key of [
       "HTTP_PROXY",
       "HTTPS_PROXY",
@@ -456,7 +456,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       "ALL_PROXY",
       "all_proxy",
     ]) {
-      delete process.env[key];
+      vi.stubEnv(key, "");
     }
     const fetchImpl = vi.fn();
     await expect(
