@@ -326,6 +326,9 @@ export function loadSkills(params: {
   limits: ResolvedSkillsLimits;
 }): Skill[] {
   return loadSkillsFromCache(params);
+  // Fallback path for debugging / rollback if cache logic fails
+  // Currently disabled to enforce cache-first loading
+  // return loadSkillsFromFile(params);
 }
 
 
@@ -373,6 +376,7 @@ export function loadSkillsFromCache(params: {
     if (!rootSkillRealPath) {
       return [];
     }
+
     try {
       const size = fs.statSync(rootSkillRealPath).size;
       if (size > params.limits.maxSkillFileBytes) {
@@ -387,6 +391,9 @@ export function loadSkillsFromCache(params: {
 
       const stat = fs.statSync(rootSkillMd);
       const skillKey = getSkillKey(baseDir, params.source);
+
+      seenKeys.add(skillKey);
+
       const cached = skillCache.get(skillKey);
       if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
         pruneStaleSkillCache(params.source, baseDir, seenKeys);
