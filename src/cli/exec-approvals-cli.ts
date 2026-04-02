@@ -162,9 +162,6 @@ async function loadConfigForApprovalsTarget(params: {
   opts: ExecApprovalsCliOpts;
   source: ApprovalsTargetSource;
 }): Promise<OpenClawConfig | null> {
-  if (params.source === "node") {
-    return null;
-  }
   try {
     if (params.source === "local") {
       return await readBestEffortConfig();
@@ -217,9 +214,18 @@ function buildEffectivePolicyReport(params: {
   approvals: ExecApprovalsFile;
 }): EffectivePolicyReport {
   if (params.source === "node") {
+    if (!params.cfg) {
+      return {
+        scopes: [],
+        note: "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
+      };
+    }
     return {
-      scopes: [],
-      note: "Node output shows host approvals state only. Gateway tools.exec policy still intersects at runtime.",
+      scopes: collectExecPolicySnapshots({
+        cfg: params.cfg,
+        approvals: params.approvals,
+      }),
+      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     };
   }
   if (!params.cfg) {
