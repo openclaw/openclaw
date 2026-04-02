@@ -10,8 +10,8 @@ import {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,

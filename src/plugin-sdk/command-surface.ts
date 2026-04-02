@@ -1,1 +1,4 @@
-export { normalizeCommandBody, shouldHandleTextCommands } from "../auto-reply/commands-registry.js";
+export {
+  normalizeCommandBody,
+  shouldHandleTextCommands,
+} from "../auto-reply/commands-registry.js";

@@ -130,7 +130,10 @@ function applyWhamCooldownResult(params: {
       : 0;
   return {
     ...params.computed,
-    cooldownUntil: Math.max(existingActiveCooldownUntil, params.now + params.whamResult.cooldownMs),
+    cooldownUntil: Math.max(
+      existingActiveCooldownUntil,
+      params.now + params.whamResult.cooldownMs,
+    ),
   };
 }
 

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveOAuthDir } from "../config/paths.js";
 import type { WhatsAppAccountConfig, WhatsAppConfig } from "../config/types.whatsapp.js";
+import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 

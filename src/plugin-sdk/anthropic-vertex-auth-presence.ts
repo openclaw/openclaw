@@ -37,7 +37,9 @@ function resolveAnthropicVertexAdcCredentialsPath(
   return existsSync(defaultAdcPath) ? defaultAdcPath : undefined;
 }
 
-export function hasAnthropicVertexAvailableAuth(env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasAnthropicVertexAvailableAuth(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return (
     hasAnthropicVertexMetadataServerAdc(env) ||
     resolveAnthropicVertexAdcCredentialsPath(env) !== undefined
