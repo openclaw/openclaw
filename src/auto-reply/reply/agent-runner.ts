@@ -424,6 +424,7 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      flowId,
     });
 
     if (runOutcome.kind === "final") {

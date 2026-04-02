@@ -47,6 +47,8 @@ export type SubscribeEmbeddedPiSessionParams = {
     usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
     status: "ok" | "error";
     errorMessage?: string;
+    /** Estimated cost in USD for this single LLM call. */
+    costUsd?: number;
   }) => void;
   /**
    * Called after every internal tool execution completes (tool.call trace).
@@ -58,6 +60,8 @@ export type SubscribeEmbeddedPiSessionParams = {
     durationMs: number;
     isError: boolean;
     errorMessage?: string;
+    /** Key input params extracted from the tool call args (command, path, query, etc.). */
+    toolInput?: Record<string, unknown>;
   }) => void;
 };
 

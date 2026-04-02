@@ -183,6 +183,7 @@ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -1281,11 +1282,20 @@ export async function runEmbeddedAttempt(
                       };
                       status: "ok" | "error";
                       errorMessage?: string;
-                    }) =>
+                      costUsd?: number;
+                    }) => {
+                      const costConfig = resolveModelCostConfig({
+                        provider: params.provider,
+                        model: params.modelId,
+                        config: params.config,
+                      });
+                      const costUsd = estimateUsageCost({ usage: evt.usage, cost: costConfig });
                       emitDiagnosticEvent({
                         type: "model.call",
                         sessionKey: params.sessionKey,
                         sessionId: params.sessionId,
+                        flowId: params.flowId,
+                        agentId: sessionAgentId,
                         callIndex: evt.callIndex,
                         provider: params.provider,
                         model: params.modelId,
@@ -1293,7 +1303,9 @@ export async function runEmbeddedAttempt(
                         durationMs: evt.durationMs,
                         status: evt.status,
                         ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
-                      })
+                        ...(costUsd != null ? { costUsd } : {}),
+                      });
+                    }
                   : undefined,
               onToolCallComplete:
                 params.config?.diagnostics?.callTrace?.logToolCalls === true
@@ -1303,16 +1315,20 @@ export async function runEmbeddedAttempt(
                       durationMs: number;
                       isError: boolean;
                       errorMessage?: string;
+                      toolInput?: Record<string, unknown>;
                     }) =>
                       emitDiagnosticEvent({
                         type: "tool.call",
                         sessionKey: params.sessionKey,
                         sessionId: params.sessionId,
+                        flowId: params.flowId,
+                        agentId: sessionAgentId,
                         toolName: evt.toolName,
                         toolCallId: evt.toolCallId,
                         durationMs: evt.durationMs,
                         isError: evt.isError,
                         ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
+                        ...(evt.toolInput ? { toolInput: evt.toolInput } : {}),
                       })
                   : undefined,
             }

@@ -50,6 +50,7 @@ export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   flowId?: string;
+  agentId?: string;
   callIndex: number;
   provider?: string;
   model?: string;
@@ -63,6 +64,8 @@ export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
   durationMs: number;
   status: "ok" | "error";
   errorMessage?: string;
+  /** Estimated cost in USD for this single LLM call. */
+  costUsd?: number;
 };
 
 export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
@@ -70,11 +73,14 @@ export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   flowId?: string;
+  agentId?: string;
   toolName: string;
   toolCallId?: string;
   durationMs: number;
   isError: boolean;
   errorMessage?: string;
+  /** Key input params extracted from the tool call args (command, path, query, url, etc.). */
+  toolInput?: Record<string, unknown>;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
