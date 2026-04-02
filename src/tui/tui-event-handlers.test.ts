@@ -403,6 +403,79 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-active");
   });
 
+  it("displays fallback output after a chat error event", () => {
+    const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-fallback",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial from primary" },
+    });
+    expect(state.activeChatRunId).toBe("run-fallback");
+
+    handleChatEvent({
+      runId: "run-fallback",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "API rate limit reached",
+    });
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run error: API rate limit reached");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    chatLog.updateAssistant.mockClear();
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-fallback",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "response from fallback model" },
+    });
+    expect(state.activeChatRunId).toBe("run-fallback");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith(
+      "response from fallback model",
+      "run-fallback",
+    );
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+
+    handleChatEvent({
+      runId: "run-fallback",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "complete fallback response" }] },
+    });
+    expect(chatLog.finalizeAssistant).toHaveBeenCalled();
+  });
+
+  it("does not reload history when error event fires for a local run", () => {
+    const ctx = makeContext(makeState({ activeChatRunId: null }));
+    ctx.noteLocalRunId("run-local-err");
+    const handlers = createEventHandlers({
+      chatLog: ctx.chatLog,
+      tui: ctx.tui,
+      state: ctx.state,
+      setActivityStatus: ctx.setActivityStatus,
+      loadHistory: ctx.loadHistory,
+      isLocalRunId: ctx.isLocalRunId,
+      forgetLocalRunId: ctx.forgetLocalRunId,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-local-err",
+      sessionKey: ctx.state.currentSessionKey,
+      state: "error",
+      errorMessage: "timeout",
+    });
+
+    expect(ctx.loadHistory).not.toHaveBeenCalled();
+    expect(ctx.isLocalRunId("run-local-err")).toBe(true);
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },

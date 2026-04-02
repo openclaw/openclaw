@@ -225,8 +225,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "error") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      // Soft-terminate: clear stale stream state and active-run claim, but
+      // keep the runId in sessionRuns and skip the history refresh. The
+      // gateway may retry the same runId with a fallback model; a full
+      // terminateRun + maybeRefreshHistoryForRun would drop the stream
+      // assembler, forget the local-run flag, and trigger loadHistory,
+      // preventing fallback delta/final events from displaying.
+      streamAssembler.drop(evt.runId);
+      clearActiveRunIfMatch(evt.runId);
+      if (wasActiveRun) {
+        setActivityStatus("error");
+      }
     }
     tui.requestRender();
   };
