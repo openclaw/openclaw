@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Podman/launch: remove noisy container output from `scripts/run-openclaw-podman.sh` and align the Podman install guidance with the quieter startup flow. (#59368) Thanks @sallyom.
 - MS Teams/streaming: strip already-streamed text from fallback block delivery when replies exceed the 4000-character streaming limit so long responses stop duplicating content. (#59297) Thanks @bradgroux.
 - MS Teams/logging: format non-`Error` failures with the shared unknown-error helper so logs stop collapsing caught SDK or Axios objects into `[object Object]`. (#59321) Thanks @bradgroux.
+- Slack/thread context: filter thread starter and history by the effective conversation allowlist without dropping valid open-room, DM, or group DM context. (#58380)
 
 ## 2026.4.1-beta.1
 
