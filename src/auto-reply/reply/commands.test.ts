@@ -518,7 +518,7 @@ describe("telegram command test plugin helpers", () => {
     const source = await fs.readFile(new URL("./commands-approve.ts", import.meta.url), "utf8");
 
     expect(source).toContain('from "../../plugin-sdk/telegram-surface.js"');
-    expect(source).not.toContain('from "../../../extensions/telegram/api.js"');
+    expect(source).not.toContain("extensions/telegram/api.js");
   });
 
   it("falls back to allowFrom when explicit exec approvers are empty", () => {
