@@ -4,6 +4,9 @@ function formatMediaAttachedLine(params: {
   path: string;
   url?: string;
   type?: string;
+  caption?: string;
+  width?: number;
+  height?: number;
   index?: number;
   total?: number;
 }): string {
@@ -11,7 +14,17 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const typePart = params.type?.trim() ? ` (${params.type.trim()})` : "";
+  const details: string[] = [];
+  if (params.type?.trim()) {
+    details.push(params.type.trim());
+  }
+  if (typeof params.width === "number" && typeof params.height === "number") {
+    details.push(`${params.width}x${params.height}`);
+  }
+  if (params.caption?.trim()) {
+    details.push(JSON.stringify(params.caption.trim()));
+  }
+  const typePart = details.length > 0 ? ` (${details.join(", ")})` : "";
   const urlRaw = params.url?.trim();
   const urlPart = urlRaw ? ` | ${urlRaw}` : "";
   return `${prefix}${params.path}${typePart}${urlPart}]`;
@@ -97,11 +110,23 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // when there is a single attachment to avoid stripping unrelated audio files.
   const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
 
+  const captions =
+    Array.isArray(ctx.MediaCaptions) && ctx.MediaCaptions.length === paths.length
+      ? ctx.MediaCaptions
+      : undefined;
+  const dimensions =
+    Array.isArray(ctx.MediaDimensions) && ctx.MediaDimensions.length === paths.length
+      ? ctx.MediaDimensions
+      : undefined;
+
   const entries = paths
     .map((entry, index) => ({
       path: entry ?? "",
       type: types?.[index] ?? ctx.MediaType,
       url: urls?.[index] ?? ctx.MediaUrl,
+      caption: captions?.[index] ?? ctx.MediaCaption,
+      width: dimensions?.[index]?.width ?? ctx.MediaDimension?.width,
+      height: dimensions?.[index]?.height ?? ctx.MediaDimension?.height,
       index,
     }))
     .filter((entry) => {
@@ -134,6 +159,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       path: entries[0]?.path ?? "",
       type: entries[0]?.type,
       url: entries[0]?.url,
+      caption: entries[0]?.caption,
+      width: entries[0]?.width,
+      height: entries[0]?.height,
     });
   }
 
@@ -147,6 +175,9 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
         total: count,
         type: entry.type,
         url: entry.url,
+        caption: entry.caption,
+        width: entry.width,
+        height: entry.height,
       }),
     );
   }

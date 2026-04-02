@@ -176,4 +176,22 @@ describe("buildInboundMediaNote", () => {
     // No transcription = keep audio attachment as fallback
     expect(note).toBe("[media attached: /tmp/voice.ogg (audio/ogg)]");
   });
+
+  it("includes attachment dimensions when available", () => {
+    const note = buildInboundMediaNote({
+      MediaPath: "/tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaDimension: { width: 4000, height: 3000 },
+    });
+    expect(note).toBe("[media attached: /tmp/photo.jpg (image/jpeg, 4000x3000)]");
+  });
+
+  it("includes attachment captions when available", () => {
+    const note = buildInboundMediaNote({
+      MediaPath: "/tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaCaption: "sunset over the ocean",
+    });
+    expect(note).toBe('[media attached: /tmp/photo.jpg (image/jpeg, "sunset over the ocean")]');
+  });
 });

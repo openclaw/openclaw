@@ -36,6 +36,11 @@ type GroupEventOpts = {
     start?: number;
     length?: number;
   }> | null;
+  textStyles?: Array<{
+    style: string;
+    start: number;
+    length: number;
+  }>;
 };
 
 function makeGroupEvent(opts: GroupEventOpts) {
@@ -45,6 +50,7 @@ function makeGroupEvent(opts: GroupEventOpts) {
       attachments: opts.attachments ?? [],
       quote: opts.quoteText ? { text: opts.quoteText } : undefined,
       mentions: opts.mentions ?? undefined,
+      textStyles: opts.textStyles ?? undefined,
       groupInfo: { groupId: "g1", groupName: "Test Group" },
     },
   });
@@ -86,6 +92,15 @@ function createSignalConfig(params: { requireMention: boolean; mentionPattern?: 
       },
     },
   } as unknown as OpenClawConfig;
+}
+
+function createGroupHandler() {
+  capturedCtx = undefined;
+  return createMentionHandler({ requireMention: true });
+}
+
+function dispatchCalled() {
+  return capturedCtx !== undefined;
 }
 
 async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: string) {
@@ -258,6 +273,16 @@ describe("signal mention gating", () => {
     expect(String(getCapturedCtx()?.Body ?? "")).toContain("@123e4567");
     expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
+
+  it("detects control commands even when text style markers wrap the command", async () => {
+    const handler = createGroupHandler();
+    const event = makeGroupEvent({
+      message: "/help",
+      textStyles: [{ style: "BOLD", start: 0, length: 5 }],
+    });
+    await handler(event);
+    expect(dispatchCalled()).toBe(true);
+  });
 });
 
 describe("renderSignalMentions", () => {
@@ -265,35 +290,38 @@ describe("renderSignalMentions", () => {
 
   it("returns the original message when no mentions are provided", () => {
     const message = `${PLACEHOLDER} ping`;
-    expect(renderSignalMentions(message, null)).toBe(message);
-    expect(renderSignalMentions(message, [])).toBe(message);
+    expect(renderSignalMentions(message, null).text).toBe(message);
+    expect(renderSignalMentions(message, []).text).toBe(message);
   });
 
   it("replaces placeholder code points using mention metadata", () => {
     const message = `${PLACEHOLDER} hi ${PLACEHOLDER}!`;
-    const normalized = renderSignalMentions(message, [
+    const result = renderSignalMentions(message, [
       { uuid: "abc-123", start: 0, length: 1 },
       { number: "+15550005555", start: message.lastIndexOf(PLACEHOLDER), length: 1 },
     ]);
 
-    expect(normalized).toBe("@abc-123 hi @+15550005555!");
+    expect(result.text).toBe("@abc-123 hi @+15550005555!");
+    expect(result.offsetShifts.size).toBeGreaterThan(0);
   });
 
   it("skips mentions that lack identifiers or out-of-bounds spans", () => {
     const message = `${PLACEHOLDER} hi`;
-    const normalized = renderSignalMentions(message, [
+    const result = renderSignalMentions(message, [
       { name: "ignored" },
       { uuid: "valid", start: 0, length: 1 },
       { number: "+1555", start: 999, length: 1 },
     ]);
 
-    expect(normalized).toBe("@valid hi");
+    expect(result.text).toBe("@valid hi");
+    expect(result.offsetShifts.size).toBeGreaterThan(0);
   });
 
   it("clamps and truncates fractional mention offsets", () => {
     const message = `${PLACEHOLDER} ping`;
-    const normalized = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
+    const result = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
 
-    expect(normalized).toBe("@valid ping");
+    expect(result.text).toBe("@valid ping");
+    expect(result.offsetShifts.size).toBeGreaterThan(0);
   });
 });

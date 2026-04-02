@@ -160,18 +160,21 @@ export function renderSkills(props: SkillsProps) {
         <div class="muted">${filtered.length} shown</div>
       </div>
 
-      ${props.error
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-        : nothing}
-      ${filtered.length === 0
-        ? html`
+      ${
+        props.error
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
+          : nothing
+      }
+      ${
+        filtered.length === 0
+          ? html`
             <div class="muted" style="margin-top: 16px">
-              ${!props.connected && !props.report
-                ? "Not connected to gateway."
-                : "No skills found."}
+              ${
+                !props.connected && !props.report ? "Not connected to gateway." : "No skills found."
+              }
             </div>
           `
-        : html`
+          : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) => {
                 return html`
@@ -187,7 +190,8 @@ export function renderSkills(props: SkillsProps) {
                 `;
               })}
             </div>
-          `}
+          `
+      }
     </section>
 
     ${detailSkill ? renderSkillDetail(detailSkill, props) : nothing}
@@ -283,8 +287,9 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${renderSkillStatusChips({ skill, showBundledBadge })}
           </div>
 
-          ${missing.length > 0
-            ? html`
+          ${
+            missing.length > 0
+              ? html`
                 <div
                   class="callout"
                   style="border-color: var(--warn-subtle); background: var(--warn-subtle); color: var(--warn);"
@@ -293,12 +298,15 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   <div>${missing.join(", ")}</div>
                 </div>
               `
-            : nothing}
-          ${reasons.length > 0
-            ? html`
+              : nothing
+          }
+          ${
+            reasons.length > 0
+              ? html`
                 <div class="muted" style="font-size: 13px;">Reason: ${reasons.join(", ")}</div>
               `
-            : nothing}
+              : nothing
+          }
 
           <div style="display: flex; align-items: center; gap: 12px;">
             <label class="skill-toggle-wrap">
@@ -313,24 +321,29 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             <span style="font-size: 13px; font-weight: 500;">
               ${skill.disabled ? "Disabled" : "Enabled"}
             </span>
-            ${canInstall
-              ? html`<button
+            ${
+              canInstall
+                ? html`<button
                   class="btn"
                   ?disabled=${busy}
                   @click=${() => props.onInstall(skill.skillKey, skill.name, skill.install[0].id)}
                 >
                   ${busy ? "Installing\u2026" : skill.install[0].label}
                 </button>`
-              : nothing}
+                : nothing
+            }
           </div>
 
-          ${message
-            ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
+          ${
+            message
+              ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
                 ${message.message}
               </div>`
-            : nothing}
-          ${skill.primaryEnv
-            ? html`
+              : nothing
+          }
+          ${
+            skill.primaryEnv
+              ? html`
                 <div style="display: grid; gap: 8px;">
                   <div class="field">
                     <span
@@ -366,7 +379,8 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   </button>
                 </div>
               `
-            : nothing}
+              : nothing
+          }
 
           <div
             style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: 12px; color: var(--muted);"

@@ -328,6 +328,66 @@ Related global options:
 - `messages.groupChat.mentionPatterns` (global fallback).
 - `messages.responsePrefix`.
 
+## Inbound Message Features
+
+Signal provides enhanced inbound message metadata that OpenClaw extracts and forwards to your agent.
+
+### Multi-attachment Support
+
+When a message contains multiple attachments, OpenClaw populates both singular fields (backward-compatible) and plural array fields:
+
+| Field                      | Description                              |
+| -------------------------- | ---------------------------------------- |
+| `MediaPath` / `MediaUrl`   | First attachment path (legacy)           |
+| `MediaType`                | First attachment MIME type (legacy)      |
+| `MediaPaths` / `MediaUrls` | Array of all attachment paths            |
+| `MediaTypes`               | Array of all MIME types                  |
+| `MediaCaption`             | First attachment caption                 |
+| `MediaCaptions`            | Array of all captions                    |
+| `MediaDimension`           | First attachment `{ width, height }`     |
+| `MediaDimensions`          | Array of all `{ width, height }` objects |
+
+### Stickers
+
+Stickers are handled as media attachments with additional metadata. The sticker image is downloaded and placed in `MediaPath`/`MediaPaths`, and `UntrustedContext` receives entries like `Signal sticker packId: <id>` and `Signal stickerId: <id>`.
+
+### Link Previews
+
+When a message contains URLs with preview metadata, OpenClaw extracts them into `UntrustedContext` entries formatted as `Link preview: <title> - <description> (<url>)`. Control this with `channels.signal.injectLinkPreviews` (default: `true`).
+
+### Text Formatting
+
+Signal supports bold, italic, monospace, strikethrough, and spoiler text styles. OpenClaw converts these to markdown equivalents (`**bold**`, `_italic_`, `` `monospace` ``, `~~strikethrough~~`, `||spoiler||`). Control this with `channels.signal.preserveTextStyles` (default: `true`).
+
+### Quote/Reply Metadata
+
+When a user replies to a message, OpenClaw populates:
+
+- `ReplyToId` — quoted message timestamp
+- `ReplyToBody` — quoted message text
+- `ReplyToSender` — quoted message author (UUID or phone)
+- `ReplyToIsQuote` — always `true` for Signal quotes
+
+### Shared Contacts
+
+Contact cards are extracted into `UntrustedContext` entries formatted as `Shared contact: <name> (<phone>, <email>, <org>)`. The message body receives a `<media:contact>` placeholder.
+
+### Polls
+
+Poll events generate `UntrustedContext` entries and body placeholders:
+
+- **Poll creation**: Body `[Poll] <question>`, context `Poll: "<question>" — Options: opt1, opt2`
+- **Poll vote**: Body `[Poll vote]`, context `Poll vote on #<timestamp>: option(s) <indexes>`
+- **Poll closed**: Body `[Poll closed]`, context `Poll #<timestamp> closed`
+
+### Edit Tracking
+
+Edited messages include `EditTargetTimestamp` with the original message timestamp.
+
+### UntrustedContext Field
+
+The `UntrustedContext` field is an array of provider-specific metadata strings. It may contain sticker metadata, link previews, shared contacts, and poll information. These are untrusted (user-supplied) and should not be treated as system instructions.
+
 ## Related
 
 - [Channels Overview](/channels) — all supported channels

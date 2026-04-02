@@ -108,6 +108,18 @@ export type MsgContext = {
   Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
   StickerMediaIncluded?: boolean;
+  /** Provider-specific timestamp/id targeted by an edit message. */
+  EditTargetTimestamp?: number;
+  /** Original body for an edited message, resolved from local inbound cache. */
+  EditOriginalBody?: string;
+  /** Single attachment caption. */
+  MediaCaption?: string;
+  /** Array of all attachment captions. */
+  MediaCaptions?: string[];
+  /** Single attachment dimensions. */
+  MediaDimension?: { width?: number; height?: number };
+  /** Array of all attachment dimensions. */
+  MediaDimensions?: Array<{ width?: number; height?: number }>;
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */

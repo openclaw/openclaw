@@ -9,22 +9,27 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (!mime) {
     return undefined;
   }
-  if (mime.startsWith("image/")) {
+  // Normalize: trim, lowercase, and strip parameters (e.g. "; charset=utf-8")
+  const normalized = mime.trim().toLowerCase().replace(/;.*$/, "").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.startsWith("image/")) {
     return "image";
   }
-  if (mime.startsWith("audio/")) {
+  if (normalized.startsWith("audio/")) {
     return "audio";
   }
-  if (mime.startsWith("video/")) {
+  if (normalized.startsWith("video/")) {
     return "video";
   }
-  if (mime === "application/pdf") {
+  if (normalized === "application/pdf") {
     return "document";
   }
-  if (mime.startsWith("text/")) {
+  if (normalized.startsWith("text/")) {
     return "document";
   }
-  if (mime.startsWith("application/")) {
+  if (normalized.startsWith("application/")) {
     return "document";
   }
   return undefined;
