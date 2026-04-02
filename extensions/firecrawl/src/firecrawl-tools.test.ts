@@ -445,19 +445,56 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
-  it("only allows the official Firecrawl API host for fetch endpoints", () => {
+  it("resolves endpoints for both official and self-hosted Firecrawl URLs", () => {
     expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
       "https://api.firecrawl.dev/v2/scrape",
     );
-    expect(() =>
-      firecrawlClientTesting.resolveEndpoint("http://api.firecrawl.dev", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl must use https.");
-    expect(() =>
-      firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl host is not allowed");
-    expect(() =>
-      firecrawlClientTesting.resolveEndpoint("https://attacker.example", "/v2/search"),
-    ).toThrow("Firecrawl baseUrl host is not allowed");
+    expect(
+      firecrawlClientTesting.resolveEndpoint("https://firecrawl.mycompany.com", "/v2/scrape"),
+    ).toBe("https://firecrawl.mycompany.com/v2/scrape");
+    expect(firecrawlClientTesting.resolveEndpoint("http://localhost:3002", "/v2/search")).toBe(
+      "http://localhost:3002/v2/search",
+    );
+    expect(firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape")).toBe(
+      "https://127.0.0.1:8787/v2/scrape",
+    );
+  });
+
+  it("validates baseUrl: rejects HTTP for public hosts, allows HTTPS for any host", async () => {
+    // HTTPS for any host is allowed
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("https://api.firecrawl.dev"),
+    ).resolves.toBeUndefined();
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("https://firecrawl.mycompany.com"),
+    ).resolves.toBeUndefined();
+
+    // HTTP for loopback is allowed
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("http://localhost:3002"),
+    ).resolves.toBeUndefined();
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("http://127.0.0.1:3002"),
+    ).resolves.toBeUndefined();
+
+    // Invalid URL is rejected
+    await expect(firecrawlClientTesting.validateFirecrawlBaseUrl("not-a-url")).rejects.toThrow(
+      "Firecrawl base URL must be a valid http:// or https:// URL.",
+    );
+
+    // Non-http/https protocol is rejected
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("ftp://firecrawl.example.com"),
+    ).rejects.toThrow("Firecrawl base URL must use http:// or https://.");
+  });
+
+  it("detects default vs self-hosted Firecrawl host", () => {
+    expect(firecrawlClientTesting.isDefaultFirecrawlHost("https://api.firecrawl.dev")).toBe(true);
+    expect(firecrawlClientTesting.isDefaultFirecrawlHost("https://API.FIRECRAWL.DEV")).toBe(true);
+    expect(firecrawlClientTesting.isDefaultFirecrawlHost("https://firecrawl.mycompany.com")).toBe(
+      false,
+    );
+    expect(firecrawlClientTesting.isDefaultFirecrawlHost("http://localhost:3002")).toBe(false);
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {
