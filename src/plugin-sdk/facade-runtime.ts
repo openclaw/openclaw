@@ -37,6 +37,7 @@ const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
+const loadedFacadePluginIds = new Set<string>();
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
 let cachedBoundaryResolvedConfig:
   | {
@@ -173,6 +174,10 @@ function resolveBundledPluginManifestRecordByDirName(dirName: string): PluginMan
       (plugin) => plugin.origin === "bundled" && path.basename(plugin.rootDir) === dirName,
     ) ?? null
   );
+}
+
+function resolveTrackedFacadePluginId(dirName: string): string {
+  return resolveBundledPluginManifestRecordByDirName(dirName)?.id ?? dirName;
 }
 
 function resolveBundledPluginPublicSurfaceAccess(params: {
@@ -334,6 +339,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   try {
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
     Object.assign(sentinel, loaded);
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
   } catch (err) {
     loadedFacadeModules.delete(location.modulePath);
     throw err;
@@ -372,4 +378,16 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
     return null;
   }
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+export function listImportedBundledPluginFacadeIds(): string[] {
+  return [...loadedFacadePluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resetFacadeRuntimeStateForTest(): void {
+  loadedFacadeModules.clear();
+  loadedFacadePluginIds.clear();
+  jitiLoaders.clear();
+  cachedBoundaryRawConfig = undefined;
+  cachedBoundaryResolvedConfig = undefined;
 }
