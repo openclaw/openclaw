@@ -426,40 +426,10 @@ export async function runEmbeddedAttempt(
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
-          agentId: sessionAgentId,
-          // Spawned subagents can receive an explicit filesystem policy ceiling from the gateway.
-          // This is merged with config defaults inside createOpenClawCodingTools.
-          fsPolicy: params.toolFsPolicy ?? undefined,
-          trigger: params.trigger,
-          memoryFlushWritePath: params.memoryFlushWritePath,
-          exec: {
-            ...params.execOverrides,
-            elevated: params.bashElevated,
-          },
-          sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-          agentAccountId: params.agentAccountId,
-          messageTo: params.messageTo,
-          messageThreadId: params.messageThreadId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-          senderIsOwner: params.senderIsOwner,
-          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-          sessionKey: sandboxSessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-          spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
             agentId: sessionAgentId,
+            // Spawned subagents can receive an explicit filesystem policy ceiling from the gateway.
+            // This is merged with config defaults inside createOpenClawCodingTools.
+            fsPolicy: params.toolFsPolicy ?? undefined,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             exec: {
@@ -517,6 +487,7 @@ export async function runEmbeddedAttempt(
               abortSessionForYield?.();
             },
           });
+
           if (params.toolsAllow && params.toolsAllow.length > 0) {
             const allowSet = new Set(params.toolsAllow);
             return allTools.filter((tool) => allowSet.has(tool.name));

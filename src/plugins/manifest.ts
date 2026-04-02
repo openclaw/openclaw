@@ -274,7 +274,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
   } catch (err) {
     return {
       ok: false,
