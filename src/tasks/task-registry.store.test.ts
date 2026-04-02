@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createManagedFlow, resetFlowRegistryForTests } from "./flow-registry.js";
 import {
   createTaskRecord,
   deleteTaskRecordById,
@@ -37,6 +38,7 @@ describe("task-registry store runtime", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests({ persist: false });
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -195,11 +197,16 @@ describe("task-registry store runtime", () => {
   });
 
   it("persists parentFlowId with task rows", () => {
+    const flow = createManagedFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/task-store-parent-flow",
+      goal: "Persist linked tasks",
+    });
     const created = createTaskRecord({
       runtime: "acp",
       ownerKey: "agent:main:main",
       scopeKind: "session",
-      parentFlowId: "flow-123",
+      parentFlowId: flow.flowId,
       childSessionKey: "agent:codex:acp:new",
       runId: "run-flow-linked",
       task: "Linked task",
@@ -211,7 +218,7 @@ describe("task-registry store runtime", () => {
 
     expect(findTaskByRunId("run-flow-linked")).toMatchObject({
       taskId: created.taskId,
-      parentFlowId: "flow-123",
+      parentFlowId: flow.flowId,
     });
   });
 
