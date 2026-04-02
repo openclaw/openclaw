@@ -23,7 +23,25 @@ export type KyutaiStreamResult = {
 export async function kyutaiPrewarm(): Promise<boolean> {
   try {
     const res = await fetch(`${KYUTAI_BASE_URL}/load`, { method: "POST" });
-    return res.ok;
+    if (!res.ok) return false;
+
+    // Dummy inference to warm CUDA kernels — discard the output
+    try {
+      const warmup = await fetch(KYUTAI_STREAM_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: "hey" }),
+      });
+      if (warmup.body) {
+        // Drain the response to complete the inference
+        const reader = warmup.body.getReader();
+        while (!(await reader.read()).done) { /* discard */ }
+      }
+    } catch {
+      // Best-effort — model is loaded even if warmup inference fails
+    }
+
+    return true;
   } catch {
     return false;
   }
