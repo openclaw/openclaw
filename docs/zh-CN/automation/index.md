@@ -25,22 +25,22 @@ flowchart TD
 
 ## 机制一览
 
-| 机制                                           | 功能                                          | 运行环境                 | 创建任务记录 |
-| ---------------------------------------------- | --------------------------------------------- | ------------------------ | ------------ |
-| [心跳](/gateway/heartbeat)                     | 周期性主会话轮次 — 批量合并多项检查           | 主会话                   | 否           |
-| [Cron 定时任务](/automation/cron-jobs)         | 精确计时的计划任务                            | 主会话或隔离会话         | 是（所有类型）|
-| [后台任务](/automation/tasks)                  | 跟踪分离的工作（cron、ACP、子代理、CLI）      | 不适用（账本）           | 不适用       |
-| [钩子](/automation/hooks)                      | 由代理生命周期事件触发的事件驱动脚本          | 钩子运行器               | 否           |
-| [常驻指令](/automation/standing-orders)        | 注入到系统提示词中的持久化指令                | 主会话                   | 否           |
-| [Webhook](/automation/webhook)                 | 接收入站 HTTP 事件并路由给代理                | Gateway HTTP             | 否           |
+| 机制                                    | 功能                                     | 运行环境         | 创建任务记录   |
+| --------------------------------------- | ---------------------------------------- | ---------------- | -------------- |
+| [心跳](/gateway/heartbeat)              | 周期性主会话轮次 — 批量合并多项检查      | 主会话           | 否             |
+| [Cron 定时任务](/automation/cron-jobs)  | 精确计时的计划任务                       | 主会话或隔离会话 | 是（所有类型） |
+| [后台任务](/automation/tasks)           | 跟踪分离的工作（cron、ACP、子代理、CLI） | 不适用（账本）   | 不适用         |
+| [钩子](/automation/hooks)               | 由代理生命周期事件触发的事件驱动脚本     | 钩子运行器       | 否             |
+| [常驻指令](/automation/standing-orders) | 注入到系统提示词中的持久化指令           | 主会话           | 否             |
+| [Webhook](/automation/webhook)          | 接收入站 HTTP 事件并路由给代理           | Gateway HTTP     | 否             |
 
 ### 专业化自动化
 
-| 机制                                           | 功能                                    |
-| ---------------------------------------------- | --------------------------------------- |
-| [Gmail PubSub](/automation/gmail-pubsub)       | 通过 Google PubSub 实时接收 Gmail 通知  |
-| [轮询](/automation/poll)                       | 周期性数据源检查（RSS、API 等）          |
-| [认证监控](/automation/auth-monitoring)        | 凭据健康状态和过期提醒                   |
+| 机制                                     | 功能                                   |
+| ---------------------------------------- | -------------------------------------- |
+| [Gmail PubSub](/automation/gmail-pubsub) | 通过 Google PubSub 实时接收 Gmail 通知 |
+| [轮询](/automation/poll)                 | 周期性数据源检查（RSS、API 等）        |
+| [认证监控](/automation/auth-monitoring)  | 凭据健康状态和过期提醒                 |
 
 ## 它们如何协同工作
 
