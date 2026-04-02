@@ -27,6 +27,7 @@ describe("reportD0ToolLifecycle", () => {
         toolCallId: "tool-call-1",
         toolDetail: "show /tmp/file.txt",
         durationMs: 250,
+        resultChars: 13,
         status: "success",
       },
       {
@@ -58,6 +59,46 @@ describe("reportD0ToolLifecycle", () => {
         sessionId: "ephemeral-session-1",
         toolDetail: "show /tmp/file.txt",
         durationMs: 250,
+        resultChars: 13,
+      }),
+    );
+  });
+
+  it("posts main D0 tool lifecycle to backend when runtime env is configured", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubEnv("D0_BACKEND_INTERNAL_URL", "http://backend.internal");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "gateway-token");
+
+    const { reportD0ToolLifecycle } = await import("./d0-tool-analytics-reporter.js");
+
+    const ok = await reportD0ToolLifecycle(
+      {
+        toolName: "exec",
+        runId: "run-tool-2",
+        toolCallId: "tool-call-2",
+        toolDetail: "git status",
+        resultChars: 2,
+        status: "success",
+      },
+      {
+        sessionKey: "agent:main:main",
+        sessionId: "ephemeral-session-2",
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(JSON.parse(String(init?.body))).toEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        status: "success",
+        runId: "run-tool-2",
+        toolCallId: "tool-call-2",
+        sessionKey: "agent:main:main",
+        sessionId: "ephemeral-session-2",
+        toolDetail: "git status",
+        resultChars: 2,
       }),
     );
   });

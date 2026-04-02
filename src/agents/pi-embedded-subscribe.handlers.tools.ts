@@ -393,6 +393,8 @@ export async function handleToolExecutionEnd(
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  const resultText = extractToolResultText(sanitizedResult);
+  const resultChars = resultText?.length;
   if (!isToolError && isMessagingSend) {
     const committedMediaUrls = [
       ...pendingMediaUrls,
@@ -478,6 +480,7 @@ export async function handleToolExecutionEnd(
           sessionId: ctx.params.sessionId,
           durationMs,
           error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+          resultChars,
         },
         {
           sessionKey: ctx.params.sessionKey,
