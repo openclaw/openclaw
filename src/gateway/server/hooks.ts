@@ -48,6 +48,7 @@ export function createGatewayHooksRequestHandler(params: {
           mode: "announce" as const,
           channel: value.channel,
           to: value.to,
+          ...(value.accountId ? { accountId: value.accountId } : {}),
         }
       : { mode: "none" as const };
 
