@@ -88,6 +88,21 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates python script operand even when trailing option values look like scripts", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "script.py"), "payload = $DM_JSON", "utf-8");
+      await fs.writeFile(path.join(tmp, "out.py"), "print('ok')", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-python-trailing-option-value", {
+          command: "python script.py --output out.py",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates the first positional node script operand when extra args follow", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");

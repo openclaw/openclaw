@@ -28,6 +28,7 @@ import {
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForCarbon as parseDiscordModalCustomIdForCarbonImpl,
 } from "./component-custom-id.js";
+export { buildDiscordComponentCustomId, buildDiscordModalCustomId } from "./component-custom-id.js";
 
 // Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
 // Keep dynamic form definitions loadable instead of crashing unrelated suites.

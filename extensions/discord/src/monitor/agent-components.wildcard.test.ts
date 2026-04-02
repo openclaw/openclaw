@@ -1,7 +1,7 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
-let buildDiscordComponentCustomId: typeof import("../component-custom-id.js").buildDiscordComponentCustomId;
-let buildDiscordModalCustomId: typeof import("../component-custom-id.js").buildDiscordModalCustomId;
+let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
+let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
 let createDiscordComponentButton: typeof import("./agent-components.js").createDiscordComponentButton;
 let createDiscordComponentChannelSelect: typeof import("./agent-components.js").createDiscordComponentChannelSelect;
 let createDiscordComponentMentionableSelect: typeof import("./agent-components.js").createDiscordComponentMentionableSelect;
@@ -11,8 +11,7 @@ let createDiscordComponentStringSelect: typeof import("./agent-components.js").c
 let createDiscordComponentUserSelect: typeof import("./agent-components.js").createDiscordComponentUserSelect;
 
 beforeAll(async () => {
-  ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } =
-    await import("../component-custom-id.js"));
+  ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } = await import("../components.js"));
   ({
     createDiscordComponentButton,
     createDiscordComponentChannelSelect,
