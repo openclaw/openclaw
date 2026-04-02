@@ -330,7 +330,10 @@ describe("acp translator stop reason mapping", () => {
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
       agent.handleGatewayReconnect();
-      await Promise.resolve();
+      for (let attempt = 0; attempt < 5 && !resolveAgentWait; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(resolveAgentWait).toBeDefined();
 
       agent.handleGatewayDisconnect("1006: second disconnect");
       resolveAgentWait?.({ status: "timeout" });
@@ -492,6 +495,66 @@ describe("acp translator stop reason mapping", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(secondPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects only unrecovered prompts after reconnect reconciliation", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "chat.send") {
+          return params?.sessionKey === "agent:main:second"
+            ? Promise.reject(new Error("gateway closed (1006): connection lost"))
+            : {};
+        }
+        if (method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:first",
+        cwd: "/tmp",
+      });
+      sessionStore.createSession({
+        sessionId: "session-2",
+        sessionKey: "agent:main:second",
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+
+      const acceptedPrompt = agent.prompt({
+        sessionId: "session-1",
+        prompt: [{ type: "text", text: "accepted" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      const preAckPrompt = agent.prompt({
+        sessionId: "session-2",
+        prompt: [{ type: "text", text: "pre-ack" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      const acceptedSettleSpy = vi.fn();
+      void acceptedPrompt.then(
+        (value) => acceptedSettleSpy({ kind: "resolve", value }),
+        (error) => acceptedSettleSpy({ kind: "reject", error }),
+      );
+      void preAckPrompt.catch(() => {});
+
+      await Promise.resolve();
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(acceptedSettleSpy).not.toHaveBeenCalled();
+      await expect(preAckPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
     } finally {
       vi.useRealTimers();
     }
