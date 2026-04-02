@@ -8,6 +8,47 @@ vi.mock("../chrome-mcp.js", () => ({
 }));
 
 describe("basic browser routes", () => {
+  it("returns 503 when browser hosting is disabled", async () => {
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => ({
+        resolved: {
+          enabled: false,
+          headless: false,
+          noSandbox: false,
+          executablePath: undefined,
+        },
+        profiles: new Map(),
+      }),
+      forProfile: () =>
+        ({
+          profile: {
+            name: "chrome-live",
+            driver: "existing-session",
+            cdpPort: 0,
+            cdpUrl: "",
+            userDataDir: "/tmp/brave-profile",
+            color: "#00AA00",
+            attachOnly: true,
+          },
+          isHttpReachable: async () => true,
+          isReachable: async () => true,
+        }) as never,
+    } as never);
+
+    const handler = getHandlers.get("/");
+    expect(handler).toBeTypeOf("function");
+
+    const response = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { profile: "chrome-live" } }, response.res);
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toMatchObject({
+      error:
+        "browser hosting is not enabled. Configure browser.hosting in your gateway config and restart the gateway.",
+    });
+  });
+
   it("maps existing-session status failures to JSON browser errors", async () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserBasicRoutes(app, {

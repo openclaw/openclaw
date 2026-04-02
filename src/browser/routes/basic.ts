@@ -72,7 +72,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     if (!current.resolved.enabled) {
       return jsonError(
         res,
-        400,
+        503,
         "browser hosting is not enabled. Configure browser.hosting in your gateway config and restart the gateway.",
       );
     }
