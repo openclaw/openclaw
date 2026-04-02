@@ -16,6 +16,8 @@ import {
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
   retryBlockedFlowAsQueuedTaskRun,
+  runTaskInFlow,
+  runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
@@ -289,7 +291,7 @@ describe("task-executor", () => {
     });
   });
 
-  it("cancels active tasks linked to a managed flow", async () => {
+  it("cancels active tasks linked to a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
@@ -330,6 +332,139 @@ describe("task-executor", () => {
     });
   });
 
+  it("runs child tasks under managed TaskFlows", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Inspect PR batch",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+      });
+
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-child",
+        label: "Inspect a PR",
+        task: "Inspect a PR",
+        status: "running",
+        startedAt: 10,
+        lastEventAt: 10,
+      });
+
+      expect(created).toMatchObject({
+        found: true,
+        created: true,
+        task: expect.objectContaining({
+          parentFlowId: flow.flowId,
+          ownerKey: "agent:main:main",
+          status: "running",
+          runId: "run-flow-child",
+        }),
+      });
+      expect(getTaskById(created.task!.taskId)).toMatchObject({
+        parentFlowId: flow.flowId,
+        ownerKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child",
+      });
+    });
+  });
+
+  it("refuses to add child tasks once cancellation is requested on a managed TaskFlow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+      });
+
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-after-cancel",
+        task: "Should be denied",
+      });
+
+      expect(created).toMatchObject({
+        found: true,
+        created: false,
+        reason: "Flow cancellation has already been requested.",
+      });
+    });
+  });
+
+  it("sets cancel intent before child tasks settle and finalizes later", async () => {
+    await withTaskExecutorStateDir(async () => {
+      hoisted.cancelSessionMock.mockRejectedValue(new Error("still shutting down"));
+
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Long running batch",
+      });
+      const child = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-sticky-cancel",
+        task: "Inspect a PR",
+        status: "running",
+        startedAt: 10,
+        lastEventAt: 10,
+      }).task!;
+
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "One or more child tasks are still active.",
+        flow: expect.objectContaining({
+          flowId: flow.flowId,
+          cancelRequestedAt: expect.any(Number),
+          status: "queued",
+        }),
+      });
+
+      failTaskRunByRunId({
+        runId: "run-flow-sticky-cancel",
+        endedAt: 50,
+        lastEventAt: 50,
+        error: "cancel completed later",
+        status: "cancelled",
+      });
+
+      expect(getTaskById(child.taskId)).toMatchObject({
+        taskId: child.taskId,
+        status: "cancelled",
+      });
+      expect(getFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        cancelRequestedAt: expect.any(Number),
+        status: "cancelled",
+        endedAt: 50,
+      });
+    });
+  });
+
   it("denies cross-owner flow cancellation through the owner-scoped wrapper", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedFlow({
@@ -353,6 +488,32 @@ describe("task-executor", () => {
         flowId: flow.flowId,
         status: "queued",
       });
+    });
+  });
+
+  it("denies cross-owner managed TaskFlow child spawning through the owner-scoped wrapper", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+
+      const created = runTaskInFlowForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:other",
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-cross-owner",
+        task: "Should be denied",
+      });
+
+      expect(created).toMatchObject({
+        found: false,
+        created: false,
+        reason: "Flow not found.",
+      });
+      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
     });
   });
 
