@@ -80,6 +80,8 @@ export default definePluginEntry({
         },
       },
       capabilities: {
+        anthropicToolSchemaMode: "openai-functions",
+        anthropicToolChoiceMode: "openai-string-modes",
         openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       },
