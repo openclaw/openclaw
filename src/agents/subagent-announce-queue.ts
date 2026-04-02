@@ -255,7 +255,7 @@ export function enqueueAnnounce(params: {
     summarize: (item) => {
       const display = item.display;
       if (display.visibility === "summary-only") {
-        return display.summaryLine?.trim() || item.execution.agentPrompt.trim();
+        return display.summaryLine?.trim() || "[summary unavailable]";
       }
       return (
         display.summaryLine?.trim() || display.text?.trim() || item.execution.agentPrompt.trim()

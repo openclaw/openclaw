@@ -209,7 +209,7 @@ describe("subagent-announce-queue", () => {
     expect(send.mock.calls[1]?.[0].execution.agentPrompt).toBe("second internal");
   });
 
-  it("safely summarizes dropped summary-only announce items without summaryLine", async () => {
+  it("uses a safe placeholder when summarizing dropped summary-only announce items without summaryLine", async () => {
     const send = vi.fn(async () => {});
 
     expect(() =>
@@ -248,7 +248,8 @@ describe("subagent-announce-queue", () => {
       expect(send).toHaveBeenCalledTimes(1);
     });
     expect(send.mock.calls[0]?.[0].display.text).toContain("[Queue overflow]");
-    expect(send.mock.calls[0]?.[0].display.text).toContain("hidden fallback prompt");
+    expect(send.mock.calls[0]?.[0].display.text).toContain("[summary unavailable]");
+    expect(send.mock.calls[0]?.[0].display.text).not.toContain("hidden fallback prompt");
   });
 
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {
