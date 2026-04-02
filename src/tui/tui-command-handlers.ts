@@ -252,6 +252,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         contextTokens: state.sessionInfo.contextTokens ?? null,
       }),
       onClose: closeOverlayAndRender,
+      requestRender: () => tui.requestRender(),
     });
     openOverlay(overlay);
     tui.requestRender();

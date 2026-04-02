@@ -33,6 +33,7 @@ export type ContextVizOptions = {
   fetchReport: () => Promise<SessionSystemPromptReport | null>;
   getTokenInfo: () => SessionTokenInfo;
   onClose: () => void;
+  requestRender: () => void;
 };
 
 export class ContextVizOverlay implements Component {
@@ -77,6 +78,7 @@ export class ContextVizOverlay implements Component {
         }
       }
       this.tokenInfo = this.options.getTokenInfo();
+      this.options.requestRender();
     } catch {
       // Silently ignore fetch errors; keep last known state
     }
@@ -228,7 +230,9 @@ export class ContextVizOverlay implements Component {
         const item = this.detailItems[i];
         const isSelected = i === this.scrollOffset;
         const prefix = isSelected ? chalk.hex(palette.accent)("\u25B6 ") : "  ";
-        const name = item.name.padEnd(nameWidth);
+        const truncatedName =
+          item.name.length > nameWidth ? `${item.name.slice(0, nameWidth - 1)}\u2026` : item.name;
+        const name = truncatedName.padEnd(nameWidth);
         const statusStr = item.status ? statusColor(item.status).padEnd(statusWidth) : "";
         const hex = getCategoryColor(cat.category);
         const bar = renderHorizontalBar(item.chars, maxChars, barWidth, hex);
