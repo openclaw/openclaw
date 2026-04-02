@@ -173,6 +173,11 @@ function readToolResultDetails(result: unknown): Record<string, unknown> | undef
     : undefined;
 }
 
+function readToolResultStatus(result: unknown): string | undefined {
+  const status = readToolResultDetails(result)?.status;
+  return typeof status === "string" ? status.trim().toLowerCase() : undefined;
+}
+
 function isExternalToolResult(result: unknown): boolean {
   const details = readToolResultDetails(result);
   if (!details) {
@@ -314,20 +319,19 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 }
 
 export function isToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
+  const normalized = readToolResultStatus(result);
+  if (!normalized) {
     return false;
   }
-  const record = result as { details?: unknown };
-  const details = record.details;
-  if (!details || typeof details !== "object") {
-    return false;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (typeof status !== "string") {
-    return false;
-  }
-  const normalized = status.trim().toLowerCase();
   return normalized === "error" || normalized === "timeout";
+}
+
+export function isToolResultTimedOut(result: unknown): boolean {
+  const normalizedStatus = readToolResultStatus(result);
+  if (normalizedStatus === "timeout") {
+    return true;
+  }
+  return readToolResultDetails(result)?.timedOut === true;
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {

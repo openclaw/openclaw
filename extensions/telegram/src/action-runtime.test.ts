@@ -867,6 +867,28 @@ describe("readTelegramButtons", () => {
       }),
     ).toThrow(/style must be one of danger, success, primary/i);
   });
+
+  it("rejects callback_data over Telegram's 64-byte limit", () => {
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "x".repeat(65) }]],
+      }),
+    ).toThrow(/callback_data too long/i);
+  });
+
+  it("accepts multibyte callback_data at 64 bytes and rejects 68 bytes", () => {
+    expect(
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "😀".repeat(16) }]],
+      }),
+    ).toEqual([[{ text: "Option A", callback_data: "😀".repeat(16) }]]);
+
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "😀".repeat(17) }]],
+      }),
+    ).toThrow(/callback_data too long/i);
+  });
 });
 
 describe("handleTelegramAction per-account gating", () => {

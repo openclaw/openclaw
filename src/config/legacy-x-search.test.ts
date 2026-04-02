@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "./config.js";
 import { listLegacyXSearchConfigPaths, migrateLegacyXSearchConfig } from "./legacy-x-search.js";
 
 describe("legacy x_search config migration", () => {
-  it("moves legacy x_search auth and settings into the xai plugin config", () => {
+  it("moves only legacy x_search auth into the xai plugin config", () => {
     const res = migrateLegacyXSearchConfig({
       tools: {
         web: {
@@ -16,28 +16,24 @@ describe("legacy x_search config migration", () => {
       },
     } as OpenClawConfig);
 
-    expect(
-      (res.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
-    ).toBeUndefined();
+    expect((res.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
     expect(res.config.plugins?.entries?.xai).toEqual({
       enabled: true,
       config: {
         webSearch: {
           apiKey: "xai-legacy-key",
         },
-        xSearch: {
-          enabled: true,
-          model: "grok-4-1-fast",
-        },
       },
     });
     expect(res.changes).toEqual([
       "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
-      "Moved tools.web.x_search → plugins.entries.xai.config.xSearch.",
     ]);
   });
 
-  it("keeps explicit plugin-owned values when migrating legacy x_search config", () => {
+  it("keeps explicit plugin-owned auth when migrating legacy x_search config", () => {
     const res = migrateLegacyXSearchConfig({
       tools: {
         web: {
@@ -66,16 +62,38 @@ describe("legacy x_search config migration", () => {
       },
     } as OpenClawConfig);
 
+    expect((res.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "legacy-model",
+      cacheTtlMinutes: 5,
+    });
     expect(res.config.plugins?.entries?.xai?.config).toEqual({
       webSearch: {
         apiKey: "plugin-key",
       },
       xSearch: {
-        enabled: true,
         model: "plugin-model",
-        cacheTtlMinutes: 5,
       },
     });
+  });
+
+  it("does nothing for knob-only x_search config without a legacy apiKey", () => {
+    const config = {
+      tools: {
+        web: {
+          x_search: {
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        } as Record<string, unknown>,
+      },
+    } as OpenClawConfig;
+
+    const res = migrateLegacyXSearchConfig(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes).toEqual([]);
+    expect(res.config.plugins?.entries?.xai).toBeUndefined();
   });
 
   it("lists legacy x_search paths", () => {
@@ -90,6 +108,6 @@ describe("legacy x_search config migration", () => {
           } as Record<string, unknown>,
         },
       } as OpenClawConfig),
-    ).toEqual(["tools.web.x_search.apiKey", "tools.web.x_search.enabled"]);
+    ).toEqual(["tools.web.x_search.apiKey"]);
   });
 });

@@ -63,6 +63,21 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
 
     expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: 1000 });
+    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: expect.anything(),
+      ssrfPolicy: { allowPrivateNetwork: true },
+      targetId: undefined,
+      timeoutMs: 1000,
+      url: "https://example.com",
+    });
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: expect.anything(),
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      targetId: undefined,
+    });
     expect(result.url).toBe("https://example.com");
   });
 
@@ -92,7 +107,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       targetId: "tab-1",
       reason: "retry navigate after detached frame",
     });
-    expect(goto).toHaveBeenCalledTimes(2);
+    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(2);
     expect(result.url).toBe("https://example.com/recovered");
   });
 
@@ -113,6 +128,9 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       goto,
       url: vi.fn(() => "https://93.184.216.34/final"),
     });
+    getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
+      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+    );
 
     await expect(
       mod.navigateViaPlaywright({
@@ -121,6 +139,9 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       }),
     ).rejects.toBeInstanceOf(SsrFBlockedError);
 
-    expect(goto).toHaveBeenCalledTimes(1);
+    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(1);
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(
+      1,
+    );
   });
 });

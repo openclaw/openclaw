@@ -15,6 +15,8 @@ export {
 } from "./tool-policy-shared.js";
 export type { ToolProfileId } from "./tool-policy-shared.js";
 
+export type OwnerOnlyToolApprovalClass = "control_plane" | "exec_capable" | "interactive";
+
 // Keep tool-policy browser-safe: do not import tools/common at runtime.
 function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
   if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
@@ -28,15 +30,21 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
   };
 }
 
-const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>([
-  "whatsapp_login",
-  "cron",
-  "gateway",
-  "nodes",
+const OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS = new Map<string, OwnerOnlyToolApprovalClass>([
+  ["whatsapp_login", "interactive"],
+  ["cron", "control_plane"],
+  ["gateway", "control_plane"],
+  ["nodes", "exec_capable"],
 ]);
 
+export function resolveOwnerOnlyToolApprovalClass(
+  name: string,
+): OwnerOnlyToolApprovalClass | undefined {
+  return OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS.get(normalizeToolName(name));
+}
+
 export function isOwnerOnlyToolName(name: string) {
-  return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));
+  return resolveOwnerOnlyToolApprovalClass(name) !== undefined;
 }
 
 function isOwnerOnlyTool(tool: AnyAgentTool) {

@@ -75,23 +75,22 @@ function timingSafeEquals(left: string, right: string): boolean {
   return safeEqualSecret(left, right);
 }
 
+function buildReplayEventCacheKey(
+  target: ZaloWebhookTarget,
+  update: ZaloUpdate,
+  messageId: string,
+): string {
+  const chatId = update.message?.chat?.id ?? "";
+  const senderId = update.message?.from?.id ?? "";
+  return JSON.stringify([target.path, target.account.accountId, update.event_name, chatId, senderId, messageId]);
+}
+
 function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
     return false;
   }
-  const chatId = update.message?.chat?.id ?? "";
-  const senderId = update.message?.from?.id ?? "";
-  // Scope replay dedupe to the authenticated target and the message origin so
-  // reused message ids in other chats or from other senders do not collide.
-  const key = [
-    target.path,
-    target.account.accountId,
-    update.event_name,
-    chatId,
-    senderId,
-    messageId,
-  ].join(":");
+  const key = buildReplayEventCacheKey(target, update, messageId);
   return recentWebhookEvents.check(key, nowMs);
 }
 
