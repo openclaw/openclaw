@@ -1,8 +1,8 @@
 import {
-  normalizeStringEntries,
   resolveAllowlistMatchByCandidates,
   type AllowlistMatch,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/allow-from";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 function normalizeAllowList(list?: Array<string | number>) {
   return normalizeStringEntries(list);
