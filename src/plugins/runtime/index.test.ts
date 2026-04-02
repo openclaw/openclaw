@@ -6,8 +6,10 @@ import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
 import {
+  clearGatewayAgentAbort,
   clearGatewaySubagentRuntime,
   createPluginRuntime,
+  setGatewayAgentAbort,
   setGatewaySubagentRuntime,
 } from "./index.js";
 
@@ -102,6 +104,7 @@ describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     clearGatewaySubagentRuntime();
+    clearGatewayAgentAbort();
   });
 
   it.each([
@@ -264,5 +267,38 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("agent.abort rejects by default without gateway binding", async () => {
+    const runtime = createPluginRuntime();
+    await expect(runtime.agent.abort({ runId: "run-1" })).rejects.toThrow(
+      "Plugin runtime agent.abort is only available during a gateway request.",
+    );
+  });
+
+  it("agent.abort stays unavailable by default even after gateway initialization", async () => {
+    const runtime = createPluginRuntime();
+    setGatewayAgentAbort(vi.fn().mockResolvedValue({ aborted: true }));
+    await expect(runtime.agent.abort({ runId: "run-1" })).rejects.toThrow(
+      "Plugin runtime agent.abort is only available during a gateway request.",
+    );
+  });
+
+  it("agent.abort late-binds to the gateway agent abort when explicitly enabled", async () => {
+    const abort = vi.fn().mockResolvedValue({ aborted: true });
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+    setGatewayAgentAbort(abort);
+
+    await expect(runtime.agent.abort({ runId: "run-42" })).resolves.toEqual({ aborted: true });
+    expect(abort).toHaveBeenCalledWith({ runId: "run-42" });
+  });
+
+  it("agent.abort forwards sessionKey when provided", async () => {
+    const abort = vi.fn().mockResolvedValue({ aborted: true });
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+    setGatewayAgentAbort(abort);
+
+    await runtime.agent.abort({ runId: "run-42", sessionKey: "session-1" });
+    expect(abort).toHaveBeenCalledWith({ runId: "run-42", sessionKey: "session-1" });
   });
 });

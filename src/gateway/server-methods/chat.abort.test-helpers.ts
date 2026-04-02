@@ -7,10 +7,12 @@ export function createActiveRun(
   params: {
     sessionId?: string;
     owner?: { connId?: string; deviceId?: string };
+    kind?: "chat" | "agent";
   } = {},
 ) {
   const now = Date.now();
   return {
+    kind: params.kind ?? ("chat" as const),
     controller: new AbortController(),
     sessionId: params.sessionId ?? `${sessionKey}-session`,
     sessionKey,

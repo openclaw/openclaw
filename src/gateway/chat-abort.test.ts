@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  abortTrackedRunById,
   abortChatRunById,
   isChatStopCommandText,
   type ChatAbortOps,
@@ -9,8 +10,21 @@ import {
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
   return {
+    kind: "chat",
     controller: new AbortController(),
     sessionId: "sess-1",
+    sessionKey,
+    startedAtMs: now,
+    expiresAtMs: now + 10_000,
+  };
+}
+
+function createAgentEntry(sessionKey: string): ChatAbortControllerEntry {
+  const now = Date.now();
+  return {
+    kind: "agent",
+    controller: new AbortController(),
+    sessionId: "sess-agent-1",
     sessionKey,
     startedAtMs: now,
     expiresAtMs: now + 10_000,
@@ -139,5 +153,42 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "streamed text" }],
       }),
     );
+  });
+
+  it("ignores agent-owned active entries", () => {
+    const runId = "run-agent-1";
+    const sessionKey = "main";
+    const entry = createAgentEntry(sessionKey);
+    const ops = createOps({ runId, entry, buffer: "agent output" });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+
+    expect(result).toEqual({ aborted: false });
+    expect(entry.controller.signal.aborted).toBe(false);
+    expect(ops.chatAbortControllers.get(runId)).toBe(entry);
+    expect(ops.broadcast).not.toHaveBeenCalled();
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
+    expect(ops.removeChatRun).not.toHaveBeenCalled();
+  });
+
+  it("does not emit chat aborted payloads for agent-owned tracked aborts", () => {
+    const runId = "run-agent-2";
+    const sessionKey = "main";
+    const entry = createAgentEntry(sessionKey);
+    const ops = createOps({ runId, entry, buffer: "agent output" });
+
+    const result = abortTrackedRunById(ops, {
+      runId,
+      sessionKey,
+      stopReason: "plugin",
+      expectedKind: "agent",
+    });
+
+    expect(result).toEqual({ aborted: true });
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(ops.chatAbortControllers.has(runId)).toBe(false);
+    expect(ops.chatAbortedRuns.has(runId)).toBe(false);
+    expect(ops.broadcast).not.toHaveBeenCalled();
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 });

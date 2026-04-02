@@ -87,6 +87,7 @@ describe("chat.abort authorization", () => {
       chatAbortControllers: new Map([
         ["run-mine", createActiveRun("main", { owner: { deviceId: "dev-1" } })],
         ["run-other", createActiveRun("main", { owner: { deviceId: "dev-2" } })],
+        ["run-agent", createActiveRun("main", { kind: "agent", owner: { deviceId: "dev-1" } })],
       ]),
     });
 
@@ -105,6 +106,67 @@ describe("chat.abort authorization", () => {
     expect(payload).toMatchObject({ aborted: true, runIds: ["run-mine"] });
     expect(context.chatAbortControllers.has("run-mine")).toBe(false);
     expect(context.chatAbortControllers.has("run-other")).toBe(true);
+    expect(context.chatAbortControllers.has("run-agent")).toBe(true);
+  });
+
+  it("ignores foreign agent runs during session-scoped chat abort authorization", async () => {
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        [
+          "run-agent-foreign",
+          createActiveRun("main", {
+            kind: "agent",
+            owner: { connId: "conn-other", deviceId: "dev-other" },
+          }),
+        ],
+      ]),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      client: {
+        connId: "conn-1",
+        connect: { device: { id: "dev-1" }, scopes: ["operator.write"] },
+      },
+    });
+
+    const [ok, payload, error] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: false, runIds: [] });
+    expect(error).toBeUndefined();
+    expect(context.chatAbortControllers.has("run-agent-foreign")).toBe(true);
+  });
+
+  it("treats agent-owned runIds as non-chat abort targets", async () => {
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        [
+          "run-agent",
+          createActiveRun("main", {
+            kind: "agent",
+            owner: { connId: "conn-owner", deviceId: "dev-owner" },
+          }),
+        ],
+      ]),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId: "run-agent" },
+      client: {
+        connId: "conn-owner",
+        connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+      },
+    });
+
+    const [ok, payload, error] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: false, runIds: [] });
+    expect(error).toBeUndefined();
+    expect(context.chatAbortControllers.has("run-agent")).toBe(true);
   });
 
   it("allows operator.admin clients to bypass owner checks", async () => {

@@ -3,6 +3,13 @@ import type { OpenClawConfig } from "../config/config.js";
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
+/**
+ * Sentinel for effectively no timeout.
+ * This still maps to the maximum timer-safe delay (~24.8 days), so maintenance
+ * can eventually sweep stale entries even when the logical timeout is "none".
+ */
+export const AGENT_NO_TIMEOUT_MS = MAX_SAFE_TIMEOUT_MS;
+
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 

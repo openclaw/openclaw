@@ -1,6 +1,7 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 
 export type ChatAbortControllerEntry = {
+  kind: "chat" | "agent";
   controller: AbortController;
   sessionId: string;
   sessionKey: string;
@@ -9,6 +10,21 @@ export type ChatAbortControllerEntry = {
   ownerConnId?: string;
   ownerDeviceId?: string;
 };
+
+export function normalizeOptionalTrackedText(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+export function clearTrackedRunEntryIfOwned(
+  entries: Map<string, ChatAbortControllerEntry>,
+  runId: string,
+  controller: AbortController,
+): void {
+  if (entries.get(runId)?.controller === controller) {
+    entries.delete(runId);
+  }
+}
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
@@ -73,17 +89,21 @@ function broadcastChatAborted(
   ops.nodeSendToSession(sessionKey, "chat", payload);
 }
 
-export function abortChatRunById(
+export function abortTrackedRunById(
   ops: ChatAbortOps,
   params: {
     runId: string;
     sessionKey: string;
     stopReason?: string;
+    expectedKind?: ChatAbortControllerEntry["kind"];
   },
 ): { aborted: boolean } {
-  const { runId, sessionKey, stopReason } = params;
+  const { runId, sessionKey, stopReason, expectedKind } = params;
   const active = ops.chatAbortControllers.get(runId);
   if (!active) {
+    return { aborted: false };
+  }
+  if (expectedKind && active.kind !== expectedKind) {
     return { aborted: false };
   }
   if (active.sessionKey !== sessionKey) {
@@ -92,19 +112,34 @@ export function abortChatRunById(
 
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
-  ops.chatAbortedRuns.set(runId, Date.now());
+  if (active.kind === "chat") {
+    ops.chatAbortedRuns.set(runId, Date.now());
+  }
   active.controller.abort();
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
   ops.chatDeltaLastBroadcastLen.delete(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
-  broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
+  if (active.kind === "chat") {
+    broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
+  }
   ops.agentRunSeq.delete(runId);
   if (removed?.clientRunId) {
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
+}
+
+export function abortChatRunById(
+  ops: ChatAbortOps,
+  params: {
+    runId: string;
+    sessionKey: string;
+    stopReason?: string;
+  },
+): { aborted: boolean } {
+  return abortTrackedRunById(ops, { ...params, expectedKind: "chat" });
 }
 
 export function abortChatRunsForSessionKey(
@@ -117,6 +152,9 @@ export function abortChatRunsForSessionKey(
   const { sessionKey, stopReason } = params;
   const runIds: string[] = [];
   for (const [runId, active] of ops.chatAbortControllers) {
+    if (active.kind !== "chat") {
+      continue;
+    }
     if (active.sessionKey !== sessionKey) {
       continue;
     }

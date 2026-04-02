@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { waitForTerminalGatewayDedupe } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -13,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   loadGatewaySessionRow: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
+  waitForAgentJob: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
@@ -51,6 +54,10 @@ vi.mock("../../config/sessions.js", async () => {
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
   agentCommandFromIngress: mocks.agentCommand,
+}));
+
+vi.mock("./agent-job.js", () => ({
+  waitForAgentJob: mocks.waitForAgentJob,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -98,11 +105,15 @@ vi.mock("../../utils/delivery-context.js", async () => {
   };
 });
 
+mocks.waitForAgentJob.mockResolvedValue(null);
+
 const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
     addChatRun: vi.fn(),
+    chatAbortControllers: new Map(),
     logGateway: { info: vi.fn(), error: vi.fn() },
+    registerToolEventRecipient: vi.fn(),
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
   }) as unknown as GatewayRequestContext;
@@ -131,6 +142,33 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs
   } finally {
     vi.useRealTimers();
   }
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function createActiveRun(
+  runId: string,
+  overrides: Partial<ChatAbortControllerEntry> = {},
+): ChatAbortControllerEntry {
+  const now = Date.now();
+  return {
+    kind: overrides.kind ?? "agent",
+    controller: overrides.controller ?? new AbortController(),
+    sessionId: overrides.sessionId ?? `${runId}-session`,
+    sessionKey: overrides.sessionKey ?? "agent:main:main",
+    startedAtMs: overrides.startedAtMs ?? now,
+    expiresAtMs: overrides.expiresAtMs ?? now + 60_000,
+    ownerConnId: overrides.ownerConnId,
+    ownerDeviceId: overrides.ownerDeviceId,
+  };
 }
 
 function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
@@ -305,6 +343,30 @@ async function invokeAgentIdentityGet(
   return respond;
 }
 
+async function invokeAgentWait(
+  params: { runId: string; timeoutMs?: number },
+  options?: {
+    respond?: ReturnType<typeof vi.fn>;
+    reqId?: string;
+    context?: GatewayRequestContext;
+  },
+) {
+  const respond = options?.respond ?? vi.fn();
+  await agentHandlers["agent.wait"]({
+    params,
+    respond: respond as never,
+    context: options?.context ?? makeContext(),
+    req: {
+      type: "req",
+      id: options?.reqId ?? "agent-wait-test-req",
+      method: "agent.wait",
+    },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 describe("gateway agent handler", () => {
   afterEach(() => {
     if (ORIGINAL_STATE_DIR === undefined) {
@@ -452,6 +514,671 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("rejects agent runs when idempotencyKey collides with an active run", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    mocks.updateSessionStore.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    const respond = vi.fn();
+    const context = makeContext();
+    context.chatAbortControllers.set(
+      "collision-idem",
+      createActiveRun("collision-idem", { sessionKey: "agent:other:main" }),
+    );
+
+    await invokeAgent(
+      {
+        message: "test collision",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "collision-idem",
+      },
+      {
+        reqId: "collision-idem",
+        respond,
+        context,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(context.dedupe.has("agent:collision-idem")).toBe(false);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message:
+          'idempotencyKey "collision-idem" already belongs to an active run; use a unique key.',
+      }),
+    );
+  });
+
+  it("rejects colliding /reset before mutating session state", async () => {
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+    mocks.updateSessionStore.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    const respond = vi.fn();
+    const context = makeContext();
+    context.chatAbortControllers.set(
+      "collision-reset",
+      createActiveRun("collision-reset", { sessionKey: "agent:other:main" }),
+    );
+
+    await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "collision-reset",
+      },
+      {
+        reqId: "collision-reset",
+        respond,
+        context,
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.performGatewaySessionReset).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message:
+          'idempotencyKey "collision-reset" already belongs to an active run; use a unique key.',
+      }),
+    );
+  });
+
+  it("registers sessionless agent runs in the shared abort registry", async () => {
+    const runId = "run-sessionless-agent";
+    const deferred = createDeferred<{
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }>();
+    mocks.agentCommand.mockImplementation(() => deferred.promise);
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "sessionless run",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        respond,
+        context,
+      },
+    );
+
+    const active = context.chatAbortControllers.get(runId);
+    expect(active).toBeDefined();
+    expect(active).toMatchObject({
+      kind: "agent",
+      controller: expect.any(AbortController),
+      sessionKey: `__agent_run__:${runId}`,
+    });
+    expect(context.dedupe.get(`agent:${runId}`)?.payload).toEqual(
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+    );
+
+    deferred.resolve({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "ok",
+        }),
+      );
+    });
+  });
+
+  it("returns cached accepted for same runId retries while the first request is preparing", async () => {
+    const runId = "run-preparing-retry";
+    primeMainAgentRun();
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const retryRespond = vi.fn();
+    const storeDeferred = createDeferred<Record<string, unknown> | undefined>();
+
+    mocks.updateSessionStore.mockImplementationOnce(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      const updated = await updater(store);
+      await storeDeferred.promise;
+      return updated;
+    });
+
+    const firstPromise = invokeAgent(
+      {
+        message: "prepare",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: `${runId}-first`,
+        respond: firstRespond,
+        context,
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "accepted",
+        }),
+      );
+      expect(context.chatAbortControllers.get(runId)?.sessionKey).toBe("agent:main:main");
+    });
+
+    await invokeAgent(
+      {
+        message: "prepare",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: `${runId}-retry`,
+        respond: retryRespond,
+        context,
+      },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalledTimes(1);
+    expect(retryRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { cached: true },
+    );
+
+    storeDeferred.resolve({
+      sessionId: "existing-session-id",
+      updatedAt: Date.now(),
+    });
+    await firstPromise;
+  });
+
+  it("records a terminal error if setup fails after a retry already observed accepted", async () => {
+    const runId = "run-preparing-reset-failure";
+    primeMainAgentRun();
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const retryRespond = vi.fn();
+    const adminClient = {
+      connect: {
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+    } as AgentHandlerArgs["client"];
+    const resetDeferred = createDeferred<
+      | {
+          ok: true;
+          key: string;
+          entry: { sessionId: string };
+        }
+      | {
+          ok: false;
+          error: { code: string; message: string };
+        }
+    >();
+
+    mocks.performGatewaySessionReset.mockImplementationOnce(async () => {
+      return await resetDeferred.promise;
+    });
+
+    const firstPromise = invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: `${runId}-first`,
+        respond: firstRespond,
+        context,
+        client: adminClient,
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "accepted",
+        }),
+      );
+      expect(context.chatAbortControllers.get(runId)?.sessionKey).toBe("agent:main:main");
+    });
+
+    const waitPromise = waitForTerminalGatewayDedupe({
+      dedupe: context.dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+
+    await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: `${runId}-retry`,
+        respond: retryRespond,
+        context,
+        client: adminClient,
+      },
+    );
+
+    expect(retryRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { cached: true },
+    );
+
+    resetDeferred.resolve({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "reset failed",
+      },
+    });
+    await firstPromise;
+
+    await expect(waitPromise).resolves.toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: "reset failed",
+      }),
+    );
+    expect(context.dedupe.get(`agent:${runId}`)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          message: "reset failed",
+        }),
+      }),
+    );
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(firstRespond).toHaveBeenLastCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "reset failed",
+      }),
+    );
+    mocks.performGatewaySessionReset.mockClear();
+  });
+
+  it("preserves abort-entry grace for timeouts longer than 24 hours", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-28T00:00:00.000Z"));
+      const now = Date.now();
+      primeMainAgentRun();
+      const deferred = createDeferred<{
+        payloads: Array<{ text: string }>;
+        meta: { durationMs: number };
+      }>();
+      mocks.agentCommand.mockReturnValue(deferred.promise);
+      const respond = vi.fn();
+      const context = makeContext();
+      const runId = "run-long-timeout";
+      const timeoutSeconds = 25 * 60 * 60;
+
+      await invokeAgent(
+        {
+          message: "test long timeout",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+          timeout: timeoutSeconds,
+        },
+        {
+          reqId: runId,
+          respond,
+          context,
+        },
+      );
+
+      expect(context.chatAbortControllers.get(runId)?.expiresAtMs).toBe(
+        now + timeoutSeconds * 1_000 + 60_000,
+      );
+
+      deferred.resolve({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+      await waitForAssertion(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            runId,
+            status: "ok",
+          }),
+          undefined,
+          { runId },
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a newer abort-controller entry when the original run resolves", async () => {
+    primeMainAgentRun();
+    const deferred = createDeferred<{
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }>();
+    mocks.agentCommand.mockReturnValue(deferred.promise);
+    const respond = vi.fn();
+    const context = makeContext();
+
+    await invokeAgent(
+      {
+        message: "test replacement success",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "run-replacement-success",
+      },
+      {
+        reqId: "run-replacement-success",
+        respond,
+        context,
+      },
+    );
+
+    expect(context.chatAbortControllers.has("run-replacement-success")).toBe(true);
+    const replacement = createActiveRun("run-replacement-success", {
+      sessionId: "replacement-session",
+    });
+    context.chatAbortControllers.set("run-replacement-success", replacement);
+    deferred.resolve({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "run-replacement-success",
+          status: "ok",
+        }),
+        undefined,
+        { runId: "run-replacement-success" },
+      );
+    });
+    expect(context.chatAbortControllers.get("run-replacement-success")).toBe(replacement);
+  });
+
+  it("preserves a newer abort-controller entry when the original run rejects", async () => {
+    primeMainAgentRun();
+    const deferred = createDeferred<{
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }>();
+    mocks.agentCommand.mockReturnValue(deferred.promise);
+    const respond = vi.fn();
+    const context = makeContext();
+
+    await invokeAgent(
+      {
+        message: "test replacement failure",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "run-replacement-error",
+      },
+      {
+        reqId: "run-replacement-error",
+        respond,
+        context,
+      },
+    );
+
+    expect(context.chatAbortControllers.has("run-replacement-error")).toBe(true);
+    const replacement = createActiveRun("run-replacement-error", {
+      sessionId: "replacement-error-session",
+    });
+    context.chatAbortControllers.set("run-replacement-error", replacement);
+    deferred.reject(new Error("boom"));
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        expect.objectContaining({
+          runId: "run-replacement-error",
+          status: "error",
+        }),
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: "Error: boom",
+        }),
+        expect.objectContaining({
+          runId: "run-replacement-error",
+        }),
+      );
+    });
+    expect(context.chatAbortControllers.get("run-replacement-error")).toBe(replacement);
+  });
+
+  it("does not overwrite a newer run entry when the provisional controller was aborted before dispatch", async () => {
+    primeMainAgentRun();
+    const runId = "run-pre-dispatch-abort-replaced";
+    const context = makeContext();
+    const respond = vi.fn();
+    const releaseUpdate = createDeferred<void>();
+    mocks.agentCommand.mockClear();
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const nextEntry = await updater(store);
+      await releaseUpdate.promise;
+      return nextEntry;
+    });
+
+    const invokePromise = invokeAgent(
+      {
+        message: "test pre-dispatch abort replacement",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        respond,
+        context,
+      },
+    );
+
+    await waitForAssertion(() => {
+      const provisional = context.chatAbortControllers.get(runId);
+      expect(provisional?.controller).toBeInstanceOf(AbortController);
+      provisional?.controller.abort();
+      context.chatAbortControllers.delete(runId);
+    });
+
+    const replacement = createActiveRun(runId, {
+      kind: "chat",
+      sessionId: "replacement-session",
+      sessionKey: "agent:other:main",
+    });
+    const replacementAccepted = {
+      runId,
+      status: "accepted" as const,
+      acceptedAt: Date.now() + 1,
+    };
+    context.chatAbortControllers.set(runId, replacement);
+    context.dedupe.set(`agent:${runId}`, {
+      ts: Date.now(),
+      ok: true,
+      payload: replacementAccepted,
+    });
+    releaseUpdate.resolve();
+
+    await invokePromise;
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.get(runId)).toBe(replacement);
+    expect(context.dedupe.get(`agent:${runId}`)?.payload).toBe(replacementAccepted);
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenNthCalledWith(
+      1,
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { runId },
+    );
+    expect(respond).toHaveBeenNthCalledWith(
+      2,
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `idempotencyKey "${runId}" already belongs to an active run; use a unique key.`,
+      }),
+      { runId },
+    );
+  });
+
+  it("rejects subagent runId collisions before remapping follow-up state", async () => {
+    const childSessionKey = "agent:main:subagent:late-collision";
+    const runId = "run-late-collision";
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    };
+    const context = makeContext();
+    const collisionEntry = createActiveRun(runId, {
+      sessionId: "collision-session",
+      sessionKey: "agent:other:main",
+    });
+    context.chatAbortControllers.set(runId, collisionEntry);
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.loadSessionEntry.mockClear();
+    mocks.updateSessionStore.mockClear();
+    mocks.replaceSubagentRunAfterSteer.mockClear();
+    mocks.agentCommand.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    const respond = vi.fn();
+    const registerToolEventRecipient = context.registerToolEventRecipient as unknown as ReturnType<
+      typeof vi.fn
+    >;
+
+    await invokeAgent(
+      {
+        message: "follow-up",
+        sessionKey: childSessionKey,
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        respond,
+        context,
+        client: {
+          connId: "conn-1",
+          connect: { caps: ["tool-events"] },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(registerToolEventRecipient).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.get(runId)).toBe(collisionEntry);
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(respond).toHaveBeenNthCalledWith(
+      1,
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `idempotencyKey "${runId}" already belongs to an active run; use a unique key.`,
+      }),
+    );
+  });
+
+  it("rejects main-session runId collisions before mutating session state", async () => {
+    const runId = "run-main-late-collision";
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    mocks.updateSessionStore.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    const context = makeContext();
+    const collisionEntry = createActiveRun(runId, {
+      sessionId: "collision-session",
+      sessionKey: "agent:other:main",
+    });
+    context.chatAbortControllers.set(runId, collisionEntry);
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test main late collision",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        respond,
+        context,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.get(runId)).toBe(collisionEntry);
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(respond).toHaveBeenNthCalledWith(
+      1,
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `idempotencyKey "${runId}" already belongs to an active run; use a unique key.`,
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
@@ -528,7 +1255,9 @@ describe("gateway agent handler", () => {
         context: {
           dedupe: new Map(),
           addChatRun: vi.fn(),
+          chatAbortControllers: new Map(),
           logGateway: { info: vi.fn(), error: vi.fn() },
+          registerToolEventRecipient: vi.fn(),
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         } as unknown as GatewayRequestContext,
@@ -549,6 +1278,75 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+    });
+  });
+
+  it("does not suppress terminal agent snapshots for active agent runs", async () => {
+    const runId = "run-wait-agent-terminal";
+    const context = makeContext();
+    context.chatAbortControllers.set(runId, createActiveRun(runId, { kind: "agent" }));
+    context.dedupe.set(`agent:${runId}`, {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+      },
+    });
+
+    const respond = await invokeAgentWait(
+      {
+        runId,
+        timeoutMs: 50,
+      },
+      { context },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      runId,
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+      error: undefined,
+    });
+  });
+
+  it("ignores cached lifecycle snapshots while an active agent run is in flight", async () => {
+    const runId = "run-wait-active-agent";
+    const context = makeContext();
+    context.chatAbortControllers.set(runId, createActiveRun(runId, { kind: "agent" }));
+    mocks.waitForAgentJob.mockResolvedValueOnce({
+      runId,
+      status: "ok",
+      startedAt: 200,
+      endedAt: 210,
+      ts: Date.now(),
+    });
+
+    const respond = await invokeAgentWait(
+      {
+        runId,
+        timeoutMs: 50,
+      },
+      { context },
+    );
+
+    expect(mocks.waitForAgentJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId,
+        timeoutMs: 50,
+        ignoreCachedSnapshot: true,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      runId,
+      status: "ok",
+      startedAt: 200,
+      endedAt: 210,
+      error: undefined,
     });
   });
 
@@ -608,7 +1406,9 @@ describe("gateway agent handler", () => {
         context: {
           dedupe: new Map(),
           addChatRun: vi.fn(),
+          chatAbortControllers: new Map(),
           logGateway: { info: vi.fn(), error: vi.fn() },
+          registerToolEventRecipient: vi.fn(),
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         } as unknown as GatewayRequestContext,
@@ -748,6 +1548,7 @@ describe("gateway agent handler", () => {
         context: {
           dedupe: new Map(),
           addChatRun: vi.fn(),
+          chatAbortControllers: new Map(),
           logGateway: { info: logInfo, error: vi.fn() },
           broadcastToConnIds: vi.fn(),
           getSessionEventSubscriberConnIds: () => new Set(),

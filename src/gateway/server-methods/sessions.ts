@@ -30,6 +30,13 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import {
+  abortTrackedRunById,
+  normalizeOptionalTrackedText,
+  type ChatAbortControllerEntry,
+  type ChatAbortOps,
+} from "../chat-abort.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -301,6 +308,58 @@ function hasTrackedActiveSessionRun(params: {
   return false;
 }
 
+type SessionInterruptRequester = {
+  connId?: string;
+  deviceId?: string;
+  isAdmin: boolean;
+};
+
+function resolveSessionInterruptRequester(
+  client: GatewayRequestHandlerOptions["client"],
+): SessionInterruptRequester {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return {
+    connId: normalizeOptionalTrackedText(client?.connId),
+    deviceId: normalizeOptionalTrackedText(client?.connect?.device?.id),
+    isAdmin: scopes.includes(ADMIN_SCOPE),
+  };
+}
+
+function canRequesterInterruptTrackedRun(
+  entry: ChatAbortControllerEntry,
+  requester: SessionInterruptRequester,
+): boolean {
+  if (requester.isAdmin) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalTrackedText(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalTrackedText(entry.ownerConnId);
+  if (!ownerDeviceId && !ownerConnId) {
+    return true;
+  }
+  if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
+    return true;
+  }
+  if (ownerConnId && requester.connId && ownerConnId === requester.connId) {
+    return true;
+  }
+  return false;
+}
+
+function createTrackedAbortOps(context: GatewayRequestContext): ChatAbortOps {
+  return {
+    chatAbortControllers: context.chatAbortControllers,
+    chatRunBuffers: context.chatRunBuffers,
+    chatDeltaSentAt: context.chatDeltaSentAt,
+    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
+    chatAbortedRuns: context.chatAbortedRuns,
+    removeChatRun: context.removeChatRun,
+    agentRunSeq: context.agentRunSeq,
+    broadcast: context.broadcast,
+    nodeSendToSession: context.nodeSendToSession,
+  };
+}
+
 async function interruptSessionRunIfActive(params: {
   req: GatewayRequestHandlerOptions["req"];
   context: GatewayRequestContext;
@@ -325,34 +384,66 @@ async function interruptSessionRunIfActive(params: {
   }
 
   if (hasTrackedRun) {
-    let abortOk = true;
-    let abortError: ReturnType<typeof errorShape> | undefined;
-    const abortSessionKey = resolveAbortSessionKey({
-      context: params.context,
-      requestedKey: params.requestedKey,
-      canonicalKey: params.canonicalKey,
-    });
+    const requester = resolveSessionInterruptRequester(params.client);
+    const matchedRuns = [...params.context.chatAbortControllers.entries()].filter(
+      ([, active]) =>
+        active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey,
+    );
+    const authorizedRuns = matchedRuns.filter(([, active]) =>
+      canRequesterInterruptTrackedRun(active, requester),
+    );
 
-    await chatHandlers["chat.abort"]({
-      req: params.req,
-      params: {
-        sessionKey: abortSessionKey,
-      },
-      respond: (ok, _payload, error) => {
-        abortOk = ok;
-        abortError = error;
-      },
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-    });
-
-    if (!abortOk) {
+    if (matchedRuns.length > 0 && authorizedRuns.length !== matchedRuns.length) {
       return {
         interrupted: true,
-        error:
-          abortError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
       };
+    }
+
+    const chatSessionKeys = [
+      ...new Set(
+        authorizedRuns
+          .filter(([, active]) => active.kind === "chat")
+          .map(([, active]) => active.sessionKey),
+      ),
+    ];
+    for (const sessionKey of chatSessionKeys) {
+      let abortOk = true;
+      let abortError: ReturnType<typeof errorShape> | undefined;
+      await chatHandlers["chat.abort"]({
+        req: params.req,
+        params: {
+          sessionKey,
+        },
+        respond: (ok, _payload, error) => {
+          abortOk = ok;
+          abortError = error;
+        },
+        context: params.context,
+        client: params.client,
+        isWebchatConnect: params.isWebchatConnect,
+      });
+
+      if (!abortOk) {
+        return {
+          interrupted: true,
+          error:
+            abortError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
+        };
+      }
+    }
+
+    const ops = createTrackedAbortOps(params.context);
+    for (const [runId, active] of authorizedRuns) {
+      if (active.kind !== "agent") {
+        continue;
+      }
+      abortTrackedRunById(ops, {
+        runId,
+        sessionKey: active.sessionKey,
+        stopReason: "rpc",
+        expectedKind: "agent",
+      });
     }
   }
 
