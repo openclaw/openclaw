@@ -243,45 +243,49 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
-  it("shows immediate progress feedback for /lossless doctor apply and edits it in place on success", async () => {
+  it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
 
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
       {
-        name: "lossless",
-        nativeNames: { default: "lossless" },
-        description: "Lossless Claw command",
+        name: "plug",
+        description: "Plugin command",
       },
     ] as never);
     pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "lcm", requireAuth: false },
-      args: "doctor apply",
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage:
+          "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
+      },
+      args: "now",
     } as never);
     pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "Lossless Claw Doctor Apply\n\nresult: repaired 8 summary(s) in place",
+      text: "Command completed successfully",
     } as never);
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams({}, { bot }),
     });
 
-    const handler = commandHandlers.get("lossless");
+    const handler = commandHandlers.get("plug");
     expect(handler).toBeTruthy();
     await handler?.(
       createPrivateCommandContext({
-        match: "doctor apply",
+        match: "now",
       }),
     );
 
     expect(sendMessage).toHaveBeenCalledWith(
       100,
-      expect.stringContaining("Running `/lossless doctor apply`"),
+      expect.stringContaining("Running this command now"),
       undefined,
     );
     expect(editMessageTelegram).toHaveBeenCalledWith(
       100,
       999,
-      expect.stringContaining("Lossless Claw Doctor Apply"),
+      expect.stringContaining("Command completed successfully"),
       expect.objectContaining({
         accountId: "default",
       }),
@@ -289,19 +293,22 @@ describe("registerTelegramNativeCommands", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("falls back to a normal reply when the progress result is not editable", async () => {
+  it("falls back to a normal reply when a metadata-driven progress result is not editable", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
 
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
       {
-        name: "lcm",
-        nativeNames: { default: "lcm" },
-        description: "Lossless Claw command",
+        name: "plug",
+        description: "Plugin command",
       },
     ] as never);
     pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "lcm", requireAuth: false },
-      args: "doctor apply",
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage: "Working on it...",
+      },
+      args: "now",
     } as never);
     pluginCommandMocks.executePluginCommand.mockResolvedValue({
       text: "rich output",
@@ -312,19 +319,15 @@ describe("registerTelegramNativeCommands", () => {
       ...createNativeCommandTestParams({}, { bot }),
     });
 
-    const handler = commandHandlers.get("lcm");
+    const handler = commandHandlers.get("plug");
     expect(handler).toBeTruthy();
     await handler?.(
       createPrivateCommandContext({
-        match: "doctor apply",
+        match: "now",
       }),
     );
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      100,
-      expect.stringContaining("Running `/lcm doctor apply`"),
-      undefined,
-    );
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
