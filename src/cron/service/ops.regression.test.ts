@@ -366,7 +366,7 @@ describe("cron service ops regressions", () => {
     const errorLogged = createDeferred<void>();
     const log = {
       ...noopLogger,
-      error: vi.fn(() => {
+      error: vi.fn<(payload: unknown, message?: string) => void>(() => {
         errorLogged.resolve();
       }),
     };
