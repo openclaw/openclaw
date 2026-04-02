@@ -25,10 +25,10 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import {
-  getTaskRegistryHooks,
+  getTaskRegistryObservers,
   getTaskRegistryStore,
   resetTaskRegistryRuntimeForTests,
-  type TaskRegistryHookEvent,
+  type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
@@ -174,15 +174,15 @@ function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecor
   return [...source.values()].map((record) => cloneTaskRecord(record));
 }
 
-function emitTaskRegistryHookEvent(createEvent: () => TaskRegistryHookEvent): void {
-  const hooks = getTaskRegistryHooks();
-  if (!hooks?.onEvent) {
+function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEvent): void {
+  const observers = getTaskRegistryObservers();
+  if (!observers?.onEvent) {
     return;
   }
   try {
-    hooks.onEvent(createEvent());
+    observers.onEvent(createEvent());
   } catch (error) {
-    log.warn("Task registry hook failed", {
+    log.warn("Task registry observer failed", {
       event: "task-registry",
       error,
     });
@@ -826,7 +826,7 @@ function restoreTaskRegistryOnce() {
     rebuildOwnerKeyIndex();
     rebuildParentFlowIdIndex();
     rebuildRelatedSessionKeyIndex();
-    emitTaskRegistryHookEvent(() => ({
+    emitTaskRegistryObserverEvent(() => ({
       kind: "restored",
       tasks: snapshotTaskRecords(tasks),
     }));
@@ -888,7 +888,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
       error,
     });
   }
-  emitTaskRegistryHookEvent(() => ({
+  emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
     previous: cloneTaskRecord(current),
@@ -1456,7 +1456,7 @@ export function createTaskRecord(params: {
       error,
     });
   }
-  emitTaskRegistryHookEvent(() => ({
+  emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
@@ -1902,7 +1902,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   rebuildRunIdIndex();
   persistTaskDelete(taskId);
   persistTaskDeliveryStateDelete(taskId);
-  emitTaskRegistryHookEvent(() => ({
+  emitTaskRegistryObserverEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,
     previous: cloneTaskRecord(current),
