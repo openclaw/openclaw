@@ -133,6 +133,66 @@ describe("buildCliArgs", () => {
       }),
     ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
   });
+  
+  it("places the prompt immediately after Claude CLI -p", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          promptFlag: "-p",
+        },
+        baseArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--permission-mode",
+          "bypassPermissions",
+        ],
+        modelId: "claude-opus-4-6",
+        promptArg: "user prompt",
+        useResume: false,
+      }),
+    ).toEqual([
+      "-p",
+      "user prompt",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+  });
+
+  it("places the prompt immediately after --prompt for generic prompt-flag backends", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "gemini",
+          promptFlag: "--prompt",
+        },
+        baseArgs: ["--resume", "sid-1", "--prompt", "--output-format", "json"],
+        modelId: "gemini-3.1-pro-preview",
+        promptArg: "resume prompt",
+        useResume: true,
+      }),
+    ).toEqual(["--resume", "sid-1", "--prompt", "resume prompt", "--output-format", "json"]);
+  });
+
+  it("appends the prompt when no prompt flag exists in base args", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "codex",
+          modelArg: "--model",
+        },
+        baseArgs: ["exec", "--json"],
+        modelId: "gpt-5.4",
+        promptArg: "user prompt",
+        useResume: false,
+      }),
+    ).toEqual(["exec", "--json", "--model", "gpt-5.4", "user prompt"]);
+  });
 });
 
 describe("resolveCliRunQueueKey", () => {

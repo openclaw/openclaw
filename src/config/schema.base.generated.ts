@@ -2897,6 +2897,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                       ],
                     },
+                    promptFlag: {
+                      type: "string",
+                    },
                     serialize: {
                       type: "boolean",
                     },

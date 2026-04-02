@@ -303,7 +303,17 @@ export function buildCliArgs(params: {
     }
   }
   if (params.promptArg !== undefined) {
-    args.push(params.promptArg);
+    const promptFlag = params.backend.promptFlag;
+    if (promptFlag) {
+      const flagIndex = args.findIndex((arg) => arg === promptFlag);
+      if (flagIndex >= 0) {
+        args.splice(flagIndex + 1, 0, params.promptArg);
+      } else {
+        args.push(params.promptArg);
+      }
+    } else {
+      args.push(params.promptArg);
+    }
   }
   return args;
 }

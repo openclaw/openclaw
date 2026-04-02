@@ -535,6 +535,7 @@ export const CliBackendSchema = z
       .optional(),
     imageArg: z.string().optional(),
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
+    promptFlag: z.string().optional(),
     serialize: z.boolean().optional(),
     reliability: z
       .object({

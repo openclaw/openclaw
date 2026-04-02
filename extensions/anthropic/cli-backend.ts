@@ -37,6 +37,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       ],
       output: "jsonl",
       input: "arg",
+      promptFlag: "-p",
       modelArg: "--model",
       modelAliases: CLAUDE_CLI_MODEL_ALIASES,
       sessionArg: "--session-id",
