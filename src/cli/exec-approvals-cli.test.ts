@@ -436,7 +436,8 @@ describe("exec approvals CLI", () => {
                 effective: "always",
               }),
               askFallback: expect.objectContaining({
-                source: "OpenClaw default (deny)",
+                effective: "full",
+                source: "OpenClaw default (full)",
               }),
             }),
           ]),
