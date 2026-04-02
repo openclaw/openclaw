@@ -355,6 +355,10 @@ Viewer accessibility issues:
 - For remote access scenarios, either:
   - pass `baseUrl` per tool call, or
   - use `gateway.bind=custom` and `gateway.customBindHost`
+- If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw loopback viewer requests without forwarded client-IP headers fail closed by design.
+- For that proxy topology:
+  - prefer `mode: "file"` or `mode: "both"` when you only need an attachment, or
+  - intentionally enable `security.allowRemoteViewer` and pass a proxy/public `baseUrl` when you need a shareable viewer URL
 - Enable `security.allowRemoteViewer` only when you intend external viewer access.
 
 Unmodified-lines row has no expand button:
