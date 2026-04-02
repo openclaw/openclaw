@@ -165,6 +165,9 @@ const TOOL_CALL_STUB_PLACEHOLDER_RE = /\[\s*tool call stub\s*\]/gi;
 const TOOL_CALL_STUB_PLACEHOLDER_SINGLE_RE = /\[\s*tool call stub\s*\]/i;
 
 function stripToolCallStubPlaceholder(content: string): string {
+  if (!TOOL_CALL_STUB_PLACEHOLDER_SINGLE_RE.test(content)) {
+    return content;
+  }
   return content.replaceAll(TOOL_CALL_STUB_PLACEHOLDER_RE, " ").replace(/\s{2,}/g, " ").trim();
 }
 
