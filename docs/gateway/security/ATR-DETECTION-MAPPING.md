@@ -28,7 +28,7 @@ This gives OpenClaw operators a path from "understand the threat" to "detect it 
 | Data Exfiltration & Privacy Leakage         | 5 rules   | MODERATE |
 | Session & Memory Manipulation               | 4 rules   | MODERATE |
 
-**Total: 71 unique rules across 9 threat categories**
+**Total: 48 unique rules referenced across 9 threat categories (from ATR's 71-rule library)**
 
 ---
 
@@ -181,11 +181,15 @@ npx @panguard-ai/panguard audit <skill-name>
 ### Run ATR engine programmatically
 
 ```typescript
-import { ATREngine } from "@anthropic-ai/agent-threat-rules";
+import { ATREngine } from "agent-threat-rules";
 
 const engine = new ATREngine();
-const results = await engine.scan(skillContent);
-// results: { severity, ruleId, match, recommendation }
+await engine.loadRules();
+const matches = engine.evaluate({
+  role: "assistant",
+  content: skillContent,
+});
+// matches: Array<{ ruleId, title, severity, confidence, match }>
 ```
 
 ### ATR as MCP server (self-audit)
@@ -196,8 +200,8 @@ ATR ships as an MCP server, enabling AI agents to scan other skills and self-aud
 {
   "mcpServers": {
     "atr": {
-      "command": "npx",
-      "args": ["@anthropic-ai/agent-threat-rules", "mcp"]
+      "command": "atr",
+      "args": ["mcp"]
     }
   }
 }
@@ -225,4 +229,4 @@ ATR complements VirusTotal (which doesn't detect prompt injection) and `openclaw
 - [ATR Paper](https://doi.org/10.5281/zenodo.19178002) — Academic paper on Threat Crystallization methodology
 - [PINT Benchmark Results](https://github.com/Agent-Threat-Rule/agent-threat-rules/tree/main/data/pint-benchmark) — 61.4% recall, 99.6% precision on 850 adversarial samples
 - [OWASP Agentic AI Top 10 Mapping](https://github.com/precize/Agentic-AI-Top10-Vulnerability/blob/main/ATR-DETECTION-MAPPING.md) — ATR mapping merged into OWASP repo
-- [OpenClaw Security Documentation](https://docs.openclaw.ai/gateway/security)
+- [OpenClaw Security Documentation](/gateway/security)
