@@ -321,6 +321,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       start: async () =>
         await startGatewayServer(port, {
           bind,
+          host:
+            (process.env.OPENCLAW_GATEWAY_HOST?.trim() ||
+              process.env.BACKEND_HOST?.trim() ||
+              undefined) ?? undefined,
           auth: authOverride,
           tailscale: tailscaleOverride,
         }),

@@ -182,6 +182,44 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - [Nix mode](https://docs.openclaw.ai/install/nix) for declarative config; [Docker](https://docs.openclaw.ai/install/docker)-based installs.
 - [Doctor](https://docs.openclaw.ai/gateway/doctor) migrations, [logging](https://docs.openclaw.ai/logging).
 
+## Security & Deployment Model
+
+- Localhost-only by default:
+  - Control UI dev/preview binds to 127.0.0.1:18790 unless `HOSTNAME`/`PORT` are set.
+  - Gateway binds to loopback by default (`gateway.bind=loopback`, port 18789).
+- Public exposure is explicit opt-in:
+  - UI: set `HOSTNAME=0.0.0.0` (or a specific IP) when running the Vite dev server.
+  - Gateway: set `gateway.bind=lan` or `OPENCLAW_GATEWAY_HOST=0.0.0.0` (alias `BACKEND_HOST`).
+  - Always configure auth (`gateway.auth.token` or `gateway.auth.password`) before non-loopback binds.
+- CORS restricted by default:
+  - Allowed origins default to `http://localhost:18790`.
+  - Override with `CORS_ALLOWED_ORIGINS` (comma-separated).
+- WebSocket resource controls:
+  - Global and per-IP connection caps via `MAX_WS_CONNECTIONS` (default 100) and `MAX_WS_PER_IP` (default 5).
+  - Slow clients are dropped using backpressure thresholds; idle clients close after `WS_IDLE_TIMEOUT_SECONDS` (default 120).
+
+### Recommended public deployment
+
+Use a reverse proxy and rate limiting in front of the Gateway:
+
+```
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=5r/s;
+
+server {
+    location /api/ {
+        limit_req zone=api_limit burst=10 nodelay;
+        proxy_pass http://127.0.0.1:18791;
+    }
+}
+```
+
+Set explicit binds for exposure:
+
+- UI dev/preview: `HOSTNAME=0.0.0.0 PORT=18790`
+- Gateway: `openclaw config set gateway.bind lan` or `OPENCLAW_GATEWAY_HOST=0.0.0.0`, `OPENCLAW_GATEWAY_PORT=18791` (alias `BACKEND_PORT`)
+
+Warning: exposing the Gateway directly to the internet without a reverse proxy and rate limiting is not recommended.
+
 ## How it works (short)
 
 ```

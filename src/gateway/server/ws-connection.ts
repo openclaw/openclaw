@@ -99,8 +99,36 @@ export function attachGatewayWsConnectionHandler(params: {
     broadcast,
     buildRequestContext,
   } = params;
+  const maxConnections = (() => {
+    const raw =
+      process.env.MAX_WS_CONNECTIONS?.trim() || process.env.MAX_SSE_CONNECTIONS?.trim();
+    if (!raw) return 100;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  })();
+  const maxPerIp = (() => {
+    const raw = process.env.MAX_WS_PER_IP?.trim() || process.env.MAX_SSE_PER_IP?.trim();
+    if (!raw) return 5;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+  })();
+  const idleTimeoutMs = (() => {
+    const raw =
+      process.env.WS_IDLE_TIMEOUT_SECONDS?.trim() ||
+      process.env.SSE_IDLE_TIMEOUT_SECONDS?.trim();
+    if (!raw) return 120_000;
+    const seconds = Number.parseInt(raw, 10);
+    return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 120_000;
+  })();
+  const perIpCounts = new Map<string, number>();
 
   wss.on("connection", (socket, upgradeReq) => {
+    if (clients.size >= maxConnections) {
+      try {
+        socket.close(1013, "server overloaded");
+      } catch {}
+      return;
+    }
     let client: GatewayWsClient | null = null;
     let closed = false;
     const openedAt = Date.now();
@@ -166,22 +194,66 @@ export function attachGatewayWsConnectionHandler(params: {
       payload: { nonce: connectNonce, ts: Date.now() },
     });
 
+    const ipKey = remoteAddr ?? "unknown";
+    const incPerIp = () => {
+      const prev = perIpCounts.get(ipKey) ?? 0;
+      perIpCounts.set(ipKey, prev + 1);
+    };
+    const decPerIp = () => {
+      const prev = perIpCounts.get(ipKey) ?? 0;
+      if (prev <= 1) {
+        perIpCounts.delete(ipKey);
+      } else {
+        perIpCounts.set(ipKey, prev - 1);
+      }
+    };
+    const perIpNow = perIpCounts.get(ipKey) ?? 0;
+    if (perIpNow >= maxPerIp) {
+      try {
+        socket.close(1013, "too many connections from ip");
+      } catch {}
+      return;
+    }
+    incPerIp();
+
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetIdle = () => {
+      if (idleTimeoutMs <= 0) return;
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      idleTimer = setTimeout(() => {
+        setCloseCause("idle-timeout", { idleMs: idleTimeoutMs });
+        try {
+          socket.close(1000, "idle timeout");
+        } catch {}
+      }, idleTimeoutMs);
+    };
+    resetIdle();
+    socket.on("message", () => {
+      resetIdle();
+    });
+
     const close = (code = 1000, reason?: string) => {
       if (closed) {
         return;
       }
       closed = true;
       clearTimeout(handshakeTimer);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
       if (client) {
         clients.delete(client);
       }
+      decPerIp();
       try {
         socket.close(code, reason);
       } catch {
         /* ignore */
       }
     };
-
     socket.once("error", (err) => {
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();

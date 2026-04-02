@@ -61,6 +61,7 @@ import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleEventsHttpRequest } from "./server/events-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -440,6 +441,16 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
   } = opts;
+  const allowedOrigins = (() => {
+    const raw =
+      process.env.OPENCLAW_CORS_ALLOWED_ORIGINS?.trim() ||
+      process.env.CORS_ALLOWED_ORIGINS?.trim() ||
+      "http://localhost:18790";
+    return raw
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  })();
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequest(req, res);
@@ -452,6 +463,24 @@ export function createGatewayHttpServer(opts: {
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
+
+    const originHeader = String(req.headers.origin ?? "").trim();
+    const hasOrigin = originHeader.length > 0;
+    if (hasOrigin && allowedOrigins.includes(originHeader)) {
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Origin", originHeader);
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, X-Requested-With",
+      );
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
 
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
@@ -472,6 +501,14 @@ export function createGatewayHttpServer(opts: {
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
+        return;
+      }
+      if (
+        await handleEventsHttpRequest(req, res, {
+          trustedProxies,
+          allowRealIpFallback,
+        })
+      ) {
         return;
       }
       if (
