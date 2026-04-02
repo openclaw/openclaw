@@ -675,31 +675,42 @@ export class DiscordVoiceManager {
       const MAX_RETRIES = 2;
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
-          const { streamKyutaiTtsRaw48k, kyutaiPrewarm } = await import("./kyutai-streaming.js");
+          const { streamKyutaiTts, kyutaiPrewarm } = await import("./kyutai-streaming.js");
           if (attempt > 0) {
-            // Wait for sidecar to come up after MCP restart
             await kyutaiPrewarm();
             await new Promise((r) => setTimeout(r, 2000));
           }
-          const pcmStream = await streamKyutaiTtsRaw48k(speakText);
+          const { readable: pcmStream } = await streamKyutaiTts(speakText);
           logger.warn(`discord voice: kyutai streaming started (attempt ${attempt + 1})`);
           this.enqueuePlayback(entry, async () => {
             const voiceSdk = loadDiscordVoiceSdk();
-            const resource = voiceSdk.createAudioResource(pcmStream, {
-              inputType: voiceSdk.StreamType.Raw,
+            const childProcess = await import("node:child_process");
+
+            // Spawn FFmpeg: read raw 24kHz mono s16le from stdin, output ogg/opus to stdout
+            const ffmpeg = childProcess.spawn("ffmpeg", [
+              "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
+              "-c:a", "libopus", "-ar", "48000", "-ac", "2",
+              "-f", "ogg", "pipe:1",
+            ], { stdio: ["pipe", "pipe", "pipe"] });
+
+            ffmpeg.stderr.on("data", (d: Buffer) => {
+              const msg = d.toString().trim();
+              if (msg) logger.warn(`discord voice: ffmpeg stderr: ${msg.slice(0, 200)}`);
             });
-            // Debug: monitor stream and player events
-            let chunkCount = 0;
-            let totalBytes = 0;
-            pcmStream.on("data", (chunk: Buffer) => { chunkCount++; totalBytes += chunk.length; });
-            pcmStream.on("end", () => logger.warn(`discord voice: pcmStream ended: ${chunkCount} chunks, ${totalBytes} bytes`));
-            pcmStream.on("error", (err: Error) => logger.warn(`discord voice: pcmStream error: ${err.message}`));
-            resource.playStream.on("error", (err: Error) => logger.warn(`discord voice: resource playStream error: ${err.message}`));
+
+            // Pipe raw 24kHz mono PCM into FFmpeg
+            pcmStream.pipe(ffmpeg.stdin);
+            pcmStream.on("error", (err: Error) => {
+              logger.warn(`discord voice: pcmStream error: ${err.message}`);
+              ffmpeg.stdin.end();
+            });
+
+            // Create audio resource from FFmpeg's ogg/opus output
+            const resource = voiceSdk.createAudioResource(ffmpeg.stdout, {
+              inputType: voiceSdk.StreamType.OggOpus,
+            });
+
             entry.player.on("error", (err: unknown) => logger.warn(`discord voice: player error: ${err instanceof Error ? err.message : String(err)}`));
-            entry.player.on(voiceSdk.AudioPlayerStatus.Playing, () => logger.warn(`discord voice: player -> Playing`));
-            entry.player.on(voiceSdk.AudioPlayerStatus.Idle, () => logger.warn(`discord voice: player -> Idle`));
-            entry.player.on(voiceSdk.AudioPlayerStatus.AutoPaused, () => logger.warn(`discord voice: player -> AutoPaused`));
-            entry.player.on(voiceSdk.AudioPlayerStatus.Buffering, () => logger.warn(`discord voice: player -> Buffering`));
             entry.player.play(resource);
             await voiceSdk
               .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
