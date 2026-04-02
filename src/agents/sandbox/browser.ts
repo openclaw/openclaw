@@ -11,7 +11,7 @@ import {
   resolveProfile,
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -43,17 +43,6 @@ import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./worksp
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
-
-function normalizeSandboxBridgeSsrFPolicyKey(ssrfPolicy?: SsrFPolicy): string {
-  if (!ssrfPolicy) {
-    return "";
-  }
-  return JSON.stringify({
-    dangerouslyAllowPrivateNetwork: ssrfPolicy.dangerouslyAllowPrivateNetwork === true,
-    allowedHostnames: [...(ssrfPolicy.allowedHostnames ?? [])].toSorted(),
-    hostnameAllowlist: [...(ssrfPolicy.hostnameAllowlist ?? [])].toSorted(),
-  });
-}
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -327,9 +316,7 @@ export async function ensureSandboxBrowser(params: {
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
   const policyMatches =
-    !existing ||
-    normalizeSandboxBridgeSsrFPolicyKey(existing.bridge.state.resolved.ssrfPolicy) ===
-      normalizeSandboxBridgeSsrFPolicyKey(params.ssrfPolicy);
+    !existing || isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy);
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -337,11 +324,7 @@ export async function ensureSandboxBrowser(params: {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
-  if (existing && shouldReuse && !policyMatches) {
-    await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
-    BROWSER_BRIDGES.delete(params.scopeKey);
-  }
-  if (existing && shouldReuse && !authMatches) {
+  if (existing && shouldReuse && (!policyMatches || !authMatches)) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
