@@ -1,26 +1,26 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  findLatestFlowForOwner,
-  getFlowByIdForOwner,
-  listFlowsForOwner,
-  resolveFlowForLookupTokenForOwner,
-} from "./flow-owner-access.js";
-import { createManagedFlow, resetFlowRegistryForTests } from "./flow-registry.js";
+  findLatestTaskFlowForOwner,
+  getTaskFlowByIdForOwner,
+  listTaskFlowsForOwner,
+  resolveTaskFlowForLookupTokenForOwner,
+} from "./task-flow-owner-access.js";
+import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 
 afterEach(() => {
-  resetFlowRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
 });
 
-describe("flow owner access", () => {
+describe("task flow owner access", () => {
   it("returns owner-scoped flows for direct and owner-key lookups", () => {
-    const older = createManagedFlow({
+    const older = createManagedTaskFlow({
       ownerKey: "agent:main:main",
       controllerId: "tests/owner-access",
       goal: "Older flow",
       createdAt: 100,
       updatedAt: 100,
     });
-    const latest = createManagedFlow({
+    const latest = createManagedTaskFlow({
       ownerKey: "agent:main:main",
       controllerId: "tests/owner-access",
       goal: "Latest flow",
@@ -29,56 +29,56 @@ describe("flow owner access", () => {
     });
 
     expect(
-      getFlowByIdForOwner({
+      getTaskFlowByIdForOwner({
         flowId: older.flowId,
         callerOwnerKey: "agent:main:main",
       })?.flowId,
     ).toBe(older.flowId);
     expect(
-      findLatestFlowForOwner({
+      findLatestTaskFlowForOwner({
         callerOwnerKey: "agent:main:main",
       })?.flowId,
     ).toBe(latest.flowId);
     expect(
-      resolveFlowForLookupTokenForOwner({
+      resolveTaskFlowForLookupTokenForOwner({
         token: "agent:main:main",
         callerOwnerKey: "agent:main:main",
       })?.flowId,
     ).toBe(latest.flowId);
     expect(
-      listFlowsForOwner({
+      listTaskFlowsForOwner({
         callerOwnerKey: "agent:main:main",
       }).map((flow) => flow.flowId),
     ).toEqual([latest.flowId, older.flowId]);
   });
 
   it("denies cross-owner flow reads", () => {
-    const flow = createManagedFlow({
+    const flow = createManagedTaskFlow({
       ownerKey: "agent:main:main",
       controllerId: "tests/owner-access",
       goal: "Hidden flow",
     });
 
     expect(
-      getFlowByIdForOwner({
+      getTaskFlowByIdForOwner({
         flowId: flow.flowId,
         callerOwnerKey: "agent:main:other",
       }),
     ).toBeUndefined();
     expect(
-      resolveFlowForLookupTokenForOwner({
+      resolveTaskFlowForLookupTokenForOwner({
         token: flow.flowId,
         callerOwnerKey: "agent:main:other",
       }),
     ).toBeUndefined();
     expect(
-      resolveFlowForLookupTokenForOwner({
+      resolveTaskFlowForLookupTokenForOwner({
         token: "agent:main:main",
         callerOwnerKey: "agent:main:other",
       }),
     ).toBeUndefined();
     expect(
-      listFlowsForOwner({
+      listTaskFlowsForOwner({
         callerOwnerKey: "agent:main:other",
       }),
     ).toEqual([]);

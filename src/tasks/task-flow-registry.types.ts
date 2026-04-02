@@ -9,9 +9,9 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type FlowSyncMode = "task_mirrored" | "managed";
+export type TaskFlowSyncMode = "task_mirrored" | "managed";
 
-export type FlowStatus =
+export type TaskFlowStatus =
   | "queued"
   | "running"
   | "waiting"
@@ -21,14 +21,14 @@ export type FlowStatus =
   | "cancelled"
   | "lost";
 
-export type FlowRecord = {
+export type TaskFlowRecord = {
   flowId: string;
-  syncMode: FlowSyncMode;
+  syncMode: TaskFlowSyncMode;
   ownerKey: string;
   requesterOrigin?: DeliveryContext;
   controllerId?: string;
   revision: number;
-  status: FlowStatus;
+  status: TaskFlowStatus;
   notifyPolicy: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
