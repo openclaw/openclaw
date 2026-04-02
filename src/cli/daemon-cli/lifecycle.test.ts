@@ -49,11 +49,15 @@ const probeGateway = vi.fn<
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => loadConfig(),
-  readBestEffortConfig: async () => loadConfig(),
-  resolveGatewayPort,
-}));
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfig(),
+    readBestEffortConfig: async () => loadConfig(),
+    resolveGatewayPort,
+  };
+});
 
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
@@ -277,6 +281,32 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("uses service command auth for unmanaged restart probes when shell env is unset", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: " service-token ",
+      },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: {
+          token: "service-token",
+          password: undefined,
+        },
+      }),
+    );
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {

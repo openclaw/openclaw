@@ -1,6 +1,7 @@
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -50,15 +51,28 @@ function resolveGatewayPortFallback(): Promise<number> {
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
+  const service = resolveGatewayService();
+  const command = await service.readCommand(process.env).catch(() => null);
+  const serviceEnv = command?.environment ?? undefined;
+  const mergedEnv = {
+    ...(process.env as Record<string, string | undefined>),
+    ...(serviceEnv ?? undefined),
+  } as NodeJS.ProcessEnv;
+
   const cfg = await readBestEffortConfig().catch(() => undefined);
   const tlsEnabled = !!cfg?.gateway?.tls?.enabled;
   const scheme = tlsEnabled ? "wss" : "ws";
+  const probeAuth = cfg
+    ? await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg,
+        mode: cfg.gateway?.mode === "remote" ? "remote" : "local",
+        env: mergedEnv,
+      })
+    : { auth: {} };
+
   const probe = await probeGateway({
     url: `${scheme}://127.0.0.1:${port}`,
-    auth: {
-      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
-    },
+    auth: probeAuth.auth,
     timeoutMs: 1_000,
   }).catch(() => null);
 
