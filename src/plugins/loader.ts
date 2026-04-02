@@ -84,7 +84,6 @@ export type PluginLoadOptions = {
   cache?: boolean;
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
-  allowChannelIdScopeMatch?: boolean;
   includeSetupOnlyChannelPlugins?: boolean;
   /**
    * Prefer `setupEntry` for configured channel plugins that explicitly opt in
@@ -234,7 +233,6 @@ function buildCacheKey(params: {
   installs?: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
-  allowChannelIdScopeMatch?: boolean;
   includeSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
@@ -263,7 +261,6 @@ function buildCacheKey(params: {
     ]),
   );
   const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
-  const scopeModeKey = params.allowChannelIdScopeMatch === true ? "plugin-or-channel" : "plugin";
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
@@ -272,7 +269,7 @@ function buildCacheKey(params: {
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${scopeModeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -286,20 +283,12 @@ function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
 function matchesScopedPluginRequest(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   pluginId: string;
-  manifestChannels: readonly string[];
-  allowChannelIdScopeMatch?: boolean;
 }): boolean {
   const scopedIds = params.onlyPluginIdSet;
   if (!scopedIds) {
     return true;
   }
-  if (scopedIds.has(params.pluginId)) {
-    return true;
-  }
-  if (params.allowChannelIdScopeMatch !== true) {
-    return false;
-  }
-  return params.manifestChannels.some((channelId) => scopedIds.has(channelId));
+  return scopedIds.has(params.pluginId);
 }
 
 function resolveRuntimeSubagentMode(
@@ -320,7 +309,6 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.workspaceDir !== undefined ||
     options.env !== undefined ||
     options.onlyPluginIds?.length ||
-    options.allowChannelIdScopeMatch === true ||
     options.runtimeOptions !== undefined ||
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
@@ -334,7 +322,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const cfg = applyTestPluginDefaults(options.config ?? {}, env);
   const normalized = normalizePluginsConfig(cfg.plugins);
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
-  const allowChannelIdScopeMatch = options.allowChannelIdScopeMatch === true;
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
@@ -344,7 +331,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     installs: cfg.plugins?.installs,
     env,
     onlyPluginIds,
-    allowChannelIdScopeMatch,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
@@ -356,7 +342,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     cfg,
     normalized,
     onlyPluginIds,
-    allowChannelIdScopeMatch,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
@@ -855,7 +840,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     cfg,
     normalized,
     onlyPluginIds,
-    allowChannelIdScopeMatch,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
@@ -1037,8 +1021,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const matchesRequestedScope = matchesScopedPluginRequest({
       onlyPluginIdSet,
       pluginId,
-      manifestChannels: manifestRecord.channels,
-      allowChannelIdScopeMatch,
     });
     // Filter again at import time as a final guard. The earlier manifest filter keeps
     // warnings scoped; this one prevents loading/registering anything outside the scope.
@@ -1457,12 +1439,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  const { env, cfg, normalized, onlyPluginIds, allowChannelIdScopeMatch, cacheKey } =
-    resolvePluginLoadCacheContext({
-      ...options,
-      activate: false,
-      cache: false,
-    });
+  const { env, cfg, normalized, onlyPluginIds, cacheKey } = resolvePluginLoadCacheContext({
+    ...options,
+    activate: false,
+    cache: false,
+  });
   const logger = options.logger ?? defaultLogger();
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
   const getJiti = createPluginJitiLoader(options);
@@ -1533,8 +1514,6 @@ export async function loadOpenClawPluginCliRegistry(
       !matchesScopedPluginRequest({
         onlyPluginIdSet,
         pluginId,
-        manifestChannels: manifestRecord.channels,
-        allowChannelIdScopeMatch,
       })
     ) {
       continue;

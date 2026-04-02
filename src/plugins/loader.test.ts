@@ -2448,7 +2448,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(disabled?.status).toBe("disabled");
   });
 
-  it("does not treat scoped plugin ids as channel ids unless channel matching is explicit", () => {
+  it("does not treat manifest channel ids as scoped plugin id matches", () => {
     useNoBundledPlugins();
     const target = writePlugin({
       id: "target-plugin",
@@ -2492,7 +2492,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(registry.plugins.map((entry) => entry.id)).toEqual(["target-plugin"]);
   });
 
-  it("only setup-loads a disabled channel plugin when the caller scopes to the selected channel", () => {
+  it("only setup-loads a disabled channel plugin when the caller scopes to the selected plugin", () => {
     useNoBundledPlugins();
     const marker = path.join(makeTempDir(), "lazy-channel-imported.txt");
     const plugin = writePlugin({
@@ -2574,8 +2574,7 @@ module.exports = {
       cache: false,
       config,
       includeSetupOnlyChannelPlugins: true,
-      onlyPluginIds: ["lazy-channel"],
-      allowChannelIdScopeMatch: true,
+      onlyPluginIds: ["lazy-channel-plugin"],
     });
 
     expect(fs.existsSync(marker)).toBe(true);

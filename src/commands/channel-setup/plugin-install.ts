@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -239,7 +240,6 @@ function loadChannelSetupPluginRegistry(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   onlyPluginIds?: string[];
-  allowChannelIdScopeMatch?: boolean;
   activate?: boolean;
 }): PluginRegistry {
   clearPluginDiscoveryCache();
@@ -254,10 +254,23 @@ function loadChannelSetupPluginRegistry(params: {
     cache: false,
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
-    allowChannelIdScopeMatch: params.allowChannelIdScopeMatch === true,
     includeSetupOnlyChannelPlugins: true,
     activate: params.activate,
   });
+}
+
+function resolveScopedChannelPluginId(params: {
+  channel: string;
+  pluginId?: string;
+  workspaceDir?: string;
+}): string | undefined {
+  const explicitPluginId = params.pluginId?.trim();
+  if (explicitPluginId) {
+    return explicitPluginId;
+  }
+  return getChannelPluginCatalogEntry(params.channel, {
+    workspaceDir: params.workspaceDir,
+  })?.pluginId;
 }
 
 export function reloadChannelSetupPluginRegistryForChannel(params: {
@@ -268,15 +281,19 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   workspaceDir?: string;
 }): void {
   const activeRegistry = getActivePluginChannelRegistry();
+  const scopedPluginId = resolveScopedChannelPluginId({
+    channel: params.channel,
+    pluginId: params.pluginId,
+    workspaceDir: params.workspaceDir,
+  });
   // On low-memory hosts, the empty-registry fallback should only recover the selected
-  // plugin instead of importing every bundled extension during setup.
-  const onlyPluginIds = activeRegistry?.plugins.length
-    ? undefined
-    : [params.pluginId ?? params.channel];
+  // plugin when we have a trusted channel -> plugin mapping. Otherwise fall back
+  // to an unscoped reload instead of trusting manifest-declared channel ids.
+  const onlyPluginIds =
+    activeRegistry?.plugins.length || !scopedPluginId ? undefined : [scopedPluginId];
   loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds,
-    allowChannelIdScopeMatch: !params.pluginId,
   });
 }
 
@@ -287,10 +304,14 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   pluginId?: string;
   workspaceDir?: string;
 }): PluginRegistry {
+  const scopedPluginId = resolveScopedChannelPluginId({
+    channel: params.channel,
+    pluginId: params.pluginId,
+    workspaceDir: params.workspaceDir,
+  });
   return loadChannelSetupPluginRegistry({
     ...params,
-    onlyPluginIds: [params.pluginId ?? params.channel],
-    allowChannelIdScopeMatch: !params.pluginId,
+    ...(scopedPluginId ? { onlyPluginIds: [scopedPluginId] } : {}),
     activate: false,
   });
 }

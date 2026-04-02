@@ -29,6 +29,15 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 
 const resolveBundledPluginSources = vi.fn();
+const getChannelPluginCatalogEntry = vi.fn();
+vi.mock("../../channels/plugins/catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/catalog.js")>();
+  return {
+    ...actual,
+    getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntry(...args),
+  };
+});
+
 vi.mock("../../plugins/bundled-sources.js", () => ({
   findBundledPluginSourceInMap: ({
     bundled,
@@ -107,6 +116,7 @@ beforeEach(() => {
     changes: [],
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
+  getChannelPluginCatalogEntry.mockReturnValue(undefined);
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -408,6 +418,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes channel reloads when setup starts from an empty registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
+    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@openclaw/telegram-plugin" });
 
     reloadChannelSetupPluginRegistryForChannel({
       cfg,
@@ -421,8 +432,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         config: cfg,
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
-        onlyPluginIds: ["telegram"],
-        allowChannelIdScopeMatch: true,
+        onlyPluginIds: ["@openclaw/telegram-plugin"],
         includeSetupOnlyChannelPlugins: true,
       }),
     );
@@ -460,6 +470,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes channel reloads when the global registry is populated but the pinned channel registry is empty", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
+    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@openclaw/telegram-plugin" });
     const activeRegistry = createEmptyPluginRegistry();
     activeRegistry.plugins.push(
       createPluginRecord({
@@ -486,8 +497,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        onlyPluginIds: ["telegram"],
-        allowChannelIdScopeMatch: true,
+        onlyPluginIds: ["@openclaw/telegram-plugin"],
       }),
     );
   });
@@ -495,6 +505,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("can load a channel-scoped snapshot without activating the global registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
+    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@openclaw/telegram-plugin" });
 
     loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
@@ -508,10 +519,27 @@ describe("ensureChannelSetupPluginInstalled", () => {
         config: cfg,
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
-        onlyPluginIds: ["telegram"],
-        allowChannelIdScopeMatch: true,
+        onlyPluginIds: ["@openclaw/telegram-plugin"],
         includeSetupOnlyChannelPlugins: true,
         activate: false,
+      }),
+    );
+  });
+
+  it("does not scope by raw channel id when no trusted plugin mapping exists", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: expect.anything(),
       }),
     );
   });
@@ -534,7 +562,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/msteams-plugin"],
-        allowChannelIdScopeMatch: false,
         includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),
