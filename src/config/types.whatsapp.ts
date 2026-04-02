@@ -90,6 +90,10 @@ type WhatsAppSharedConfig = {
   reactionLevel?: WhatsAppReactionLevel;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Controls outbound error reporting: always, once per cooldown window, or silent. Default: "always". */
+  errorPolicy?: "always" | "once" | "silent";
+  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
+  errorCooldownMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */

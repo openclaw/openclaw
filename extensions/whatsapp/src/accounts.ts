@@ -34,6 +34,8 @@ export type ResolvedWhatsAppAccount = {
   reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  errorPolicy?: "always" | "once" | "silent";
+  errorCooldownMs?: number;
 };
 
 export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
@@ -147,6 +149,8 @@ export function resolveWhatsAppAccount(params: {
     reactionLevel: merged.reactionLevel,
     groups: merged.groups,
     debounceMs: merged.debounceMs,
+    errorPolicy: merged.errorPolicy,
+    errorCooldownMs: merged.errorCooldownMs,
   };
 }
 
