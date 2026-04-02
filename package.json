@@ -323,6 +323,10 @@
       "types": "./dist/plugin-sdk/browser-runtime.d.ts",
       "default": "./dist/plugin-sdk/browser-runtime.js"
     },
+    "./plugin-sdk/browser-config-support": {
+      "types": "./dist/plugin-sdk/browser-config-support.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-support.js"
+    },
     "./plugin-sdk/browser-support": {
       "types": "./dist/plugin-sdk/browser-support.d.ts",
       "default": "./dist/plugin-sdk/browser-support.js"
