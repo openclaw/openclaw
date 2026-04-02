@@ -236,13 +236,13 @@ describe("exec approvals CLI", () => {
             expect.objectContaining({
               scopeLabel: "agent:runner",
               security: expect.objectContaining({
-                hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
+                hostSource: "/tmp/local-exec-approvals.json agents.*.security",
               }),
               ask: expect.objectContaining({
-                hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
+                hostSource: "/tmp/local-exec-approvals.json agents.*.ask",
               }),
               askFallback: expect.objectContaining({
-                source: "~/.openclaw/exec-approvals.json agents.*.askFallback",
+                source: "/tmp/local-exec-approvals.json agents.*.askFallback",
               }),
             }),
           ]),
@@ -304,7 +304,7 @@ describe("exec approvals CLI", () => {
               }),
               askFallback: expect.objectContaining({
                 effective: "deny",
-                source: "~/.openclaw/exec-approvals.json defaults.askFallback",
+                source: "/tmp/node-exec-approvals.json defaults.askFallback",
               }),
             }),
           ],
