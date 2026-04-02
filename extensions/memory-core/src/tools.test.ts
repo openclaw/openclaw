@@ -56,7 +56,7 @@ describe("memory_search unavailable payloads", () => {
         "Memory search is unavailable because node:sqlite is not available in this Node.js runtime.",
       action:
         "node:sqlite requires Node.js 22.5+ compiled with SQLite support. " +
-        "Check your Node.js build or run: openclaw doctor to see remediation options.",
+        "Check your Node.js build (node:sqlite requires Node.js v22.5+) or run `openclaw doctor` to diagnose.",
     });
   });
 });
