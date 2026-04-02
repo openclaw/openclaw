@@ -272,7 +272,9 @@ describe("gateway plugin HTTP auth boundary", () => {
           },
         ],
       }),
-      log: { warn: vi.fn() } as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
     });
 
     await withTempConfig({
@@ -345,7 +347,9 @@ describe("gateway plugin HTTP auth boundary", () => {
           },
         ],
       }),
-      log: { warn: vi.fn() } as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
     });
 
     await withGatewayServer({
