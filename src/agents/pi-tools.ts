@@ -636,6 +636,7 @@ export function createOpenClawCodingTools(options?: {
               root: sandboxRoot ?? workspaceRoot,
               relativePath: memoryFlushWritePath,
               containerWorkdir: sandbox?.containerWorkdir,
+              mutationLockingEnabled,
               sandbox:
                 sandboxRoot && sandboxFsBridge
                   ? { root: sandboxRoot, bridge: sandboxFsBridge }

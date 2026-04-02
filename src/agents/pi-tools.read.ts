@@ -499,7 +499,7 @@ async function normalizeCanonicalLockKeys(paths: string[]): Promise<string[]> {
   const canonical = await Promise.all(
     paths.map(async (target) => await canonicalizeMutationLockKey(target)),
   );
-  return [...new Set(canonical)];
+  return [...new Set(canonical)].toSorted();
 }
 
 export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): AnyAgentTool {
@@ -518,19 +518,25 @@ export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): An
 
       let ranMutation = false;
       try {
-        await waitForQueuedMutation(previous, signal);
-
-        // Also wait on any in-flight per-file write/edit queues for paths this
-        // patch touches so that apply_patch cannot bypass earlier-queued writes
-        // on the same files (fixes write-ordering race).
+        // Snapshot per-file queue promises *before* waiting on `previous` so we
+        // only wait on writes that were already enqueued at the time this
+        // apply_patch was queued — not on writes that arrive later and might in
+        // turn wait on *us*, which would deadlock.
         const touchedPaths = await normalizeCanonicalLockKeys(
           extractApplyPatchTouchedPaths(resolvedRoot, params),
         );
+        const perFileSnapshots: Array<{ tp: string; prev: Promise<void> }> = [];
         for (const tp of touchedPaths) {
           const perFilePrevious = workspaceMutationLocks.get(tp);
           if (perFilePrevious) {
-            await waitForQueuedMutation(perFilePrevious, signal);
+            perFileSnapshots.push({ tp, prev: perFilePrevious });
           }
+        }
+
+        await waitForQueuedMutation(previous, signal);
+
+        for (const { prev } of perFileSnapshots) {
+          await waitForQueuedMutation(prev, signal);
         }
 
         ranMutation = true;
@@ -793,6 +799,9 @@ type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
   containerWorkdir?: string;
+  /** When true, the inner write tool is already wrapped with wrapToolMutationLock;
+   *  skip the outer file lock to avoid nested-lock deadlock. */
+  mutationLockingEnabled?: boolean;
   sandbox?: {
     root: string;
     bridge: SandboxFsBridge;
@@ -866,6 +875,37 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
       // Wrap the read-then-write in a file-level workspace lock so concurrent
       // memory flushes to the same file cannot read the same old content before
       // the lock serialises the writes (fixes lost-update race).
+      //
+      // When the inner write tool is already mutation-locked
+      // (mutationLockingEnabled=true), skip the outer lock to avoid
+      // nested-lock deadlock — the inner tool already serialises file writes.
+      const doFlush = async () => {
+        const existing = await readOptionalUtf8File({
+          absolutePath: allowedAbsolutePath,
+          relativePath: options.relativePath,
+          sandbox: options.sandbox,
+          signal,
+        });
+        const separator =
+          existing.length > 0 && !existing.endsWith("\n") && !content.startsWith("\n") ? "\n" : "";
+
+        return await tool.execute(
+          toolCallId,
+          {
+            ...record,
+            path: options.relativePath,
+            content: `${existing}${separator}${content}`,
+          },
+          signal,
+          onUpdate,
+        );
+      };
+
+      if (options.mutationLockingEnabled) {
+        // Inner tool already holds a file-level mutation lock; run directly.
+        return await doFlush();
+      }
+
       const lockFn = await getWithWorkspaceLock();
       return await lockFn(
         allowedAbsolutePath,
@@ -875,29 +915,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
           signal,
         },
-        async () => {
-          const existing = await readOptionalUtf8File({
-            absolutePath: allowedAbsolutePath,
-            relativePath: options.relativePath,
-            sandbox: options.sandbox,
-            signal,
-          });
-          const separator =
-            existing.length > 0 && !existing.endsWith("\n") && !content.startsWith("\n")
-              ? "\n"
-              : "";
-
-          return await tool.execute(
-            toolCallId,
-            {
-              ...record,
-              path: options.relativePath,
-              content: `${existing}${separator}${content}`,
-            },
-            signal,
-            onUpdate,
-          );
-        },
+        doFlush,
       );
     },
   };

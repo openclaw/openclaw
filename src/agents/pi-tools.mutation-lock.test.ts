@@ -819,3 +819,79 @@ describe("wrapApplyPatchMutationLock", () => {
     }
   });
 });
+
+describe("wrapToolMemoryFlushAppendOnlyWrite", () => {
+  it("skips outer lock when mutationLockingEnabled to avoid nested-lock deadlock", async () => {
+    const { wrapToolMemoryFlushAppendOnlyWrite } = await import("./pi-tools.read.js");
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memflush-lock-"));
+    const relPath = "memory/test.md";
+    const absPath = path.resolve(tempRoot, relPath);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, "initial\n");
+
+    const executed = deferred();
+    const writeTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_id, params) => {
+        const record = params as Record<string, unknown>;
+        await fs.writeFile(path.resolve(tempRoot, record.path as string), record.content as string);
+        executed.resolve();
+        return textResult("ok");
+      },
+    };
+
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
+      root: tempRoot,
+      relativePath: relPath,
+      mutationLockingEnabled: true,
+    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    try {
+      await wrapped.execute("flush-1", { path: relPath, content: "appended" }, controller.signal);
+      await executed.promise;
+      const result = await fs.readFile(absPath, "utf8");
+      expect(result).toContain("initial");
+      expect(result).toContain("appended");
+    } finally {
+      clearTimeout(timeout);
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("applies file lock when mutationLockingEnabled is unset", async () => {
+    const { wrapToolMemoryFlushAppendOnlyWrite } = await import("./pi-tools.read.js");
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memflush-gate-"));
+    const relPath = "memory/test.md";
+    const absPath = path.resolve(tempRoot, relPath);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, "start\n");
+
+    const writeTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_id, params) => {
+        const record = params as Record<string, unknown>;
+        await fs.writeFile(path.resolve(tempRoot, record.path as string), record.content as string);
+        return textResult("ok");
+      },
+    };
+
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
+      root: tempRoot,
+      relativePath: relPath,
+    });
+
+    await wrapped.execute("flush-2", { path: relPath, content: "added" });
+    const result = await fs.readFile(absPath, "utf8");
+    expect(result).toContain("start");
+    expect(result).toContain("added");
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+});

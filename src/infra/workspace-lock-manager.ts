@@ -370,8 +370,18 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
         }
       }
       if (attempt === 2) {
-        await handle.write(Buffer.from(previousRaw, "utf8"), 0, Buffer.byteLength(previousRaw), 0);
-        await handle.truncate(Buffer.byteLength(previousRaw));
+        const rollbackBuf = Buffer.from(previousRaw, "utf8");
+        const { bytesWritten: rollbackBytes } = await handle.write(
+          rollbackBuf,
+          0,
+          rollbackBuf.length,
+          0,
+        );
+        if (rollbackBytes === rollbackBuf.length) {
+          await handle.truncate(rollbackBytes);
+        }
+        // Even if rollback was partial, throw to signal the refresh failed;
+        // the lock TTL will eventually reclaim if the payload is corrupted.
         throw new Error(
           `refreshLock: failed to write full payload after 3 attempts; aborting to preserve lock integrity`,
         );
