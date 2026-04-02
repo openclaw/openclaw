@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=OpenClaw Companion
+Exec=openclaw-linux
+Terminal=false
+Categories=Utility;
