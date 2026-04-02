@@ -165,10 +165,10 @@ async function loadConfigForApprovalsTarget(params: {
   if (params.source === "node") {
     return null;
   }
-  if (params.source === "local") {
-    return await readBestEffortConfig();
-  }
   try {
+    if (params.source === "local") {
+      return await readBestEffortConfig();
+    }
     const snapshot = (await callGatewayFromCli(
       "config.get",
       params.opts,

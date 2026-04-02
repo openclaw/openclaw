@@ -283,6 +283,23 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("keeps local approvals output when config load fails", async () => {
+    readBestEffortConfig.mockRejectedValue(new Error("duplicate agent directories"));
+
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectivePolicy: {
+          note: "Config unavailable.",
+          scopes: [],
+        },
+      }),
+      0,
+    );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("reports agent scopes with inherited global requested policy", async () => {
     localSnapshot.file = {
       version: 1,
