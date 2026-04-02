@@ -110,7 +110,7 @@ export function buildGmicloudProvider(): ModelProviderConfig {
       },
       {
         id: GMICLOUD_DEFAULT_MODEL_ID,
-        name: "DeepSeek V3 0324",
+        name: "Claude Opus 4.6",
         reasoning: false,
         input: ["text"],
         cost: { input: 0.28, output: 0.88, cacheRead: 0, cacheWrite: 0 },

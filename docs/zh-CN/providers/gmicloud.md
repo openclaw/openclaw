@@ -44,7 +44,7 @@ openclaw onboard --non-interactive \
 
 ## 可用模型
 
-已与当前 Dify GMI Cloud 插件中的模型集同步，包含：
+OpenClaw 当前支持以下 GMI Cloud 模型：
 
 - **Anthropic**: `anthropic/claude-opus-4.6`, `anthropic/claude-sonnet-4.6`
 - **GPT**: `openai/gpt-5.4`, `openai/gpt-5.4-pro`, `openai/gpt-5.4-mini`, `openai/gpt-5.4-nano`, `openai/gpt-oss-120b`
