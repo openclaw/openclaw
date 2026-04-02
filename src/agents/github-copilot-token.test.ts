@@ -14,6 +14,9 @@ describe("resolveCopilotApiToken", () => {
     expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.example.com;")).toBe(
       "https://api.example.com",
     );
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.example.com:8443;")).toBe(
+      "https://api.example.com",
+    );
   });
 
   it("rejects malformed or non-http proxy hints", () => {

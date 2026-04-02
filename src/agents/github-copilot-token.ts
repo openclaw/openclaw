@@ -62,10 +62,7 @@ function resolveCopilotProxyHost(proxyEp: string): string | null {
     return null;
   }
 
-  const urlText =
-    /^https?:\/\//i.test(trimmed) || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
-      ? trimmed
-      : `https://${trimmed}`;
+  const urlText = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
     const url = new URL(urlText);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -98,9 +95,6 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
     return null;
   }
   const host = proxyHost.replace(/^proxy\./i, "api.");
-  if (!host) {
-    return null;
-  }
 
   const baseUrl = `https://${host}`;
   return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
