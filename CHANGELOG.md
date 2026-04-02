@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/onboarding: restore guided setup in `openclaw channels add` and `openclaw configure --section channels`, while keeping custom plugin wizards on the shared `setupWizard` seam. (#59462) Thanks @gumadeiras.
 - Feishu/comment threads: harden document comment-thread delivery so whole-document comments fall back to `add_comment`, delayed reply lookups retry more reliably, and user-visible replies avoid reasoning/planning spillover. (#59129) Thanks @wittam-01.
 - Matrix/streaming: keep live partial previews for the current assistant block while preserving completed block updates as separate messages when `channels.matrix.blockStreaming` is enabled. (#59384) thanks @gumadeiras
+- Kimi Coding/tools: normalize Anthropic tool payloads into the OpenAI-compatible function shape Kimi Coding expects so tool calls stop losing required arguments. (#59440) Thanks @obviyus.
 
 ## 2026.4.1-beta.1
 
