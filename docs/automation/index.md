@@ -1,15 +1,15 @@
 ---
-summary: "Overview of all automation mechanisms: heartbeat, cron, tasks, hooks, webhooks, and more"
+summary: "Overview of automation mechanisms: tasks, cron, hooks, standing orders, and Task Flow"
 read_when:
   - Deciding how to automate work with OpenClaw
-  - Choosing between heartbeat, cron, hooks, and webhooks
+  - Choosing between heartbeat, cron, hooks, and standing orders
   - Looking for the right automation entry point
-title: "Automation Overview"
+title: "Automation & Tasks"
 ---
 
-# Automation
+# Automation & Tasks
 
-OpenClaw provides several automation mechanisms, each suited to different use cases. This page helps you choose the right one.
+OpenClaw runs work in the background through tasks, scheduled jobs, event hooks, and standing instructions. This page helps you choose the right mechanism and understand how they fit together.
 
 ## Quick decision guide
 
@@ -23,46 +23,65 @@ flowchart TD
     C -->|No| G[Standing Orders]
 ```
 
-## Mechanisms at a glance
+| Use case                             | Recommended         | Why                                      |
+| ------------------------------------ | ------------------- | ---------------------------------------- |
+| Check inbox every 30 min             | Heartbeat           | Batches with other checks, context-aware |
+| Send daily report at 9 AM sharp      | Cron (isolated)     | Exact timing needed                      |
+| Monitor calendar for upcoming events | Heartbeat           | Natural fit for periodic awareness       |
+| Run weekly deep analysis             | Cron (isolated)     | Standalone task, can use different model |
+| Remind me in 20 minutes              | Cron (main, `--at`) | One-shot with precise timing             |
+| React to commands or lifecycle       | Hooks               | Event-driven, runs custom scripts        |
+| Persistent agent instructions        | Standing orders     | Injected into every session              |
 
-| Mechanism                                      | What it does                                             | Runs in                  | Creates task record |
-| ---------------------------------------------- | -------------------------------------------------------- | ------------------------ | ------------------- |
-| [Heartbeat](/gateway/heartbeat)                | Periodic main-session turn — batches multiple checks     | Main session             | No                  |
-| [Cron](/automation/cron-jobs)                  | Scheduled jobs with precise timing                       | Main or isolated session | Yes (all types)     |
-| [Background Tasks](/automation/tasks)          | Tracks detached work (cron, ACP, subagents, CLI)         | N/A (ledger)             | N/A                 |
-| [Hooks](/automation/hooks)                     | Event-driven scripts triggered by agent lifecycle events | Hook runner              | No                  |
-| [Standing Orders](/automation/standing-orders) | Persistent instructions injected into the system prompt  | Main session             | No                  |
-| [Webhooks](/automation/webhook)                | Receive inbound HTTP events and route to the agent       | Gateway HTTP             | No                  |
+## Core concepts
 
-### Specialized automation
+### Tasks
 
-| Mechanism                                      | What it does                                    |
-| ---------------------------------------------- | ----------------------------------------------- |
-| [Gmail PubSub](/automation/gmail-pubsub)       | Real-time Gmail notifications via Google PubSub |
-| [Polling](/automation/poll)                    | Periodic data source checks (RSS, APIs, etc.)   |
-| [Auth Monitoring](/automation/auth-monitoring) | Credential health and expiry alerts             |
+The background task ledger tracks all detached work: ACP runs, subagent spawns, isolated cron executions, and CLI operations. Tasks are records, not schedulers. Use `openclaw tasks list` and `openclaw tasks audit` to inspect them.
+
+See [Background Tasks](/automation/tasks).
+
+### Scheduled tasks (cron)
+
+Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook. Supports one-shot reminders, recurring expressions, and inbound webhook triggers.
+
+See [Scheduled Tasks](/automation/cron-jobs).
+
+### Task Flow
+
+Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
+
+See [Task Flow](/automation/taskflow).
+
+### Heartbeat
+
+Heartbeat is a periodic main-session turn (default every 30 minutes). It batches multiple checks (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records. Use `HEARTBEAT.md` to define what the agent checks.
+
+See [Heartbeat](/gateway/heartbeat).
+
+### Hooks
+
+Hooks are event-driven scripts triggered by agent lifecycle events (`/new`, `/reset`, `/stop`), session compaction, gateway startup, message flow, and tool calls. Hooks are automatically discovered from directories and can be managed with `openclaw hooks`.
+
+See [Hooks](/automation/hooks).
+
+### Standing orders
+
+Standing orders grant the agent permanent operating authority for defined programs. They live in workspace files (typically `AGENTS.md`) and are injected into every session. Combine with cron for time-based enforcement.
+
+See [Standing Orders](/automation/standing-orders).
 
 ## How they work together
 
-The most effective setups combine multiple mechanisms:
-
-1. **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
-2. **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders.
-3. **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
-4. **Standing Orders** give the agent persistent context ("always check the project board before replying").
-5. **Background Tasks** automatically track all detached work so you can inspect and audit it.
-
-See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for a detailed comparison of the two scheduling mechanisms.
-
-## Older ClawFlow references
-
-Older release notes and docs may mention `ClawFlow` or `openclaw flows`, but the current CLI surface in this repo is `openclaw tasks`.
-
-See [Background Tasks](/automation/tasks) for the supported task ledger commands, plus [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes.
+- **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
+- **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
+- **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
+- **Standing orders** give the agent persistent context and authority boundaries.
+- **Task Flow** coordinates multi-step flows above individual tasks.
+- **Tasks** automatically track all detached work so you can inspect and audit it.
 
 ## Related
 
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — detailed comparison guide
-- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
-- [Troubleshooting](/automation/troubleshooting) — debugging automation issues
+- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys

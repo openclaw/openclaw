@@ -2,56 +2,40 @@ import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
-import { resolveProviderRequestAttributionHeaders } from "../agents/provider-attribution.js";
 import {
-  resolveProviderRequestConfig,
+  buildProviderRequestDispatcherPolicy,
+  normalizeBaseUrl,
+  resolveProviderRequestPolicyConfig,
+  type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
+const MAX_ERROR_RESPONSE_BYTES = 4096;
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
+const MAX_AUDIT_CONTEXT_CHARS = 80;
 
-export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
-  const raw = baseUrl?.trim() || fallback;
-  return raw.replace(/\/+$/, "");
+function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
+  }
+  return timeoutMs;
 }
 
-export function applyProviderRequestHeaders(params: {
-  headers?: HeadersInit;
-  defaultHeaders?: Record<string, string>;
-  provider?: string;
-  api?: string;
-  baseUrl?: string;
-  capability?: ProviderRequestCapability;
-  transport?: ProviderRequestTransport;
-}): Headers {
-  const headers = new Headers(params.headers);
-  if (params.defaultHeaders) {
-    for (const [key, value] of Object.entries(params.defaultHeaders)) {
-      if (!headers.has(key)) {
-        headers.set(key, value);
-      }
-    }
+function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
+  const cleaned = auditContext
+    ?.replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return undefined;
   }
-  const attributionHeaders = resolveProviderRequestAttributionHeaders({
-    provider: params.provider,
-    api: params.api,
-    baseUrl: params.baseUrl,
-    capability: params.capability ?? "other",
-    transport: params.transport ?? "http",
-  });
-  if (!attributionHeaders) {
-    return headers;
-  }
-  for (const [key, value] of Object.entries(attributionHeaders)) {
-    if (!headers.has(key)) {
-      headers.set(key, value);
-    }
-  }
-  return headers;
+  return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
 }
 
 export function resolveProviderHttpRequestConfig(params: {
@@ -60,6 +44,7 @@ export function resolveProviderHttpRequestConfig(params: {
   allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;
@@ -68,35 +53,34 @@ export function resolveProviderHttpRequestConfig(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   requestConfig: ResolvedProviderRequestConfig;
 } {
-  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
-  const requestConfigParams: Parameters<typeof resolveProviderRequestConfig>[0] = {
+  const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
-    baseUrl,
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: params.defaultBaseUrl,
     capability: params.capability ?? "other",
     transport: params.transport ?? "http",
-  };
-  if (params.api !== undefined) {
-    requestConfigParams.api = params.api;
+    callerHeaders: params.headers
+      ? Object.fromEntries(new Headers(params.headers).entries())
+      : undefined,
+    providerHeaders: params.defaultHeaders,
+    precedence: "caller-wins",
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    api: params.api,
+    request: params.request,
+  });
+  const headers = new Headers(requestConfig.headers);
+  if (!requestConfig.baseUrl) {
+    throw new Error("Missing baseUrl: provide baseUrl or defaultBaseUrl");
   }
-  if (params.defaultHeaders !== undefined) {
-    requestConfigParams.providerHeaders = params.defaultHeaders;
-  }
-  const requestConfig = resolveProviderRequestConfig(requestConfigParams);
 
   return {
-    baseUrl,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
-    headers: applyProviderRequestHeaders({
-      headers: params.headers,
-      defaultHeaders: requestConfig.headers,
-      provider: params.provider,
-      api: params.api,
-      baseUrl,
-      capability: params.capability,
-      transport: params.transport,
-    }),
+    baseUrl: requestConfig.baseUrl,
+    allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+    headers,
+    dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
   };
 }
@@ -104,22 +88,26 @@ export function resolveProviderHttpRequestConfig(params: {
 export async function fetchWithTimeoutGuarded(
   url: string,
   init: RequestInit,
-  timeoutMs: number,
+  timeoutMs: number | undefined,
   fetchFn: typeof fetch,
   options?: {
     ssrfPolicy?: SsrFPolicy;
     lookupFn?: LookupFn;
     pinDns?: boolean;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
   },
 ): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuard({
     url,
     fetchImpl: fetchFn,
     init,
-    timeoutMs,
+    timeoutMs: resolveGuardedHttpTimeoutMs(timeoutMs),
     policy: options?.ssrfPolicy,
     lookupFn: options?.lookupFn,
     pinDns: options?.pinDns,
+    dispatcherPolicy: options?.dispatcherPolicy,
+    auditContext: sanitizeAuditContext(options?.auditContext),
   });
 }
 
@@ -127,9 +115,11 @@ export async function postTranscriptionRequest(params: {
   url: string;
   headers: Headers;
   body: BodyInit;
-  timeoutMs: number;
+  timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -140,7 +130,13 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+        }
+      : undefined,
   );
 }
 
@@ -148,9 +144,11 @@ export async function postJsonRequest(params: {
   url: string;
   headers: Headers;
   body: unknown;
-  timeoutMs: number;
+  timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -161,13 +159,53 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+        }
+      : undefined,
   );
 }
 
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const text = await res.text();
+    if (!res.body) {
+      return undefined;
+    }
+    reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let sawBytes = false;
+    while (total < MAX_ERROR_RESPONSE_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.length === 0) {
+        continue;
+      }
+      sawBytes = true;
+      const remaining = MAX_ERROR_RESPONSE_BYTES - total;
+      const chunk = value.length <= remaining ? value : value.subarray(0, remaining);
+      chunks.push(chunk);
+      total += chunk.length;
+      if (chunk.length < value.length) {
+        break;
+      }
+    }
+    if (!sawBytes) {
+      return undefined;
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    const text = new TextDecoder().decode(bytes);
     const collapsed = text.replace(/\s+/g, " ").trim();
     if (!collapsed) {
       return undefined;
@@ -178,6 +216,12 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
     return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
   } catch {
     return undefined;
+  } finally {
+    try {
+      await reader?.cancel();
+    } catch {
+      // Ignore stream-cancel failures while reporting the original HTTP error.
+    }
   }
 }
 

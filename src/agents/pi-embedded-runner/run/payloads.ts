@@ -5,6 +5,7 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -19,16 +20,10 @@ import {
   extractAssistantThinking,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
-type LastToolError = {
-  toolName: string;
-  meta?: string;
-  error?: string;
-  mutatingAction?: boolean;
-  actionFingerprint?: string;
-};
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
@@ -53,19 +48,37 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function shouldIncludeToolErrorDetails(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+  verboseLevel?: VerboseLevel;
+}): boolean {
+  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
+    return true;
+  }
+  return (
+    isExecLikeToolName(params.lastToolError.toolName) &&
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+  );
+}
+
 function resolveToolErrorWarningPolicy(params: {
-  lastToolError: LastToolError;
+  lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  isCronTrigger?: boolean;
+  sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -92,8 +105,9 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: LastToolError;
+  lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
+  isCronTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -289,6 +303,8 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      isCronTrigger: params.isCronTrigger,
+      sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
 

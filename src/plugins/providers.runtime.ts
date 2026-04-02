@@ -4,7 +4,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
   resolveEnabledProviderPluginIds,
@@ -28,13 +28,14 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const autoEnabledConfig =
+  const autoEnabled =
     params.config !== undefined
       ? applyPluginAutoEnable({
           config: params.config,
           env,
-        }).config
+        })
       : undefined;
+  const autoEnabledConfig = autoEnabled?.config;
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
       ? resolveBundledProviderCompatPluginIds({
@@ -69,8 +70,10 @@ export function resolvePluginProviders(params: {
     env,
     onlyPluginIds: params.onlyPluginIds,
   });
-  const registry = loadOpenClawPlugins({
+  const registry = resolveRuntimePluginRegistry({
     config,
+    activationSourceConfig: params.config,
+    autoEnabledReasons: autoEnabled?.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,
@@ -79,6 +82,9 @@ export function resolvePluginProviders(params: {
     activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
+  if (!registry) {
+    return [];
+  }
 
   return registry.providers.map((entry) => ({
     ...entry.provider,

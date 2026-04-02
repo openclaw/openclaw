@@ -74,7 +74,12 @@
     "additionalProperties": false,
     "properties": {
       "viewerBaseUrl": {
-        "type": "string"
+        "type": "string",
+        "format": "uri",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+        "not": {
+          "pattern": "[?#]"
+        }
       },
       "defaults": {
         "type": "object",

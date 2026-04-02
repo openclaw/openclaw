@@ -403,7 +403,7 @@ export async function sendExecApprovalFollowupResult(
 export function buildExecApprovalPendingToolResult(params: {
   host: "gateway" | "node";
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   warningText: string;
   approvalId: string;
   approvalSlug: string;

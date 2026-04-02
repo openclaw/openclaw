@@ -141,12 +141,25 @@ resolve_linux_vm_name() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+    match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+def version_distance(version: tuple[int, ...], target: tuple[int, ...]) -> tuple[int, ...]:
+    width = max(len(version), len(target))
+    padded_version = version + (0,) * (width - len(version))
+    padded_target = target + (0,) * (width - len(target))
+    return tuple(abs(a - b) for a, b in zip(padded_version, padded_target))
 
 if requested in names:
     print(requested)
@@ -155,6 +168,27 @@ if requested in names:
 ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
 if not ubuntu_names:
     sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+requested_version = parse_ubuntu_version(requested) or (24,)
+ubuntu_with_versions = [
+    (name, parse_ubuntu_version(name)) for name in ubuntu_names
+]
+ubuntu_ge_24 = [
+    (name, version)
+    for name, version in ubuntu_with_versions
+    if version and version[0] >= 24
+]
+if ubuntu_ge_24:
+    best_name = min(
+        ubuntu_ge_24,
+        key=lambda item: (
+            version_distance(item[1], requested_version),
+            -len(item[1]),
+            item[0].lower(),
+        ),
+    )[0]
+    print(best_name)
+    raise SystemExit(0)
 
 best_name = max(
     ubuntu_names,
@@ -221,6 +255,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
+function Write-ProgressLog {
+  param([Parameter(Mandatory = $true)][string]$Stage)
+
+  "==> $Stage" | Tee-Object -FilePath $LogPath -Append | Out-Null
+}
+
 function Invoke-Logged {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
@@ -284,25 +324,35 @@ try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
   Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Write-ProgressLog 'update.start'
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
+  Write-ProgressLog 'update.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
+  Write-ProgressLog 'update.install-tgz'
   Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Write-ProgressLog 'update.verify-version'
   $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
   if ($version -notmatch [regex]::Escape($HeadShort)) {
     throw "version mismatch: expected substring $HeadShort"
   }
+  Write-ProgressLog $version
+  Write-ProgressLog 'update.set-model'
   Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
+  Write-ProgressLog 'update.restart-gateway'
   Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
   Start-Sleep -Seconds 5
+  Write-ProgressLog 'update.gateway-status'
   Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
   if ($null -eq $exitCode) {
     $exitCode = 0
   }
+  Write-ProgressLog 'update.done'
   Set-Content -Path $DonePath -Value ([string]$exitCode)
   exit $exitCode
 } catch {
@@ -510,11 +560,14 @@ run_windows_script_via_log() {
   local model_id="$5"
   local provider_key_env="$6"
   local provider_key="$7"
-  local runner_name log_name done_name done_status launcher_state
+  local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
+  local log_state_path
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-update-$RANDOM-$RANDOM.log"
   done_name="openclaw-update-$RANDOM-$RANDOM.done"
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-log-state.XXXXXX")"
+  : >"$log_state_path"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + 900))
   startup_checked=0
@@ -541,6 +594,34 @@ Start-Process powershell.exe -ArgumentList @(
 EOF
 )"
 
+  stream_windows_update_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
+
   while :; do
     set +e
     done_status="$(
@@ -558,14 +639,18 @@ EOF
       sleep 2
       continue
     fi
+    set +e
+    stream_windows_update_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows update helper live log poll failed; retrying"
+    fi
     if [[ -n "$done_status" ]]; then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_update_log; then
         warn "windows update helper log drain failed after completion"
       fi
+      rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -584,13 +669,10 @@ EOF
       fi
     fi
     if (( SECONDS >= poll_deadline )); then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_update_log; then
         warn "windows update helper log drain failed after timeout"
       fi
+      rm -f "$log_state_path"
       warn "windows update helper timed out waiting for done file"
       return 1
     fi

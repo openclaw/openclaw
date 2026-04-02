@@ -290,6 +290,7 @@ const { parseInlineDirectives } = await import("./directive-handling.js");
 const { buildCommandContext, handleCommands } = await import("./commands.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
+const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -2764,6 +2765,66 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Status: done");
     expect(result.reply?.text).toContain("TaskStatus: succeeded");
     expect(result.reply?.text).toContain("Task summary: Completed the requested task");
+  });
+
+  it("sanitizes leaked task details in /subagents info", async () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Inspect the stuck run",
+      cleanup: "keep",
+      createdAt: now - 20_000,
+      startedAt: now - 20_000,
+      endedAt: now - 1_000,
+      outcome: {
+        status: "error",
+        error: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:abc",
+      runId: "run-1",
+      task: "Inspect the stuck run",
+      status: "running",
+      deliveryStatus: "delivered",
+    });
+    failTaskRunByRunId({
+      runId: "run-1",
+      endedAt: now - 1_000,
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      terminalSummary: "Needs manual follow-up.",
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents info 1", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Subagent info");
+    expect(result.reply?.text).toContain("Outcome: error");
+    expect(result.reply?.text).toContain("Task summary: Needs manual follow-up.");
+    expect(result.reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(result.reply?.text).not.toContain("Internal task completion event");
   });
 
   it("kills subagents via /kill alias without a confirmation reply", async () => {

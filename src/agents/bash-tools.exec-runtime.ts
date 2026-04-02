@@ -221,13 +221,10 @@ export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
 }) {
-  if (params.requestedTarget === params.configuredTarget) {
-    return true;
-  }
-  if (params.configuredTarget === "auto") {
-    return true;
-  }
-  return false;
+  // `auto` is a routing strategy, not a wildcard allowlist. Keep per-call host
+  // selection pinned to the configured/session-selected target so a sandboxed
+  // session cannot silently hop to gateway or node.
+  return params.requestedTarget === params.configuredTarget;
 }
 
 export function resolveExecTarget(params: {
@@ -255,10 +252,13 @@ export function resolveExecTarget(params: {
   ) {
     throw new Error(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configure tools.exec.host=${renderExecTargetLabel(configuredTarget)} to allow).`,
+        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
+  // `auto` preserves the no-config "just work" default: sandbox when available,
+  // otherwise gateway. The YOLO part comes from security/ask defaults, not from
+  // `auto` itself.
   const effectiveHost =
     selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
   return {
@@ -340,7 +340,7 @@ export function buildApprovalPendingMessage(params: {
   approvalId: string;
   allowedDecisions?: readonly ExecApprovalDecision[];
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
 }) {
@@ -361,7 +361,7 @@ export function buildApprovalPendingMessage(params: {
   if (params.nodeId) {
     lines.push(`Node: ${params.nodeId}`);
   }
-  lines.push(`CWD: ${params.cwd}`);
+  lines.push(`CWD: ${params.cwd ?? "(node default)"}`);
   lines.push("Command:");
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");

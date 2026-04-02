@@ -13,6 +13,11 @@
     },
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@aws-sdk/client-bedrock"
+      ]
+    }
   }
 }

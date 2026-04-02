@@ -1,6 +1,7 @@
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -59,8 +60,8 @@ export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 
 export type TelegramExecApprovalConfig = {
-  /** Enable Telegram exec approvals for this account. Default: false. */
-  enabled?: boolean;
+  /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
   /** Telegram user IDs allowed to approve exec requests. Optional: falls back to numeric owner IDs inferred from allowFrom/defaultTo when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
@@ -131,6 +132,8 @@ export type TelegramAccountConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
