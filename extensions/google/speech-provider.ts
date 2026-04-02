@@ -1,3 +1,4 @@
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
@@ -35,7 +36,10 @@ function normalizeGeminiProviderConfig(
   const raw = asObject(providers?.gemini) ?? asObject(rawConfig.gemini);
   const baseUrl = trimToUndefined(raw?.baseUrl);
   return {
-    apiKey: trimToUndefined(raw?.apiKey),
+    apiKey: normalizeResolvedSecretInputString({
+      value: raw?.apiKey,
+      path: "messages.tts.providers.gemini.apiKey",
+    }),
     baseUrl: baseUrl?.replace(/\/+$/, "") || DEFAULT_GEMINI_BASE_URL,
     modelId: trimToUndefined(raw?.modelId) ?? DEFAULT_GEMINI_TTS_MODEL,
     timeoutMs: asNumber(raw?.timeoutMs),
@@ -45,7 +49,11 @@ function normalizeGeminiProviderConfig(
 function readGeminiProviderConfig(config: SpeechProviderConfig): GeminiProviderConfig {
   const defaults = normalizeGeminiProviderConfig({});
   return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
+    apiKey:
+      normalizeResolvedSecretInputString({
+        value: config.apiKey,
+        path: "messages.tts.providers.gemini.apiKey",
+      }) ?? defaults.apiKey,
     baseUrl: trimToUndefined(config.baseUrl)?.replace(/\/+$/, "") ?? defaults.baseUrl,
     modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
     timeoutMs: asNumber(config.timeoutMs) ?? defaults.timeoutMs,
@@ -82,9 +90,14 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
       const base = normalizeGeminiProviderConfig(baseTtsConfig);
       return {
         ...base,
-        ...(trimToUndefined(talkProviderConfig.apiKey) == null
+        ...(talkProviderConfig.apiKey === undefined
           ? {}
-          : { apiKey: trimToUndefined(talkProviderConfig.apiKey) }),
+          : {
+              apiKey: normalizeResolvedSecretInputString({
+                value: talkProviderConfig.apiKey,
+                path: "talk.providers.gemini.apiKey",
+              }),
+            }),
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: trimToUndefined(talkProviderConfig.baseUrl) }),
