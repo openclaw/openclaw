@@ -651,7 +651,7 @@ function isIpv4LoopbackOrPrivate(hostname: string): boolean {
 }
 
 function isIpv6LoopbackOrPrivate(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
   return (
     normalized === "::1" ||
     normalized === "0:0:0:0:0:0:0:1" ||
