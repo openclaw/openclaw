@@ -1,15 +1,11 @@
 import type { ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  createStatusReactionController,
   shouldAckReaction as shouldAckReactionGate,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
-import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -45,6 +41,15 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
+type TelegramMessageContextRuntime = typeof import("./bot-message-context.runtime.js");
+
+let telegramMessageContextRuntimePromise: Promise<TelegramMessageContextRuntime> | undefined;
+
+async function loadTelegramMessageContextRuntime() {
+  telegramMessageContextRuntimePromise ??= import("./bot-message-context.runtime.js");
+  return await telegramMessageContextRuntimePromise;
+}
+
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
 type TelegramReactionApi = (
   chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"],
@@ -61,6 +66,9 @@ export type TelegramMessageContext = {
   groupConfig?: ReturnType<
     BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
   >["groupConfig"];
+  topicConfig?: ReturnType<
+    BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
+  >["topicConfig"];
   resolvedThreadId?: number;
   threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
   replyThreadId?: number;
@@ -138,7 +146,7 @@ export const buildTelegramMessageContext = async ({
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const freshCfg = (loadFreshConfig ?? loadConfig)();
+  const freshCfg = loadFreshConfig?.() ?? (await loadTelegramMessageContextRuntime()).loadConfig();
   let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
@@ -261,6 +269,7 @@ export const buildTelegramMessageContext = async ({
     if (!configuredBinding) {
       return true;
     }
+    const { ensureConfiguredBindingRouteReady } = await loadTelegramMessageContextRuntime();
     const ensured = await ensureConfiguredBindingRouteReady({
       cfg: freshCfg,
       bindingResolution: configuredBinding,
@@ -319,7 +328,7 @@ export const buildTelegramMessageContext = async ({
     baseRequireMention,
   );
 
-  recordChannelActivity({
+  (await loadTelegramMessageContextRuntime()).recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
     direction: "inbound",
@@ -390,7 +399,7 @@ export const buildTelegramMessageContext = async ({
   let allowedStatusReactionEmojisPromise: Promise<Set<TelegramReactionEmoji> | null> | null = null;
   const statusReactionController: StatusReactionController | null =
     statusReactionsEnabled && msg.message_id
-      ? createStatusReactionController({
+      ? (await loadTelegramMessageContextRuntime()).createStatusReactionController({
           enabled: true,
           adapter: {
             setReaction: async (emoji: string) => {
@@ -491,6 +500,7 @@ export const buildTelegramMessageContext = async ({
     chatId,
     isGroup,
     groupConfig,
+    topicConfig,
     resolvedThreadId,
     threadSpec,
     replyThreadId,

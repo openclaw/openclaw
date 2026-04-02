@@ -10,13 +10,18 @@ vi.mock("../send.js", () => ({
 
 let SlackExecApprovalHandler: typeof import("./exec-approvals.js").SlackExecApprovalHandler;
 
-function buildConfig(target: "dm" | "channel" | "both" = "dm"): OpenClawConfig {
+function buildConfig(
+  target: "dm" | "channel" | "both" = "dm",
+  slackOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
+): OpenClawConfig {
+  const configuredExecApprovals = slackOverrides?.execApprovals;
   return {
     channels: {
       slack: {
         botToken: "xoxb-test",
         appToken: "xapp-test",
-        execApprovals: {
+        ...slackOverrides,
+        execApprovals: configuredExecApprovals ?? {
           enabled: true,
           approvers: ["U123APPROVER"],
           target,
@@ -125,6 +130,37 @@ describe("SlackExecApprovalHandler", () => {
     );
   });
 
+  it("omits allow-always when exec approvals disallow it", async () => {
+    const app = buildApp();
+    const handler = new SlackExecApprovalHandler({
+      app,
+      accountId: "default",
+      config: buildConfig("dm").channels!.slack!.execApprovals!,
+      cfg: buildConfig("dm"),
+    });
+
+    await handler.handleApprovalRequested(
+      buildRequest({
+        ask: "always",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    const dmCall = sendMessageSlackMock.mock.calls.find(([to]) => to === "user:U123APPROVER");
+    const blocks = dmCall?.[2]?.blocks as Array<Record<string, unknown>> | undefined;
+    const actionsBlock = blocks?.find((block) => block.type === "actions");
+    const buttons = Array.isArray(actionsBlock?.elements) ? actionsBlock.elements : [];
+    const buttonTexts = buttons.map((button) =>
+      typeof button === "object" && button && typeof button.text === "object" && button.text
+        ? String((button.text as { text?: unknown }).text ?? "")
+        : "",
+    );
+
+    expect(buttonTexts).toContain("Allow Once");
+    expect(buttonTexts).toContain("Deny");
+    expect(buttonTexts).not.toContain("Allow Always");
+  });
+
   it("updates the pending approval card in place after resolution", async () => {
     const app = buildApp();
     const update = app.client.chat.update as ReturnType<typeof vi.fn>;
@@ -158,5 +194,39 @@ describe("SlackExecApprovalHandler", () => {
         blocks: expect.not.arrayContaining([expect.objectContaining({ type: "actions" })]),
       }),
     );
+  });
+
+  it("does not treat allowFrom senders as approvers", async () => {
+    const app = buildApp();
+    const cfg = buildConfig("dm", {
+      allowFrom: ["U123APPROVER"],
+      execApprovals: { enabled: true, target: "dm" },
+    });
+    const handler = new SlackExecApprovalHandler({
+      app,
+      accountId: "default",
+      config: cfg.channels!.slack!.execApprovals!,
+      cfg,
+    });
+
+    expect(handler.shouldHandle(buildRequest())).toBe(false);
+  });
+
+  it("accepts commands.ownerAllowFrom as exec approver fallback", async () => {
+    const app = buildApp();
+    const cfg = {
+      ...buildConfig("dm", {
+        execApprovals: { enabled: true, target: "dm" },
+      }),
+      commands: { ownerAllowFrom: ["slack:U123APPROVER"] },
+    } as OpenClawConfig;
+    const handler = new SlackExecApprovalHandler({
+      app,
+      accountId: "default",
+      config: cfg.channels!.slack!.execApprovals!,
+      cfg,
+    });
+
+    expect(handler.shouldHandle(buildRequest())).toBe(true);
   });
 });

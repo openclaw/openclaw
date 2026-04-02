@@ -45,19 +45,53 @@ describe("dropThinkingBlocks", () => {
     expect(result).toBe(messages);
   });
 
-  it("drops thinking blocks while preserving non-thinking assistant content", () => {
+  it("preserves thinking blocks when the assistant message is the latest assistant turn", () => {
     const { assistant, messages, result } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal" },
       { type: "text", text: "final" },
     ]);
-    expect(result).not.toBe(messages);
-    expect(assistant.content).toEqual([{ type: "text", text: "final" }]);
+    expect(result).toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "internal" },
+      { type: "text", text: "final" },
+    ]);
   });
 
-  it("keeps assistant turn structure when all content blocks were thinking", () => {
+  it("preserves a latest assistant turn even when all content blocks are thinking", () => {
     const { assistant } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal-only" },
     ]);
-    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+    expect(assistant.content).toEqual([{ type: "thinking", thinking: "internal-only" }]);
+  });
+
+  it("preserves thinking blocks in the latest assistant message", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old" },
+          { type: "text", text: "old text" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest", thinkingSignature: "sig_latest" },
+          { type: "text", text: "latest text" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const firstAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const latestAssistant = result[3] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(firstAssistant.content).toEqual([{ type: "text", text: "old text" }]);
+    expect(latestAssistant.content).toEqual([
+      { type: "thinking", thinking: "latest", thinkingSignature: "sig_latest" },
+      { type: "text", text: "latest text" },
+    ]);
   });
 });

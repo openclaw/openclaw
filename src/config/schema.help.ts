@@ -437,6 +437,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
+  "gateway.webchat.chatHistoryMaxChars":
+    "Max characters per text field in chat.history responses before truncation (default: 12000).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
   "nodeHost.browserProxy":
@@ -805,6 +807,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
   "auth.cooldowns.overloadedBackoffMs":
     "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
+  "auth.cooldowns.rateLimitedProfileRotations":
+    "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.bootstrapMaxChars":
@@ -1112,6 +1116,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+  "agents.defaults.compaction.notifyUser":
+    "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

@@ -7,8 +7,8 @@ import {
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
-  normalizeBaseUrl,
   postJsonRequest,
+  resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 
 export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
@@ -62,19 +62,23 @@ export async function describeMoonshotVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_MOONSHOT_VIDEO_BASE_URL);
   const model = resolveModel(params.model);
   const mime = params.mime ?? "video/mp4";
   const prompt = resolvePrompt(params.prompt);
+  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: DEFAULT_MOONSHOT_VIDEO_BASE_URL,
+    headers: params.headers,
+    defaultHeaders: {
+      "content-type": "application/json",
+      authorization: `Bearer ${params.apiKey}`,
+    },
+    provider: "moonshot",
+    api: "openai-completions",
+    capability: "video",
+    transport: "media-understanding",
+  });
   const url = `${baseUrl}/chat/completions`;
-
-  const headers = new Headers(params.headers);
-  if (!headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  if (!headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${params.apiKey}`);
-  }
 
   const body = {
     model,
@@ -100,6 +104,7 @@ export async function describeMoonshotVideo(
     body,
     timeoutMs: params.timeoutMs,
     fetchFn,
+    allowPrivateNetwork,
   });
 
   try {
