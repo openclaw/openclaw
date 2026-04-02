@@ -237,14 +237,13 @@ describe("task-executor", () => {
 
   it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
     await withTaskExecutorStateDir(async () => {
+      // Avoid a deliverable requesterOrigin here: terminal delivery uses a dynamic import of
+      // task-registry-delivery-runtime; the outbound sendMessage path can hang tests if the mock
+      // does not bind to that import. Blocked-flow + retry behavior does not require outbound.
       const created = createRunningTaskRun({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
-        requesterOrigin: {
-          channel: "telegram",
-          to: "telegram:123",
-        },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-executor-blocked",
         task: "Patch file",
