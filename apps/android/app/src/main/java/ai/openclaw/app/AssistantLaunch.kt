@@ -16,6 +16,7 @@ enum class HomeDestination {
 data class AssistantLaunchRequest(
   val source: String,
   val prompt: String?,
+  val autoSend: Boolean,
 )
 
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
@@ -25,6 +26,7 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
       AssistantLaunchRequest(
         source = "assist",
         prompt = null,
+        autoSend = false,
       )
 
     actionAskOpenClaw -> {
@@ -32,6 +34,7 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
       AssistantLaunchRequest(
         source = "app_action",
         prompt = prompt,
+        autoSend = prompt != null,
       )
     }
 
