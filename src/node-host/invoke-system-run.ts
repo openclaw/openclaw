@@ -383,9 +383,16 @@ async function evaluateSystemRunPolicyPhase(
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
   if (!policy.allowed) {
+    const message =
+      policy.eventReason === "approval-required" &&
+      inlineEvalHit &&
+      !policy.approvedByAsk
+        ? `SYSTEM_RUN_DENIED: approval required (` +
+          `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`
+        : policy.errorMessage;
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
-      message: policy.errorMessage,
+      message,
     });
     return null;
   }
