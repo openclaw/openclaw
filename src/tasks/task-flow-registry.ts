@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getTaskFlowRegistryHooks,
   getTaskFlowRegistryStore,
@@ -13,8 +14,10 @@ import type {
 } from "./task-flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
+const log = createSubsystemLogger("tasks/task-flow-registry");
 const flows = new Map<string, TaskFlowRecord>();
 let restoreAttempted = false;
+let restoreFailureMessage: string | null = null;
 
 type FlowRecordPatch = Omit<
   Partial<
@@ -200,15 +203,28 @@ function ensureFlowRegistryReady() {
     return;
   }
   restoreAttempted = true;
-  const restored = getTaskFlowRegistryStore().loadSnapshot();
-  flows.clear();
-  for (const [flowId, flow] of restored.flows) {
-    flows.set(flowId, normalizeRestoredFlowRecord(flow));
+  try {
+    const restored = getTaskFlowRegistryStore().loadSnapshot();
+    flows.clear();
+    for (const [flowId, flow] of restored.flows) {
+      flows.set(flowId, normalizeRestoredFlowRecord(flow));
+    }
+    restoreFailureMessage = null;
+  } catch (error) {
+    flows.clear();
+    restoreFailureMessage = error instanceof Error ? error.message : String(error);
+    log.warn("Failed to restore task-flow registry", { error });
+    return;
   }
   emitFlowRegistryHookEvent(() => ({
     kind: "restored",
     flows: snapshotFlowRecords(flows),
   }));
+}
+
+export function getTaskFlowRegistryRestoreFailure(): string | null {
+  ensureFlowRegistryReady();
+  return restoreFailureMessage;
 }
 
 function persistFlowRegistry() {
@@ -690,9 +706,10 @@ export function deleteTaskFlowRecordById(flowId: string): boolean {
 export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
   flows.clear();
   restoreAttempted = false;
+  restoreFailureMessage = null;
   resetTaskFlowRegistryRuntimeForTests();
   if (opts?.persist !== false) {
     persistFlowRegistry();
-    getTaskFlowRegistryStore().close?.();
   }
+  getTaskFlowRegistryStore().close?.();
 }

@@ -338,6 +338,27 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
+  it("routes tasks flow commands through the TaskFlow handlers", async () => {
+    await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
+    expect(flowsListCommand).toHaveBeenCalledWith(expect.any(Object), runtime);
+
+    await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
+    expect(flowsShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+      }),
+      runtime,
+    );
+
+    await runCli(["tasks", "flow", "cancel", "flow-123"]);
+    expect(flowsCancelCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+      }),
+      runtime,
+    );
+  });
+
   it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
     await runCli(["tasks", "notify", "run-123", "state_changes"]);
 

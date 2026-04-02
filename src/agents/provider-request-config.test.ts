@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
 } from "./provider-request-config.js";
@@ -103,9 +104,81 @@ describe("provider request config", () => {
     });
 
     expect(resolved).toEqual({
-      "HTTP-Referer": "https://example.com",
+      "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
       "X-OpenRouter-Categories": "cli-agent",
+      "X-Custom": "1",
+    });
+  });
+
+  it("merges header names case-insensitively", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "user-agent": "custom-agent/1.0",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(
+      Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
+    ).toHaveLength(1);
+    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
+  });
+
+  it("drops forbidden header keys while merging", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "custom-openai",
+      callerHeaders: {
+        __proto__: "polluted",
+        constructor: "polluted",
+        "X-Custom": "1",
+      } as Record<string, string>,
+      defaultHeaders: {
+        prototype: "polluted",
+      } as Record<string, string>,
+    });
+
+    expect(resolved).toEqual({
+      "X-Custom": "1",
+    });
+    expect(Object.getPrototypeOf(resolved ?? {})).toBeNull();
+  });
+
+  it("unifies policy, capabilities, headers, base URL, and private-network posture", () => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1/",
+      defaultBaseUrl: "https://fallback.example/v1/",
+      callerHeaders: {
+        "User-Agent": "custom-agent/1.0",
+        "X-Custom": "1",
+      },
+      providerHeaders: {
+        authorization: "Bearer test-key",
+      },
+      compat: {
+        supportsStore: true,
+      },
+      capability: "llm",
+      transport: "stream",
+      precedence: "defaults-win",
+    });
+
+    expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
+    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.policy.endpointClass).toBe("openai-public");
+    expect(resolved.capabilities.allowsResponsesStore).toBe(true);
+    expect(resolved.headers).toMatchObject({
+      authorization: "Bearer test-key",
+      originator: "openclaw",
+      version: expect.any(String),
+      "User-Agent": expect.stringMatching(/^openclaw\//),
       "X-Custom": "1",
     });
   });
