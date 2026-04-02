@@ -77,9 +77,7 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
   const headline =
     snapshot.activeCount > 0
       ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : undefined;
+      : `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`;
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
   const parts = [headline, task.runtime, title, detail].filter(Boolean);
