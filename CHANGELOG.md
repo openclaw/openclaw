@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: resolve `agents.defaults.compaction.model` consistently for manual `/compact` and other context-engine compaction paths, so engine-owned compaction uses the configured override model across runtime entrypoints. (#56710) Thanks @oliviareid-svg.
 - Agents/compaction: add `agents.defaults.compaction.notifyUser` so the `🧹 Compacting context...` start notice is opt-in instead of always being shown. (#54251) Thanks @oguricap0327.
 - WhatsApp/reactions: add `reactionLevel` guidance for agent reactions. Thanks @mcaxtr.
+- Exec approvals/channels: auto-enable DM-first native chat approvals when supported channels can infer approvers from existing owner config, while keeping channel fanout explicit and clarifying forwarding versus native approval client config.
 
 ### Fixes
 
