@@ -1,22 +1,22 @@
 ---
-summary: "TaskFlow flow orchestration layer above background tasks"
+summary: "Task Flow flow orchestration layer above background tasks"
 read_when:
-  - You want to understand how TaskFlow relates to background tasks
-  - You encounter TaskFlow or openclaw tasks flow in release notes or docs
+  - You want to understand how Task Flow relates to background tasks
+  - You encounter Task Flow or openclaw tasks flow in release notes or docs
   - You want to inspect or manage durable flow state
-title: "TaskFlow"
+title: "Task Flow"
 ---
 
-# TaskFlow
+# Task Flow
 
-TaskFlow is the flow orchestration substrate that sits above [background tasks](/automation/tasks). It manages durable multi-step flows with their own state, revision tracking, and sync semantics while individual tasks remain the unit of detached work.
+Task Flow is the flow orchestration substrate that sits above [background tasks](/automation/tasks). It manages durable multi-step flows with their own state, revision tracking, and sync semantics while individual tasks remain the unit of detached work.
 
 ## Sync modes
 
-TaskFlow supports two sync modes:
+Task Flow supports two sync modes:
 
-- **Managed** — TaskFlow owns the lifecycle end-to-end, creating and driving tasks as flow steps progress.
-- **Mirrored** — TaskFlow observes externally created tasks and keeps flow state in sync without taking ownership of task creation.
+- **Managed** — Task Flow owns the lifecycle end-to-end, creating and driving tasks as flow steps progress.
+- **Mirrored** — Task Flow observes externally created tasks and keeps flow state in sync without taking ownership of task creation.
 
 ## Durable state and revision tracking
 

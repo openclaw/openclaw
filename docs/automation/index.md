@@ -1,5 +1,5 @@
 ---
-summary: "Overview of automation mechanisms: tasks, cron, hooks, standing orders, and TaskFlow"
+summary: "Overview of automation mechanisms: tasks, cron, hooks, standing orders, and Task Flow"
 read_when:
   - Deciding how to automate work with OpenClaw
   - Choosing between heartbeat, cron, hooks, and standing orders
@@ -47,11 +47,11 @@ Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, w
 
 See [Scheduled Tasks](/automation/cron-jobs).
 
-### TaskFlow
+### Task Flow
 
-TaskFlow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
+Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
 
-See [TaskFlow](/automation/taskflow).
+See [Task Flow](/automation/taskflow).
 
 ### Heartbeat
 
@@ -77,11 +77,11 @@ See [Standing Orders](/automation/standing-orders).
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
 - **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
 - **Standing orders** give the agent persistent context and authority boundaries.
-- **TaskFlow** coordinates multi-step flows above individual tasks.
+- **Task Flow** coordinates multi-step flows above individual tasks.
 - **Tasks** automatically track all detached work so you can inspect and audit it.
 
 ## Related
 
-- [TaskFlow](/automation/taskflow) — flow orchestration above tasks
+- [Task Flow](/automation/taskflow) — flow orchestration above tasks
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys
