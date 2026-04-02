@@ -11,7 +11,7 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createManagedFlow, resetFlowRegistryForTests } from "./flow-registry.js";
+import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
   createTaskRecord,
   findLatestTaskForOwnerKey,
@@ -193,7 +193,7 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
-    resetFlowRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -301,9 +301,9 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Owner main flow",
@@ -326,9 +326,9 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Owner main flow",
@@ -352,7 +352,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
       const task = createTaskRecord({
         runtime: "acp",
@@ -361,7 +361,7 @@ describe("task-registry", () => {
         runId: "owner-main-task",
         task: "Safe task",
       });
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:other",
         controllerId: "tests/task-registry",
         goal: "Other owner flow",
@@ -384,9 +384,9 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Cancelling flow",
@@ -417,9 +417,9 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const flow = createManagedFlow({
+      const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Completed flow",
