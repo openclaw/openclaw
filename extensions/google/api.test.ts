@@ -21,6 +21,18 @@ describe("google generative ai helpers", () => {
     expect(normalizeGoogleGenerativeAiBaseUrl("https://proxy.example.com/google/v1beta")).toBe(
       "https://proxy.example.com/google/v1beta",
     );
+    expect(normalizeGoogleGenerativeAiBaseUrl("https://aiplatform.googleapis.com")).toBe(
+      "https://aiplatform.googleapis.com",
+    );
+    expect(normalizeGoogleGenerativeAiBaseUrl("proxy/generativelanguage.googleapis.com")).toBe(
+      "proxy/generativelanguage.googleapis.com",
+    );
+    expect(normalizeGoogleGenerativeAiBaseUrl("generativelanguage.googleapis.com")).toBe(
+      "generativelanguage.googleapis.com",
+    );
+    expect(normalizeGoogleGenerativeAiBaseUrl("https://xgenerativelanguage.googleapis.com")).toBe(
+      "https://xgenerativelanguage.googleapis.com",
+    );
     expect(normalizeGoogleGenerativeAiBaseUrl()).toBeUndefined();
   });
 

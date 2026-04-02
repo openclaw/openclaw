@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
@@ -72,20 +72,7 @@ export function getZaloWebhookStatusCounterSizeForTest(): number {
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    const length = Math.max(1, leftBuffer.length, rightBuffer.length);
-    const paddedLeft = Buffer.alloc(length);
-    const paddedRight = Buffer.alloc(length);
-    leftBuffer.copy(paddedLeft);
-    rightBuffer.copy(paddedRight);
-    timingSafeEqual(paddedLeft, paddedRight);
-    return false;
-  }
-
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  return safeEqualSecret(left, right);
 }
 
 function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
@@ -93,7 +80,18 @@ function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: num
   if (!messageId) {
     return false;
   }
-  const key = `${target.path}:${target.account.accountId}:${update.event_name}:${messageId}`;
+  const chatId = update.message?.chat?.id ?? "";
+  const senderId = update.message?.from?.id ?? "";
+  // Scope replay dedupe to the authenticated target and the message origin so
+  // reused message ids in other chats or from other senders do not collide.
+  const key = [
+    target.path,
+    target.account.accountId,
+    update.event_name,
+    chatId,
+    senderId,
+    messageId,
+  ].join(":");
   return recentWebhookEvents.check(key, nowMs);
 }
 

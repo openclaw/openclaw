@@ -1146,11 +1146,10 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "DISABLED_TELEGRAM_BASE_TOKEN",
     });
-    expect(
-      snapshot.warnings.filter(
-        (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-      ),
-    ).toHaveLength(6);
+    const ignoredInactiveWarnings = snapshot.warnings.filter(
+      (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+    );
+    expect(ignoredInactiveWarnings).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
@@ -1159,6 +1158,10 @@ describe("secrets runtime snapshot", () => {
         "channels.telegram.accounts.disabled.botToken",
         "plugins.entries.brave.config.webSearch.apiKey",
         "plugins.entries.google.config.webSearch.apiKey",
+        "plugins.entries.xai.config.webSearch.apiKey",
+        "plugins.entries.moonshot.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
       ]),
     );
   });
@@ -2714,5 +2717,39 @@ describe("secrets runtime snapshot", () => {
       }
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("migrates legacy x_search SecretRefs into the xai plugin webSearch auth at runtime", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      (snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
+    ).toBeUndefined();
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key",
+      },
+      xSearch: {
+        enabled: true,
+        model: "grok-4-1-fast",
+      },
+    });
   });
 });
