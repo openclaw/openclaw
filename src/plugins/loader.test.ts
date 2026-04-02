@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearInternalHooks, getRegisteredEventKeys } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
@@ -1015,7 +1016,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "loads bundled channel plugins when channels.<id>.enabled=true even under restrictive plugins.allow",
+      name: "blocks bundled channel plugins when channels.<id>.enabled=true but plugins.allow excludes them",
       config: {
         channels: {
           telegram: {
@@ -1027,7 +1028,9 @@ describe("loadOpenClawPlugins", () => {
         },
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        expectTelegramLoaded(registry);
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("disabled");
+        expect(telegram?.error).toBe("not in allowlist");
       },
     },
     {
@@ -1062,6 +1065,109 @@ describe("loadOpenClawPlugins", () => {
       assert(registry);
     },
   );
+
+  it("marks auto-enabled bundled channels as activated but not explicitly enabled", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        enabled: true,
+      },
+    } satisfies PluginLoadConfig;
+    const autoEnabled = applyPluginAutoEnable({
+      config: rawConfig,
+      env: {},
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured",
+    });
+  });
+
+  it("preserves all auto-enable reasons in activation metadata", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        enabled: true,
+      },
+    } satisfies PluginLoadConfig;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        ...rawConfig,
+        plugins: {
+          enabled: true,
+          entries: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: {
+        telegram: ["telegram configured", "telegram selected for startup"],
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured; telegram selected for startup",
+    });
+  });
+
+  it("keeps explicit plugin enablement distinct from derived activation", () => {
+    const { bundledDir } = writeBundledPlugin({
+      id: "demo",
+    });
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies PluginLoadConfig;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config,
+      activationSourceConfig: config,
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "demo")).toMatchObject({
+      explicitlyEnabled: true,
+      activated: true,
+      activationSource: "explicit",
+      activationReason: "enabled in config",
+    });
+  });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
@@ -4122,6 +4228,34 @@ describe("getCompatibleActivePluginRegistry", () => {
         runtimeOptions: undefined,
       }),
     ).toBeUndefined();
+  });
+
+  it("does not embed activation secrets in the loader cache key", () => {
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      activationSourceConfig: {
+        plugins: {
+          allow: ["telegram"],
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "secret-token",
+          },
+        },
+      },
+      autoEnabledReasons: {
+        telegram: ["telegram configured"],
+      },
+    });
+
+    expect(cacheKey).not.toContain("secret-token");
+    expect(cacheKey).not.toContain("botToken");
+    expect(cacheKey).not.toContain("telegram configured");
   });
 
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {

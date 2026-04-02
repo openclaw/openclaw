@@ -39,7 +39,7 @@ let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
 let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
 let findTaskByRunId: typeof import("../../tasks/task-registry.js").findTaskByRunId;
 let resetTaskRegistryForTests: typeof import("../../tasks/task-registry.js").resetTaskRegistryForTests;
-let resetFlowRegistryForTests: typeof import("../../tasks/flow-registry.js").resetFlowRegistryForTests;
+let resetTaskFlowRegistryForTests: typeof import("../../tasks/task-flow-registry.js").resetTaskFlowRegistryForTests;
 let installInMemoryTaskRegistryRuntime: typeof import("../../test-utils/task-registry-runtime.js").installInMemoryTaskRegistryRuntime;
 
 const baseCfg = {
@@ -55,13 +55,13 @@ async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>):
   await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests({ persist: false });
-    resetFlowRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     installInMemoryTaskRegistryRuntime();
     try {
       await run(root);
     } finally {
       resetTaskRegistryForTests({ persist: false });
-      resetFlowRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -184,7 +184,7 @@ describe("AcpSessionManager", () => {
     } = await import("./manager.js"));
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
     ({ findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js"));
-    ({ resetFlowRegistryForTests } = await import("../../tasks/flow-registry.js"));
+    ({ resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js"));
     ({ installInMemoryTaskRegistryRuntime } =
       await import("../../test-utils/task-registry-runtime.js"));
   });
@@ -205,7 +205,7 @@ describe("AcpSessionManager", () => {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskRegistryForTests({ persist: false });
-    resetFlowRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {

@@ -29,13 +29,17 @@ vi.mock("./firecrawl-client.js", () => ({
 
 describe("firecrawl tools", () => {
   const priorFetch = global.fetch;
+  let fetchFirecrawlContent: typeof import("../api.js").fetchFirecrawlContent;
   let createFirecrawlWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlWebSearchProvider;
+  let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
   let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
 
   beforeAll(async () => {
     vi.resetModules();
+    ({ fetchFirecrawlContent } = await import("../api.js"));
+    ({ createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js"));
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
@@ -197,6 +201,62 @@ describe("firecrawl tools", () => {
       query: "openclaw docs",
       count: 4,
     });
+  });
+
+  it("keeps the compare-helper fetch facade owned by the Firecrawl extension", async () => {
+    await fetchFirecrawlContent({
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      apiKey: "firecrawl-key",
+      baseUrl: "https://api.firecrawl.dev",
+      onlyMainContent: false,
+      maxAgeMs: 5000,
+      proxy: "stealth",
+      storeInCache: false,
+      timeoutSeconds: 22,
+      maxChars: 1500,
+    });
+
+    expect(runFirecrawlScrape).toHaveBeenCalledWith({
+      cfg: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              enabled: true,
+              config: {
+                webFetch: {
+                  apiKey: "firecrawl-key",
+                  baseUrl: "https://api.firecrawl.dev",
+                  onlyMainContent: false,
+                  maxAgeMs: 5000,
+                  timeoutSeconds: 22,
+                },
+              },
+            },
+          },
+        },
+      },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+      proxy: "stealth",
+      storeInCache: false,
+      onlyMainContent: false,
+      maxAgeMs: 5000,
+      timeoutSeconds: 22,
+    });
+  });
+
+  it("applies minimal provider-selection config for fetch providers", () => {
+    const provider = createFirecrawlWebFetchProvider();
+    if (!provider.applySelectionConfig) {
+      throw new Error("Expected applySelectionConfig to be defined");
+    }
+    const applied = provider.applySelectionConfig({});
+
+    expect(provider.id).toBe("firecrawl");
+    expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
+    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
   });
 
   it("passes proxy and storeInCache through the fetch provider tool", async () => {

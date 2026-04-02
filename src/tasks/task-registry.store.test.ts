@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createManagedFlow, resetFlowRegistryForTests } from "./flow-registry.js";
+import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
   createTaskRecord,
   deleteTaskRecordById,
@@ -38,7 +38,7 @@ describe("task-registry store runtime", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
     resetTaskRegistryForTests();
-    resetFlowRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -197,7 +197,7 @@ describe("task-registry store runtime", () => {
   });
 
   it("persists parentFlowId with task rows", () => {
-    const flow = createManagedFlow({
+    const flow = createManagedTaskFlow({
       ownerKey: "agent:main:main",
       controllerId: "tests/task-store-parent-flow",
       goal: "Persist linked tasks",
