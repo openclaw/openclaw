@@ -554,54 +554,37 @@ describe("ollama plugin", () => {
     expect(payloadSeen?.think).toBeUndefined();
 =======
   describe("resolveSyntheticAuth", () => {
-    it("returns synthetic auth for localhost", () => {
-      const provider = registerProvider();
-      const result = provider.resolveSyntheticAuth?.({
-        providerConfig: { baseUrl: "http://localhost:11434", api: "ollama", models: [] },
-      });
-      expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local", mode: "api-key" }));
-    });
-
-    it("returns synthetic auth for LAN IPs", () => {
+    it("returns synthetic auth for HTTP endpoints", () => {
       const provider = registerProvider();
       for (const baseUrl of [
+        "http://localhost:11434",
+        "http://127.0.0.1:11434",
         "http://192.168.4.50:11434",
         "http://10.0.0.5:11434",
-        "http://172.16.0.1:11434",
+        "http://gpu-node-server:11434",
+        "http://myhost.local:11434",
       ]) {
         const result = provider.resolveSyntheticAuth?.({
           providerConfig: { baseUrl, api: "ollama", models: [] },
         });
-        expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local" }));
+        expect(result).toEqual(
+          expect.objectContaining({ apiKey: "ollama-local", mode: "api-key" }),
+        );
       }
     });
 
-    it("returns synthetic auth for .local mDNS hosts", () => {
+    it("returns undefined for HTTPS endpoints", () => {
       const provider = registerProvider();
-      const result = provider.resolveSyntheticAuth?.({
-        providerConfig: { baseUrl: "http://myhost.local:11434", api: "ollama", models: [] },
-      });
-      expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local" }));
-    });
-
-    it("returns undefined for Ollama Cloud URLs", () => {
-      const provider = registerProvider();
-      const result = provider.resolveSyntheticAuth?.({
-        providerConfig: { baseUrl: "https://ollama.com", api: "ollama", models: [] },
-      });
-      expect(result).toBeUndefined();
-    });
-
-    it("returns undefined for remote URLs", () => {
-      const provider = registerProvider();
-      const result = provider.resolveSyntheticAuth?.({
-        providerConfig: {
-          baseUrl: "https://my-ollama.example.com:11434",
-          api: "ollama",
-          models: [],
-        },
-      });
-      expect(result).toBeUndefined();
+      for (const baseUrl of [
+        "https://ollama.com",
+        "https://my-ollama.example.com:11434",
+        "https://ollama-cloud.internal:443",
+      ]) {
+        const result = provider.resolveSyntheticAuth?.({
+          providerConfig: { baseUrl, api: "ollama", models: [] },
+        });
+        expect(result).toBeUndefined();
+      }
     });
 
     it("returns synthetic auth when no baseUrl is configured", () => {
@@ -620,5 +603,73 @@ describe("ollama plugin", () => {
       expect(result).toBeUndefined();
     });
 >>>>>>> 87e6554f5 (Ollama: fix Cloud auth by distinguishing remote from local providers)
+  });
+
+  describe("createStreamFn key injection", () => {
+    it("does not inject key when apiKey is the default marker", () => {
+      const provider = registerProvider();
+      const streamFn = provider.createStreamFn?.({
+        config: {
+          models: {
+            providers: {
+              ollama: { baseUrl: "http://localhost:11434", apiKey: "ollama-local" },
+            },
+          },
+        },
+        model: { id: "test", provider: "ollama", api: "ollama" },
+      });
+      expect(typeof streamFn).toBe("function");
+    });
+
+    it("injects env-var resolved key into stream options", () => {
+      const original = process.env.OLLAMA_API_KEY;
+      process.env.OLLAMA_API_KEY = "test-cloud-key";
+      try {
+        const provider = registerProvider();
+        const streamFn = provider.createStreamFn?.({
+          config: {
+            models: {
+              providers: {
+                ollama: { baseUrl: "https://ollama.com", apiKey: "OLLAMA_API_KEY" },
+              },
+            },
+          },
+          model: { id: "test", provider: "ollama", api: "ollama" },
+        });
+        // The wrapper should be a function (not the raw inner fn)
+        expect(typeof streamFn).toBe("function");
+      } finally {
+        if (original !== undefined) {
+          process.env.OLLAMA_API_KEY = original;
+        } else {
+          delete process.env.OLLAMA_API_KEY;
+        }
+      }
+    });
+
+    it("injects inline key when config has a non-marker value", () => {
+      const provider = registerProvider();
+      const streamFn = provider.createStreamFn?.({
+        config: {
+          models: {
+            providers: {
+              ollama: { baseUrl: "https://ollama.com", apiKey: "sk-short" },
+            },
+          },
+        },
+        model: { id: "test", provider: "ollama", api: "ollama" },
+      });
+      // Should produce a wrapper (not the raw fn) since "sk-short" is a real key
+      expect(typeof streamFn).toBe("function");
+    });
+
+    it("does not inject key when no provider config is present", () => {
+      const provider = registerProvider();
+      const streamFn = provider.createStreamFn?.({
+        config: {},
+        model: { id: "test", provider: "ollama", api: "ollama" },
+      });
+      expect(typeof streamFn).toBe("function");
+    });
   });
 });

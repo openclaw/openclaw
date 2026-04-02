@@ -6,6 +6,7 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   buildProviderReplayFamilyHooks,
   type ModelProviderConfig,
@@ -254,10 +255,9 @@ export default definePluginEntry({
         const configApiKey = typeof rawApiKey === "string" ? rawApiKey : undefined;
         let resolvedKey: string | undefined;
         if (configApiKey && configApiKey !== DEFAULT_API_KEY && configApiKey !== "custom-local") {
-          // configApiKey may be an env-var marker (e.g. "OLLAMA_API_KEY") or an
-          // inline key. Env-var names are short; inline keys are long (>30 chars).
-          resolvedKey =
-            process.env[configApiKey] || (configApiKey.length > 30 ? configApiKey : undefined);
+          // Try env-var resolution first (handles markers like "OLLAMA_API_KEY"),
+          // then fall back to the raw config value as an inline key.
+          resolvedKey = resolveEnvApiKey(PROVIDER_ID)?.apiKey ?? configApiKey;
         }
         if (!resolvedKey) {
           return innerStreamFn;
@@ -287,20 +287,15 @@ export default definePluginEntry({
           return undefined;
         }
         // Only provide synthetic "ollama-local" auth for local/LAN instances.
-        // Remote URLs (e.g. Ollama Cloud) require real credentials; returning
-        // undefined forces the auth pipeline to resolve a real key.
+        // HTTPS endpoints (e.g. Ollama Cloud) require real credentials;
+        // returning undefined forces the auth pipeline to resolve a real key.
+        // HTTP endpoints (localhost, LAN IPs, bare hostnames) get synthetic
+        // auth since local Ollama instances don't require authentication.
         const baseUrl = providerConfig?.baseUrl?.trim();
         if (baseUrl) {
           try {
-            const host = new URL(baseUrl).hostname.toLowerCase();
-            const isLocal =
-              host === "localhost" ||
-              host === "127.0.0.1" ||
-              host === "0.0.0.0" ||
-              host === "[::1]" ||
-              host.endsWith(".local") ||
-              /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
-            if (!isLocal) {
+            const parsed = new URL(baseUrl);
+            if (parsed.protocol === "https:") {
               return undefined;
             }
           } catch {
