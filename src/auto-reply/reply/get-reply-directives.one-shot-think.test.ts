@@ -188,6 +188,25 @@ describe("resolveOneShotThinkLevel", () => {
     });
   });
 
+  it("preserves repeated directive-only model chains as directives", () => {
+    const result = resolveReplyDirectivesInSubprocess({
+      commandText: "/model openai/gpt-5.4 /model openai/gpt-5.4",
+    });
+    expect(result).toEqual({
+      kind: "continue",
+      oneShotThinkLevel: undefined,
+      hasThinkDirective: false,
+      thinkLevel: undefined,
+      hasStatusDirective: false,
+      hasModelDirective: true,
+      rawModelDirective: "openai/gpt-5.4",
+      hasQueueDirective: false,
+      queueMode: undefined,
+      hasVerboseDirective: false,
+      verboseLevel: undefined,
+    });
+  });
+
   it("clears all directives for directive-only tails (invalid one-shot)", () => {
     const directives = parseInlineDirectives("/think high /status");
 

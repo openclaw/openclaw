@@ -282,24 +282,32 @@ export async function resolveReplyDirectives(params: {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
     if (noMentions.trim().length > 0) {
-      const oneShotCtx = {
-        commandText,
-        ctx,
-        cfg,
-        agentId,
-        isGroup,
-        hasThinkDirective: parsedDirectives.hasThinkDirective,
-        thinkLevel: parsedDirectives.thinkLevel,
-      };
-      const preparedText = prepareOneShotThinkText(oneShotCtx);
-      const oneShotThinkLevel = resolveOneShotThinkLevel(oneShotCtx, preparedText);
-      const allowInlineStatus =
-        parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
-      parsedDirectives = normalizeInlineDirectivesForMessage({
-        directives: parsedDirectives,
-        allowInlineStatus,
-        oneShotThinkLevel,
+      // Re-parse the cleaned tail so repeated or out-of-order directive-only chains
+      // are not mistaken for directive+body messages.
+      const directiveOnlyTail = parseInlineDirectives(noMentions, {
+        modelAliases: configuredAliases,
+        allowStatusDirective,
       });
+      if (directiveOnlyTail.cleaned.trim().length > 0) {
+        const oneShotCtx = {
+          commandText,
+          ctx,
+          cfg,
+          agentId,
+          isGroup,
+          hasThinkDirective: parsedDirectives.hasThinkDirective,
+          thinkLevel: parsedDirectives.thinkLevel,
+        };
+        const preparedText = prepareOneShotThinkText(oneShotCtx);
+        const oneShotThinkLevel = resolveOneShotThinkLevel(oneShotCtx, preparedText);
+        const allowInlineStatus =
+          parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
+        parsedDirectives = normalizeInlineDirectivesForMessage({
+          directives: parsedDirectives,
+          allowInlineStatus,
+          oneShotThinkLevel,
+        });
+      }
     }
   }
   // Use command.isAuthorizedSender (resolved authorization) instead of raw commandAuthorized
