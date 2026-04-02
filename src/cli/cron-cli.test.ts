@@ -237,6 +237,32 @@ describe("cron cli", () => {
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
   });
 
+  it("accepts --force as a compatibility alias for manual cron runs", async () => {
+    await runCronRunAndCaptureExit({
+      ran: true,
+      args: ["cron", "run", "job-1", "--force"],
+    });
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    expect(runCall?.[2]).toMatchObject({
+      id: "job-1",
+      mode: "force",
+    });
+  });
+
+  it("keeps --due taking precedence over the compatibility --force flag", async () => {
+    await runCronRunAndCaptureExit({
+      ran: true,
+      args: ["cron", "run", "job-1", "--force", "--due"],
+    });
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    expect(runCall?.[2]).toMatchObject({
+      id: "job-1",
+      mode: "due",
+    });
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",

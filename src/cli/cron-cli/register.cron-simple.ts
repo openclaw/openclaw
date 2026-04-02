@@ -88,6 +88,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("run")
       .description("Run a cron job now (debug)")
       .argument("<id>", "Job id")
+      .option("--force", "Alias for the default manual run mode", false)
       .option("--due", "Run only when due (default behavior in older versions)", false)
       .action(async (id, opts, command) => {
         try {
