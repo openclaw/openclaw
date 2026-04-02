@@ -371,11 +371,9 @@ describe("security audit", () => {
     cases: readonly T[],
     run: (testCase: T, tmp: string) => Promise<void>,
   ) => {
-    await Promise.all(
-      cases.map(async (testCase) => {
-        await withChannelSecurityStateDir(async (tmp) => run(testCase, tmp));
-      }),
-    );
+    for (const testCase of cases) {
+      await withChannelSecurityStateDir(async (tmp) => run(testCase, tmp));
+    }
   };
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {

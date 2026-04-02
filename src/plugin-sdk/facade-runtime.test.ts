@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  canLoadActivatedBundledPluginPublicSurface,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSync,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
+} from "./facade-runtime.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -63,6 +69,7 @@ function createCircularPluginDir(prefix: string): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -139,5 +146,70 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "api.js",
       }),
     ).toThrow("plugin load failure");
+  });
+
+  it("blocks runtime-api facade loads for bundled plugins that are not activated", () => {
+    setRuntimeConfigSnapshot({});
+
+    expect(
+      canLoadActivatedBundledPluginPublicSurface({
+        dirName: "discord",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBe(false);
+    expect(() =>
+      loadActivatedBundledPluginPublicSurfaceModuleSync({
+        dirName: "discord",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toThrow(/Bundled plugin public surface access blocked/);
+    expect(
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync({
+        dirName: "discord",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBeNull();
+  });
+
+  it("allows runtime-api facade loads when the bundled plugin is explicitly enabled", () => {
+    setRuntimeConfigSnapshot({
+      plugins: {
+        entries: {
+          discord: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      canLoadActivatedBundledPluginPublicSurface({
+        dirName: "discord",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps shared runtime-core facades available without plugin activation", () => {
+    setRuntimeConfigSnapshot({});
+
+    expect(
+      canLoadActivatedBundledPluginPublicSurface({
+        dirName: "speech-core",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBe(true);
+    expect(
+      canLoadActivatedBundledPluginPublicSurface({
+        dirName: "image-generation-core",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBe(true);
+    expect(
+      canLoadActivatedBundledPluginPublicSurface({
+        dirName: "media-understanding-core",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBe(true);
   });
 });

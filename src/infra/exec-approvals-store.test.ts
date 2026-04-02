@@ -14,6 +14,7 @@ import type { ExecApprovalsFile } from "./exec-approvals.js";
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
 let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
+let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
@@ -29,6 +30,7 @@ const originalOpenClawHome = process.env.OPENCLAW_HOME;
 beforeAll(async () => {
   ({
     addAllowlistEntry,
+    addDurableCommandApproval,
     ensureExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
@@ -166,6 +168,65 @@ describe("exec approvals store helpers", () => {
       }),
     ]);
     expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
+  it("persists durable command approvals without storing plaintext command text", () => {
+    const dir = createHomeDir();
+    vi.spyOn(Date, "now").mockReturnValue(321_000);
+
+    const approvals = ensureExecApprovals();
+    addDurableCommandApproval(approvals, "worker", 'printenv API_KEY="secret-value"');
+
+    expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
+      expect.objectContaining({
+        source: "allow-always",
+        lastUsedAt: 321_000,
+      }),
+    ]);
+    expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.pattern).toMatch(
+      /^=command:[0-9a-f]{16}$/i,
+    );
+    expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]).not.toHaveProperty("commandText");
+  });
+
+  it("strips legacy plaintext command text during normalization", () => {
+    expect(
+      normalizeExecApprovals({
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "=command:test",
+                source: "allow-always",
+                commandText: "echo secret-token",
+              },
+            ],
+          },
+        },
+      }).agents?.main?.allowlist,
+    ).toEqual([
+      expect.objectContaining({
+        pattern: "=command:test",
+        source: "allow-always",
+      }),
+    ]);
+    expect(
+      normalizeExecApprovals({
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "=command:test",
+                source: "allow-always",
+                commandText: "echo secret-token",
+              },
+            ],
+          },
+        },
+      }).agents?.main?.allowlist?.[0],
+    ).not.toHaveProperty("commandText");
   });
 
   it("records allowlist usage on the matching entry and backfills missing ids", () => {
