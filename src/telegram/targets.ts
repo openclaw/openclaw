@@ -20,6 +20,10 @@ export function stripTelegramInternalPrefixes(to: string): string {
       if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
         return trimmed.replace(/^group:/i, "").trim();
       }
+      // Native command context: `slash:<chatId>` (emitted by bot-native-commands for /new, /reset).
+      if (/^slash:/i.test(trimmed)) {
+        return trimmed.replace(/^slash:/i, "").trim();
+      }
       return trimmed;
     })();
     if (next === trimmed) {
