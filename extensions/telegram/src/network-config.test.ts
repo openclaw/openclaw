@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -15,7 +15,6 @@ let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js"
 let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
 
 async function loadModule() {
-  vi.resetModules();
   ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
   ({
     resetTelegramNetworkConfigStateForTests,
@@ -25,8 +24,12 @@ async function loadModule() {
 }
 
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadModule();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   afterEach(async () => {
@@ -155,8 +158,8 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 });
 
 describe("resolveTelegramDnsResultOrderDecision", () => {
-  beforeEach(async () => {
-    await loadModule();
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it.each([

@@ -351,6 +351,64 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
+  it("normalizes custom api.openai.com providers to responses transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-openai": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                provider: "custom-openai",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("normalizes custom api.x.ai providers to responses transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-xai": {
+            baseUrl: "https://api.x.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("grok-4.1-fast"),
+                provider: "custom-xai",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-xai", "grok-4.1-fast", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-xai",
+      id: "grok-4.1-fast",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+    });
+  });
+
   it("includes provider headers in provider fallback model", () => {
     const cfg = {
       models: {
@@ -1048,6 +1106,15 @@ describe("resolveModel", () => {
         buildProviderUnknownModelHintWithPlugin: () => undefined,
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
+        applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
+          provider === "xai" &&
+          context.model.api === "openai-completions" &&
+          context.model.baseUrl === "https://api.x.ai/v1"
+            ? {
+                ...context.model,
+                api: "openai-responses",
+              }
+            : undefined,
         normalizeProviderResolvedModelWithPlugin: ({ provider, context }) =>
           provider === "xai" ? (context.model as never) : undefined,
         normalizeProviderTransportWithPlugin: () => undefined,

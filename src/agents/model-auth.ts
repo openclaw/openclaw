@@ -33,29 +33,12 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "./xai-auth-trace.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 const log = createSubsystemLogger("model-auth");
-
-function logProviderAuthDecision(params: {
-  provider: string;
-  stage: string;
-  source?: string;
-  mode?: string;
-  profileId?: string;
-  apiKey?: string;
-}): void {
-  if (!shouldTraceProviderAuth(params.provider)) {
-    return;
-  }
-  log.info(
-    `[xai-auth] ${params.stage}: source=${params.source ?? "unknown"} mode=${params.mode ?? "unknown"} profile=${params.profileId ?? "none"} key=${summarizeProviderAuthKey(params.apiKey)}`,
-  );
-}
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -380,14 +363,6 @@ export async function resolveApiKeyForProvider(params: {
           source: `profile:${candidate}`,
           mode: resolvedMode,
         };
-        logProviderAuthDecision({
-          provider,
-          stage: "resolved from profile",
-          source: result.source,
-          mode: result.mode,
-          profileId: result.profileId,
-          apiKey: result.apiKey,
-        });
         return result;
       }
     } catch (err) {
@@ -405,38 +380,17 @@ export async function resolveApiKeyForProvider(params: {
       source: envResolved.source,
       mode: resolvedMode,
     };
-    logProviderAuthDecision({
-      provider,
-      stage: "resolved from env",
-      source: result.source,
-      mode: result.mode,
-      apiKey: result.apiKey,
-    });
     return result;
   }
 
   const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
     const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
-    logProviderAuthDecision({
-      provider,
-      stage: "resolved from models.providers",
-      source: result.source,
-      mode: result.mode,
-      apiKey: result.apiKey,
-    });
     return result;
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
-    logProviderAuthDecision({
-      provider,
-      stage: "resolved synthetic auth",
-      source: syntheticLocalAuth.source,
-      mode: syntheticLocalAuth.mode,
-      apiKey: syntheticLocalAuth.apiKey,
-    });
     return syntheticLocalAuth;
   }
 
@@ -467,22 +421,12 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      logProviderAuthDecision({
-        provider,
-        stage: "plugin missing auth message",
-        source: pluginMissingAuthMessage,
-      });
       throw new Error(pluginMissingAuthMessage);
     }
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  logProviderAuthDecision({
-    provider,
-    stage: "missing auth",
-    source: "no profiles/env/config fallback",
-  });
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
@@ -636,6 +580,51 @@ export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
     ...model.headers,
     Authorization: null,
   } as unknown as Record<string, string>;
+
+  return {
+    ...model,
+    headers,
+  };
+}
+
+/**
+ * When the provider config sets `authHeader: true`, inject an explicit
+ * `Authorization: Bearer <apiKey>` header into the model so downstream SDKs
+ * (e.g. `@google/genai`) send credentials via the standard HTTP Authorization
+ * header instead of vendor-specific headers like `x-goog-api-key`.
+ *
+ * This is a no-op when `authHeader` is not `true`, when no API key is
+ * available, or when the API key is a synthetic marker (e.g. local-server
+ * placeholders) rather than a real credential.
+ */
+export function applyAuthHeaderOverride<T extends Model<Api>>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+  cfg: OpenClawConfig | undefined,
+): T {
+  if (!auth?.apiKey) {
+    return model;
+  }
+  // Reject synthetic marker values that are not real credentials.
+  if (isNonSecretApiKeyMarker(auth.apiKey)) {
+    return model;
+  }
+  const providerConfig = resolveProviderConfig(cfg, model.provider);
+  if (!providerConfig?.authHeader) {
+    return model;
+  }
+
+  // Strip any existing authorization header (case-insensitive) before
+  // injecting the canonical one so we don't produce a comma-joined value.
+  const headers: Record<string, string> = {};
+  if (model.headers) {
+    for (const [key, value] of Object.entries(model.headers)) {
+      if (key.toLowerCase() !== "authorization") {
+        headers[key] = value;
+      }
+    }
+  }
+  headers.Authorization = `Bearer ${auth.apiKey}`;
 
   return {
     ...model,

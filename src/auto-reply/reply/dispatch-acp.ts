@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
@@ -18,10 +17,10 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
-import {
-  normalizeAttachmentPath,
-  normalizeAttachments,
-} from "../../media-understanding/attachments.normalize.js";
+import { MediaAttachmentCache } from "../../media-understanding/attachments.js";
+import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
+import { isMediaUnderstandingSkipError } from "../../media-understanding/errors.js";
+import { resolveMediaAttachmentLocalRoots } from "../../media-understanding/runner.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
@@ -69,33 +68,46 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
 }
 
 const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+const ACP_ATTACHMENT_TIMEOUT_MS = 1_000;
 
-async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
-  const mediaAttachments = normalizeAttachments(ctx);
+async function resolveAcpAttachments(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): Promise<AcpTurnAttachment[]> {
+  const mediaAttachments = normalizeAttachments(ctx).map((attachment) =>
+    attachment.path?.trim() ? { ...attachment, url: undefined } : attachment,
+  );
+  const cache = new MediaAttachmentCache(mediaAttachments, {
+    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+  });
   const results: AcpTurnAttachment[] = [];
   for (const attachment of mediaAttachments) {
     const mediaType = attachment.mime ?? "application/octet-stream";
     if (!mediaType.startsWith("image/")) {
       continue;
     }
-    const filePath = normalizeAttachmentPath(attachment.path);
-    if (!filePath) {
+    if (!attachment.path?.trim()) {
       continue;
     }
     try {
-      const stat = await fs.stat(filePath);
-      if (stat.size > ACP_ATTACHMENT_MAX_BYTES) {
-        logVerbose(
-          `dispatch-acp: skipping attachment ${filePath} (${stat.size} bytes exceeds ${ACP_ATTACHMENT_MAX_BYTES} byte limit)`,
-        );
-        continue;
-      }
-      const buf = await fs.readFile(filePath);
+      const { buffer } = await cache.getBuffer({
+        attachmentIndex: attachment.index,
+        maxBytes: ACP_ATTACHMENT_MAX_BYTES,
+        timeoutMs: ACP_ATTACHMENT_TIMEOUT_MS,
+      });
       results.push({
         mediaType,
-        data: buf.toString("base64"),
+        data: buffer.toString("base64"),
       });
-    } catch {
+    } catch (error) {
+      if (isMediaUnderstandingSkipError(error)) {
+        logVerbose(`dispatch-acp: skipping attachment #${attachment.index + 1} (${error.reason})`);
+      } else {
+        const errorName = error instanceof Error ? error.name : typeof error;
+        logVerbose(
+          `dispatch-acp: failed to read attachment #${attachment.index + 1} (${errorName})`,
+        );
+      }
       // Skip unreadable files. Text content should still be delivered.
     }
   }
@@ -429,7 +441,7 @@ export async function tryDispatchAcpReply(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const attachments = await resolveAcpAttachments(params.ctx);
+    const attachments = await resolveAcpAttachments(params.ctx, params.cfg);
     if (!promptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);

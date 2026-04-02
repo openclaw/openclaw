@@ -59,6 +59,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: qqbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qqbot/**"
+          - "docs/channels/qqbot.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -301,6 +306,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tavily/**"
+"extensions: tinyfish":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tinyfish/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:

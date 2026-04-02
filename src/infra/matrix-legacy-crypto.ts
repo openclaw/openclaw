@@ -7,7 +7,7 @@ import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "../plugi
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../plugin-sdk/matrix.js";
+} from "./matrix-config-helpers.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
   resolveMatrixMigrationAccountTarget,
@@ -328,9 +328,22 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     : detectLegacyMatrixCrypto({ cfg: params.cfg, env });
   const warnings = [...detection.warnings];
   const changes: string[] = [];
-  let inspectLegacyStore = params.deps?.inspectLegacyStore;
   const writeJsonFileAtomically =
     params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
+  if (detection.plans.length === 0) {
+    if (warnings.length > 0) {
+      params.log?.warn?.(
+        `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+    return {
+      migrated: false,
+      changes,
+      warnings,
+    };
+  }
+
+  let inspectLegacyStore = params.deps?.inspectLegacyStore;
   if (!inspectLegacyStore) {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
@@ -353,6 +366,13 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
         warnings,
       };
     }
+  }
+  if (!inspectLegacyStore) {
+    return {
+      migrated: false,
+      changes,
+      warnings,
+    };
   }
 
   for (const plan of detection.plans) {

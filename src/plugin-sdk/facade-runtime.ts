@@ -2,9 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRecord,
+} from "../plugins/manifest-registry.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
@@ -19,8 +26,21 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
+const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
+  "image-generation-core",
+  "media-understanding-core",
+  "speech-core",
+]);
+const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
+let cachedBoundaryRawConfig: OpenClawConfig | undefined;
+let cachedBoundaryResolvedConfig:
+  | {
+      config: OpenClawConfig;
+      normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+    }
+  | undefined;
 
 function resolveSourceFirstPublicSurfacePath(params: {
   bundledPluginsDir?: string;
@@ -106,6 +126,88 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
+function readFacadeBoundaryConfigSafely(): OpenClawConfig {
+  try {
+    return loadConfig();
+  } catch {
+    return EMPTY_FACADE_BOUNDARY_CONFIG;
+  }
+}
+
+function getFacadeBoundaryResolvedConfig() {
+  const rawConfig = readFacadeBoundaryConfigSafely();
+  if (cachedBoundaryResolvedConfig && cachedBoundaryRawConfig === rawConfig) {
+    return cachedBoundaryResolvedConfig;
+  }
+
+  const config = applyPluginAutoEnable({
+    config: rawConfig,
+    env: process.env,
+  }).config;
+  const resolved = {
+    config,
+    normalizedPluginsConfig: normalizePluginsConfig(config.plugins),
+  };
+  cachedBoundaryRawConfig = rawConfig;
+  cachedBoundaryResolvedConfig = resolved;
+  return resolved;
+}
+
+function resolveBundledPluginManifestRecordByDirName(dirName: string): PluginManifestRecord | null {
+  const { config } = getFacadeBoundaryResolvedConfig();
+  return (
+    loadPluginManifestRegistry({
+      config,
+      cache: true,
+    }).plugins.find(
+      (plugin) => plugin.origin === "bundled" && path.basename(plugin.rootDir) === dirName,
+    ) ?? null
+  );
+}
+
+function resolveBundledPluginPublicSurfaceAccess(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { allowed: boolean; pluginId?: string; reason?: string } {
+  if (
+    params.artifactBasename === "runtime-api.js" &&
+    ALWAYS_ALLOWED_RUNTIME_DIR_NAMES.has(params.dirName)
+  ) {
+    return {
+      allowed: true,
+      pluginId: params.dirName,
+    };
+  }
+
+  const manifestRecord = resolveBundledPluginManifestRecordByDirName(params.dirName);
+  if (!manifestRecord) {
+    return {
+      allowed: false,
+      reason: `no bundled plugin manifest found for ${params.dirName}`,
+    };
+  }
+  const { config, normalizedPluginsConfig } = getFacadeBoundaryResolvedConfig();
+  const enableState = resolveEffectiveEnableState({
+    id: manifestRecord.id,
+    origin: manifestRecord.origin,
+    config: normalizedPluginsConfig,
+    rootConfig: config,
+    enabledByDefault: manifestRecord.enabledByDefault,
+  });
+  if (enableState.enabled) {
+    return {
+      allowed: true,
+      pluginId: manifestRecord.id,
+    };
+  }
+
+  return {
+    allowed: false,
+    pluginId: manifestRecord.id,
+    reason: enableState.reason ?? "plugin runtime is not activated",
+  };
+}
+
 function createLazyFacadeValueLoader<T>(load: () => T): () => T {
   let loaded = false;
   let value: T;
@@ -168,7 +270,7 @@ export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: (
   return createLazyFacadeProxyValue({ load, target: [] });
 }
 
-export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
+export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
 }): T {
@@ -200,7 +302,55 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
-  const loaded = getJiti(location.modulePath)(location.modulePath) as T;
-  loadedFacadeModules.set(location.modulePath, loaded);
-  return loaded;
+  // Place a sentinel object in the cache *before* the Jiti load begins.
+  // If a transitive dependency of the loaded module re-enters this function
+  // for the same modulePath (circular facade reference), it will receive the
+  // sentinel instead of recursing infinitely.  Once the real module finishes
+  // loading, Object.assign() back-fills the sentinel so any references
+  // captured during the circular load phase see the final exports.
+  const sentinel = {} as T;
+  loadedFacadeModules.set(location.modulePath, sentinel);
+
+  let loaded: T;
+  try {
+    loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    Object.assign(sentinel, loaded);
+  } catch (err) {
+    loadedFacadeModules.delete(location.modulePath);
+    throw err;
+  }
+
+  return sentinel;
+}
+
+export function canLoadActivatedBundledPluginPublicSurface(params: {
+  dirName: string;
+  artifactBasename: string;
+}): boolean {
+  return resolveBundledPluginPublicSurfaceAccess(params).allowed;
+}
+
+export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+}): T {
+  const access = resolveBundledPluginPublicSurfaceAccess(params);
+  if (!access.allowed) {
+    const pluginLabel = access.pluginId ?? params.dirName;
+    throw new Error(
+      `Bundled plugin public surface access blocked for "${pluginLabel}" via ${params.dirName}/${params.artifactBasename}: ${access.reason ?? "plugin runtime is not activated"}`,
+    );
+  }
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+}): T | null {
+  const access = resolveBundledPluginPublicSurfaceAccess(params);
+  if (!access.allowed) {
+    return null;
+  }
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }

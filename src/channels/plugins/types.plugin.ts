@@ -1,11 +1,12 @@
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
+  ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelConversationBindingSupport,
   ChannelDirectoryAdapter,
-  ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
@@ -97,10 +98,11 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   auth?: ChannelAuthAdapter;
+  approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
-  execApprovals?: ChannelExecApprovalAdapter;
+  approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;

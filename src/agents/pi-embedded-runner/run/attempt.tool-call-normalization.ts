@@ -565,9 +565,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (sanitized.messages === messages) {
       return baseFn(model, context, options);
     }
-    let nextMessages = sanitizeToolUseResultPairing(sanitized.messages, {
-      preserveErroredAssistantResults: true,
-    });
+    let nextMessages = sanitizeToolUseResultPairing(sanitized.messages);
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages);
     }

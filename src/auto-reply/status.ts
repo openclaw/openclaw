@@ -7,6 +7,8 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
+import { resolveExtraParams } from "../agents/pi-embedded-runner/extra-params.js";
+import { resolveOpenAITextVerbosity } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
@@ -86,6 +88,7 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
+  taskLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -116,6 +119,27 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
     return "unknown";
   }
   return undefined;
+}
+
+function resolveConfiguredTextVerbosity(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider?: string | null;
+  model?: string | null;
+}): "low" | "medium" | "high" | undefined {
+  const provider = params.provider?.trim();
+  const model = params.model?.trim();
+  if (!provider || !model || (provider !== "openai" && provider !== "openai-codex")) {
+    return undefined;
+  }
+  return resolveOpenAITextVerbosity(
+    resolveExtraParams({
+      cfg: params.config,
+      provider,
+      modelId: model,
+      agentId: params.agentId,
+    }),
+  );
 }
 
 function resolveRuntimeLabel(
@@ -664,10 +688,17 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
+  const textVerbosity = resolveConfiguredTextVerbosity({
+    config: args.config,
+    agentId: args.agentId,
+    provider: activeProvider,
+    model: activeModel,
+  });
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
+    textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
@@ -732,6 +763,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
@@ -791,6 +823,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.usageLine,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
+    args.taskLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
     activationLine,
@@ -842,7 +875,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
+  const optionParts = ["/think <level>", "/model <id>", "/fast status|on|off", "/verbose on|off"];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }
@@ -854,7 +887,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
+  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
   lines.push("");
 
   lines.push("Skills");

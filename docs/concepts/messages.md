@@ -152,3 +152,10 @@ Outbound message formatting is centralized in `messages`:
 - Reply threading via `replyToMode` and per-channel defaults
 
 Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
+
+## Related
+
+- [Streaming](/concepts/streaming) — real-time message delivery
+- [Retry](/concepts/retry) — message delivery retry behavior
+- [Queue](/concepts/queue) — message processing queue
+- [Channels](/channels) — messaging platform integrations
