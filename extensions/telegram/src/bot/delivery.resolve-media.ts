@@ -32,8 +32,8 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
         // still enforcing resolved-IP checks for the default public host.
         allowedHostnames = [customHost];
       }
-    } catch {
-      // invalid URL; fall through to default
+    } catch (err) {
+      logVerbose(`telegram: invalid apiRoot URL "${apiRoot}": ${String(err)}`);
     }
   }
   return {
@@ -70,35 +70,33 @@ function isRetryableGetFileError(err: unknown): boolean {
   return true;
 }
 
-function resolveMediaFileRef(msg: TelegramContext["message"]) {
-  return (
-    msg.photo?.[msg.photo.length - 1] ??
-    msg.video ??
-    msg.video_note ??
-    msg.document ??
-    msg.audio ??
-    msg.voice
-  );
+interface MediaMetadata {
+  fileRef?: unknown;
+  fileName?: string;
+  mimeType?: string;
 }
 
-function resolveTelegramFileName(msg: TelegramContext["message"]): string | undefined {
-  return (
-    msg.document?.file_name ??
-    msg.audio?.file_name ??
-    msg.video?.file_name ??
-    msg.animation?.file_name
-  );
-}
-
-function resolveTelegramMimeType(msg: TelegramContext["message"]): string | undefined {
-  return (
-    msg.audio?.mime_type ??
-    msg.voice?.mime_type ??
-    msg.video?.mime_type ??
-    msg.document?.mime_type ??
-    msg.animation?.mime_type ??
-    undefined
-  );
+function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
+  return {
+    fileRef:
+      msg.photo?.[msg.photo.length - 1] ??
+      msg.video ??
+      msg.video_note ??
+      msg.document ??
+      msg.audio ??
+      msg.voice,
+    fileName:
+      msg.document?.file_name ??
+      msg.audio?.file_name ??
+      msg.video?.file_name ??
+      msg.animation?.file_name,
+    mimeType:
+      msg.audio?.mime_type ??
+      msg.voice?.mime_type ??
+      msg.video?.mime_type ??
+      msg.document?.mime_type ??
+      msg.animation?.mime_type,
+  };
 }
 
 async function resolveTelegramFileWithRetry(
@@ -314,7 +312,8 @@ export async function resolveMedia(
     return stickerResolved;
   }
 
-  const m = resolveMediaFileRef(msg);
+  const metadata = resolveMediaMetadata(msg);
+  const m = metadata.fileRef;
   if (!m?.file_id) {
     return null;
   }
@@ -331,8 +330,8 @@ export async function resolveMedia(
     token,
     transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
-    telegramFileName: resolveTelegramFileName(msg),
-    mimeType: resolveTelegramMimeType(msg),
+    telegramFileName: metadata.fileName,
+    mimeType: metadata.mimeType,
     apiRoot,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
