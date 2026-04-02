@@ -41,4 +41,26 @@ describe("createTtsTool", () => {
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
   });
+
+  it("passes requesterAgentIdOverride through to textToSpeech", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool({
+      requesterAgentIdOverride: "named-worker",
+      agentSessionKey: "agent:main:main",
+    });
+    await tool.execute("call-1", { text: "hello" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "named-worker",
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
 });

@@ -75,6 +75,7 @@ export type AcpDispatchDeliveryCoordinator = {
 export function createAcpDispatchDeliveryCoordinator(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
+  sessionKey: string;
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
@@ -156,7 +157,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           messageId: handle.messageId,
           message,
         },
-        sessionKey: params.ctx.SessionKey,
+        sessionKey: params.sessionKey,
       });
       state.routedCounts.tool += 1;
       return true;
@@ -198,7 +199,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           kind,
           inboundAudio: params.inboundAudio,
           ttsAuto: params.sessionTtsAuto,
-          sessionKey: params.ctx.SessionKey,
+          sessionKey: params.sessionKey,
         });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
@@ -219,7 +220,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: ttsPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
+        sessionKey: params.sessionKey,
         accountId: params.ctx.AccountId,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,

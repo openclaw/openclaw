@@ -18,6 +18,7 @@ export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -34,6 +35,7 @@ export function createTtsTool(opts?: {
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        agentId: opts?.requesterAgentIdOverride,
         sessionKey: opts?.agentSessionKey,
       });
 

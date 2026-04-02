@@ -811,6 +811,35 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("uses canonical session keys when applying ACP TTS payloads", async () => {
+    const aliasSessionKey = "main";
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta(),
+    });
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    mockVisibleTextTurn("CODEX_OK");
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      sessionKeyOverride: aliasSessionKey,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: canonicalSessionKey,
+      }),
+    );
+  });
+
   it("does not deliver final fallback text when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });

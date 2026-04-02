@@ -35,6 +35,7 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
       Surface: "discord",
       SessionKey: "agent:codex-acp:session-1",
     }),
+    sessionKey: "agent:codex-acp:session-1",
     dispatcher: createDispatcher(),
     inboundAudio: false,
     shouldRouteToOriginating: false,
@@ -52,6 +53,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         Surface: "discord",
         SessionKey: "agent:codex-acp:session-1",
       }),
+      sessionKey: "agent:codex-acp:session-1",
       dispatcher,
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -88,6 +90,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         Surface: "telegram",
         SessionKey: "agent:codex-acp:session-1",
       }),
+      sessionKey: "agent:codex-acp:session-1",
       dispatcher: createDispatcher(),
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -110,6 +113,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         Surface: "webchat",
         SessionKey: "agent:codex-acp:session-1",
       }),
+      sessionKey: "agent:codex-acp:session-1",
       dispatcher: createDispatcher(),
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -151,6 +155,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         Surface: "telegram",
         SessionKey: "agent:codex-acp:session-1",
       }),
+      sessionKey: "agent:codex-acp:session-1",
       dispatcher,
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -202,6 +207,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         Surface: "telegram",
         SessionKey: "agent:codex-acp:session-1",
       }),
+      sessionKey: "agent:codex-acp:session-1",
       dispatcher,
       inboundAudio: false,
       suppressUserDelivery: true,
@@ -220,5 +226,29 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(coordinator.getAccumulatedBlockText()).toBe("working on it");
     expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+  });
+
+  it("uses the explicit coordinator session key for TTS resolution", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "main",
+      }),
+      sessionKey: "agent:codex-acp:session-1",
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("final", { text: "hello" });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex-acp:session-1",
+      }),
+    );
   });
 });

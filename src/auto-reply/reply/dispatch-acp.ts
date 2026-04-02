@@ -361,6 +361,7 @@ export async function tryDispatchAcpReply(params: {
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     ctx: params.ctx,
+    sessionKey: canonicalSessionKey,
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,
     sessionTtsAuto: params.sessionTtsAuto,
