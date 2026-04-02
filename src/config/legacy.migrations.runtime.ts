@@ -4,6 +4,7 @@ import {
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
 } from "./gateway-control-ui-origins.js";
+import { migrateLegacyXSearchConfig } from "./legacy-x-search.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -259,6 +260,12 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
     "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
 };
 
+const X_SEARCH_RULE: LegacyConfigRule = {
+  path: ["tools", "web", "x_search"],
+  message:
+    "tools.web.x_search auth/settings moved to the xAI plugin; use plugins.entries.xai.config.webSearch/apiKey and plugins.entries.xai.config.xSearch instead (auto-migrated on load).",
+};
+
 const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "tts"],
@@ -287,6 +294,22 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
 ];
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "tools.web.x_search->plugins.entries.xai.config.*",
+    describe: "Move legacy x_search auth/settings into the xAI plugin config",
+    legacyRules: [X_SEARCH_RULE],
+    apply: (raw, changes) => {
+      const migrated = migrateLegacyXSearchConfig(raw);
+      if (!migrated.changes.length) {
+        return;
+      }
+      for (const key of Object.keys(raw)) {
+        delete raw[key];
+      }
+      Object.assign(raw, migrated.config);
+      changes.push(...migrated.changes);
+    },
+  }),
   defineLegacyConfigMigration({
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The setup wizard was updated
