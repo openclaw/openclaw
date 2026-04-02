@@ -15,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // --- Module mocks (must be hoisted before imports) ---
 
 vi.mock("../../agents/subagent-registry.js", () => ({
-  countActiveDescendantRuns: vi.fn().mockReturnValue(0),
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
@@ -85,8 +84,13 @@ function makeWithRunSession() {
   });
 }
 
-function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested?: boolean }) {
+function makeBaseParams(overrides: {
+  synthesizedText?: string;
+  deliveryRequested?: boolean;
+  runStartedAt?: number;
+}) {
   const resolvedDelivery = makeResolvedDelivery();
+  const now = overrides.runStartedAt ?? Date.now();
   return {
     cfg: {} as never,
     cfgWithAgentDefaults: {} as never,
@@ -100,8 +104,8 @@ function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested
     agentId: "main",
     agentSessionKey: "agent:main",
     runSessionId: "run-123",
-    runStartedAt: Date.now(),
-    runEndedAt: Date.now(),
+    runStartedAt: now,
+    runEndedAt: now,
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
