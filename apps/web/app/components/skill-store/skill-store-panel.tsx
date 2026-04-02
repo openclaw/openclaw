@@ -18,10 +18,8 @@ type BrowseSkill = {
   slug: string;
   displayName: string;
   summary: string;
-  version: string;
-  downloads: number;
-  stars: number;
-  tags: string[];
+  installs: number;
+  source: string;
 };
 
 const TABS: { id: SkillStoreTab; label: string }[] = [
@@ -92,7 +90,7 @@ export function SkillStorePanel({ embedded }: { embedded?: boolean } = {}) {
   const handleBrowseSearch = useCallback((value: string) => {
     setBrowseQuery(value);
     clearTimeout(browseDebounce.current);
-    // Debounce remote search so typing does not hammer the ClawHub proxy route.
+    // Debounce remote search so typing does not hammer the skills search proxy route.
     browseDebounce.current = setTimeout(() => {
       void fetchBrowse(value);
     }, 300);
@@ -115,18 +113,18 @@ export function SkillStorePanel({ embedded }: { embedded?: boolean } = {}) {
     }
   }, []);
 
-  const handleInstall = useCallback(async (slug: string) => {
-    setInstallingSlug(slug);
+  const handleInstall = useCallback(async (skill: BrowseSkill) => {
+    setInstallingSlug(skill.slug);
     try {
       const res = await fetch("/api/skills/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug }),
+        body: JSON.stringify({ slug: skill.slug, source: skill.source }),
       });
       const data = await res.json();
       if (data.ok) {
         // Update Browse card state immediately, then refresh Installed with full metadata.
-        setInstalledSlugs((prev) => new Set(prev).add(slug));
+        setInstalledSlugs((prev) => new Set(prev).add(skill.slug));
         void fetchInstalled();
       }
     } catch {
@@ -194,7 +192,7 @@ export function SkillStorePanel({ embedded }: { embedded?: boolean } = {}) {
               ? setSearchQuery(e.target.value)
               : handleBrowseSearch(e.target.value)
           }
-          placeholder={activeTab === "installed" ? "Filter installed skills..." : "Search ClawHub skills..."}
+          placeholder={activeTab === "installed" ? "Filter installed skills..." : "Search skills..."}
           className="w-full px-3 py-2 rounded-xl text-sm outline-none"
           style={{
             background: "var(--color-surface)",
@@ -395,7 +393,7 @@ function BrowseTab({
   error: string | null;
   installedSlugs: Set<string>;
   installingSlug: string | null;
-  onInstall: (slug: string) => void;
+  onInstall: (skill: BrowseSkill) => void;
   onRetry: () => void;
 }) {
   if (loading) {
@@ -416,7 +414,7 @@ function BrowseTab({
         style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
       >
         <p className="text-sm mb-3" style={{ color: "var(--color-text-muted)" }}>
-          Could not load skills from ClawHub
+          Could not load skills
         </p>
         <p className="text-xs mb-4" style={{ color: "var(--color-text-muted)" }}>{error}</p>
         <button
@@ -464,17 +462,18 @@ function BrowseTab({
                   {skill.displayName}
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5">
-                  {skill.version && (
+                  {skill.source && (
                     <span
                       className="text-[10px] px-1.5 py-0.5 rounded-full"
                       style={{ background: "var(--color-surface-hover)", color: "var(--color-text-muted)" }}
+                      title={skill.source}
                     >
-                      v{skill.version}
+                      {skill.source}
                     </span>
                   )}
-                  {skill.downloads > 0 && (
+                  {skill.installs > 0 && (
                     <span className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                      <DownloadIcon /> {skill.downloads.toLocaleString()}
+                      <DownloadIcon /> {skill.installs.toLocaleString()}
                     </span>
                   )}
                 </div>
@@ -493,7 +492,7 @@ function BrowseTab({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => onInstall(skill.slug)}
+                    onClick={() => onInstall(skill)}
                     disabled={isInstalling}
                     className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-colors"
                     style={{
@@ -521,19 +520,6 @@ function BrowseTab({
               <p className="text-xs leading-relaxed line-clamp-2" style={{ color: "var(--color-text-muted)" }}>
                 {skill.summary}
               </p>
-            )}
-            {skill.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {skill.tags.slice(0, 4).map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-[10px] px-1.5 py-0.5 rounded-full"
-                    style={{ background: "var(--color-surface-hover)", color: "var(--color-text-muted)" }}
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
             )}
           </div>
         );
