@@ -294,6 +294,120 @@ describe("bundle manifest parsing", () => {
 
   it.each([
     {
+      name: "accepts JSON5 Codex bundle manifests",
+      bundleFormat: "codex" as const,
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+      json5Manifest: `{
+  // Bundle name can include comments and trailing commas.
+  name: "Codex JSON5 Bundle",
+  skills: "skills",
+  hooks: "hooks",
+}`,
+      dirs: ["skills", "hooks"],
+      expected: {
+        id: "codex-json5-bundle",
+        name: "Codex JSON5 Bundle",
+        bundleFormat: "codex",
+        skills: ["skills"],
+        hooks: ["hooks"],
+      },
+    },
+    {
+      name: "accepts JSON5 Claude bundle manifests",
+      bundleFormat: "claude" as const,
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+      json5Manifest: `{
+  name: "Claude JSON5 Bundle",
+  commands: "commands-pack",
+  hooks: "hooks-pack",
+  outputStyles: "styles",
+}`,
+      dirs: [".claude-plugin", "commands-pack", "hooks-pack", "styles"],
+      expected: {
+        id: "claude-json5-bundle",
+        name: "Claude JSON5 Bundle",
+        bundleFormat: "claude",
+        skills: ["commands-pack", "styles"],
+        hooks: ["hooks-pack"],
+      },
+    },
+    {
+      name: "accepts JSON5 Cursor bundle manifests",
+      bundleFormat: "cursor" as const,
+      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+      json5Manifest: `{
+  name: "Cursor JSON5 Bundle",
+  commands: ".cursor/commands",
+  mcpServers: "./.mcp.json",
+}`,
+      dirs: [".cursor-plugin", "skills", ".cursor/commands"],
+      textFiles: {
+        ".mcp.json": "{ servers: {}, }",
+      },
+      expected: {
+        id: "cursor-json5-bundle",
+        name: "Cursor JSON5 Bundle",
+        bundleFormat: "cursor",
+        skills: ["skills", ".cursor/commands"],
+        hooks: [],
+      },
+    },
+  ] as const)(
+    "$name",
+    ({ bundleFormat, manifestRelativePath, json5Manifest, dirs, textFiles, expected }) => {
+      const rootDir = makeTempDir();
+      setupBundleFixture({
+        rootDir,
+        dirs: [path.dirname(manifestRelativePath), ...dirs],
+        textFiles: {
+          [manifestRelativePath]: json5Manifest,
+          ...textFiles,
+        },
+      });
+
+      expectBundleManifest({
+        rootDir,
+        bundleFormat,
+        expected,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "rejects JSON5 Codex bundle manifests that parse to non-objects",
+      bundleFormat: "codex" as const,
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+    {
+      name: "rejects JSON5 Claude bundle manifests that parse to non-objects",
+      bundleFormat: "claude" as const,
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+    {
+      name: "rejects JSON5 Cursor bundle manifests that parse to non-objects",
+      bundleFormat: "cursor" as const,
+      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+  ] as const)("$name", ({ bundleFormat, manifestRelativePath }) => {
+    const rootDir = makeTempDir();
+    setupBundleFixture({
+      rootDir,
+      dirs: [path.dirname(manifestRelativePath)],
+      textFiles: {
+        [manifestRelativePath]: "'still not an object'",
+      },
+    });
+
+    const result = loadBundleManifest({ rootDir, bundleFormat });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plugin manifest must be an object");
+    }
+  });
+
+  it.each([
+    {
       name: "resolves Claude bundle hooks from default and declared paths",
       setupKind: "default-hooks",
       expectedHooks: ["hooks/hooks.json"],
