@@ -385,9 +385,31 @@ describe("runGatewayLoop", () => {
       sigusr1();
 
       await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(gatewayLog.info).toHaveBeenCalledWith("checking gateway lock on port 18789");
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("logs lock acquisition before waiting for the gateway lock", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const lockRelease = vi.fn(async () => {});
+      acquireGatewayLock.mockResolvedValueOnce({
+        release: lockRelease,
+      });
+
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      expect(gatewayLog.info).toHaveBeenCalledWith("checking gateway lock");
+      expect(acquireGatewayLock).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
 
       sigterm();
       await expect(exited).resolves.toBe(0);
