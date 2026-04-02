@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../ui/button";
+import { DenchIntegrationsSection } from "../integrations/dench-integrations-section";
 
 type CloudStatus = "no_key" | "invalid_key" | "valid";
 
@@ -431,24 +432,36 @@ export function CloudSettingsPanel() {
 
   if (data.status === "no_key" || data.status === "invalid_key") {
     return (
-      <ApiKeyEntry
-        onSave={handleSaveKey}
-        saving={saving}
-        notice={notice}
-        validationError={data.status === "invalid_key" ? data.validationError : undefined}
-      />
+      <div className="space-y-8">
+        <ApiKeyEntry
+          onSave={handleSaveKey}
+          saving={saving}
+          notice={notice}
+          validationError={data.status === "invalid_key" ? data.validationError : undefined}
+        />
+        <div>
+          <h2 className="text-sm font-medium mb-3" style={{ color: "var(--color-text)" }}>Integrations</h2>
+          <DenchIntegrationsSection />
+        </div>
+      </div>
     );
   }
 
   return (
-    <ModelSelector
-      models={data.models}
-      selectedModel={data.selectedDenchModel}
-      isDenchPrimary={data.isDenchPrimary}
-      recommendedModelId={data.recommendedModelId}
-      onSelect={handleSelectModel}
-      selecting={selecting}
-      notice={notice}
-    />
+    <div className="space-y-8">
+      <ModelSelector
+        models={data.models}
+        selectedModel={data.selectedDenchModel}
+        isDenchPrimary={data.isDenchPrimary}
+        recommendedModelId={data.recommendedModelId}
+        onSelect={handleSelectModel}
+        selecting={selecting}
+        notice={notice}
+      />
+      <div>
+        <h2 className="text-sm font-medium mb-3" style={{ color: "var(--color-text)" }}>Integrations</h2>
+        <DenchIntegrationsSection />
+      </div>
+    </div>
   );
 }

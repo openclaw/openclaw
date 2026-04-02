@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { GoTools } from "react-icons/go";
+import { RiApps2AiLine } from "react-icons/ri";
 import { useTheme } from "next-themes";
 import { FileManagerTree, type TreeNode } from "./file-manager-tree";
 import { ProfileSwitcher } from "./profile-switcher";
@@ -76,8 +78,8 @@ type WorkspaceSidebarProps = {
   /** Which tab is active. Controlled from parent if provided. */
   activeTab?: "files" | "chats";
   onTabChange?: (tab: "files" | "chats") => void;
-  /** Open the unified Settings surface. */
-  onOpenSettings?: () => void;
+  /** Navigate to a sidebar section (cloud, integrations, skills, cron). */
+  onNavigate?: (target: "cloud" | "integrations" | "skills" | "cron") => void;
 };
 
 function HomeIcon() {
@@ -418,7 +420,7 @@ export function WorkspaceSidebar({
   onRenameChatSession,
   activeTab: activeTabProp,
   onTabChange,
-  onOpenSettings,
+  onNavigate,
 }: WorkspaceSidebarProps) {
 	const isBrowsing = browseDir != null;
 	const width = mobile ? "280px" : (widthProp ?? 260);
@@ -538,27 +540,11 @@ export function WorkspaceSidebar({
 				)}
 			</div>
 
-			{onFileSearchSelect && (
-				<div className="flex items-center gap-1 px-3 pt-2 pb-1">
-					<div className="flex-1 min-w-0">
-						<FileSearch onSelect={onFileSearchSelect} />
-					</div>
-					{onOpenSettings && (
-						<button
-							type="button"
-							onClick={onOpenSettings}
-							className="p-1.5 rounded-lg shrink-0 transition-colors hover:bg-stone-200 dark:hover:bg-stone-700"
-							style={{ color: "var(--color-text-muted)" }}
-							title="Settings"
-						>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-								<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-								<circle cx="12" cy="12" r="3" />
-							</svg>
-						</button>
-					)}
-				</div>
-			)}
+		{onFileSearchSelect && (
+			<div className="px-3 pt-2 pb-1">
+				<FileSearch onSelect={onFileSearchSelect} />
+			</div>
+		)}
 
 			<div className="flex-1 overflow-y-auto px-1">
 				{loading ? (
@@ -584,11 +570,49 @@ export function WorkspaceSidebar({
 				)}
 			</div>
 
-			{/* Footer */}
+		{/* Navigation */}
+		{onNavigate && (
 			<div
-				className="px-3 py-2.5 border-t flex items-center justify-between"
+				className="px-2 py-1.5 border-t space-y-0.5"
 				style={{ borderColor: "var(--color-border)" }}
 			>
+				{([
+					{ id: "cloud" as const, label: "Cloud", icon: (
+						<svg className="h-4 w-4 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+							<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
+						</svg>
+					)},
+					{ id: "integrations" as const, label: "Integrations", icon: (
+						<RiApps2AiLine className="h-4 w-4 shrink-0" aria-hidden />
+					)},
+					{ id: "skills" as const, label: "Skills", icon: (
+						<GoTools className="h-4 w-4 shrink-0" aria-hidden />
+					)},
+					{ id: "cron" as const, label: "Cron", icon: (
+						<svg className="h-4 w-4 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+							<circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+						</svg>
+					)},
+				]).map((item) => (
+					<button
+						key={item.id}
+						type="button"
+						onClick={() => onNavigate(item.id)}
+						className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm font-medium transition-colors hover:bg-stone-200/60 dark:hover:bg-stone-700/60 hover:[color:var(--color-text)]"
+						style={{ color: "var(--color-text-secondary)" }}
+					>
+						<span className="shrink-0">{item.icon}</span>
+						{item.label}
+					</button>
+				))}
+			</div>
+		)}
+
+		{/* Footer */}
+		<div
+			className="px-3 py-2.5 border-t flex items-center justify-between"
+			style={{ borderColor: "var(--color-border)" }}
+		>
 				<a
 					href="https://dench.com"
 					target="_blank"

@@ -36,12 +36,16 @@ beforeEach(() => {
 });
 
 describe("inferTabType", () => {
-  it("recognizes settings virtual tabs", () => {
-    expect(inferTabType("~settings")).toBe("settings");
+  it("recognizes cloud virtual tabs", () => {
+    expect(inferTabType("~cloud")).toBe("cloud");
   });
 
-  it("maps legacy ~integrations to settings", () => {
-    expect(inferTabType("~integrations")).toBe("settings");
+  it("recognizes integrations virtual tabs", () => {
+    expect(inferTabType("~integrations")).toBe("integrations");
+  });
+
+  it("recognizes skills virtual tabs", () => {
+    expect(inferTabType("~skills")).toBe("skills");
   });
 
   it("keeps cron virtual tabs recognized", () => {
