@@ -236,7 +236,7 @@ async function pumpStreamWithRecovery(
   stream: ReturnType<StreamFn>,
   sessionMeta: RecoverySessionMeta,
   retry: () => ReturnType<StreamFn>,
-): Promise<unknown> {
+): Promise<AssistantMessage> {
   let yieldedChunk = false;
   try {
     const resolved = stream instanceof Promise ? await stream : stream;
@@ -244,7 +244,8 @@ async function pumpStreamWithRecovery(
       yieldedChunk = true;
       outer.push(chunk as Parameters<typeof outer.push>[0]);
     }
-    return await (resolved as { result?: () => Promise<unknown> }).result?.();
+    const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
+    return result as AssistantMessage;
   } catch (error: unknown) {
     if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
       throw error;
@@ -264,7 +265,8 @@ async function pumpStreamWithRecovery(
     for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
       outer.push(chunk as Parameters<typeof outer.push>[0]);
     }
-    return await (resolvedRetry as { result?: () => Promise<unknown> }).result?.();
+    const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
+    return result as AssistantMessage;
   }
 }
 

@@ -10,6 +10,8 @@ import {
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   const messages: AgentMessage[] = [
     castAgentMessage({
@@ -260,7 +262,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   });
 
   it("preserves result() for synchronous event streams", async () => {
-    const finalMessage = {
+    const finalMessage = castAgentMessage({
       role: "assistant",
       content: [{ type: "text", text: "done" }],
       api: "anthropic-messages",
@@ -276,7 +278,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       },
       stopReason: "stop",
       timestamp: Date.now(),
-    } as const;
+    }) as AssistantMessage;
 
     const wrapped = wrapAnthropicStreamWithRecovery(
       (() => {
