@@ -4,6 +4,7 @@ import {
   resolveProviderAttributionHeaders,
   resolveProviderAttributionIdentity,
   resolveProviderAttributionPolicy,
+  resolveProviderEndpoint,
   resolveProviderRequestAttributionHeaders,
   resolveProviderRequestPolicy,
 } from "./provider-attribution.js";
@@ -273,6 +274,32 @@ describe("provider attribution", () => {
       knownProviderFamily: "github-copilot",
       attributionProvider: undefined,
       allowsHiddenAttribution: false,
+    });
+  });
+
+  it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://generativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "google-generative-ai",
+      hostname: "generativelanguage.googleapis.com",
+    });
+
+    expect(
+      resolveProviderEndpoint("https://europe-west4-aiplatform.googleapis.com/v1/projects/test"),
+    ).toMatchObject({
+      endpointClass: "google-vertex",
+      hostname: "europe-west4-aiplatform.googleapis.com",
+      googleVertexRegion: "europe-west4",
+    });
+
+    expect(resolveProviderEndpoint("https://aiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.googleapis.com",
+      googleVertexRegion: "global",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/google")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
     });
   });
 

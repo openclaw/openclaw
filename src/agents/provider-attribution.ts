@@ -37,9 +37,17 @@ export type ProviderEndpointClass =
   | "openai-codex"
   | "azure-openai"
   | "openrouter"
+  | "google-generative-ai"
+  | "google-vertex"
   | "local"
   | "custom"
   | "invalid";
+
+export type ProviderEndpointResolution = {
+  endpointClass: ProviderEndpointClass;
+  hostname?: string;
+  googleVertexRegion?: string;
+};
 
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
@@ -96,6 +104,15 @@ function resolveUrlHostname(value: unknown): string | undefined {
     if (normalized.includes("openrouter.ai")) {
       return "openrouter.ai";
     }
+    if (normalized.includes("generativelanguage.googleapis.com")) {
+      return "generativelanguage.googleapis.com";
+    }
+    if (normalized.includes("aiplatform.googleapis.com")) {
+      const match = /([a-z0-9-]+-aiplatform\.googleapis\.com|aiplatform\.googleapis\.com)/.exec(
+        normalized,
+      );
+      return match?.[1];
+    }
     if (
       normalized.includes("localhost") ||
       normalized.includes("127.0.0.1") ||
@@ -117,31 +134,53 @@ function isLocalEndpointHost(host: string): boolean {
   );
 }
 
-function classifyProviderEndpoint(baseUrl: string | null | undefined): ProviderEndpointClass {
+export function resolveProviderEndpoint(
+  baseUrl: string | null | undefined,
+): ProviderEndpointResolution {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return "default";
+    return { endpointClass: "default" };
   }
 
   const host = resolveUrlHostname(baseUrl);
   if (!host) {
-    return "invalid";
+    return { endpointClass: "invalid" };
   }
   if (host === "api.openai.com") {
-    return "openai-public";
+    return { endpointClass: "openai-public", hostname: host };
   }
   if (host === "chatgpt.com") {
-    return "openai-codex";
+    return { endpointClass: "openai-codex", hostname: host };
   }
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
-    return "openrouter";
+    return { endpointClass: "openrouter", hostname: host };
   }
   if (host.endsWith(".openai.azure.com")) {
-    return "azure-openai";
+    return { endpointClass: "azure-openai", hostname: host };
+  }
+  if (host === "generativelanguage.googleapis.com") {
+    return { endpointClass: "google-generative-ai", hostname: host };
+  }
+  if (host === "aiplatform.googleapis.com") {
+    return {
+      endpointClass: "google-vertex",
+      hostname: host,
+      googleVertexRegion: "global",
+    };
+  }
+  {
+    const googleVertexHost = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/.exec(host);
+    if (googleVertexHost) {
+      return {
+        endpointClass: "google-vertex",
+        hostname: host,
+        googleVertexRegion: googleVertexHost[1],
+      };
+    }
   }
   if (isLocalEndpointHost(host)) {
-    return "local";
+    return { endpointClass: "local", hostname: host };
   }
-  return "custom";
+  return { endpointClass: "custom", hostname: host };
 }
 
 function resolveKnownProviderFamily(provider: string | undefined): string {
@@ -320,7 +359,8 @@ export function resolveProviderRequestPolicy(
 ): ProviderRequestPolicyResolution {
   const provider = normalizeProviderId(input.provider ?? "");
   const policy = resolveProviderAttributionPolicy(provider, env);
-  const endpointClass = classifyProviderEndpoint(input.baseUrl);
+  const endpointResolution = resolveProviderEndpoint(input.baseUrl);
+  const endpointClass = endpointResolution.endpointClass;
   const api = input.api?.trim().toLowerCase();
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =

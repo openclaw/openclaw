@@ -1,3 +1,4 @@
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
@@ -14,8 +15,6 @@ type GoogleProviderConfigLike = GoogleApiCarrier & {
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
-const DEFAULT_GOOGLE_API_HOST = "generativelanguage.googleapis.com";
-
 export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 function trimTrailingSlashes(value: string): string {
@@ -29,14 +28,14 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
     url.hash = "";
     url.search = "";
     if (
-      url.hostname.toLowerCase() === DEFAULT_GOOGLE_API_HOST &&
+      resolveProviderEndpoint(url.toString()).endpointClass === "google-generative-ai" &&
       trimTrailingSlashes(url.pathname || "") === ""
     ) {
       url.pathname = "/v1beta";
     }
     return trimTrailingSlashes(url.toString());
   } catch {
-    if (/^https:\/\/generativelanguage\.googleapis\.com\/?$/i.test(raw)) {
+    if (resolveProviderEndpoint(raw).endpointClass === "google-generative-ai") {
       return DEFAULT_GOOGLE_API_BASE_URL;
     }
     return raw;

@@ -11,3 +11,15 @@ export {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "../media-understanding/shared.js";
+export type {
+  ProviderEndpointClass,
+  ProviderEndpointResolution,
+  ProviderRequestCapability,
+  ProviderRequestPolicyInput,
+  ProviderRequestPolicyResolution,
+  ProviderRequestTransport,
+} from "../agents/provider-attribution.js";
+export {
+  resolveProviderEndpoint,
+  resolveProviderRequestPolicy,
+} from "../agents/provider-attribution.js";
