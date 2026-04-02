@@ -77,7 +77,7 @@ export type PluginToolGroups = {
 export type AllowlistResolution = {
   policy: ToolPolicyLike | undefined;
   unknownAllowlist: string[];
-  strippedAllowlist: boolean;
+  pluginOnlyAllowlist: boolean;
 };
 
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
@@ -112,7 +112,10 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     }
     const name = normalizeToolName(tool.name);
     all.push(name);
-    const pluginId = meta.pluginId.toLowerCase();
+    const pluginId = meta.pluginId.trim().toLowerCase();
+    if (!pluginId) {
+      continue;
+    }
     const list = byPlugin.get(pluginId) ?? [];
     list.push(name);
     byPlugin.set(pluginId, list);
@@ -161,49 +164,43 @@ export function expandPolicyWithPluginGroups(
   };
 }
 
-export function stripPluginOnlyAllowlist(
+export function analyzeAllowlistByToolType(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
   coreTools: Set<string>,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
-    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+    return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
   const normalized = normalizeToolList(policy.allow);
   if (normalized.length === 0) {
-    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+    return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
   const pluginIds = new Set(groups.byPlugin.keys());
   const pluginTools = new Set(groups.all);
   const unknownAllowlist: string[] = [];
-  let hasCoreEntry = false;
+  let hasOnlyPluginEntries = true;
   for (const entry of normalized) {
     if (entry === "*") {
-      hasCoreEntry = true;
+      hasOnlyPluginEntries = false;
       continue;
     }
     const isPluginEntry =
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
-    if (isCoreEntry) {
-      hasCoreEntry = true;
+    if (!isPluginEntry) {
+      hasOnlyPluginEntries = false;
     }
     if (!isCoreEntry && !isPluginEntry) {
       unknownAllowlist.push(entry);
     }
   }
-  const strippedAllowlist = !hasCoreEntry;
-  // When an allowlist contains only plugin tools, we strip it to avoid accidentally
-  // disabling core tools. Users who want additive behavior should prefer `tools.alsoAllow`.
-  if (strippedAllowlist) {
-    // Note: logging happens in the caller (pi-tools/tools-invoke) after this function returns.
-    // We keep this note here for future maintainers.
-  }
+  const pluginOnlyAllowlist = hasOnlyPluginEntries;
   return {
-    policy: strippedAllowlist ? { ...policy, allow: undefined } : policy,
+    policy,
     unknownAllowlist: Array.from(new Set(unknownAllowlist)),
-    strippedAllowlist,
+    pluginOnlyAllowlist,
   };
 }
 
