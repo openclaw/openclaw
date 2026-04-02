@@ -6,8 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Breaking
 
-- Plugins/web fetch: move Firecrawl `web_fetch` config from the legacy core `tools.web.fetch.firecrawl.*` path to the plugin-owned `plugins.entries.firecrawl.config.webFetch.*` path, route `web_fetch` fallback through the new fetch-provider boundary instead of a Firecrawl-only core branch, and migrate legacy config with `openclaw doctor --fix`. Thanks @vincentkoc.
-- Plugins/xAI: move `x_search` settings from the legacy core `tools.web.x_search.*` path to the plugin-owned `plugins.entries.xai.config.xSearch.*` path, standardize `x_search` auth on `plugins.entries.xai.config.webSearch.apiKey` / `XAI_API_KEY`, and migrate legacy config with `openclaw doctor --fix`. Thanks @vincentkoc.
+- Plugins/web fetch: move Firecrawl `web_fetch` config from the legacy core `tools.web.fetch.firecrawl.*` path to the plugin-owned `plugins.entries.firecrawl.config.webFetch.*` path, route `web_fetch` fallback through the new fetch-provider boundary instead of a Firecrawl-only core branch, and migrate legacy config with `openclaw doctor --fix`. (#59465) Thanks @vincentkoc.
+- Plugins/xAI: move `x_search` settings from the legacy core `tools.web.x_search.*` path to the plugin-owned `plugins.entries.xai.config.xSearch.*` path, standardize `x_search` auth on `plugins.entries.xai.config.webSearch.apiKey` / `XAI_API_KEY`, and migrate legacy config with `openclaw doctor --fix`. (#59674) Thanks @vincentkoc.
 
 ### Changes
 
@@ -50,7 +50,7 @@ Docs: https://docs.openclaw.ai
 - Providers/media HTTP: centralize base URL normalization, default auth/header injection, and explicit header override handling across shared OpenAI-compatible audio, Deepgram audio, Gemini media/image, and Moonshot video request paths. (#59469) Thanks @vincentkoc.
 - Providers/streaming headers: centralize default and attribution header merging across OpenAI websocket, embedded-runner, and proxy stream paths so provider-specific headers stay consistent and caller overrides only win where intended. (#59542) Thanks @vincentkoc.
 - Providers/Anthropic routing: centralize native-vs-proxy endpoint classification for direct Anthropic `service_tier` handling so spoofed or proxied hosts do not inherit native Anthropic defaults. (#59608) Thanks @vincentkoc.
-- Providers/Copilot: classify native GitHub Copilot API hosts in the shared provider endpoint resolver and harden token-derived proxy endpoint parsing so Copilot base URL routing stays centralized and fails closed on malformed hints. Thanks @vincentkoc.
+- Providers/Copilot: classify native GitHub Copilot API hosts in the shared provider endpoint resolver and harden token-derived proxy endpoint parsing so Copilot base URL routing stays centralized and fails closed on malformed hints. (#59644) Thanks @vincentkoc.
 - ACP/gateway reconnects: keep ACP prompts alive across transient websocket drops while still failing boundedly when reconnect recovery does not complete. (#59473) Thanks @obviyus.
 - ACP/gateway reconnects: reject stale pre-ack ACP prompts after reconnect grace expiry so callers fail cleanly instead of hanging indefinitely when the gateway never confirms the run.
 - Exec approvals/doctor: report host policy sources from the real approvals file path and ignore malformed host override values when attributing effective policy conflicts. (#59367) Thanks @gumadeiras.
@@ -58,7 +58,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/session kill: enforce HTTP operator scopes on session kill requests and gate authorization before session lookup so unauthenticated callers cannot probe session existence. (#59128) Thanks @jacobtomlinson.
 - MS Teams/logging: format non-`Error` failures with the shared unknown-error helper so logs stop collapsing caught SDK or Axios objects into `[object Object]`. (#59321) Thanks @bradgroux.
 - Gateway: prune empty `node-pending-work` state entries after explicit acknowledgments and natural expiry so the per-node state map no longer grows indefinitely. (#58179) Thanks @gavyngong.
-- Webhooks/secret comparison: replace ad-hoc timing-safe secret comparisons across BlueBubbles, Feishu, Mattermost, Telegram, Twilio, and Zalo webhook handlers with the shared `safeEqualSecret` helper and reject empty auth tokens in BlueBubbles. Thanks @eleqtrizit.
+- Webhooks/secret comparison: replace ad-hoc timing-safe secret comparisons across BlueBubbles, Feishu, Mattermost, Telegram, Twilio, and Zalo webhook handlers with the shared `safeEqualSecret` helper and reject empty auth tokens in BlueBubbles. (#58432) Thanks @eleqtrizit.
 - OpenShell/mirror: constrain `remoteWorkspaceDir` and `remoteAgentWorkspaceDir` to the managed `/sandbox` and `/agent` roots so mirror sync cannot escape the intended remote workspace paths. (#58515) Thanks @eleqtrizit.
 - Plugins/activation: preserve explicit, auto-enabled, and default activation provenance plus reason metadata across CLI, gateway bootstrap, and status surfaces so plugin enablement state stays accurate after auto-enable resolution. (#59641) Thanks @vincentkoc.
 - Exec/env: block additional host environment override pivots for package roots, language runtimes, compiler include paths, and credential/config locations so request-scoped exec cannot redirect trusted toolchains or config lookups. (#59233) Thanks @drobison00.
