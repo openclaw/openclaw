@@ -155,8 +155,16 @@ export default definePluginEntry({
       }
     }
 
-    let runtimePromise: Promise<VoiceCallRuntime> | null = null;
-    let runtime: VoiceCallRuntime | null = null;
+    const VOICE_RUNTIME_KEY = Symbol.for("openclaw.voice.runtime");
+    const VOICE_RUNTIME_PROMISE_KEY = Symbol.for("openclaw.voice.runtimePromise");
+
+    const globalState = globalThis as typeof globalThis & {
+      [VOICE_RUNTIME_KEY]?: VoiceCallRuntime | null;
+      [VOICE_RUNTIME_PROMISE_KEY]?: Promise<VoiceCallRuntime> | null;
+    };
+
+    globalState[VOICE_RUNTIME_KEY] ??= null;
+    globalState[VOICE_RUNTIME_PROMISE_KEY] ??= null;
 
     const ensureRuntime = async () => {
       if (!config.enabled) {
@@ -165,11 +173,13 @@ export default definePluginEntry({
       if (!validation.valid) {
         throw new Error(validation.errors.join("; "));
       }
-      if (runtime) {
-        return runtime;
+
+      if (globalState[VOICE_RUNTIME_KEY]) {
+        return globalState[VOICE_RUNTIME_KEY];
       }
-      if (!runtimePromise) {
-        runtimePromise = createVoiceCallRuntime({
+
+      if (!globalState[VOICE_RUNTIME_PROMISE_KEY]) {
+        globalState[VOICE_RUNTIME_PROMISE_KEY] = createVoiceCallRuntime({
           config,
           coreConfig: api.config as CoreConfig,
           fullConfig: api.config,
@@ -178,16 +188,18 @@ export default definePluginEntry({
           logger: api.logger,
         });
       }
+
       try {
-        runtime = await runtimePromise;
+        globalState[VOICE_RUNTIME_KEY] = await globalState[VOICE_RUNTIME_PROMISE_KEY];
       } catch (err) {
-        // Reset so the next call can retry instead of caching the
-        // rejected promise forever (which also leaves the port orphaned
-        // if the server started before the failure).  See: #32387
-        runtimePromise = null;
+        // Reset shared state so the next call can retry instead of caching a
+        // rejected promise or stale runtime across plugin contexts.
+        globalState[VOICE_RUNTIME_PROMISE_KEY] = null;
+        globalState[VOICE_RUNTIME_KEY] = null;
         throw err;
       }
-      return runtime;
+
+      return globalState[VOICE_RUNTIME_KEY];
     };
 
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
@@ -540,15 +552,16 @@ export default definePluginEntry({
         }
       },
       stop: async () => {
-        if (!runtimePromise) {
+        if (!globalState[VOICE_RUNTIME_PROMISE_KEY] && !globalState[VOICE_RUNTIME_KEY]) {
           return;
         }
         try {
-          const rt = await runtimePromise;
+          const rt =
+            globalState[VOICE_RUNTIME_KEY] ?? (await globalState[VOICE_RUNTIME_PROMISE_KEY]!);
           await rt.stop();
         } finally {
-          runtimePromise = null;
-          runtime = null;
+          globalState[VOICE_RUNTIME_PROMISE_KEY] = null;
+          globalState[VOICE_RUNTIME_KEY] = null;
         }
       },
     });
