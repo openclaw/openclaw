@@ -92,7 +92,7 @@ function buildApproverRestrictedNativeApprovalCapability(
       accountId?: string | null;
       action: "approve";
     }) =>
-      params.hasApprovers({ cfg, accountId }) && params.isNativeDeliveryEnabled({ cfg, accountId })
+      params.hasApprovers({ cfg, accountId })
         ? ({ kind: "enabled" } as const)
         : ({ kind: "disabled" } as const),
     approvals: {

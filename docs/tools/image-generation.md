@@ -38,7 +38,7 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 | Provider | Default model                    | Edit support            | API key                              |
 | -------- | -------------------------------- | ----------------------- | ------------------------------------ |
-| OpenAI   | `gpt-image-1`                    | No                      | `OPENAI_API_KEY`                     |
+| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)    | `OPENAI_API_KEY`                     |
 | Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 | fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                            |
 | MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY`                    |
@@ -100,23 +100,23 @@ If a provider fails (auth error, rate limit, etc.), the next candidate is tried 
 
 ### Image editing
 
-Google, fal, and MiniMax support editing reference images. Pass a reference image path or URL:
+OpenAI, Google, fal, and MiniMax support editing reference images. Pass a reference image path or URL:
 
 ```
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-Google supports up to 5 reference images via the `images` parameter. fal and MiniMax support 1.
+OpenAI and Google support up to 5 reference images via the `images` parameter. fal and MiniMax support 1.
 
 ## Provider capabilities
 
-| Capability            | OpenAI        | Google               | fal                 | MiniMax                    |
-| --------------------- | ------------- | -------------------- | ------------------- | -------------------------- |
-| Generate              | Yes (up to 4) | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              |
-| Edit/reference        | No            | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) |
-| Size control          | Yes           | Yes                  | Yes                 | No                         |
-| Aspect ratio          | No            | Yes                  | Yes (generate only) | Yes                        |
-| Resolution (1K/2K/4K) | No            | Yes                  | Yes                 | No                         |
+| Capability            | OpenAI               | Google               | fal                 | MiniMax                    |
+| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) |
+| Size control          | Yes                  | Yes                  | Yes                 | No                         |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         |
 
 ## Related
 

@@ -173,6 +173,7 @@ async function withTaskRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
   return await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
     try {
       return await run(root);
     } finally {
