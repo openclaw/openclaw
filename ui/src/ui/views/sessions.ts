@@ -27,7 +27,10 @@ export type SessionsProps = {
     includeUnknown: boolean;
   }) => void;
   onSearchChange: (query: string) => void;
-  onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
+  onSortChange: (
+    column: "key" | "kind" | "updated" | "tokens",
+    dir: "asc" | "desc",
+  ) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -49,7 +52,15 @@ export type SessionsProps = {
   onNavigateToChat?: (sessionKey: string) => void;
 };
 
-const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const THINK_LEVELS = [
+  "",
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
 const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
@@ -81,10 +92,15 @@ function isBinaryThinkingProvider(provider?: string | null): boolean {
 }
 
 function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
-  return isBinaryThinkingProvider(provider) ? BINARY_THINK_LEVELS : THINK_LEVELS;
+  return isBinaryThinkingProvider(provider)
+    ? BINARY_THINK_LEVELS
+    : THINK_LEVELS;
 }
 
-function withCurrentOption(options: readonly string[], current: string): string[] {
+function withCurrentOption(
+  options: readonly string[],
+  current: string,
+): string[] {
   if (!current) {
     return [...options];
   }
@@ -107,6 +123,13 @@ function withCurrentLabeledOption(
   return [...options, { value: current, label: `${current} (custom)` }];
 }
 
+function shortModelName(model?: string | null): string {
+  if (!model) {
+    return "";
+  }
+  return model.includes("/") ? model.split("/").pop()! : model;
+}
+
 function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
   if (!isBinary) {
     return value;
@@ -117,7 +140,10 @@ function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
   return "on";
 }
 
-function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
+function resolveThinkLevelPatchValue(
+  value: string,
+  isBinary: boolean,
+): string | null {
   if (!value) {
     return null;
   }
@@ -130,7 +156,10 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
-function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
+function filterRows(
+  rows: GatewaySessionRow[],
+  query: string,
+): GatewaySessionRow[] {
   const q = query.trim().toLowerCase();
   if (!q) {
     return rows;
@@ -140,7 +169,12 @@ function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow
     const label = (row.label ?? "").toLowerCase();
     const kind = (row.kind ?? "").toLowerCase();
     const displayName = (row.displayName ?? "").toLowerCase();
-    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
+    return (
+      key.includes(q) ||
+      label.includes(q) ||
+      kind.includes(q) ||
+      displayName.includes(q)
+    );
   });
 }
 
@@ -196,7 +230,10 @@ export function renderSessions(props: SessionsProps) {
     extraClass = "",
   ) => {
     const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
+    const nextDir =
+      isActive && props.sortDir === "asc"
+        ? ("desc" as const)
+        : ("asc" as const);
     return html`
       <th
         class=${extraClass}
@@ -212,7 +249,10 @@ export function renderSessions(props: SessionsProps) {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
+      <div
+        class="row"
+        style="justify-content: space-between; margin-bottom: 12px;"
+      >
         <div>
           <div class="card-title">Sessions</div>
           <div class="card-sub">
@@ -221,7 +261,11 @@ export function renderSessions(props: SessionsProps) {
               : "Active session keys and per-session overrides."}
           </div>
         </div>
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+        <button
+          class="btn"
+          ?disabled=${props.loading}
+          @click=${props.onRefresh}
+        >
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
@@ -287,7 +331,9 @@ export function renderSessions(props: SessionsProps) {
       </div>
 
       ${props.error
-        ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
+        ? html`<div class="callout danger" style="margin-bottom: 12px;">
+            ${props.error}
+          </div>`
         : nothing}
 
       <div class="data-table-wrapper">
@@ -297,7 +343,8 @@ export function renderSessions(props: SessionsProps) {
               type="text"
               placeholder="Filter by key, label, kind…"
               .value=${props.searchQuery}
-              @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
+              @input=${(e: Event) =>
+                props.onSearchChange((e.target as HTMLInputElement).value)}
             />
           </div>
         </div>
@@ -306,7 +353,9 @@ export function renderSessions(props: SessionsProps) {
           ? html`
               <div class="data-table-bulk-bar">
                 <span>${props.selectedKeys.size} selected</span>
-                <button class="btn btn--sm" @click=${props.onDeselectAll}>Unselect</button>
+                <button class="btn btn--sm" @click=${props.onDeselectAll}>
+                  Unselect
+                </button>
                 <button
                   class="btn btn--sm danger"
                   ?disabled=${props.loading}
@@ -328,10 +377,14 @@ export function renderSessions(props: SessionsProps) {
                         type="checkbox"
                         .checked=${paginated.length > 0 &&
                         paginated.every((r) => props.selectedKeys.has(r.key))}
-                        .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
+                        .indeterminate=${paginated.some((r) =>
+                          props.selectedKeys.has(r.key),
+                        ) &&
                         !paginated.every((r) => props.selectedKeys.has(r.key))}
                         @change=${() => {
-                          const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
+                          const allSelected = paginated.every((r) =>
+                            props.selectedKeys.has(r.key),
+                          );
                           if (allSelected) {
                             props.onDeselectPage(paginated.map((r) => r.key));
                           } else {
@@ -344,8 +397,10 @@ export function renderSessions(props: SessionsProps) {
                 </th>
                 ${sortHeader("key", "Key", "data-table-key-col")}
                 <th>Label</th>
-                ${sortHeader("kind", "Kind")} ${sortHeader("updated", "Updated")}
+                ${sortHeader("kind", "Kind")}
+                ${sortHeader("updated", "Updated")}
                 ${sortHeader("tokens", "Tokens")}
+                <th>Model</th>
                 <th>Thinking</th>
                 <th>Fast</th>
                 <th>Verbose</th>
@@ -357,7 +412,7 @@ export function renderSessions(props: SessionsProps) {
                 ? html`
                     <tr>
                       <td
-                        colspan="10"
+                        colspan="11"
                         style="text-align: center; padding: 48px 16px; color: var(--muted)"
                       >
                         No sessions found.
@@ -383,7 +438,10 @@ export function renderSessions(props: SessionsProps) {
           ? html`
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
-                  ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
+                  ${page * props.pageSize + 1}-${Math.min(
+                    (page + 1) * props.pageSize,
+                    totalRows,
+                  )}
                   of ${totalRows} row${totalRows === 1 ? "" : "s"}
                 </div>
                 <div class="data-table-pagination__controls">
@@ -391,11 +449,18 @@ export function renderSessions(props: SessionsProps) {
                     style="height: 32px; padding: 0 8px; font-size: 13px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--card);"
                     .value=${String(props.pageSize)}
                     @change=${(e: Event) =>
-                      props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
+                      props.onPageSizeChange(
+                        Number((e.target as HTMLSelectElement).value),
+                      )}
                   >
-                    ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
+                    ${PAGE_SIZES.map(
+                      (s) => html`<option value=${s}>${s} per page</option>`,
+                    )}
                   </select>
-                  <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
+                  <button
+                    ?disabled=${page <= 0}
+                    @click=${() => props.onPageChange(page - 1)}
+                  >
                     Previous
                   </button>
                   <button
@@ -422,12 +487,18 @@ function renderRow(
   disabled: boolean,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
-  const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const updated = row.updatedAt
+    ? formatRelativeTimestamp(row.updatedAt)
+    : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
-  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
-  const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
+  const thinkLevels = withCurrentOption(
+    resolveThinkLevelOptions(row.modelProvider),
+    thinking,
+  );
+  const fastMode =
+    row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
   const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
@@ -491,7 +562,9 @@ function renderRow(
               >`
             : row.key}
           ${showDisplayName
-            ? html`<span class="muted session-key-display-name">${displayName}</span>`
+            ? html`<span class="muted session-key-display-name"
+                >${displayName}</span
+              >`
             : nothing}
         </div>
       </td>
@@ -512,6 +585,13 @@ function renderRow(
       </td>
       <td>${updated}</td>
       <td>${formatSessionTokens(row)}</td>
+      <td
+        class="mono"
+        style="font-size: 12px; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis;"
+        title=${row.model ?? ""}
+      >
+        ${shortModelName(row.model)}
+      </td>
       <td>
         <select
           ?disabled=${disabled}
@@ -519,7 +599,10 @@ function renderRow(
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, {
-              thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking),
+              thinkingLevel: resolveThinkLevelPatchValue(
+                value,
+                isBinaryThinking,
+              ),
             });
           }}
         >
@@ -537,12 +620,17 @@ function renderRow(
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
-            onPatch(row.key, { fastMode: value === "" ? null : value === "on" });
+            onPatch(row.key, {
+              fastMode: value === "" ? null : value === "on",
+            });
           }}
         >
           ${fastLevels.map(
             (level) =>
-              html`<option value=${level.value} ?selected=${fastMode === level.value}>
+              html`<option
+                value=${level.value}
+                ?selected=${fastMode === level.value}
+              >
                 ${level.label}
               </option>`,
           )}
@@ -559,7 +647,10 @@ function renderRow(
         >
           ${verboseLevels.map(
             (level) =>
-              html`<option value=${level.value} ?selected=${verbose === level.value}>
+              html`<option
+                value=${level.value}
+                ?selected=${verbose === level.value}
+              >
                 ${level.label}
               </option>`,
           )}
