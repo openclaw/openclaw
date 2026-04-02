@@ -62,6 +62,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const fallbackPendingRuns = new Set<string>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -96,6 +97,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
     sessionRuns.clear();
+    fallbackPendingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -120,6 +122,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const noteFinalizedRun = (runId: string) => {
     finalizedRuns.set(runId, Date.now());
     sessionRuns.delete(runId);
+    fallbackPendingRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
   };
@@ -151,6 +154,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
+    fallbackPendingRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -233,8 +237,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
+    if (
+      (!state.activeChatRunId || fallbackPendingRuns.has(state.activeChatRunId)) &&
+      !isLocalBtwRunId?.(evt.runId)
+    ) {
       state.activeChatRunId = evt.runId;
+      fallbackPendingRuns.delete(evt.runId);
       if (state.pendingOptimisticUserMessage) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = false;
@@ -305,6 +313,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
+      fallbackPendingRuns.delete(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
@@ -313,9 +322,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      if (wasActiveRun) {
+        fallbackPendingRuns.add(evt.runId);
+        chatLog.addSystem(
+          `run error: ${evt.errorMessage ?? "unknown"} (waiting for fallback if configured)`,
+        );
+      } else {
+        fallbackPendingRuns.delete(evt.runId);
+        chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+        terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
+        maybeRefreshHistoryForRun(evt.runId);
+      }
     }
     tui.requestRender();
   };

@@ -650,4 +650,62 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the active run alive when an error event arrives before fallback final output", () => {
+    const { state, chatLog, loadHistory, setActivityStatus, handleChatEvent } =
+      createConcurrentRunHarness("partial");
+
+    loadHistory.mockClear();
+    setActivityStatus.mockClear();
+    chatLog.addSystem.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "API rate limit reached",
+    });
+
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run error: API rate limit reached (waiting for fallback if configured)",
+    );
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "fallback ok" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("fallback ok", "run-active");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("does not let a fallback-pending run block a newer active run", () => {
+    const { state, chatLog, handleChatEvent } = createConcurrentRunHarness("partial");
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "API rate limit reached",
+    });
+
+    expect(state.activeChatRunId).toBe("run-active");
+
+    handleChatEvent({
+      runId: "run-next",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "new run output" }] },
+    });
+
+    expect(state.activeChatRunId).toBe("run-next");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("new run output", "run-next");
+  });
 });
