@@ -35,7 +35,10 @@ import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import type {
+  RuntimeWebFetchMetadata,
+  RuntimeWebSearchMetadata,
+} from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -1309,8 +1312,15 @@ export type ProviderPlugin = {
 };
 
 export type WebSearchProviderId = string;
+export type WebFetchProviderId = string;
 
 export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: Record<string, unknown>;
   execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -1320,6 +1330,12 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebFetchProviderContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
 };
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
@@ -1341,6 +1357,19 @@ export type WebSearchProviderSetupContext = {
   prompter: WizardPrompter;
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
+};
+
+export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebFetchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebFetchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
 };
 
 export type WebSearchProviderPlugin = {
@@ -1378,6 +1407,34 @@ export type WebSearchProviderPlugin = {
 };
 
 export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
+};
+
+export type WebFetchProviderPlugin = {
+  id: WebFetchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebFetchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
+  createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
+};
+
+export type PluginWebFetchProviderEntry = WebFetchProviderPlugin & {
   pluginId: string;
 };
 
@@ -1873,6 +1930,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web fetch provider (web fetch capability). */
+  registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;

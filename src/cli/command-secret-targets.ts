@@ -12,6 +12,17 @@ function idsByPrefix(prefixes: readonly string[]): string[] {
     .toSorted();
 }
 
+function idsByPredicate(predicate: (id: string) => boolean): string[] {
+  return listSecretTargetRegistryEntries()
+    .map((entry) => entry.id)
+    .filter(predicate)
+    .toSorted();
+}
+
+const WEB_PLUGIN_SECRET_TARGETS = idsByPredicate((id) =>
+  /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(id),
+);
+
 const COMMAND_SECRET_TARGETS = {
   qrRemote: ["gateway.remote.token", "gateway.remote.password"],
   channels: idsByPrefix(["channels."]),
@@ -24,9 +35,8 @@ const COMMAND_SECRET_TARGETS = {
     "skills.entries.",
     "messages.tts.",
     "tools.web.search",
-    "tools.web.fetch.firecrawl.",
     "tools.web.x_search",
-  ]),
+  ]).concat(WEB_PLUGIN_SECRET_TARGETS),
   status: idsByPrefix([
     "channels.",
     "agents.defaults.memorySearch.remote.",

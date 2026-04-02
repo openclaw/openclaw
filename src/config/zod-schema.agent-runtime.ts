@@ -316,6 +316,7 @@ export const ToolsWebSearchSchema = z
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    provider: z.string().optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),
     maxResponseBytes: z.number().int().positive().optional(),
@@ -324,6 +325,8 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    // Keep the legacy Firecrawl fetch shape loadable so existing installs can
+    // start and then migrate cleanly through doctor.
     firecrawl: z
       .object({
         enabled: z.boolean().optional(),

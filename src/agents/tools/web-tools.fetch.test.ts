@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { __testing as webFetchTesting } from "./web-fetch.js";
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 import { createWebFetchTool } from "./web-tools.js";
 
@@ -323,12 +322,6 @@ describe("web_fetch extraction fallbacks", () => {
     const init = firecrawlCall?.[1];
     const authHeader = new Headers(init?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
-  });
-
-  it("uses FIRECRAWL_BASE_URL env var when firecrawl.baseUrl is unset", async () => {
-    vi.stubEnv("FIRECRAWL_BASE_URL", "https://fc.example.com");
-
-    expect(webFetchTesting.resolveFirecrawlBaseUrl({})).toBe("https://fc.example.com");
   });
 
   it("uses guarded endpoint fetch for firecrawl requests", async () => {

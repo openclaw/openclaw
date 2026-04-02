@@ -312,30 +312,42 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   }, 300_000);
 
-  it("falls back to local resolution for Firecrawl SecretRefs when gateway is unavailable", async () => {
+  it("falls back to local resolution for web fetch provider SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_API_KEY_LOCAL_FALLBACK";
     await withEnvValue(envKey, "firecrawl-local-fallback-key", async () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: { source: "env", provider: "default", id: envKey },
+                  },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               fetch: {
-                firecrawl: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
-                },
+                provider: "firecrawl",
               },
             },
           },
         } as OpenClawConfig,
         commandName: "agent",
-        targetIds: new Set(["tools.web.fetch.firecrawl.apiKey"]),
+        targetIds: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.fetch?.firecrawl?.apiKey).toBe(
-        "firecrawl-local-fallback-key",
+      const firecrawlConfig = result.resolvedConfig.plugins?.entries?.firecrawl?.config as
+        | { webFetch?: { apiKey?: unknown } }
+        | undefined;
+      expect(firecrawlConfig?.webFetch?.apiKey).toBe("firecrawl-local-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.firecrawl.config.webFetch.apiKey"]).toBe(
+        "resolved_local",
       );
-      expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   });

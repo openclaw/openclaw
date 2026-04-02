@@ -38,6 +38,7 @@ const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
   },
   {
     pluginId: "firecrawl",
+    webFetchProviderIds: ["firecrawl"],
     webSearchProviderIds: ["firecrawl"],
     toolNames: ["firecrawl_search", "firecrawl_scrape"],
   },

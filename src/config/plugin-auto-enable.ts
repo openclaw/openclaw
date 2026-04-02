@@ -10,6 +10,7 @@ import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
 } from "../plugins/bundled-capability-metadata.js";
+import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
@@ -148,6 +149,14 @@ function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): b
   return isRecord(pluginConfig.webSearch);
 }
 
+function hasPluginOwnedWebFetchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  if (!isRecord(pluginConfig)) {
+    return false;
+  }
+  return isRecord(pluginConfig.webFetch);
+}
+
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
   if (pluginId === "xai") {
     const pluginConfig = cfg.plugins?.entries?.xai?.config;
@@ -173,6 +182,28 @@ function resolveProviderPluginsWithOwnedWebSearch(
     }
   }
   return pluginIds;
+}
+
+const BUNDLED_WEB_FETCH_OWNER_PLUGIN_IDS = new Set(
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry.webFetchProviderIds.length > 0).map(
+    (entry) => entry.pluginId,
+  ),
+);
+
+function resolveProviderPluginsWithOwnedWebFetch(): ReadonlySet<string> {
+  return new Set(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry.webFetchProviderIds.length > 0).map(
+      (entry) => entry.pluginId,
+    ),
+  );
+}
+
+function resolvePluginIdForConfiguredWebFetchProvider(
+  providerId: string | undefined,
+): string | undefined {
+  return resolveBundledWebFetchPluginId(
+    typeof providerId === "string" ? providerId.trim().toLowerCase() : "",
+  );
 }
 
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
@@ -299,6 +330,20 @@ function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
   );
 }
 
+function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+  return Object.entries(entries).some(
+    ([pluginId, entry]) =>
+      BUNDLED_WEB_FETCH_OWNER_PLUGIN_IDS.has(pluginId) &&
+      isRecord(entry) &&
+      isRecord(entry.config) &&
+      isRecord(entry.config.webFetch),
+  );
+}
+
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (!configuredChannels || typeof configuredChannels !== "object") {
@@ -340,7 +385,11 @@ function configMayNeedPluginAutoEnable(cfg: OpenClawConfig, env: NodeJS.ProcessE
   if (isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined)) {
     return true;
   }
-  if (isRecord(cfg.plugins?.entries?.xai?.config) || hasConfiguredWebSearchPluginEntry(cfg)) {
+  if (
+    isRecord(cfg.plugins?.entries?.xai?.config) ||
+    hasConfiguredWebSearchPluginEntry(cfg) ||
+    hasConfiguredWebFetchPluginEntry(cfg)
+  ) {
     return true;
   }
   return false;
@@ -429,11 +478,28 @@ function resolveConfiguredPlugins(
       });
     }
   }
+  const webFetchProvider =
+    typeof cfg.tools?.web?.fetch?.provider === "string" ? cfg.tools.web.fetch.provider : undefined;
+  const webFetchPluginId = resolvePluginIdForConfiguredWebFetchProvider(webFetchProvider);
+  if (webFetchPluginId) {
+    changes.push({
+      pluginId: webFetchPluginId,
+      reason: `${String(webFetchProvider).trim().toLowerCase()} web fetch provider selected`,
+    });
+  }
   for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
     if (hasPluginOwnedWebSearchConfig(cfg, pluginId)) {
       changes.push({
         pluginId,
         reason: `${pluginId} web search configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebFetch()) {
+    if (hasPluginOwnedWebFetchConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} web fetch configured`,
       });
     }
   }

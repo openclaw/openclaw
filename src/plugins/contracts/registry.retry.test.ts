@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin, WebSearchProviderPlugin } from "../types.js";
+import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 
 type MockPluginRecord = {
   id: string;
   status: "loaded" | "error";
   error?: string;
   providerIds: string[];
+  webFetchProviderIds: string[];
   webSearchProviderIds: string[];
 };
 
@@ -13,12 +14,14 @@ type MockRuntimeRegistry = {
   plugins: MockPluginRecord[];
   diagnostics: Array<{ pluginId?: string; message: string }>;
   providers: Array<{ pluginId: string; provider: ProviderPlugin }>;
+  webFetchProviders: Array<{ pluginId: string; provider: WebFetchProviderPlugin }>;
   webSearchProviders: Array<{ pluginId: string; provider: WebSearchProviderPlugin }>;
 };
 
 function createMockRuntimeRegistry(params: {
   plugin: MockPluginRecord;
   providers?: Array<{ pluginId: string; provider: ProviderPlugin }>;
+  webFetchProviders?: Array<{ pluginId: string; provider: WebFetchProviderPlugin }>;
   webSearchProviders?: Array<{ pluginId: string; provider: WebSearchProviderPlugin }>;
   diagnostics?: Array<{ pluginId?: string; message: string }>;
 }): MockRuntimeRegistry {
@@ -26,6 +29,7 @@ function createMockRuntimeRegistry(params: {
     plugins: [params.plugin],
     diagnostics: params.diagnostics ?? [],
     providers: params.providers ?? [],
+    webFetchProviders: params.webFetchProviders ?? [],
     webSearchProviders: params.webSearchProviders ?? [],
   };
 }
@@ -46,6 +50,7 @@ describe("plugin contract registry scoped retries", () => {
             status: "error",
             error: "transient xai load failure",
             providerIds: [],
+            webFetchProviderIds: [],
             webSearchProviderIds: [],
           },
           diagnostics: [{ pluginId: "xai", message: "transient xai load failure" }],
@@ -57,6 +62,7 @@ describe("plugin contract registry scoped retries", () => {
             id: "xai",
             status: "loaded",
             providerIds: ["xai"],
+            webFetchProviderIds: [],
             webSearchProviderIds: ["grok"],
           },
           providers: [
@@ -95,6 +101,7 @@ describe("plugin contract registry scoped retries", () => {
             status: "error",
             error: "transient grok load failure",
             providerIds: [],
+            webFetchProviderIds: [],
             webSearchProviderIds: [],
           },
           diagnostics: [{ pluginId: "xai", message: "transient grok load failure" }],
@@ -106,6 +113,7 @@ describe("plugin contract registry scoped retries", () => {
             id: "xai",
             status: "loaded",
             providerIds: ["xai"],
+            webFetchProviderIds: [],
             webSearchProviderIds: ["grok"],
           },
           webSearchProviders: [
@@ -152,6 +160,7 @@ describe("plugin contract registry scoped retries", () => {
           id: "byteplus",
           status: "loaded",
           providerIds: ["byteplus"],
+          webFetchProviderIds: [],
           webSearchProviderIds: [],
         },
         providers: [
@@ -176,5 +185,71 @@ describe("plugin contract registry scoped retries", () => {
 
     expect(requireProviderContractProvider("byteplus-plan").id).toBe("byteplus");
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries web fetch provider loads after a transient plugin-scoped runtime error", async () => {
+    const loadBundledCapabilityRuntimeRegistry = vi
+      .fn()
+      .mockReturnValueOnce(
+        createMockRuntimeRegistry({
+          plugin: {
+            id: "firecrawl",
+            status: "error",
+            error: "transient firecrawl fetch load failure",
+            providerIds: [],
+            webFetchProviderIds: [],
+            webSearchProviderIds: [],
+          },
+          diagnostics: [
+            { pluginId: "firecrawl", message: "transient firecrawl fetch load failure" },
+          ],
+        }),
+      )
+      .mockReturnValueOnce(
+        createMockRuntimeRegistry({
+          plugin: {
+            id: "firecrawl",
+            status: "loaded",
+            providerIds: [],
+            webFetchProviderIds: ["firecrawl"],
+            webSearchProviderIds: ["firecrawl"],
+          },
+          webFetchProviders: [
+            {
+              pluginId: "firecrawl",
+              provider: {
+                id: "firecrawl",
+                label: "Firecrawl",
+                hint: "Fetch with Firecrawl",
+                envVars: ["FIRECRAWL_API_KEY"],
+                placeholder: "fc-...",
+                signupUrl: "https://firecrawl.dev",
+                credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+                requiresCredential: true,
+                getCredentialValue: () => undefined,
+                setCredentialValue() {},
+                createTool: () => ({
+                  description: "fetch",
+                  parameters: {},
+                  execute: async () => ({}),
+                }),
+              } as WebFetchProviderPlugin,
+            },
+          ],
+        }),
+      );
+
+    vi.doMock("../bundled-capability-runtime.js", () => ({
+      loadBundledCapabilityRuntimeRegistry,
+    }));
+
+    const { resolveWebFetchProviderContractEntriesForPluginId } = await import("./registry.js");
+
+    expect(
+      resolveWebFetchProviderContractEntriesForPluginId("firecrawl").map(
+        (entry) => entry.provider.id,
+      ),
+    ).toEqual(["firecrawl"]);
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
 });

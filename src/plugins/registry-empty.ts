@@ -13,6 +13,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    webFetchProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},
