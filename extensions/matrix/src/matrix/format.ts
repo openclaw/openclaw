@@ -68,7 +68,7 @@ function maskEscapedMentions(markdown: string): string {
   let codeFenceLength = 0;
 
   while (idx < markdown.length) {
-    if (markdown[idx] === "`") {
+    if (markdown[idx] === "`" && !isMarkdownEscaped(markdown, idx)) {
       let runLength = 1;
       while (markdown[idx + runLength] === "`") {
         runLength += 1;
@@ -92,6 +92,16 @@ function maskEscapedMentions(markdown: string): string {
   }
 
   return masked;
+}
+
+function isMarkdownEscaped(markdown: string, idx: number): boolean {
+  let slashCount = 0;
+  let cursor = idx - 1;
+  while (cursor >= 0 && markdown[cursor] === "\\") {
+    slashCount += 1;
+    cursor -= 1;
+  }
+  return slashCount % 2 === 1;
 }
 
 function restoreEscapedMentions(text: string): string {

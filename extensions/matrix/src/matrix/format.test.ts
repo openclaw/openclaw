@@ -219,6 +219,17 @@ describe("markdownToMatrixHtml", () => {
     expect(result.mentions).toEqual({});
   });
 
+  it("keeps escaped mentions literal after escaped backticks", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "\\`literal then \\@alice:example.org",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("`literal then @alice:example.org");
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({});
+  });
+
   it("restores escaped mentions in markdown link labels without linking them", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "[\\@alice:example.org](https://example.com)",
