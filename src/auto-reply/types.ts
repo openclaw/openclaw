@@ -54,6 +54,10 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
+  /** Called synchronously when a block reply is logically emitted, before async
+   * delivery drains. Useful for channels that need to rotate preview state at
+   * block boundaries without waiting for transport acks. */
+  onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */

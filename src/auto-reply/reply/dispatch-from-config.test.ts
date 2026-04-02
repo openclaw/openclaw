@@ -2896,6 +2896,41 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
+
+  it("signals block boundaries before async block delivery is queued", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const callOrder: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return undefined;
+    };
+
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        callOrder.push(`dispatch:${payload.text}`);
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onBlockReplyQueued: (payload) => {
+          callOrder.push(`queued:${payload.text}`);
+        },
+      },
+    });
+
+    expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
+  });
 });
 
 describe("before_dispatch hook", () => {

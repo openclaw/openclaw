@@ -703,6 +703,10 @@ export async function dispatchReplyFromConfig(params: {
               accumulatedBlockText += payload.text;
               blockCount++;
             }
+            // Channels that keep a live draft preview may need to rotate their
+            // preview state at the logical block boundary before queued block
+            // delivery drains asynchronously through the dispatcher.
+            await params.replyOptions?.onBlockReplyQueued?.(payload, context);
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,

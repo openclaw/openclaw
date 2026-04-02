@@ -1553,6 +1553,10 @@ describe("matrix monitor handler draft streaming", () => {
   ) => Promise<void>;
   type ReplyOpts = {
     onPartialReply?: (payload: { text: string }) => void;
+    onBlockReplyQueued?: (payload: {
+      text?: string;
+      isCompactionNotice?: boolean;
+    }) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
     disableBlockStreaming?: boolean;
   };
@@ -1684,6 +1688,39 @@ describe("matrix monitor handler draft streaming", () => {
 
     await deliver({ text: "Block two" }, { kind: "final" });
 
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("queues late partials behind block-boundary rotation", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Alpha" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    await opts.onBlockReplyQueued?.({ text: "Alpha" });
+
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft2",
+      roomId: "!room",
+    });
+    opts.onPartialReply?.({ text: "AlphaBeta" });
+
+    // The next block must not update the previous block's draft while the
+    // prior block delivery is still draining.
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+
+    await deliver({ text: "Alpha" }, { kind: "block" });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[1]?.[1]).toBe("Beta");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
     await finish();
