@@ -36,13 +36,14 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 1. Himalaya CLI installed (`himalaya --version` to verify)
 2. A configuration file at `~/.config/himalaya/config.toml`
 3. IMAP/SMTP credentials configured (password stored securely)
+4. For the stock Homebrew build, prefer password or app-password auth. The local `himalaya v1.1.0` build here does not include OAuth2 support.
 
 ## Configuration Setup
 
 Run the interactive wizard to set up an account:
 
 ```bash
-himalaya account configure
+himalaya account configure personal
 ```
 
 Or create `~/.config/himalaya/config.toml` manually:
@@ -52,6 +53,11 @@ Or create `~/.config/himalaya/config.toml` manually:
 email = "you@example.com"
 display-name = "Your Name"
 default = true
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Trash"
 
 backend.type = "imap"
 backend.host = "imap.example.com"
@@ -69,6 +75,8 @@ message.send.backend.login = "you@example.com"
 message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show email/smtp"
 ```
+
+Use the provider-specific Gmail and iCloud templates in `references/configuration.md` instead of guessing mailbox names.
 
 ## Common Operations
 
@@ -149,7 +157,7 @@ himalaya message write
 Send directly using template:
 
 ```bash
-cat << 'EOF' | himalaya template send
+cat << 'EOF' | himalaya template send -a personal
 From: you@example.com
 To: recipient@example.com
 Subject: Test Message
@@ -169,13 +177,13 @@ himalaya message write -H "To:recipient@example.com" -H "Subject:Test" "Message 
 Move to folder:
 
 ```bash
-himalaya message move 42 "Archive"
+himalaya message move "Archive" 42
 ```
 
 Copy to folder:
 
 ```bash
-himalaya message copy 42 "Important"
+himalaya message copy "Important" 42
 ```
 
 ### Delete an Email
@@ -189,13 +197,13 @@ himalaya message delete 42
 Add flag:
 
 ```bash
-himalaya flag add 42 --flag seen
+himalaya flag add 42 seen
 ```
 
 Remove flag:
 
 ```bash
-himalaya flag remove 42 --flag seen
+himalaya flag remove 42 seen
 ```
 
 ## Multiple Accounts
@@ -209,7 +217,7 @@ himalaya account list
 Use a specific account:
 
 ```bash
-himalaya --account work envelope list
+himalaya envelope list -a work
 ```
 
 ## Attachments
@@ -252,6 +260,7 @@ RUST_LOG=trace RUST_BACKTRACE=1 himalaya envelope list
 ## Tips
 
 - Use `himalaya --help` or `himalaya <command> --help` for detailed usage.
+- In v1.1.x, account selection lives on the subcommand: `himalaya envelope list -a work`, not `himalaya --account work ...`.
 - Message IDs are relative to the current folder; re-list after folder changes.
 - For composing rich emails with attachments, use MML syntax (see `references/message-composition.md`).
 - Store passwords securely using `pass`, system keyring, or a command that outputs the password.
