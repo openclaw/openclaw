@@ -261,7 +261,7 @@ describe("sessions_spawn tool", () => {
         streamTo: "parent",
       }),
       expect.any(Object),
-      );
+    );
   });
 
   it('ignores streamTo when runtime is omitted and defaults to "subagent"', async () => {
@@ -284,7 +284,7 @@ describe("sessions_spawn tool", () => {
         streamTo: "parent",
       }),
       expect.any(Object),
-      );
+    );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
