@@ -113,7 +113,12 @@ export async function checkPathGuardStrict(
         const rest = firstMagic >= 0 ? normalizedEntryPattern.slice(firstMagic) : "";
         try {
           const canonicalPrefix = toPosixPath(await resolveRealPathStrict(prefix));
-          const rewrittenPattern = `${canonicalPrefix}${rest}`;
+          const needsSlash =
+            canonicalPrefix.length > 0 &&
+            !canonicalPrefix.endsWith("/") &&
+            rest.length > 0 &&
+            !rest.startsWith("/");
+          const rewrittenPattern = needsSlash ? `${canonicalPrefix}/${rest}` : `${canonicalPrefix}${rest}`;
           return minimatch(normalizedRealPath, rewrittenPattern, {
             dot: true,
             magicalBraces: true,
