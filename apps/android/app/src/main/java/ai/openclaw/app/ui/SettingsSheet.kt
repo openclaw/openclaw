@@ -9,6 +9,7 @@ import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.app.role.RoleManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -150,6 +151,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
         versionName
       }
     }
+  var assistantRoleAvailable by remember(context) { mutableStateOf(isAssistantRoleAvailable(context)) }
+  var assistantRoleHeld by remember(context) { mutableStateOf(isAssistantRoleHeld(context)) }
   val listItemColors =
     ListItemDefaults.colors(
       containerColor = Color.Transparent,
@@ -326,6 +329,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.refreshGatewayConnection()
     }
 
+  val assistantRoleLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+      assistantRoleAvailable = isAssistantRoleAvailable(context)
+      assistantRoleHeld = isAssistantRoleHeld(context)
+    }
+
   DisposableEffect(lifecycleOwner, context) {
     val observer =
       LifecycleEventObserver { _, event ->
@@ -362,6 +371,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
             ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
               PackageManager.PERMISSION_GRANTED
+          assistantRoleAvailable = isAssistantRoleAvailable(context)
+          assistantRoleHeld = isAssistantRoleHeld(context)
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -476,6 +487,42 @@ fun SettingsSheet(viewModel: MainViewModel) {
               instanceId.take(8) + "…",
               style = mobileCaption1.copy(fontFamily = FontFamily.Monospace),
               color = mobileTextTertiary,
+            )
+          }
+          if (assistantRoleAvailable) {
+            HorizontalDivider(color = mobileBorder)
+            ListItem(
+              modifier = Modifier.fillMaxWidth(),
+              colors = listItemColors,
+              headlineContent = { Text("Default Assistant", style = mobileHeadline) },
+              supportingContent = {
+                Text(
+                  if (assistantRoleHeld) {
+                    "OpenClaw is registered as the device assistant."
+                  } else {
+                    "Let Android launch OpenClaw from the assistant gesture. Google Assistant App Actions still work separately."
+                  },
+                  style = mobileCallout,
+                )
+              },
+              trailingContent = {
+                Button(
+                  onClick = {
+                    assistantRoleLauncher.launch(
+                      context
+                        .getSystemService(RoleManager::class.java)
+                        .createRequestRoleIntent(RoleManager.ROLE_ASSISTANT),
+                    )
+                  },
+                  colors = settingsPrimaryButtonColors(),
+                  shape = RoundedCornerShape(14.dp),
+                ) {
+                  Text(
+                    if (assistantRoleHeld) "Manage" else "Enable",
+                    style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                  )
+                }
+              },
             )
           }
         }
@@ -1293,4 +1340,12 @@ private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
     sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+}
+
+private fun isAssistantRoleAvailable(context: Context): Boolean {
+  return context.getSystemService(RoleManager::class.java).isRoleAvailable(RoleManager.ROLE_ASSISTANT)
+}
+
+private fun isAssistantRoleHeld(context: Context): Boolean {
+  return context.getSystemService(RoleManager::class.java).isRoleHeld(RoleManager.ROLE_ASSISTANT)
 }
