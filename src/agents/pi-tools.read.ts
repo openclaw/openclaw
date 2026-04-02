@@ -586,7 +586,10 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 
         if (options?.policy) {
           try {
-            await checkPathGuardStrict(sandboxPath, options.policy, root);
+            const policyPath = path.isAbsolute(sandboxPath)
+              ? sandboxPath
+              : path.join(root, sandboxPath);
+            await checkPathGuardStrict(policyPath, options.policy, root);
           } catch (error: unknown) {
             if (error instanceof PathGuardError) {
               return pathGuardDeniedToolResult({
