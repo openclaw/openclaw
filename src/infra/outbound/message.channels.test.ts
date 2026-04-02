@@ -5,7 +5,6 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
@@ -148,7 +147,7 @@ describe("sendMessage channel normalization", () => {
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: createIMessageAliasPlugin(),
         },
       ]),
       params: {
@@ -339,6 +338,36 @@ const createDemoAliasPlugin = (params?: {
     ...(params?.outbound ? { outbound: params.outbound } : {}),
   };
 };
+
+const createIMessageAliasPlugin = (): ChannelPlugin => ({
+  id: "imessage",
+  meta: {
+    id: "imessage",
+    label: "iMessage",
+    selectionLabel: "iMessage (imsg)",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test stub.",
+    aliases: ["imsg"],
+  },
+  capabilities: { chatTypes: ["direct", "group"], media: true },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => ({}),
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async ({ deps, to, text }) => {
+      const send = deps?.sendIMessage as
+        | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
+        | undefined;
+      if (!send) {
+        throw new Error("sendIMessage missing");
+      }
+      const result = await send(to, text, {});
+      return { channel: "imessage", ...result };
+    },
+  },
+});
 
 const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
