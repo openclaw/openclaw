@@ -49,6 +49,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "discord-runtime-surface",
     source: pluginSource("discord", "runtime-api.js"),
+    // Runtime entrypoints should be blocked until the owning plugin is active.
+    loadPolicy: "activated",
     exports: [
       "addRoleDiscord",
       "auditDiscordChannelPermissions",
@@ -159,6 +161,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "discord-thread-bindings",
     source: pluginSource("discord", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "autoBindSpawnedDiscordSubagent",
       "createThreadBindingManager",
@@ -199,6 +202,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser",
     source: pluginSource("browser", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "browserHandlers",
       "createBrowserPluginService",
@@ -210,6 +214,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser-runtime",
     source: pluginSource("browser", "runtime-api.js"),
+    loadPolicy: "activated",
     directExports: {
       DEFAULT_AI_SNAPSHOT_MAX_CHARS: "./browser-config.js",
       DEFAULT_BROWSER_EVALUATE_ENABLED: "./browser-config.js",
@@ -441,6 +446,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "image-generation-runtime",
     source: pluginSource("image-generation-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "generateImage",
       "listRuntimeImageGenerationProviders",
@@ -487,6 +493,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "media-understanding-runtime",
     source: pluginSource("media-understanding-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "describeImageFile",
       "describeImageFileWithModel",
@@ -501,6 +508,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "memory-core-engine-runtime",
     source: pluginSource("memory-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "BuiltinMemoryEmbeddingProviderDoctorMetadata",
       "getBuiltinMemoryEmbeddingProviderDoctorMetadata",
@@ -530,6 +538,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-runtime",
     source: pluginSource("line", "runtime-api.js"),
+    loadPolicy: "activated",
     runtimeApiPreExportsPath: runtimeApiSourcePath("line"),
     typeExports: [
       "Action",
@@ -558,6 +567,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-surface",
     source: pluginSource("line", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "CardAction",
       "createActionCard",
@@ -611,6 +621,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "matrix-runtime-surface",
     source: pluginSource("matrix", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: ["resolveMatrixAccountStringValues", "setMatrixRuntime"],
   },
   {
@@ -850,6 +861,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "speech-runtime",
     source: pluginSource("speech-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "_test",
       "buildTtsSystemPromptHint",
@@ -931,6 +943,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "slack-runtime-surface",
     source: pluginSource("slack", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "handleSlackAction",
       "listSlackDirectoryGroupsLive",
@@ -1213,24 +1226,19 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
 ];
 
-const GUARDED_PLUGIN_SDK_FACADE_SUBPATHS = new Set([
-  "browser",
-  "browser-runtime",
-  "discord-runtime-surface",
-  "discord-thread-bindings",
-  "image-generation-runtime",
-  "line-runtime",
-  "line-surface",
-  "matrix-runtime-surface",
-  "media-understanding-runtime",
-  "memory-core-engine-runtime",
-  "slack-runtime-surface",
-  "speech-runtime",
-]);
-
 export const GENERATED_PLUGIN_SDK_FACADES_BY_SUBPATH = Object.fromEntries(
   GENERATED_PLUGIN_SDK_FACADES.map((entry) => [entry.subpath, entry]),
 );
+
+function resolveFacadeLoadPolicy(entry, sourcePath) {
+  // Keep loader policy next to the facade entry itself so additions stay local
+  // and mixed-source facades can opt into per-source behavior later if needed.
+  const sourcePolicy = entry.sourceLoadPolicy?.[sourcePath];
+  if (sourcePolicy) {
+    return sourcePolicy;
+  }
+  return entry.loadPolicy ?? "plain";
+}
 
 export const GENERATED_PLUGIN_SDK_FACADES_LABEL = "plugin-sdk-facades";
 export const GENERATED_PLUGIN_SDK_FACADES_SCRIPT = "scripts/generate-plugin-sdk-facades.mjs";
@@ -1538,10 +1546,9 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       runtimeImports.add("createLazyFacadeObjectValue");
     }
     for (const sourcePath of listFacadeEntrySourcePaths(entry)) {
-      const { artifactBasename } = normalizeFacadeSourceParts(sourcePath);
+      const loadPolicy = resolveFacadeLoadPolicy(entry, sourcePath);
       runtimeImports.add(
-        artifactBasename === "runtime-api.js" &&
-          GUARDED_PLUGIN_SDK_FACADE_SUBPATHS.has(entry.subpath)
+        loadPolicy === "activated"
           ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
           : "loadBundledPluginPublicSurfaceModuleSync",
       );
@@ -1555,9 +1562,9 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       }
       const { dirName: sourceDirName, artifactBasename: sourceArtifactBasename } =
         normalizeFacadeSourceParts(sourcePath);
+      const loadPolicy = resolveFacadeLoadPolicy(entry, sourcePath);
       const loaderName =
-        sourceArtifactBasename === "runtime-api.js" &&
-        GUARDED_PLUGIN_SDK_FACADE_SUBPATHS.has(entry.subpath)
+        loadPolicy === "activated"
           ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
           : "loadBundledPluginPublicSurfaceModuleSync";
       const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
