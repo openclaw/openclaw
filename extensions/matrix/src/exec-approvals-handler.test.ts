@@ -17,23 +17,6 @@ const baseRequest = {
   expiresAtMs: 61_000,
 };
 
-const pluginRequest = {
-  id: "plugin:9f1c7d5d-b1fb-46ef-ac45-662723b65bb7",
-  request: {
-    title: "Plugin Approval Required",
-    description: "Allow plugin access",
-    pluginId: "git-tools",
-    agentId: "main",
-    sessionKey: "agent:main:matrix:channel:!ops:example.org",
-    turnSourceChannel: "matrix",
-    turnSourceTo: "room:!ops:example.org",
-    turnSourceThreadId: "$thread",
-    turnSourceAccountId: "default",
-  },
-  createdAtMs: 1000,
-  expiresAtMs: 61_000,
-};
-
 function createHandler(cfg: OpenClawConfig, accountId = "default") {
   const client = {} as never;
   const sendMessage = vi
@@ -204,34 +187,6 @@ describe("MatrixExecApprovalHandler", () => {
       "!ops:example.org",
       "$m1",
       expect.stringContaining("Exec approval: Allowed once"),
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
-  });
-
-  it("delivers plugin approvals through the shared native delivery planner", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok",
-          execApprovals: {
-            enabled: true,
-            approvers: ["@owner:example.org"],
-            target: "dm",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const { handler, sendMessage } = createHandler(cfg);
-
-    await handler.handleRequested(pluginRequest);
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      "room:!dm-owner:example.org",
-      expect.stringContaining("Plugin Approval Required"),
       expect.objectContaining({
         accountId: "default",
       }),

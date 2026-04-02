@@ -1,7 +1,5 @@
 import {
   buildExecApprovalPendingReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
-  buildPluginApprovalResolvedMessage,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/approval-runtime";
@@ -11,10 +9,6 @@ import {
   type ExecApprovalChannelRuntime,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
-import type {
-  PluginApprovalRequest,
-  PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { matrixNativeApprovalAdapter } from "./approval-native.js";
 import {
@@ -29,9 +23,8 @@ import { sendMessageMatrix } from "./matrix/send.js";
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-type ApprovalKind = "exec" | "plugin";
+type ApprovalRequest = ExecApprovalRequest;
+type ApprovalResolved = ExecApprovalResolved;
 type PendingMessage = {
   roomId: string;
   messageId: string;
@@ -67,17 +60,7 @@ function normalizeThreadId(value?: string | number | null): string | undefined {
   return trimmed || undefined;
 }
 
-function resolveApprovalKind(request: ApprovalRequest): ApprovalKind {
-  return request.id.startsWith("plugin:") ? "plugin" : "exec";
-}
-
 function buildPendingApprovalText(params: { request: ApprovalRequest; nowMs: number }): string {
-  if (resolveApprovalKind(params.request) === "plugin") {
-    return buildPluginApprovalPendingReplyPayload({
-      request: params.request as PluginApprovalRequest,
-      nowMs: params.nowMs,
-    }).text!;
-  }
   return buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
@@ -96,12 +79,7 @@ function buildResolvedApprovalText(params: {
   request: ApprovalRequest;
   resolved: ApprovalResolved;
 }): string {
-  if (resolveApprovalKind(params.request) === "plugin") {
-    return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);
-  }
-  const command = resolveExecApprovalCommandDisplay(
-    (params.request as ExecApprovalRequest).request,
-  ).commandText;
+  const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
   const decisionLabel =
     params.resolved.decision === "allow-once"
       ? "Allowed once"
@@ -140,7 +118,7 @@ export class MatrixExecApprovalHandler {
       cfg: this.opts.cfg,
       accountId: this.opts.accountId,
       gatewayUrl: this.opts.gatewayUrl,
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec"],
       nowMs: this.nowMs,
       nativeAdapter: matrixNativeApprovalAdapter.native,
       isConfigured: () =>

@@ -5,12 +5,10 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import {
   getMatrixExecApprovalApprovers,
-  isMatrixExecApprovalApprover,
   isMatrixExecApprovalAuthorizedSender,
   isMatrixExecApprovalClientEnabled,
   resolveMatrixExecApprovalTarget,
@@ -114,8 +112,6 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
     getMatrixExecApprovalApprovers({ cfg, accountId }).length > 0,
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
     isMatrixExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
-  isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isMatrixExecApprovalApprover({ cfg, accountId, senderId }),
   isNativeDeliveryEnabled: ({ cfg, accountId }) =>
     isMatrixExecApprovalClientEnabled({ cfg, accountId }),
   resolveNativeDeliveryMode: ({ cfg, accountId }) =>
@@ -126,6 +122,39 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
   resolveOriginTarget: resolveMatrixOriginTarget,
   resolveApproverDmTargets: resolveMatrixApproverDmTargets,
 });
+
+const splitMatrixApprovalCapability = splitChannelApprovalCapability(
+  matrixNativeApprovalCapability,
+);
+const matrixBaseNativeApprovalAdapter = splitMatrixApprovalCapability.native;
+const matrixExecOnlyNativeApprovalAdapter = matrixBaseNativeApprovalAdapter && {
+  describeDeliveryCapabilities: (
+    params: Parameters<typeof matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities>[0],
+  ) =>
+    params.approvalKind === "plugin"
+      ? {
+          enabled: false,
+          preferredSurface: "approver-dm" as const,
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: false,
+          notifyOriginWhenDmOnly: false,
+        }
+      : matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities(params),
+  resolveOriginTarget: async (
+    params: Parameters<NonNullable<typeof matrixBaseNativeApprovalAdapter.resolveOriginTarget>>[0],
+  ) =>
+    params.approvalKind === "plugin"
+      ? null
+      : ((await matrixBaseNativeApprovalAdapter.resolveOriginTarget?.(params)) ?? null),
+  resolveApproverDmTargets: async (
+    params: Parameters<
+      NonNullable<typeof matrixBaseNativeApprovalAdapter.resolveApproverDmTargets>
+    >[0],
+  ) =>
+    params.approvalKind === "plugin"
+      ? []
+      : ((await matrixBaseNativeApprovalAdapter.resolveApproverDmTargets?.(params)) ?? []),
+};
 
 export const matrixApprovalCapability = createChannelApprovalCapability({
   authorizeActorAction: (params) =>
@@ -148,9 +177,17 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
   },
   approvals: {
     delivery: matrixNativeApprovalCapability.delivery,
-    native: matrixNativeApprovalCapability.native,
+    native: matrixExecOnlyNativeApprovalAdapter,
     render: matrixNativeApprovalCapability.render,
   },
 });
 
-export const matrixNativeApprovalAdapter = splitChannelApprovalCapability(matrixApprovalCapability);
+export const matrixNativeApprovalAdapter = {
+  auth: {
+    authorizeActorAction: matrixApprovalCapability.authorizeActorAction,
+    getActionAvailabilityState: matrixApprovalCapability.getActionAvailabilityState,
+  },
+  delivery: matrixApprovalCapability.delivery,
+  render: matrixApprovalCapability.render,
+  native: matrixExecOnlyNativeApprovalAdapter,
+};

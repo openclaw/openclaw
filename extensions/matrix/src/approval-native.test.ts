@@ -138,4 +138,30 @@ describe("matrix native approval adapter", () => {
       }),
     ).toEqual({ authorized: true });
   });
+
+  it("disables matrix-native plugin approval delivery", () => {
+    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Plugin Approval Required",
+          description: "Allow plugin access",
+          pluginId: "git-tools",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(capabilities).toEqual({
+      enabled: false,
+      preferredSurface: "approver-dm",
+      supportsOriginSurface: false,
+      supportsApproverDmSurface: false,
+      notifyOriginWhenDmOnly: false,
+    });
+  });
 });
