@@ -6,7 +6,7 @@ import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type
 
 type BrowserExecutable = PluginSdkFacadeTypeMap["browser-runtime"]["types"]["BrowserExecutable"];
 
-const CHROME_VERSION_RE = /(\d+)(?:\.\d+){0,3}/;
+const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 
 function exists(filePath: string) {
   try {
@@ -37,9 +37,13 @@ function execText(
 function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
   for (const candidate of candidates) {
     if (exists(candidate)) {
+      const normalizedPath = candidate.toLowerCase();
       return {
         kind:
-          candidate.toLowerCase().includes("sxs") || candidate.toLowerCase().includes("canary")
+          normalizedPath.includes("beta") ||
+          normalizedPath.includes("canary") ||
+          normalizedPath.includes("sxs") ||
+          normalizedPath.includes("unstable")
             ? "canary"
             : "chrome",
         path: candidate,
@@ -113,7 +117,8 @@ export function readBrowserVersion(executablePath: string): string | null {
 }
 
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
-  const match = String(rawVersion ?? "").match(CHROME_VERSION_RE);
+  const matches = [...String(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
+  const match = matches.at(-1);
   if (!match?.[1]) {
     return null;
   }
