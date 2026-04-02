@@ -326,8 +326,8 @@ function isCaseInsensitiveFilesystem(dir: string): boolean {
     if (upper === lower) {
       return false; // conservative: assume case-sensitive when probe is inconclusive
     }
-    const { ino: inoUpper } = fs.statSync(upper);
-    const { ino: inoLower } = fs.statSync(lower);
+    const { ino: inoUpper } = fs.statSync(upper, { bigint: true });
+    const { ino: inoLower } = fs.statSync(lower, { bigint: true });
     return inoUpper === inoLower;
   } catch {
     // Cannot stat the upper/lower paths — conservatively treat as case-sensitive
