@@ -115,4 +115,28 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it("rejects silent scope-upgrade for remote clients", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects silent scope-upgrade for browser-origin local clients", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(false);
+  });
 });

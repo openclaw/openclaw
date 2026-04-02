@@ -803,10 +803,7 @@ export function attachGatewayWsMessageHandler(params: {
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              silent:
-                reason === "scope-upgrade"
-                  ? false
-                  : allowSilentLocalPairing || allowSilentBootstrapPairing,
+              silent: allowSilentLocalPairing || allowSilentBootstrapPairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
