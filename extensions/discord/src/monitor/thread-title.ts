@@ -106,7 +106,7 @@ async function completeThreadTitle(params: {
 function shouldSendThreadTitleTemperature(
   model: Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]["model"],
 ): boolean {
-  return model.provider !== "openai-codex" && model.api !== "openai-codex-responses";
+  return model.api !== "openai-codex-responses";
 }
 
 function buildThreadTitleUserMessage(params: {
