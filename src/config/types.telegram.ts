@@ -3,6 +3,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  HumanTakeoverConfig,
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
@@ -120,6 +121,8 @@ export type TelegramAccountConfig = {
   direct?: Record<string, TelegramDirectConfig>;
   /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
+  /** Owner-triggered human takeover cooldown controls. */
+  humanTakeover?: HumanTakeoverConfig;
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
   defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */

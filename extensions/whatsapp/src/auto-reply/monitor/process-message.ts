@@ -1,5 +1,7 @@
 import { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  decideHumanTakeover,
+  resolveHumanTakeoverConfig,
   resolveInboundSessionEnvelopeContext,
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -158,6 +160,10 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
 }) {
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+  });
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
@@ -212,6 +218,59 @@ export async function processMessage(params: {
     return false;
   }
 
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg);
+  const normalizedSelfE164 = self.e164 ? normalizeE164(self.e164) : null;
+  const isDirectSelfChat =
+    params.msg.chatType !== "group" &&
+    Boolean(normalizedSelfE164 && sender.e164 && normalizeE164(sender.e164) === normalizedSelfE164);
+  const normalizedOwnerAllowFrom = new Set(
+    (account.allowFrom ?? [])
+      .map((entry) => normalizeE164(String(entry)))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+  const senderE164 = sender.e164 ? normalizeE164(sender.e164) : null;
+  const ownerTriggeredTakeover =
+    !isDirectSelfChat &&
+    (Boolean(params.msg.fromMe) || Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164)));
+  const humanTakeover = resolveHumanTakeoverConfig({
+    channelConfig: params.cfg.channels?.whatsapp,
+    accountConfig: account,
+  });
+  if (humanTakeover.enabled && shouldLogVerbose()) {
+    logVerbose(
+      `WhatsApp human takeover check session=${params.route.sessionKey} fromMe=${String(Boolean(params.msg.fromMe))} isDirectSelfChat=${String(isDirectSelfChat)} sender=${senderE164 ?? "unknown"} ownerAllowlisted=${String(Boolean(senderE164 && normalizedOwnerAllowFrom.has(senderE164)))}`,
+    );
+  }
+  const messageLooksCommandLike = params.msg.body.trim().startsWith("/");
+  // fromMe DM events can pass inbound access control when takeover is enabled.
+  // Treat owner-authored slash messages as manual intervention, not inbound commands.
+  const commandLikeForTakeover = messageLooksCommandLike && !Boolean(params.msg.fromMe);
+  const takeoverDecision = decideHumanTakeover({
+    sessionKey: params.route.sessionKey,
+    enabled: humanTakeover.enabled,
+    cooldownMs: humanTakeover.cooldownMs,
+    isOwnerMessage: ownerTriggeredTakeover,
+    isCommandLike: commandLikeForTakeover,
+  });
+  if (humanTakeover.enabled && shouldLogVerbose()) {
+    logVerbose(
+      `WhatsApp human takeover decision session=${params.route.sessionKey} ownerMessage=${String(ownerTriggeredTakeover)} skip=${String(takeoverDecision.skipAutoReply)} reason=${takeoverDecision.reason ?? "none"} remainingMs=${String(takeoverDecision.remainingMs ?? 0)}`,
+    );
+  }
+  if (takeoverDecision.skipAutoReply) {
+    if (takeoverDecision.reason === "owner-message") {
+      logVerbose(
+        `Skipping auto-reply: human takeover activated for ${params.route.sessionKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s)`,
+      );
+    } else {
+      logVerbose(
+        `Skipping auto-reply: human takeover cooldown active for ${params.route.sessionKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s left)`,
+      );
+    }
+    return false;
+  }
+
   // Send ack reaction immediately upon message receipt (post-gating)
   maybeSendAckReaction({
     cfg: params.cfg,
@@ -248,8 +307,6 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
-  const sender = getSenderIdentity(params.msg);
-  const self = getSelfIdentity(params.msg);
   const replyTo = getReplyContext(params.msg);
   const dmRouteTarget =
     params.msg.chatType !== "group"

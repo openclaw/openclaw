@@ -5,7 +5,9 @@ import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-h
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
+  decideHumanTakeover,
   resolveInboundDebounceMs,
+  resolveHumanTakeoverConfig,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildCommandsMessagePaginated,
@@ -40,6 +42,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
   normalizeDmAllowFromWithStore,
+  resolveSenderAllowMatch,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -145,6 +148,15 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const humanTakeover = resolveHumanTakeoverConfig({
+    channelConfig: cfg.channels?.telegram,
+    accountConfig: telegramCfg,
+  });
+  const ownerAllowFrom = normalizeDmAllowFromWithStore({
+    allowFrom,
+    storeAllowFrom: [],
+    dmPolicy: "allowlist",
+  });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
@@ -1069,9 +1081,65 @@ export const registerTelegramHandlers = ({
         ]
       : [];
     const senderId = msg.from?.id ? String(msg.from.id) : "";
+    const senderUsername = msg.from?.username ?? "";
+    const isDirectChat = msg.chat.type === "private";
+    const ownerSenderMatch = resolveSenderAllowMatch({
+      allow: ownerAllowFrom,
+      senderId,
+      senderUsername,
+    });
+    const isLinkedOwnerSender =
+      ownerSenderMatch.allowed && ownerSenderMatch.matchSource !== "wildcard";
+    const isOwnerDirectChat = isLinkedOwnerSender && isDirectChat;
+    const shouldTriggerTakeover = isLinkedOwnerSender && !isDirectChat;
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const isForum = await resolveTelegramForumFlag({
+      chatId,
+      chatType: msg.chat.type,
+      isGroup,
+      isForum: msg.chat.is_forum,
+      getChat,
+    });
+    const takeoverSession = resolveTelegramSessionState({
+      chatId,
+      isGroup,
+      isForum,
+      messageThreadId: msg.message_thread_id,
+      resolvedThreadId,
+      senderId,
+    });
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
+    if (humanTakeover.enabled) {
+      logVerbose(
+        `telegram human takeover check session=${conversationKey} chatType=${msg.chat.type} sender=${senderId || "unknown"} ownerSender=${String(isLinkedOwnerSender)} ownerDirectChat=${String(isOwnerDirectChat)} trigger=${String(shouldTriggerTakeover)}`,
+      );
+    }
+    const takeoverDecision = decideHumanTakeover({
+      sessionKey: takeoverSession.sessionKey,
+      enabled: humanTakeover.enabled,
+      cooldownMs: humanTakeover.cooldownMs,
+      isOwnerMessage: shouldTriggerTakeover,
+      isCommandLike: Boolean((msg.text ?? msg.caption ?? "").trim().startsWith("/")),
+    });
+    if (humanTakeover.enabled) {
+      logVerbose(
+        `telegram human takeover decision session=${conversationKey} ownerMessage=${String(shouldTriggerTakeover)} skip=${String(takeoverDecision.skipAutoReply)} reason=${takeoverDecision.reason ?? "none"} remainingMs=${String(takeoverDecision.remainingMs ?? 0)}`,
+      );
+    }
+    if (takeoverDecision.skipAutoReply) {
+      if (takeoverDecision.reason === "owner-message") {
+        logVerbose(
+          `Skipping telegram auto-reply: human takeover activated for ${conversationKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s)`,
+        );
+      } else {
+        logVerbose(
+          `Skipping telegram auto-reply: human takeover cooldown active for ${conversationKey} (${Math.ceil((takeoverDecision.remainingMs ?? 0) / 1000)}s left)`,
+        );
+      }
+      return;
+    }
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
       ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`

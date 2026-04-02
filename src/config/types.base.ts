@@ -8,6 +8,13 @@ export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
+export type HumanTakeoverConfig = {
+  /** Enable owner-triggered human takeover for this channel/account. */
+  enabled?: boolean;
+  /** Cooldown duration in seconds after owner messages. Default: 300. */
+  cooldownSeconds?: number;
+};
+
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
   attempts?: number;

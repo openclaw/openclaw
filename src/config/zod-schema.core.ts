@@ -337,6 +337,14 @@ export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 
+export const HumanTakeoverSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    cooldownSeconds: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const BlockStreamingCoalesceSchema = z
   .object({
     minChars: z.number().int().positive().optional(),

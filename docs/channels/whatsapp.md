@@ -167,6 +167,23 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
     - if no allowlist is configured, the linked self number is allowed by default
     - outbound `fromMe` DMs are never auto-paired
 
+    Human takeover (owner cooldown):
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          humanTakeover: {
+            enabled: true,
+            cooldownSeconds: 300,
+          },
+        },
+      },
+    }
+    ```
+
+    When enabled, owner/manual outbound messages trigger a temporary cooldown where auto-replies are skipped for the same session.
+
   </Tab>
 
   <Tab title="Group policy + allowlists">

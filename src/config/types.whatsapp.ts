@@ -3,6 +3,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  HumanTakeoverConfig,
   MarkdownConfig,
 } from "./types.base.js";
 import type {
@@ -50,6 +51,8 @@ type WhatsAppSharedConfig = {
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Owner-triggered human takeover cooldown controls. */
+  humanTakeover?: HumanTakeoverConfig;
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
   defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */

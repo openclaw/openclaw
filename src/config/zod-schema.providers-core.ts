@@ -25,6 +25,7 @@ import {
   ExecutableTokenSchema,
   GroupPolicySchema,
   HexColorSchema,
+  HumanTakeoverSchema,
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
@@ -219,6 +220,7 @@ export const TelegramAccountSchemaBase = z
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    humanTakeover: HumanTakeoverSchema,
     defaultTo: z.union([z.string(), z.number()]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -552,6 +554,7 @@ export const DiscordAccountSchema = z
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),
     allowFrom: DiscordIdListSchema.optional(),
+    humanTakeover: HumanTakeoverSchema,
     defaultTo: z.string().optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),

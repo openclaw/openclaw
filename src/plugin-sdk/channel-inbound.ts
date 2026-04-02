@@ -35,6 +35,15 @@ export {
   resolveMentionGating,
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
+export {
+  decideHumanTakeover,
+  resolveHumanTakeoverConfig,
+  resetHumanTakeoverState,
+} from "../channels/human-takeover.js";
+export type {
+  HumanTakeoverDecision,
+  ResolvedHumanTakeoverConfig,
+} from "../channels/human-takeover.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
 export { logInboundDrop } from "../channels/logging.js";
