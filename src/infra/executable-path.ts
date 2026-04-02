@@ -43,14 +43,6 @@ function resolveVirtualExecutableFromPathHints(
   if (candidates.length === 0) {
     return undefined;
   }
-  if (!isWindowsPlatform(platform)) {
-    const preferredCandidate = candidates.find(
-      (candidate) => targetPath.dirname(candidate) === "/usr/bin",
-    );
-    if (preferredCandidate) {
-      return preferredCandidate;
-    }
-  }
   return candidates[0];
 }
 

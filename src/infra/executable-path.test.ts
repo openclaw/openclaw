@@ -90,7 +90,7 @@ describe("executable path helpers", () => {
         platform: "linux",
         resolutionMode: "virtual",
       }),
-    ).toBe("/usr/bin/python3");
+    ).toBe("/usr/local/bin/python3");
   });
 
   it("uses target-platform path semantics in virtual mode", () => {
