@@ -19,6 +19,13 @@ type SkillEntryLike = {
   enabled?: unknown;
 };
 
+type ProviderRequestLike = {
+  headers?: unknown;
+  auth?: unknown;
+  proxy?: unknown;
+  tls?: unknown;
+};
+
 function collectModelProviderAssignments(params: {
   providers: Record<string, ProviderLike>;
   defaults: SecretDefaults | undefined;
@@ -275,6 +282,138 @@ function collectGatewayAssignments(params: {
   }
 }
 
+function collectProviderRequestAssignments(params: {
+  request: ProviderRequestLike;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active?: boolean;
+  inactiveReason?: string;
+}): void {
+  const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
+  if (headers) {
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectSecretInputAssignment({
+        value: headerValue,
+        path: `${params.pathPrefix}.headers.${headerKey}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: params.active,
+        inactiveReason: params.inactiveReason,
+        apply: (value) => {
+          headers[headerKey] = value;
+        },
+      });
+    }
+  }
+
+  const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
+  if (auth) {
+    collectSecretInputAssignment({
+      value: auth.token,
+      path: `${params.pathPrefix}.auth.token`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        auth.token = value;
+      },
+    });
+    collectSecretInputAssignment({
+      value: auth.value,
+      path: `${params.pathPrefix}.auth.value`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        auth.value = value;
+      },
+    });
+  }
+
+  const collectTlsAssignments = (tls: Record<string, unknown> | undefined, pathPrefix: string) => {
+    if (!tls) {
+      return;
+    }
+    for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+      collectSecretInputAssignment({
+        value: tls[key],
+        path: `${pathPrefix}.${key}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: params.active,
+        inactiveReason: params.inactiveReason,
+        apply: (value) => {
+          tls[key] = value;
+        },
+      });
+    }
+  };
+
+  collectTlsAssignments(isRecord(params.request.tls) ? params.request.tls : undefined, `${params.pathPrefix}.tls`);
+  const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
+  collectTlsAssignments(isRecord(proxy?.tls) ? proxy.tls : undefined, `${params.pathPrefix}.proxy.tls`);
+}
+
+function collectMediaRequestAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const tools = isRecord(params.config.tools) ? params.config.tools : undefined;
+  const media = isRecord(tools?.media) ? tools.media : undefined;
+  if (!media) {
+    return;
+  }
+
+  const collectModelAssignments = (
+    models: unknown,
+    pathPrefix: string,
+    active: boolean,
+    inactiveReason: string,
+  ) => {
+    if (!Array.isArray(models)) {
+      return;
+    }
+    models.forEach((rawModel, index) => {
+      if (!isRecord(rawModel) || !isRecord(rawModel.request)) {
+        return;
+      }
+      collectProviderRequestAssignments({
+        request: rawModel.request,
+        pathPrefix: `${pathPrefix}.${index}.request`,
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason,
+      });
+    });
+  };
+
+  for (const capability of ["audio", "image", "video"] as const) {
+    const section = isRecord(media[capability]) ? media[capability] : undefined;
+    const active = section?.enabled !== false;
+    const inactiveReason = `${capability} media understanding is disabled.`;
+    if (section && isRecord(section.request)) {
+      collectProviderRequestAssignments({
+        request: section.request,
+        pathPrefix: `tools.media.${capability}.request`,
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason,
+      });
+    }
+    collectModelAssignments(section?.models, `tools.media.${capability}.models`, active, inactiveReason);
+  }
+}
+
 function collectMessagesTtsAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -426,4 +565,5 @@ export function collectCoreConfigAssignments(params: {
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
   collectCronAssignments(params);
+  collectMediaRequestAssignments(params);
 }

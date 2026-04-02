@@ -1288,6 +1288,83 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
   });
 
+  it("resolves media request secret refs for provider headers, auth, and tls material", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              request: {
+                headers: {
+                  "X-Tenant": { source: "env", provider: "default", id: "MEDIA_AUDIO_TENANT" },
+                },
+                auth: {
+                  mode: "authorization-bearer",
+                  token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
+                },
+                tls: {
+                  cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" },
+                },
+              },
+              models: [
+                {
+                  provider: "deepgram",
+                  request: {
+                    auth: {
+                      mode: "header",
+                      headerName: "x-api-key",
+                      value: { source: "env", provider: "default", id: "MEDIA_AUDIO_MODEL_KEY" },
+                    },
+                    proxy: {
+                      mode: "explicit-proxy",
+                      url: "http://proxy.example:8080",
+                      tls: {
+                        ca: { source: "env", provider: "default", id: "MEDIA_AUDIO_PROXY_CA" },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      env: {
+        MEDIA_AUDIO_TENANT: "tenant-acme",
+        MEDIA_AUDIO_TOKEN: "audio-token", // pragma: allowlist secret
+        MEDIA_AUDIO_CERT: "client-cert",
+        MEDIA_AUDIO_MODEL_KEY: "model-key", // pragma: allowlist secret
+        MEDIA_AUDIO_PROXY_CA: "proxy-ca",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.audio?.request?.headers?.["X-Tenant"]).toBe("tenant-acme");
+    expect(snapshot.config.tools?.media?.audio?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "audio-token",
+    });
+    expect(snapshot.config.tools?.media?.audio?.request?.tls).toEqual({
+      cert: "client-cert",
+    });
+    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request).toEqual({
+      auth: {
+        mode: "header",
+        headerName: "x-api-key",
+        value: "model-key",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.example:8080",
+        tls: {
+          ca: "proxy-ca",
+        },
+      },
+    });
+  });
+
   it("fails when an active exec ref id contains traversal segments", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
