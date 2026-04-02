@@ -454,26 +454,14 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const directExecutable = argv?.[commandIdx]?.toLowerCase();
   const args = argv ? argv.slice(commandIdx + 1) : [];
 
-  const isDirectInterpreterCommand = Boolean(
-    directExecutable &&
-    (/^python(?:3(?:\.\d+)?)?$/i.test(directExecutable) || directExecutable === "node"),
+  const isDirectPythonExecutable = Boolean(
+    directExecutable && /^python(?:3(?:\.\d+)?)?$/i.test(directExecutable),
   );
+  const isDirectNodeExecutable = directExecutable === "node";
+  const isDirectInterpreterCommand = isDirectPythonExecutable || isDirectNodeExecutable;
 
   const unquotedRaw = extractUnquotedShellText(raw) ?? raw;
   const topLevel = analyzeInterpreterHeuristicsFromUnquoted(unquotedRaw);
-  const unwrappedRaw = argv ? argv.join(" ") : "";
-  const unwrappedUnquotedRaw = unwrappedRaw
-    ? (extractUnquotedShellText(unwrappedRaw) ?? unwrappedRaw)
-    : "";
-  const unwrapped = unwrappedRaw
-    ? analyzeInterpreterHeuristicsFromUnquoted(unwrappedUnquotedRaw)
-    : {
-        hasPython: false,
-        hasNode: false,
-        hasComplexSyntax: false,
-        hasProcessSubstitution: false,
-        hasScriptHint: false,
-      };
 
   const shellWrappedPayload = extractShellWrappedCommandPayload(directExecutable, args);
   const nestedUnquoted = shellWrappedPayload
@@ -491,15 +479,11 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasShellWrappedInterpreter = nested.hasPython || nested.hasNode;
 
   return {
-    hasPython: topLevel.hasPython || unwrapped.hasPython || nested.hasPython,
-    hasNode: topLevel.hasNode || unwrapped.hasNode || nested.hasNode,
-    hasComplexSyntax:
-      topLevel.hasComplexSyntax || unwrapped.hasComplexSyntax || hasShellWrappedInterpreter,
-    hasProcessSubstitution:
-      topLevel.hasProcessSubstitution ||
-      unwrapped.hasProcessSubstitution ||
-      nested.hasProcessSubstitution,
-    hasScriptHint: topLevel.hasScriptHint || unwrapped.hasScriptHint || nested.hasScriptHint,
+    hasPython: topLevel.hasPython || nested.hasPython || isDirectPythonExecutable,
+    hasNode: topLevel.hasNode || nested.hasNode || isDirectNodeExecutable,
+    hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreter,
+    hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
+    hasScriptHint: topLevel.hasScriptHint || nested.hasScriptHint,
     isDirectInterpreterCommand,
   };
 }
