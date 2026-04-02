@@ -225,6 +225,12 @@ export function listTaskFlowAuditFindings(
     if (
       flow.syncMode === "managed" &&
       (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
+      ageMs >=
+        (flow.status === "running"
+          ? staleRunningMs
+          : flow.status === "waiting"
+            ? staleWaitingMs
+            : staleBlockedMs) &&
       linkedTasks.length === 0 &&
       !hasBlockingMetadata(flow)
     ) {
