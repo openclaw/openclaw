@@ -412,6 +412,14 @@ export class AcpGatewayAgent implements Agent {
   private disconnectTimer: NodeJS.Timeout | null = null;
   private disconnectGeneration = 0;
 
+  private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
+    const pending = this.pendingPrompts.get(sessionId);
+    if (pending?.idempotencyKey !== runId) {
+      return undefined;
+    }
+    return pending;
+  }
+
   constructor(
     connection: AgentSideConnection,
     gateway: GatewayClient,
@@ -706,7 +714,7 @@ export class AcpGatewayAgent implements Agent {
             },
             { timeoutMs: null },
           );
-          const pending = this.pendingPrompts.get(params.sessionId);
+          const pending = this.getPendingPrompt(params.sessionId, runId);
           if (pending) {
             pending.sendAccepted = true;
           }
@@ -716,7 +724,7 @@ export class AcpGatewayAgent implements Agent {
             isAdminScopeProvenanceRejection(err)
           ) {
             await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
-            const pending = this.pendingPrompts.get(params.sessionId);
+            const pending = this.getPendingPrompt(params.sessionId, runId);
             if (pending) {
               pending.sendAccepted = true;
             }
@@ -727,8 +735,7 @@ export class AcpGatewayAgent implements Agent {
       };
 
       void sendWithProvenanceFallback().catch((err) => {
-        const currentPending = this.pendingPrompts.get(params.sessionId);
-        if (isGatewayCloseError(err) && currentPending?.idempotencyKey === runId) {
+        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
           return;
         }
         this.pendingPrompts.delete(params.sessionId);

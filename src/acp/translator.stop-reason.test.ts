@@ -433,4 +433,67 @@ describe("acp translator stop reason mapping", () => {
     await expect(firstPrompt).rejects.toThrow("gateway closed (1006): connection lost");
     await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe("pending");
   });
+
+  it("keeps disconnect deadline when a superseded send resolves late", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = "session-1";
+      const sessionKey = "agent:main:main";
+      let firstSendResolve: (() => void) | undefined;
+      let sendCount = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          sendCount += 1;
+          if (sendCount === 1) {
+            return await new Promise<void>((resolve) => {
+              firstSendResolve = resolve;
+            });
+          }
+          throw new Error("gateway closed (1006): connection lost");
+        }
+        if (method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId,
+        sessionKey,
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+
+      const firstPrompt = agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "first" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      void firstPrompt.catch(() => {});
+      await Promise.resolve();
+      expect(firstSendResolve).toBeDefined();
+
+      const secondPrompt = agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "second" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      void secondPrompt.catch(() => {});
+      await Promise.resolve();
+      expect(sendCount).toBe(2);
+
+      firstSendResolve?.();
+      await Promise.resolve();
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(secondPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
