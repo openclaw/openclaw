@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { telegramMessagingForTest } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
@@ -104,6 +105,7 @@ beforeEach(() => {
         plugin: createOutboundTestPlugin({
           id: "telegram",
           outbound: createStubOutbound("Telegram"),
+          messaging: telegramMessagingForTest,
         }),
         source: "test",
       },
@@ -158,9 +160,13 @@ const DEFAULT_TARGET = {
 
 type SessionStore = ReturnType<typeof loadSessionStore>;
 
+function setSessionStore(store: SessionStore) {
+  vi.mocked(loadSessionStore).mockReturnValue(store);
+}
+
 function setMainSessionEntry(entry?: SessionStore[string]) {
   const store = entry ? ({ "agent:test:main": entry } as SessionStore) : ({} as SessionStore);
-  vi.mocked(loadSessionStore).mockReturnValue(store);
+  setSessionStore(store);
 }
 
 function setLastSessionEntry(params: {
@@ -423,7 +429,7 @@ describe("resolveDeliveryTarget", () => {
   });
 
   it("uses sessionKey thread entry before main session entry", async () => {
-    vi.mocked(loadSessionStore).mockReturnValue({
+    setSessionStore({
       "agent:test:main": {
         sessionId: "main-session",
         updatedAt: 1000,
@@ -435,6 +441,7 @@ describe("resolveDeliveryTarget", () => {
         updatedAt: 2000,
         lastChannel: "telegram",
         lastTo: "thread-chat",
+        lastThreadId: 42,
       },
     } as SessionStore);
 
@@ -446,6 +453,27 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.channel).toBe("telegram");
     expect(result.to).toBe("thread-chat");
+    expect(result.threadId).toBe(42);
+  });
+
+  it("falls back to the main session entry when the requested sessionKey is missing", async () => {
+    setSessionStore({
+      "agent:test:main": {
+        sessionId: "main-session",
+        updatedAt: 1000,
+        lastChannel: "telegram",
+        lastTo: "main-chat",
+      },
+    } as SessionStore);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:test:thread:missing",
+      to: undefined,
+    });
+
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBe("main-chat");
   });
 
   it("uses main session channel when channel=last and session route exists", async () => {
@@ -460,6 +488,33 @@ describe("resolveDeliveryTarget", () => {
     expect(result.channel).toBe("telegram");
     expect(result.to).toBe("987654");
     expect(result.ok).toBe(true);
+  });
+
+  it("parses explicit telegram topic targets into delivery threadId", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe(1008013);
+  });
+
+  it("keeps explicit delivery threadId on first run without session history", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "63448508",
+      threadId: "1008013",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe("1008013");
   });
 
   it("explicit delivery.accountId overrides session-derived accountId", async () => {
