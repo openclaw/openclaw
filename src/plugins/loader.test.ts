@@ -1289,6 +1289,65 @@ module.exports = { id: "manifest-only-plugin", register() { throw new Error("man
       },
     },
     {
+      label: "marks a selected memory slot as matched during manifest-only snapshots",
+      run: () => {
+        useNoBundledPlugins();
+        const memoryPlugin = writePlugin({
+          id: "memory-demo",
+          filename: "memory-demo.cjs",
+          body: `module.exports = {
+  id: "memory-demo",
+  kind: "memory",
+  register() {},
+};`,
+        });
+        fs.writeFileSync(
+          path.join(memoryPlugin.dir, "openclaw.plugin.json"),
+          JSON.stringify(
+            {
+              id: "memory-demo",
+              kind: "memory",
+              configSchema: EMPTY_PLUGIN_SCHEMA,
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [memoryPlugin.file] },
+              allow: ["memory-demo"],
+              slots: { memory: "memory-demo" },
+              entries: {
+                "memory-demo": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(
+          registry.diagnostics.some(
+            (entry) =>
+              entry.message === "memory slot plugin not found or not marked as memory: memory-demo",
+          ),
+        ).toBe(false);
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "memory-demo",
+              memorySlotSelected: true,
+            }),
+          ]),
+        );
+      },
+    },
+    {
       label: "keeps scoped plugin loads in a separate cache entry",
       run: () => {
         useNoBundledPlugins();

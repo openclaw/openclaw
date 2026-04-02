@@ -1333,6 +1333,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
+        memorySlotMatched = true;
         record.memorySlotSelected = true;
       }
     }

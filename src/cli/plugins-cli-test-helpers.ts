@@ -19,6 +19,7 @@ export const enablePluginInConfig = vi.fn();
 export const recordPluginInstall = vi.fn();
 export const clearPluginManifestRegistryCache = vi.fn();
 export const buildPluginStatusReport = vi.fn();
+export const buildPluginCompatibilityNotices = vi.fn();
 export const applyExclusiveSlotSelection = vi.fn();
 export const uninstallPlugin = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
@@ -73,6 +74,7 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 
 vi.mock("../plugins/status.js", () => ({
   buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReport(...args),
+  buildPluginCompatibilityNotices: (...args: unknown[]) => buildPluginCompatibilityNotices(...args),
 }));
 
 vi.mock("../plugins/slots.js", () => ({
@@ -155,6 +157,7 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockReset();
   clearPluginManifestRegistryCache.mockReset();
   buildPluginStatusReport.mockReset();
+  buildPluginCompatibilityNotices.mockReset();
   applyExclusiveSlotSelection.mockReset();
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
@@ -203,6 +206,7 @@ export function resetPluginsCliTestState() {
     plugins: [],
     diagnostics: [],
   });
+  buildPluginCompatibilityNotices.mockReturnValue([]);
   applyExclusiveSlotSelection.mockImplementation(({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],

@@ -793,7 +793,7 @@ export function registerPluginsCli(program: Command) {
     .command("doctor")
     .description("Report plugin load issues")
     .action(() => {
-      const report = buildPluginStatusReport({ loadModules: false });
+      const report = buildPluginStatusReport({ loadModules: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });

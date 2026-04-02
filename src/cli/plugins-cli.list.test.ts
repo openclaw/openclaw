@@ -67,4 +67,16 @@ describe("plugins cli list", () => {
     expect(output).toContain("imported: no");
     expect(output).toContain("explicitly enabled: no");
   });
+
+  it("keeps doctor on a module-loading snapshot", async () => {
+    buildPluginStatusReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    expect(buildPluginStatusReport).toHaveBeenCalledWith({ loadModules: true });
+    expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
 });
