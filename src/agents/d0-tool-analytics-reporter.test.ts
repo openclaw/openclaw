@@ -103,6 +103,45 @@ describe("reportD0ToolLifecycle", () => {
     );
   });
 
+  it("posts tracked main thread sessions to backend when runtime env is configured", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubEnv("D0_BACKEND_INTERNAL_URL", "http://backend.internal");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "gateway-token");
+
+    const { reportD0ToolLifecycle } = await import("./d0-tool-analytics-reporter.js");
+
+    const ok = await reportD0ToolLifecycle(
+      {
+        toolName: "read",
+        runId: "run-tool-3",
+        toolCallId: "tool-call-3",
+        toolDetail: "read /tmp/thread.txt",
+        resultChars: 7,
+        status: "success",
+      },
+      {
+        sessionKey: "agent:main:main:thread:9999",
+        sessionId: "ephemeral-session-3",
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(JSON.parse(String(init?.body))).toEqual(
+      expect.objectContaining({
+        toolName: "read",
+        status: "success",
+        runId: "run-tool-3",
+        toolCallId: "tool-call-3",
+        sessionKey: "agent:main:main:thread:9999",
+        sessionId: "ephemeral-session-3",
+        toolDetail: "read /tmp/thread.txt",
+        resultChars: 7,
+      }),
+    );
+  });
+
   it("skips non-telegram sessions", async () => {
     vi.stubEnv("D0_BACKEND_INTERNAL_URL", "http://backend.internal");
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "gateway-token");

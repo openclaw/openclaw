@@ -35,7 +35,10 @@ function isD0TrackedSession(sessionKey: string | undefined): boolean {
     return false;
   }
   return (
-    parsed.agentId === "main" && (parsed.rest === "main" || parsed.rest.startsWith("telegram:"))
+    parsed.agentId === "main" &&
+    (parsed.rest === "main" ||
+      parsed.rest.startsWith("main:") ||
+      parsed.rest.startsWith("telegram:"))
   );
 }
 
