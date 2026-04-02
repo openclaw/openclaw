@@ -86,10 +86,14 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
 
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
-  if (snapshot.activeCount === 0) {
+  if (snapshot.activeCount === 0 && snapshot.recentFailureCount === 0) {
     return undefined;
   }
-  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
+  const summary =
+    snapshot.activeCount > 0
+      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
+      : `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"} · ${snapshot.totalCount} total`;
+  return `📌 Tasks: ${summary} · agent-local`;
 }
 
 export async function buildStatusReply(params: {

@@ -369,6 +369,28 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("all done");
   });
 
+  it("falls back to same-agent recent failure counts when the current session has none", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:other",
+      childSessionKey: "agent:main:subagent:status-agent-fallback-failed",
+      runId: "run-status-agent-fallback-failed",
+      agentId: "main",
+      task: "hidden failed task title",
+    });
+    failTaskRunByRunId({
+      runId: "run-status-agent-fallback-failed",
+      endedAt: Date.now(),
+      error: "hidden failure detail",
+    });
+
+    const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
+
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · 1 total · agent-local");
+    expect(reply?.text).not.toContain("hidden failed task title");
+    expect(reply?.text).not.toContain("hidden failure detail");
+  });
+
   it("falls back to same-agent task counts without details when the current session has none", async () => {
     createRunningTaskRun({
       runtime: "subagent",
