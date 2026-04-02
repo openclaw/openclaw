@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./config.js";
 import {
   resolveChannelContextVisibilityMode,
   resolveDefaultContextVisibility,
@@ -44,7 +45,7 @@ describe("resolveChannelContextVisibilityMode", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
     expect(
       resolveChannelContextVisibilityMode({
         cfg,
@@ -61,7 +62,11 @@ describe("resolveChannelContextVisibilityMode", () => {
     ).toBe("allowlist");
     expect(
       resolveChannelContextVisibilityMode({
-        cfg: { channels: { defaults: { contextVisibility: "allowlist_quote" } } },
+        cfg: {
+          channels: {
+            defaults: { contextVisibility: "allowlist_quote" },
+          },
+        } satisfies OpenClawConfig,
         channel: "signal",
       }),
     ).toBe("allowlist_quote");
