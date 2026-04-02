@@ -652,6 +652,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed for piped node -e commands when inline code contains script-like text", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-piped-node-e-inline-script-hint", {
+        command: "node -e \"console.log('bad.py')\" | cat",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("bad.py");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("does not fail closed when shell operator characters are escaped", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });

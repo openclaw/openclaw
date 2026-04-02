@@ -625,12 +625,18 @@ function shouldFailClosedInterpreterPreflight(command: string): {
       segment,
     );
   };
-  const isPipelineScriptExecutingInterpreterCommand = (rawPipelineCommand: string): boolean => {
-    const argv = splitShellArgs(rawPipelineCommand.trim());
+  const isScriptExecutingInterpreterCommand = (rawCommand: string): boolean => {
+    const argv = splitShellArgs(rawCommand.trim());
     if (!argv || argv.length === 0) {
       return false;
     }
-    const normalizedArgv = stripPreflightEnvPrefix(argv);
+    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
+      ? argv.slice(1)
+      : argv;
+    if (withoutLeadingKeyword.length === 0) {
+      return false;
+    }
+    const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
     let commandIdx = 0;
     while (
       commandIdx < normalizedArgv.length &&
@@ -695,7 +701,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasInterpreterAndScriptHintInSameSegment = (rawText: string): boolean => {
     const segments = splitShellSegmentsOutsideQuotes(rawText, { splitPipes: true });
     return segments.some((segment) => {
-      if (!hasInterpreterInvocationInSegment(segment)) {
+      if (!isScriptExecutingInterpreterCommand(segment)) {
         return false;
       }
       return hasScriptHintInSegment(segment);
@@ -707,7 +713,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
       const pipelineCommands = splitShellSegmentsOutsideQuotes(segment, { splitPipes: true });
       const hasScriptExecutingPipedInterpreter = pipelineCommands
         .slice(1)
-        .some((pipelineCommand) => isPipelineScriptExecutingInterpreterCommand(pipelineCommand));
+        .some((pipelineCommand) => isScriptExecutingInterpreterCommand(pipelineCommand));
       if (!hasScriptExecutingPipedInterpreter) {
         return false;
       }
