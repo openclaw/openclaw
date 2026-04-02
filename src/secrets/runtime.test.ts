@@ -2718,4 +2718,38 @@ describe("secrets runtime snapshot", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("migrates legacy x_search SecretRefs into the xai plugin webSearch auth at runtime", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      (snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
+    ).toBeUndefined();
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key",
+      },
+      xSearch: {
+        enabled: true,
+        model: "grok-4-1-fast",
+      },
+    });
+  });
 });
