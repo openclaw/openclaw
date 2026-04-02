@@ -101,10 +101,20 @@ const normalizePathEntries = (value?: string) =>
     .filter(Boolean);
 
 function createRecordingSandbox(recordCommand: (command: string) => void) {
-  return {
-    containerName: "sandbox-test",
+  return createRecordingSandboxWithPaths(recordCommand, {
     workspaceDir: process.cwd(),
     containerWorkdir: process.cwd(),
+  });
+}
+
+function createRecordingSandboxWithPaths(
+  recordCommand: (command: string) => void,
+  paths: { workspaceDir: string; containerWorkdir: string },
+) {
+  return {
+    containerName: "sandbox-test",
+    workspaceDir: paths.workspaceDir,
+    containerWorkdir: paths.containerWorkdir,
     async buildExecSpec(params: {
       command: string;
       workdir?: string;
@@ -381,6 +391,43 @@ describe("exec host env validation", () => {
       executedCommand,
     );
     expect(executedCommand).toContain(runtimePath);
+    expect(executedCommand).toContain("'--version'");
+  });
+
+  it("evaluates sandbox allowlist relative commands against container workdir", async () => {
+    const hostWorkspace = process.cwd();
+    const containerWorkspace = "/workspace";
+    const runtimeToolPath = `${containerWorkspace}/tool`;
+    execApprovalsMocks.resolveExecApprovals.mockImplementation(() => ({
+      ...createExecApprovals(),
+      allowlist: [{ pattern: runtimeToolPath }],
+    }));
+
+    let executedCommand = "";
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "allowlist",
+      ask: "off",
+      sandbox: createRecordingSandboxWithPaths(
+        (command) => {
+          executedCommand = command;
+        },
+        {
+          workspaceDir: hostWorkspace,
+          containerWorkdir: containerWorkspace,
+        },
+      ),
+    });
+
+    const result = await tool.execute("call-sandbox-relative-container-cwd", {
+      command: "./tool --version",
+      workdir: hostWorkspace,
+    });
+
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
+      executedCommand,
+    );
+    expect(executedCommand).toContain(runtimeToolPath);
     expect(executedCommand).toContain("'--version'");
   });
 

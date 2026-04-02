@@ -725,6 +725,7 @@ export function createExecTool(
 
       if (host === "sandbox" && !bypassApprovals) {
         const sandboxShellPlatform: NodeJS.Platform = "linux";
+        const sandboxAllowlistCwd = containerWorkdir ?? sandbox?.containerWorkdir ?? workdir;
         const approvals = resolveExecApprovals(agentId, { security, ask });
         const hostSecurity = minSecurity(security, approvals.agent.security);
         if (hostSecurity === "deny") {
@@ -736,7 +737,7 @@ export function createExecTool(
             allowlist: approvals.allowlist,
             safeBins,
             safeBinProfiles,
-            cwd: workdir,
+            cwd: sandboxAllowlistCwd,
             env,
             platform: sandboxShellPlatform,
             resolutionMode: "virtual",
@@ -758,7 +759,7 @@ export function createExecTool(
           if (allowlistEval.allowlistMatches.length > 0) {
             const resolvedPath = resolveApprovalAuditCandidatePath(
               allowlistEval.segments[0]?.resolution ?? null,
-              workdir,
+              sandboxAllowlistCwd,
               sandboxShellPlatform,
             );
             const seen = new Set<string>();
