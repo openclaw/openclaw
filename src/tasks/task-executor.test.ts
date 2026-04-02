@@ -291,7 +291,7 @@ describe("task-executor", () => {
     });
   });
 
-  it("cancels active tasks linked to a managed flow", async () => {
+  it("cancels active tasks linked to a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
@@ -332,7 +332,7 @@ describe("task-executor", () => {
     });
   });
 
-  it("runs child tasks under managed flows", async () => {
+  it("runs child tasks under managed TaskFlows", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedFlow({
         ownerKey: "agent:main:main",
@@ -374,7 +374,7 @@ describe("task-executor", () => {
     });
   });
 
-  it("refuses to add child tasks once cancellation is requested on a managed flow", async () => {
+  it("refuses to add child tasks once cancellation is requested on a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedFlow({
         ownerKey: "agent:main:main",
@@ -491,7 +491,7 @@ describe("task-executor", () => {
     });
   });
 
-  it("denies cross-owner managed flow child spawning through the owner-scoped wrapper", async () => {
+  it("denies cross-owner managed TaskFlow child spawning through the owner-scoped wrapper", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedFlow({
         ownerKey: "agent:main:main",

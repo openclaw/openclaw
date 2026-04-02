@@ -295,7 +295,7 @@ function resolveRetryableBlockedFlowTask(flowId: string): {
       flowFound: true,
       retryable: false,
       latestTask,
-      reason: "Latest flow task is not blocked.",
+      reason: "Latest TaskFlow task is not blocked.",
     };
   }
   return {
