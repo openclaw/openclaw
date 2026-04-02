@@ -1,3 +1,4 @@
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
@@ -88,6 +89,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   signal?: AbortSignal;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
   let currentUrl = new URL(params.url);
   let method = (params.init?.method ?? "GET").toUpperCase();
@@ -106,7 +108,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
       const pinned = await resolvePinnedHostnameWithPolicy(currentUrl.hostname, {
         policy: params.ssrfPolicy,
       });
-      dispatcher = createPinnedDispatcher(pinned, undefined, params.ssrfPolicy);
+      dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
       const response = await fetch(currentUrl.toString(), {
         ...params.init,
         method,
@@ -184,7 +186,10 @@ async function fetchWithMatrixGuardedRedirects(params: {
   throw new Error(`Too many redirects while requesting ${params.url}`);
 }
 
-export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): typeof fetch {
+export function createMatrixGuardedFetch(params: {
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
     const url = toFetchUrl(resource);
     const { signal, ...requestInit } = init ?? {};
@@ -193,6 +198,7 @@ export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): t
       init: requestInit,
       signal: signal ?? undefined,
       ssrfPolicy: params.ssrfPolicy,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
 
     try {
@@ -220,6 +226,7 @@ export async function performMatrixRequest(params: {
   maxBytes?: number;
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   allowAbsoluteEndpoint?: boolean;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {
   const isAbsoluteEndpoint =
@@ -264,6 +271,7 @@ export async function performMatrixRequest(params: {
     },
     timeoutMs: params.timeoutMs,
     ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
   });
 
   try {

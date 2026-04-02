@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
@@ -23,7 +22,8 @@ export async function buildTelegramMessageContextForTest(
 ): Promise<
   Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
 > {
-  const { buildTelegramMessageContext } = await import("./bot-message-context.js");
+  const { vi } = await loadVitestModule();
+  const buildTelegramMessageContext = await loadBuildTelegramMessageContext();
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {
@@ -45,6 +45,7 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
+    loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
@@ -63,4 +64,40 @@ export async function buildTelegramMessageContextForTest(
       })),
     sendChatActionHandler: { sendChatAction: vi.fn() } as never,
   });
+}
+
+let buildTelegramMessageContextLoader:
+  | typeof import("./bot-message-context.js").buildTelegramMessageContext
+  | undefined;
+let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
+let messageContextMocksInstalled = false;
+
+async function loadBuildTelegramMessageContext() {
+  await installMessageContextTestMocks();
+  if (!buildTelegramMessageContextLoader) {
+    ({ buildTelegramMessageContext: buildTelegramMessageContextLoader } =
+      await import("./bot-message-context.js"));
+  }
+  return buildTelegramMessageContextLoader;
+}
+
+async function loadVitestModule() {
+  vitestModuleLoader ??= import("vitest");
+  return await vitestModuleLoader;
+}
+
+async function installMessageContextTestMocks() {
+  if (messageContextMocksInstalled) {
+    return;
+  }
+  const { vi } = await loadVitestModule();
+  vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+    return {
+      ...actual,
+      readSessionUpdatedAt: () => undefined,
+      resolveStorePath: (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    };
+  });
+  messageContextMocksInstalled = true;
 }

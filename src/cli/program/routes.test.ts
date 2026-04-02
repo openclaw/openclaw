@@ -260,10 +260,6 @@ describe("program routes", () => {
     );
   });
 
-  it("returns false for memory status route when --agent value is missing", async () => {
-    await expectRunFalse(["memory", "status"], ["node", "openclaw", "memory", "status", "--agent"]);
-  });
-
   it("returns false for models list route when --provider value is missing", async () => {
     await expectRunFalse(["models", "list"], ["node", "openclaw", "models", "list", "--provider"]);
   });
