@@ -12,6 +12,7 @@ import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
@@ -28,7 +29,7 @@ import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   isPluginHookName,
   isPromptInjectionHookName,
@@ -37,6 +38,7 @@ import {
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
+  WebFetchProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliCommandDescriptor,
@@ -144,6 +146,8 @@ export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
 export type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
+export type PluginWebFetchProviderRegistration =
+  PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
@@ -188,12 +192,17 @@ export type PluginRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   source: string;
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
   enabled: boolean;
+  explicitlyEnabled?: boolean;
+  activated?: boolean;
+  imported?: boolean;
+  activationSource?: PluginActivationSource;
+  activationReason?: string;
   status: "loaded" | "disabled" | "error";
   error?: string;
   toolNames: string[];
@@ -204,6 +213,7 @@ export type PluginRecord = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -214,6 +224,7 @@ export type PluginRecord = {
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: Record<string, unknown>;
+  memorySlotSelected?: boolean;
 };
 
 export type PluginRegistry = {
@@ -228,6 +239,7 @@ export type PluginRegistry = {
   speechProviders: PluginSpeechProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
+  webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
@@ -711,6 +723,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "web fetch provider",
+      registrations: registry.webFetchProviders,
+      ownedIds: record.webFetchProviderIds,
+    });
+  };
+
   const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
     registerUniqueProviderLike({
       record,
@@ -989,6 +1011,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMediaUnderstandingProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
+              registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
@@ -1034,7 +1057,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
               },
               registerMemoryPromptSection: (builder) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1043,10 +1066,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory prompt section registration",
+                  });
+                  return;
+                }
                 registerMemoryPromptSection(builder);
               },
               registerMemoryFlushPlan: (resolver) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1055,10 +1092,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory flush plan registration",
+                  });
+                  return;
+                }
                 registerMemoryFlushPlanResolver(resolver);
               },
               registerMemoryRuntime: (runtime) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1067,15 +1118,43 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
+                  });
+                  return;
+                }
                 registerMemoryRuntime(runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
                     message: "only memory plugins can register memory embedding providers",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
                   });
                   return;
                 }

@@ -49,7 +49,7 @@ export type PluginManifestRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
   cliBackends: string[];

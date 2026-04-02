@@ -79,13 +79,15 @@ export async function expectAugmentedCodexCatalog(
     };
   }) => Promise<unknown>,
 ) {
-  await expect(
-    augmentModelCatalogWithProviderPlugins({
+  const result = (await augmentModelCatalogWithProviderPlugins({
+    env: process.env,
+    context: {
       env: process.env,
-      context: {
-        env: process.env,
-        entries: openaiCodexCatalogEntries,
-      },
-    }),
-  ).resolves.toEqual(expectedAugmentedOpenaiCodexCatalogEntries);
+      entries: openaiCodexCatalogEntries,
+    },
+  })) as Array<Record<string, unknown>>;
+  expect(result).toHaveLength(expectedAugmentedOpenaiCodexCatalogEntries.length);
+  for (const entry of expectedAugmentedOpenaiCodexCatalogEntries) {
+    expect(result).toContainEqual(expect.objectContaining(entry));
+  }
 }

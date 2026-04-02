@@ -2,6 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type FetchMock, withFetchPreconnect } from "../../../../src/test-utils/fetch-mock.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
+vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: async (params: {
+    url: string;
+    init?: RequestInit;
+    fetchImpl?: typeof fetch;
+  }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
+}));
+
 vi.mock("../../../../src/agents/model-auth.js", async () => {
   const { createModelAuthMockModule } =
     await import("../../../../src/test-utils/model-auth-mock.js");
@@ -18,6 +37,10 @@ const createFetchMock = () => {
   );
   return withFetchPreconnect(fetchMock);
 };
+
+function installFetchMock(fetchMock: typeof globalThis.fetch) {
+  vi.stubGlobal("fetch", fetchMock);
+}
 
 let authModule: typeof import("../../../../src/agents/model-auth.js");
 let createVoyageEmbeddingProvider: typeof import("./embeddings-voyage.js").createVoyageEmbeddingProvider;
@@ -44,7 +67,7 @@ async function createDefaultVoyageProvider(
   model: string,
   fetchMock: ReturnType<typeof createFetchMock>,
 ) {
-  vi.stubGlobal("fetch", fetchMock);
+  installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
   mockPublicPinnedHostname();
   mockVoyageApiKey();
   return createVoyageEmbeddingProvider({
@@ -91,7 +114,7 @@ describe("voyage embedding provider", () => {
 
   it("respects remote overrides for baseUrl and apiKey", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
 
     const result = await createVoyageEmbeddingProvider({

@@ -6,8 +6,8 @@ import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
+  resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
-  resolveNpmPublishPlan as resolveNpmPublishPlanBase,
 } from "./lib/npm-publish-plan.mjs";
 
 type PackageJson = {
@@ -47,11 +47,17 @@ export type NpmPublishPlan = {
   publishTag: "latest" | "beta";
   mirrorDistTags: ("latest" | "beta")[];
 };
+
+export type NpmDistTagMirrorAuth = {
+  hasAuth: boolean;
+  source: "node-auth-token" | "npm-token" | "none";
+};
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -75,9 +81,53 @@ export function compareReleaseVersions(left: string, right: string): number | nu
 
 export function resolveNpmPublishPlan(
   version: string,
-  currentBetaVersion?: string | null,
+  _currentBetaVersion?: string | null,
+  requestedPublishTag?: "latest" | "beta" | null,
 ): NpmPublishPlan {
-  return resolveNpmPublishPlanBase(version, currentBetaVersion) as NpmPublishPlan;
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
+
+  if (parsedVersion.channel === "beta") {
+    if (publishTag !== "beta") {
+      throw new Error("Beta prereleases must publish to the beta dist-tag.");
+    }
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  return {
+    channel: "stable",
+    publishTag,
+    mirrorDistTags: [],
+  };
+}
+
+export function resolveNpmDistTagMirrorAuth(params?: {
+  nodeAuthToken?: string | null;
+  npmToken?: string | null;
+}): NpmDistTagMirrorAuth {
+  const nodeAuthToken =
+    params && "nodeAuthToken" in params ? params.nodeAuthToken : process.env.NODE_AUTH_TOKEN;
+  const npmToken = params && "npmToken" in params ? params.npmToken : process.env.NPM_TOKEN;
+  return resolveNpmDistTagMirrorAuthBase({
+    nodeAuthToken,
+    npmToken,
+  }) as NpmDistTagMirrorAuth;
+}
+
+export function shouldSkipPackedTarballValidation(env = process.env): boolean {
+  const raw = env[skipPackValidationEnv];
+  if (!raw) {
+    return false;
+  }
+  return !/^(0|false)$/i.test(raw);
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
@@ -393,6 +443,7 @@ function collectPackedTarballErrors(): string[] {
 function main(): number {
   const pkg = loadPackageJson();
   const now = new Date();
+  const skipPackValidation = shouldSkipPackedTarballValidation();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({
     packageVersion: pkg.version ?? "",
@@ -401,7 +452,7 @@ function main(): number {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
     now,
   });
-  const tarballErrors = collectPackedTarballErrors();
+  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
   const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
 
   if (errors.length > 0) {
@@ -416,7 +467,7 @@ function main(): number {
   const dayDistance =
     parsedVersion === null ? "unknown" : String(utcCalendarDayDistance(parsedVersion.date, now));
   console.log(
-    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
+    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta${skipPackValidation ? "; metadata-only" : ""}).`,
   );
   return 0;
 }

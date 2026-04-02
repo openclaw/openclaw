@@ -254,6 +254,17 @@ location / {
 }
 ```
 
+## Mixed token configuration
+
+OpenClaw rejects ambiguous configurations where both a `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) and `trusted-proxy` mode are active at the same time. Mixed token configs can cause loopback requests to silently authenticate on the wrong auth path.
+
+If you see a `mixed_trusted_proxy_token` error on startup:
+
+- Remove the shared token when using trusted-proxy mode, or
+- Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
+
+Loopback trusted-proxy auth also fails closed: same-host callers must supply the configured identity headers through a trusted proxy instead of being silently authenticated.
+
 ## Security Checklist
 
 Before enabling trusted-proxy auth, verify:
@@ -263,6 +274,7 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated
+- [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`
 
 ## Security Audit
 

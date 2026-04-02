@@ -159,9 +159,12 @@ function providerIsReady(
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
   const entry = resolveSearchProviderEntry(config, provider);
+  const configuredValue = entry?.getConfiguredCredentialValue?.(config);
   return (
-    entry?.getConfiguredCredentialValue?.(config) ??
-    entry?.getCredentialValue(search as Record<string, unknown> | undefined)
+    configuredValue ??
+    (entry?.id === "brave"
+      ? entry.getCredentialValue(search as Record<string, unknown> | undefined)
+      : undefined)
   );
 }
 

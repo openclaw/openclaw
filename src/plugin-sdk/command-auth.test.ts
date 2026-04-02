@@ -28,24 +28,28 @@ async function resolveAuthorization(params: {
 }
 
 describe("plugin-sdk/command-auth", () => {
-  it.each([
-    {
-      name: "authorizes group commands from explicit group allowlist",
-      senderId: "group-owner",
-      expectedAuthorized: true,
-      expectedSenderAllowed: true,
-    },
-    {
-      name: "keeps pairing-store identities DM-only for group command auth",
-      senderId: "paired-user",
-      expectedAuthorized: false,
-      expectedSenderAllowed: false,
-    },
-  ])("$name", async ({ senderId, expectedAuthorized, expectedSenderAllowed }) => {
-    const result = await resolveAuthorization({ senderId });
-    expect(result.commandAuthorized).toBe(expectedAuthorized);
-    expect(result.senderAllowedForCommands).toBe(expectedSenderAllowed);
-    expect(result.effectiveAllowFrom).toEqual(["dm-owner"]);
-    expect(result.effectiveGroupAllowFrom).toEqual(["group-owner"]);
+  it("resolves command authorization across allowlist sources", async () => {
+    const cases = [
+      {
+        name: "authorizes group commands from explicit group allowlist",
+        senderId: "group-owner",
+        expectedAuthorized: true,
+        expectedSenderAllowed: true,
+      },
+      {
+        name: "keeps pairing-store identities DM-only for group command auth",
+        senderId: "paired-user",
+        expectedAuthorized: false,
+        expectedSenderAllowed: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = await resolveAuthorization({ senderId: testCase.senderId });
+      expect(result.commandAuthorized).toBe(testCase.expectedAuthorized);
+      expect(result.senderAllowedForCommands).toBe(testCase.expectedSenderAllowed);
+      expect(result.effectiveAllowFrom).toEqual(["dm-owner"]);
+      expect(result.effectiveGroupAllowFrom).toEqual(["group-owner"]);
+    }
   });
 });

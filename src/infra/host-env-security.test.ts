@@ -174,8 +174,25 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("https_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("http_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("ALL_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("no_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(false);
+    expect(isDangerousHostEnvVarName("node_extra_ca_certs")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_DIR")).toBe(false);
+    expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(false);
+    expect(isDangerousHostEnvVarName("CURL_CA_BUNDLE")).toBe(false);
+    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(false);
+    expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(false);
+    expect(isDangerousHostEnvVarName("DOCKER_TLS_VERIFY")).toBe(false);
+    expect(isDangerousHostEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
+    expect(isDangerousHostEnvVarName("yarn_rc_filename")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
@@ -213,6 +230,8 @@ describe("sanitizeHostExecEnv", () => {
         PATH: "/usr/bin:/bin",
         HOME: "/tmp/trusted-home",
         ZDOTDIR: "/tmp/trusted-zdotdir",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://trusted.example/crates.io-index",
+        YARN_RC_FILENAME: ".trusted-yarnrc.yml",
       },
       overrides: {
         PATH: "/tmp/evil",
@@ -232,7 +251,45 @@ describe("sanitizeHostExecEnv", () => {
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
         AWS_CONFIG_FILE: "/tmp/override-aws-config",
+        YARN_RC_FILENAME: ".evil-yarnrc.yml",
+        PIP_INDEX_URL: "https://example.invalid/simple",
+        PIP_PYPI_URL: "https://example.invalid/simple",
+        PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+        PIP_FIND_LINKS: "https://example.invalid/wheels",
+        PIP_TRUSTED_HOST: "example.invalid",
+        UV_INDEX: "https://example.invalid/simple",
+        UV_INDEX_URL: "https://example.invalid/simple",
+        UV_DEFAULT_INDEX: "https://example.invalid/simple",
+        UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        DOCKER_HOST: "tcp://example.invalid:2376",
+        DOCKER_TLS_VERIFY: "1",
+        DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
+        DOCKER_CONTEXT: "evil-remote",
+        LIBRARY_PATH: "/tmp/evil-lib",
+        CPATH: "/tmp/evil-headers",
+        C_INCLUDE_PATH: "/tmp/evil-c-headers",
+        CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
+        OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
+        NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
+        SSL_CERT_FILE: "/tmp/evil-cert.pem",
+        SSL_CERT_DIR: "/tmp/evil-cert-dir",
+        REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
+        CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GIT_SSL_NO_VERIFY: "1",
+        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+        GIT_SSL_CAPATH: "/tmp/evil-git-ca-dir",
+        GOPROXY: "https://example.invalid/proxy",
+        GONOSUMCHECK: "example.invalid/*",
+        GONOSUMDB: "example.invalid/*",
+        GONOPROXY: "example.invalid/*",
+        GOPRIVATE: "example.invalid/*",
+        GOENV: "/tmp/evil-goenv",
+        GOPATH: "/tmp/evil-go",
+        PYTHONUSERBASE: "/tmp/evil-python-userbase",
+        VIRTUAL_ENV: "/tmp/evil-venv",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
@@ -261,15 +318,98 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
+    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBe("https://trusted.example/crates.io-index");
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
     expect(env.GOFLAGS).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(env.YARN_RC_FILENAME).toBe(".trusted-yarnrc.yml");
+    expect(env.PIP_INDEX_URL).toBeUndefined();
+    expect(env.PIP_PYPI_URL).toBeUndefined();
+    expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
+    expect(env.PIP_CONFIG_FILE).toBeUndefined();
+    expect(env.PIP_FIND_LINKS).toBeUndefined();
+    expect(env.PIP_TRUSTED_HOST).toBeUndefined();
+    expect(env.UV_INDEX).toBeUndefined();
+    expect(env.UV_INDEX_URL).toBeUndefined();
+    expect(env.UV_DEFAULT_INDEX).toBeUndefined();
+    expect(env.UV_EXTRA_INDEX_URL).toBeUndefined();
+    expect(env.DOCKER_HOST).toBeUndefined();
+    expect(env.DOCKER_TLS_VERIFY).toBeUndefined();
+    expect(env.DOCKER_CERT_PATH).toBeUndefined();
+    expect(env.DOCKER_CONTEXT).toBeUndefined();
+    expect(env.LIBRARY_PATH).toBeUndefined();
+    expect(env.CPATH).toBeUndefined();
+    expect(env.C_INCLUDE_PATH).toBeUndefined();
+    expect(env.CPLUS_INCLUDE_PATH).toBeUndefined();
+    expect(env.OBJC_INCLUDE_PATH).toBeUndefined();
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(env.SSL_CERT_FILE).toBeUndefined();
+    expect(env.SSL_CERT_DIR).toBeUndefined();
+    expect(env.REQUESTS_CA_BUNDLE).toBeUndefined();
+    expect(env.CURL_CA_BUNDLE).toBeUndefined();
+    expect(env.GOPROXY).toBeUndefined();
+    expect(env.GONOSUMCHECK).toBeUndefined();
+    expect(env.GONOSUMDB).toBeUndefined();
+    expect(env.GONOPROXY).toBeUndefined();
+    expect(env.GOPRIVATE).toBeUndefined();
+    expect(env.GOENV).toBeUndefined();
+    expect(env.GOPATH).toBeUndefined();
+    expect(env.PYTHONUSERBASE).toBeUndefined();
+    expect(env.VIRTUAL_ENV).toBeUndefined();
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
+  });
+
+  it("keeps trusted inherited proxy, TLS, and Docker env while blocking overrides", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+        HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        SSL_CERT_DIR: "/etc/ssl/certs",
+        CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
+        DOCKER_TLS_VERIFY: "1",
+      },
+      overrides: {
+        HTTP_PROXY: "http://evil-proxy.example.test:8080",
+        NODE_TLS_REJECT_UNAUTHORIZED: "1",
+        DOCKER_TLS_VERIFY: "0",
+      },
+    });
+
+    expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      PATH: "/usr/bin:/bin",
+      HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+      HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      SSL_CERT_DIR: "/etc/ssl/certs",
+      CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
+      DOCKER_TLS_VERIFY: "1",
+    });
+  });
+
+  it("blocks proxy, TLS, and Docker override values explicitly", () => {
+    expect(isDangerousHostEnvOverrideVarName("HTTPS_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("https_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("HTTP_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("http_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("ALL_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("no_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("node_extra_ca_certs")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("SSL_CERT_FILE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("SSL_CERT_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("requests_ca_bundle")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CURL_CA_BUNDLE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("docker_cert_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_TLS_VERIFY")).toBe(true);
   });
 
   it("drops dangerous inherited shell trace keys", () => {
@@ -352,8 +492,34 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_registries_internal_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_config_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_FIND_LINKS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_trusted_host")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_pypi_url")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_EXTRA_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("UV_INDEX")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("UV_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("uv_default_index")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("UV_EXTRA_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("docker_context")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("NODE_EXTRA_CA_CERTS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("ssl_cert_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("REQUESTS_CA_BUNDLE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("curl_ca_bundle")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("LIBRARY_PATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("c_include_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GOPROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gonosumdb")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GOPRIVATE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("goenv")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PYTHONUSERBASE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("virtual_env")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CLASSPATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
@@ -364,6 +530,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("yarn_rc_filename")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
@@ -378,18 +545,98 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       overrides: {
         PATH: "/tmp/evil",
         CXX: "/tmp/evil-cxx",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CLASSPATH: "/tmp/evil-classpath",
+        PIP_INDEX_URL: "https://example.invalid/simple",
+        PIP_PYPI_URL: "https://example.invalid/simple",
+        PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+        PIP_FIND_LINKS: "https://example.invalid/wheels",
+        PIP_TRUSTED_HOST: "example.invalid",
+        UV_INDEX: "https://example.invalid/simple",
+        UV_INDEX_URL: "https://example.invalid/simple",
+        UV_DEFAULT_INDEX: "https://example.invalid/simple",
+        UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        DOCKER_HOST: "tcp://example.invalid:2376",
+        DOCKER_TLS_VERIFY: "1",
+        DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
+        DOCKER_CONTEXT: "evil-remote",
+        LIBRARY_PATH: "/tmp/evil-lib",
+        CPATH: "/tmp/evil-headers",
+        C_INCLUDE_PATH: "/tmp/evil-c-headers",
+        CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
+        OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
+        NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
+        SSL_CERT_FILE: "/tmp/evil-cert.pem",
+        SSL_CERT_DIR: "/tmp/evil-cert-dir",
+        REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
+        CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GOPROXY: "https://example.invalid/proxy",
+        GONOSUMCHECK: "example.invalid/*",
+        GONOSUMDB: "example.invalid/*",
+        GONOPROXY: "example.invalid/*",
+        GOPRIVATE: "example.invalid/*",
+        GOENV: "/tmp/evil-goenv",
+        GOPATH: "/tmp/evil-go",
+        PYTHONUSERBASE: "/tmp/evil-python-userbase",
+        VIRTUAL_ENV: "/tmp/evil-venv",
+        YARN_RC_FILENAME: ".evil-yarnrc.yml",
+        HTTPS_PROXY: "http://proxy.example.test:8080",
+        GIT_SSL_NO_VERIFY: "1",
+        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+        GIT_SSL_CAPATH: "/tmp/evil-git-capath",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
         SAFE_KEY: "ok",
         "BAD-KEY": "bad",
       },
     });
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "C_INCLUDE_PATH",
+      "CARGO_REGISTRIES_CRATES_IO_INDEX",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
+      "CPATH",
+      "CPLUS_INCLUDE_PATH",
+      "CURL_CA_BUNDLE",
       "CXX",
+      "DOCKER_CERT_PATH",
+      "DOCKER_CONTEXT",
+      "DOCKER_HOST",
+      "DOCKER_TLS_VERIFY",
+      "GIT_SSL_CAINFO",
+      "GIT_SSL_CAPATH",
+      "GIT_SSL_NO_VERIFY",
+      "GOENV",
+      "GONOPROXY",
+      "GONOSUMCHECK",
+      "GONOSUMDB",
+      "GOPATH",
+      "GOPRIVATE",
+      "GOPROXY",
+      "HTTPS_PROXY",
+      "LIBRARY_PATH",
+      "NODE_EXTRA_CA_CERTS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+      "OBJC_INCLUDE_PATH",
       "PATH",
+      "PIP_CONFIG_FILE",
+      "PIP_EXTRA_INDEX_URL",
+      "PIP_FIND_LINKS",
+      "PIP_INDEX_URL",
+      "PIP_PYPI_URL",
+      "PIP_TRUSTED_HOST",
+      "PYTHONUSERBASE",
+      "REQUESTS_CA_BUNDLE",
+      "SSL_CERT_DIR",
+      "SSL_CERT_FILE",
+      "UV_DEFAULT_INDEX",
+      "UV_EXTRA_INDEX_URL",
+      "UV_INDEX",
+      "UV_INDEX_URL",
+      "VIRTUAL_ENV",
+      "YARN_RC_FILENAME",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -397,6 +644,46 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CLASSPATH).toBeUndefined();
     expect(result.env.CXX).toBeUndefined();
     expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(result.env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
+    expect(result.env.PIP_INDEX_URL).toBeUndefined();
+    expect(result.env.PIP_PYPI_URL).toBeUndefined();
+    expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.PIP_CONFIG_FILE).toBeUndefined();
+    expect(result.env.PIP_FIND_LINKS).toBeUndefined();
+    expect(result.env.PIP_TRUSTED_HOST).toBeUndefined();
+    expect(result.env.UV_INDEX).toBeUndefined();
+    expect(result.env.UV_INDEX_URL).toBeUndefined();
+    expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
+    expect(result.env.UV_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.GIT_SSL_NO_VERIFY).toBeUndefined();
+    expect(result.env.GIT_SSL_CAINFO).toBeUndefined();
+    expect(result.env.GIT_SSL_CAPATH).toBeUndefined();
+    expect(result.env.DOCKER_HOST).toBeUndefined();
+    expect(result.env.DOCKER_TLS_VERIFY).toBeUndefined();
+    expect(result.env.DOCKER_CERT_PATH).toBeUndefined();
+    expect(result.env.DOCKER_CONTEXT).toBeUndefined();
+    expect(result.env.LIBRARY_PATH).toBeUndefined();
+    expect(result.env.CPATH).toBeUndefined();
+    expect(result.env.C_INCLUDE_PATH).toBeUndefined();
+    expect(result.env.CPLUS_INCLUDE_PATH).toBeUndefined();
+    expect(result.env.OBJC_INCLUDE_PATH).toBeUndefined();
+    expect(result.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(result.env.SSL_CERT_FILE).toBeUndefined();
+    expect(result.env.SSL_CERT_DIR).toBeUndefined();
+    expect(result.env.REQUESTS_CA_BUNDLE).toBeUndefined();
+    expect(result.env.CURL_CA_BUNDLE).toBeUndefined();
+    expect(result.env.GOPROXY).toBeUndefined();
+    expect(result.env.GONOSUMCHECK).toBeUndefined();
+    expect(result.env.GONOSUMDB).toBeUndefined();
+    expect(result.env.GONOPROXY).toBeUndefined();
+    expect(result.env.GOPRIVATE).toBeUndefined();
+    expect(result.env.GOENV).toBeUndefined();
+    expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.HTTPS_PROXY).toBeUndefined();
+    expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+    expect(result.env.PYTHONUSERBASE).toBeUndefined();
+    expect(result.env.VIRTUAL_ENV).toBeUndefined();
+    expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {

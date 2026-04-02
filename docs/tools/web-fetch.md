@@ -82,16 +82,18 @@ If Readability extraction fails, `web_fetch` can fall back to
 
 ```json5
 {
-  tools: {
-    web: {
-      fetch: {
-        firecrawl: {
-          enabled: true,
-          apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
-          baseUrl: "https://api.firecrawl.dev",
-          onlyMainContent: true,
-          maxAgeMs: 86400000, // cache duration (1 day)
-          timeoutSeconds: 60,
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+        config: {
+          webFetch: {
+            apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
+            baseUrl: "https://api.firecrawl.dev",
+            onlyMainContent: true,
+            maxAgeMs: 86400000, // cache duration (1 day)
+            timeoutSeconds: 60,
+          },
         },
       },
     },
@@ -99,7 +101,8 @@ If Readability extraction fails, `web_fetch` can fall back to
 }
 ```
 
-`tools.web.fetch.firecrawl.apiKey` supports SecretRef objects.
+`plugins.entries.firecrawl.config.webFetch.apiKey` supports SecretRef objects.
+Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 
 <Note>
   If Firecrawl is enabled and its SecretRef is unresolved with no

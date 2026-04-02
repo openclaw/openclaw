@@ -3,6 +3,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
@@ -396,6 +397,33 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  /**
+   * Canonical plugin-owned session conversation grammar.
+   * Use this when the provider encodes thread or scoped-conversation semantics
+   * inside `rawId` (for example Telegram topics or Feishu sender scopes).
+   * Return `baseConversationId` and `parentConversationCandidates` here when
+   * you can so parsing and inheritance stay in one place.
+   * `parentConversationCandidates`, when present, should be ordered from the
+   * narrowest parent to the broadest/base conversation.
+   * Bundled plugins that need the same grammar before runtime bootstrap can
+   * mirror this contract through a top-level `session-key-api.ts` surface.
+   */
+  resolveSessionConversation?: (params: { kind: "group" | "channel"; rawId: string }) => {
+    id: string;
+    threadId?: string | null;
+    baseConversationId?: string | null;
+    parentConversationCandidates?: string[];
+  } | null;
+  /**
+   * Legacy compatibility hook for parent fallbacks when a plugin does not need
+   * to customize `id` or `threadId`. Core only uses this when
+   * `resolveSessionConversation(...)` does not return
+   * `parentConversationCandidates`.
+   */
+  resolveParentConversationCandidates?: (params: {
+    kind: "group" | "channel";
+    rawId: string;
+  }) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;
@@ -494,7 +522,9 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   /**
    * Trusted sender id from inbound context. This is server-injected and must

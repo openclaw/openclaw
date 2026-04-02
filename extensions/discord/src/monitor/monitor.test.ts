@@ -10,7 +10,7 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
   buildPluginBindingResolvedTextMock,
@@ -77,16 +77,6 @@ async function createChannelRuntimeMock(
 vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
 vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
-  };
-});
-
-// agent-components.ts can bind the core dispatcher via reply-runtime re-exports,
-// so keep this direct mock to avoid hitting real embedded-agent dispatch in tests.
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
@@ -308,8 +298,7 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       createDiscordComponentButton,
       createDiscordComponentStringSelect,
@@ -322,6 +311,9 @@ describe("discord component interactions", () => {
       resolveDiscordModalEntry,
     } = await import("../components-registry.js"));
     sendComponents = await import("../send.components.js");
+  });
+
+  beforeEach(() => {
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
       .mockResolvedValue({
@@ -676,7 +668,16 @@ describe("discord component interactions", () => {
       duplicate: false,
     });
 
-    const button = createDiscordComponentButton(createComponentContext());
+    const button = createDiscordComponentButton(
+      createComponentContext({
+        discordConfig: createDiscordConfig({
+          dm: {
+            groupEnabled: true,
+            groupChannels: ["group-dm-1"],
+          },
+        }),
+      }),
+    );
     const { interaction } = createComponentButtonInteraction({
       rawData: {
         channel_id: "group-dm-1",

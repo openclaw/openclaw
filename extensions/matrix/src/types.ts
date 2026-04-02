@@ -1,5 +1,11 @@
-import type { DmPolicy, GroupPolicy, OpenClawConfig, SecretInput } from "./runtime-api.js";
-export type { DmPolicy, GroupPolicy };
+import type {
+  ContextVisibilityMode,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  SecretInput,
+} from "./runtime-api.js";
+export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
 
@@ -10,9 +16,13 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
+  threadReplies?: "off" | "inbound" | "always";
 };
 
 export type MatrixRoomConfig = {
+  /** Restrict this room entry to a specific Matrix account in multi-account setups. */
+  account?: string;
   /** If false, disable the bot in this room (alias for allow: false). */
   enabled?: boolean;
   /** Legacy room allow toggle; prefer enabled. */
@@ -97,6 +107,15 @@ export type MatrixConfig = {
   allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
+  /**
+   * Enable shared block-streaming replies for Matrix.
+   *
+   * Default: false. Matrix keeps `streaming: "off"` as final-only delivery
+   * unless block streaming is explicitly enabled.
+   */
+  blockStreaming?: boolean;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
@@ -143,8 +162,13 @@ export type MatrixConfig = {
   actions?: MatrixActionConfig;
   /**
    * Streaming mode for Matrix replies.
-   * - `"partial"`: edit a single message in place as the model generates text.
+   * - `"partial"`: edit a single draft message in place for the current
+   *   assistant block as the model generates text.
    * - `"off"`: deliver the full reply once the model finishes.
+   * - Use `blockStreaming: true` when you want completed assistant blocks to
+   *   stay visible as separate progress messages. When combined with
+   *   `"partial"`, Matrix keeps a live draft for the current block and
+   *   preserves completed blocks as separate messages.
    * - `true` maps to `"partial"`, `false` maps to `"off"`.
    * Default: `"off"`.
    */
@@ -156,6 +180,7 @@ export type CoreConfig = {
     matrix?: MatrixConfig;
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
+      contextVisibility?: ContextVisibilityMode;
     };
   };
   commands?: {

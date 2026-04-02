@@ -13,18 +13,20 @@ import {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { compileConfigRegex } from "../security/config-regex.js";
-import { testRegexWithBoundedInput } from "../security/safe-regex.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
+import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
+import {
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalRequest,
+  type ExecApprovalResolved,
+} from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import {
   approvalDecisionLabel,
@@ -122,16 +124,6 @@ function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
   return mode ?? DEFAULT_MODE;
 }
 
-function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => {
-    if (sessionKey.includes(pattern)) {
-      return true;
-    }
-    const compiled = compileConfigRegex(pattern);
-    return compiled?.regex ? testRegexWithBoundedInput(compiled.regex, sessionKey) : false;
-  });
-}
-
 function shouldForwardRoute(params: {
   config?: {
     enabled?: boolean;
@@ -144,20 +136,12 @@ function shouldForwardRoute(params: {
   if (!config?.enabled) {
     return false;
   }
-  if (config.agentFilter?.length) {
-    const agentId =
-      params.routeRequest.agentId ?? parseAgentSessionKey(params.routeRequest.sessionKey)?.agentId;
-    if (!agentId || !config.agentFilter.includes(agentId)) {
-      return false;
-    }
-  }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.routeRequest.sessionKey;
-    if (!sessionKey || !matchSessionFilter(sessionKey, config.sessionFilter)) {
-      return false;
-    }
-  }
-  return true;
+  return matchesApprovalRequestFilters({
+    request: params.routeRequest,
+    agentFilter: config.agentFilter,
+    sessionFilter: config.sessionFilter,
+    fallbackAgentIdFromSessionKey: true,
+  });
 }
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
@@ -216,6 +200,8 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
 }
 
 function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
+  const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const command = formatApprovalCommand(
     resolveExecApprovalCommandDisplay(request.request).commandText,
@@ -250,9 +236,16 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
   lines.push("Mode: foreground (interactive approvals available in this chat).");
   lines.push(
-    "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
+    allowedDecisions.includes("allow-always")
+      ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
+      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
-  lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
+  lines.push(`Reply with: /approve <id> ${decisionText}`);
+  if (!allowedDecisions.includes("allow-always")) {
+    lines.push(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -358,6 +351,7 @@ function buildExecPendingPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     text: buildRequestMessage(params.request, params.nowMs),
+    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
   });
 }
 

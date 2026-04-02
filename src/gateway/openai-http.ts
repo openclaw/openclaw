@@ -30,6 +30,8 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
@@ -109,6 +111,7 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
 }) {
   return {
     message: params.prompt.message,
@@ -120,8 +123,7 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
-    // OpenAI-compatible HTTP ingress is external input and must not inherit owner-only tools.
-    senderIsOwner: false as const,
+    senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
   };
 }
@@ -420,6 +422,9 @@ export async function handleOpenAiHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
+    // Compat HTTP uses a different scope model from generic HTTP helpers:
+    // shared-secret bearer auth is treated as full operator access here.
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -432,6 +437,9 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return true;
   }
+  // On the compat surface, shared-secret bearer auth is also treated as an
+  // owner sender so owner-only tool policy matches the documented contract.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
@@ -495,6 +503,7 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    senderIsOwner,
   });
 
   if (!stream) {

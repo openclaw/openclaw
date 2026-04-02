@@ -81,6 +81,8 @@ OpenClaw picks that up as `<workspace>/skills` on the next session.
 - Treat third-party skills as **untrusted code**. Read them before enabling.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
 - Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
+- Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
+- `openclaw skills install <slug>` is different: it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 - For a broader threat model and checklists, see [Security](/gateway/security).
@@ -320,3 +322,10 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 Browse [https://clawhub.com](https://clawhub.com).
 
 ---
+
+## Related
+
+- [Creating Skills](/tools/creating-skills) — building custom skills
+- [Skills Config](/tools/skills-config) — skill configuration reference
+- [Slash Commands](/tools/slash-commands) — all available slash commands
+- [Plugins](/tools/plugin) — plugin system overview

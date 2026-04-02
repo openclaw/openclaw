@@ -288,7 +288,7 @@ describe("createDiffsHttpHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(String(res.body)).toContain("/plugins/diffs/assets/viewer-runtime.js?v=");
+    expect(String(res.body)).toContain("./viewer-runtime.js?v=");
   });
 
   it("serves the shared viewer runtime asset", async () => {
@@ -309,6 +309,18 @@ describe("createDiffsHttpHandler", () => {
 
   it.each([
     {
+      name: "allows direct loopback viewer access by default",
+      request: localReq,
+      allowRemoteViewer: false,
+      expectedStatusCode: 200,
+    },
+    {
+      name: "allows ipv4-mapped ipv6 loopback viewer access by default",
+      request: ipv4MappedLoopbackReq,
+      allowRemoteViewer: false,
+      expectedStatusCode: 200,
+    },
+    {
       name: "blocks non-loopback viewer access by default",
       request: remoteReq,
       allowRemoteViewer: false,
@@ -322,6 +334,21 @@ describe("createDiffsHttpHandler", () => {
       expectedStatusCode: 404,
     },
     {
+      name: "blocks trusted-proxy loopback requests without client-origin headers by default",
+      request: localReq,
+      trustedProxies: ["127.0.0.1"],
+      allowRemoteViewer: false,
+      expectedStatusCode: 404,
+    },
+    {
+      name: "blocks proxied loopback requests when trusted proxies are configured",
+      request: localReq,
+      headers: { "x-forwarded-for": "203.0.113.10" },
+      trustedProxies: ["127.0.0.1"],
+      allowRemoteViewer: false,
+      expectedStatusCode: 404,
+    },
+    {
       name: "allows remote access when allowRemoteViewer is enabled",
       request: remoteReq,
       allowRemoteViewer: true,
@@ -331,29 +358,33 @@ describe("createDiffsHttpHandler", () => {
       name: "allows proxied loopback requests when allowRemoteViewer is enabled",
       request: localReq,
       headers: { "x-forwarded-for": "203.0.113.10" },
+      trustedProxies: ["127.0.0.1"],
       allowRemoteViewer: true,
       expectedStatusCode: 200,
     },
-  ])("$name", async ({ request, headers, allowRemoteViewer, expectedStatusCode }) => {
-    const artifact = await createViewerArtifact(store);
+  ])(
+    "$name",
+    async ({ request, headers, trustedProxies, allowRemoteViewer, expectedStatusCode }) => {
+      const artifact = await createViewerArtifact(store);
 
-    const handler = createDiffsHttpHandler({ store, allowRemoteViewer });
-    const res = createMockServerResponse();
-    const handled = await handler(
-      request({
-        method: "GET",
-        url: artifact.viewerPath,
-        headers,
-      }),
-      res,
-    );
+      const handler = createDiffsHttpHandler({ store, allowRemoteViewer, trustedProxies });
+      const res = createMockServerResponse();
+      const handled = await handler(
+        request({
+          method: "GET",
+          url: artifact.viewerPath,
+          headers,
+        }),
+        res,
+      );
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(expectedStatusCode);
-    if (expectedStatusCode === 200) {
-      expect(res.body).toBe("<html>viewer</html>");
-    }
-  });
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(expectedStatusCode);
+      if (expectedStatusCode === 200) {
+        expect(res.body).toBe("<html>viewer</html>");
+      }
+    },
+  );
 
   it("rate-limits repeated remote misses", async () => {
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
@@ -412,5 +443,17 @@ function remoteReq(input: {
     ...input,
     headers: input.headers ?? {},
     socket: { remoteAddress: "203.0.113.10" },
+  } as unknown as IncomingMessage;
+}
+
+function ipv4MappedLoopbackReq(input: {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
+  return {
+    ...input,
+    headers: input.headers ?? {},
+    socket: { remoteAddress: "::ffff:127.0.0.1" },
   } as unknown as IncomingMessage;
 }

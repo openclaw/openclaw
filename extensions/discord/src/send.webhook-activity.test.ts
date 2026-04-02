@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
@@ -19,12 +19,14 @@ vi.mock("../../../src/infra/channel-activity.js", async (importOriginal) => {
   };
 });
 
-let sendWebhookMessageDiscord: typeof import("./send.js").sendWebhookMessageDiscord;
+let sendWebhookMessageDiscord: typeof import("./send.outbound.js").sendWebhookMessageDiscord;
 
 describe("sendWebhookMessageDiscord activity", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ sendWebhookMessageDiscord } = await import("./send.js"));
+  beforeAll(async () => {
+    ({ sendWebhookMessageDiscord } = await import("./send.outbound.js"));
+  });
+
+  beforeEach(() => {
     recordChannelActivityMock.mockClear();
     loadConfigMock.mockClear();
     vi.stubGlobal(

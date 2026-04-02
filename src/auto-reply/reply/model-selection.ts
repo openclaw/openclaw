@@ -14,10 +14,10 @@ import {
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -146,7 +146,7 @@ function resolveParentSessionKeyCandidate(params: {
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
   }
-  const derived = resolveThreadParentSessionKey(params.sessionKey);
+  const derived = resolveSessionParentSessionKey(params.sessionKey);
   if (derived && derived !== params.sessionKey) {
     return derived;
   }

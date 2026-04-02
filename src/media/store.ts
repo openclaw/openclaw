@@ -6,6 +6,7 @@ import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -207,7 +208,11 @@ async function downloadToFile(
               return;
             }
             const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            const redirectHeaders =
+              new URL(redirectUrl).origin === parsedUrl.origin
+                ? headers
+                : retainSafeHeadersForCrossOriginRedirect(headers);
+            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
@@ -496,10 +501,7 @@ export async function resolveMediaBufferPath(
  * @param id     The media ID as returned by SavedMedia.id.
  * @param subdir The subdirectory the file was saved into (default "inbound").
  */
-export async function deleteMediaBuffer(
-  id: string,
-  subdir: "inbound" = "inbound",
-): Promise<void> {
+export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
   const physicalPath = await resolveMediaBufferPath(id, subdir);
   await fs.unlink(physicalPath);
 }

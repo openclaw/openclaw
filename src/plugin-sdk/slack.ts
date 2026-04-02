@@ -49,6 +49,7 @@ export {
   resolveDefaultSlackAccountId,
   resolveSlackReplyToMode,
 } from "./slack-surface.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { isSlackInteractiveRepliesEnabled } from "./slack-surface.js";
 export { inspectSlackAccount } from "./slack-surface.js";
 export { parseSlackTarget, resolveSlackChannelId } from "./slack-targets.js";

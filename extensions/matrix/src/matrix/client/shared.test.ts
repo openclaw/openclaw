@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixAuth } from "./types.js";
 
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
@@ -71,8 +71,7 @@ function primeAccountClientMocks(params?: {
 }
 
 describe("resolveSharedMatrixClient", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       acquireSharedMatrixClient,
       releaseSharedClientInstance,
@@ -81,6 +80,9 @@ describe("resolveSharedMatrixClient", () => {
       stopSharedClientForAccount,
       stopSharedClientInstance,
     } = await import("./shared.js"));
+  });
+
+  beforeEach(() => {
     resolveMatrixAuthMock.mockReset();
     resolveMatrixAuthContextMock.mockReset();
     createMatrixClientMock.mockReset();

@@ -1,22 +1,66 @@
 {
   "config": "vitest.extensions.config.ts",
-  "generatedAt": "2026-03-26T17:02:23.374Z",
+  "generatedAt": "2026-03-31T06:24:09.128Z",
   "defaultDurationMs": 1000,
   "files": {
     "extensions/bluebubbles/src/monitor.webhook-auth.test.ts": {
-      "durationMs": 30152.246337890625,
+      "durationMs": 93900,
       "testCount": 19
+    },
+    "extensions/matrix/src/plugin-entry.runtime.test.ts": {
+      "durationMs": 6500,
+      "testCount": 1
     },
     "extensions/matrix/src/matrix/monitor/index.test.ts": {
       "durationMs": 23302.03173828125,
       "testCount": 8
     },
+    "extensions/matrix/src/cli.test.ts": {
+      "durationMs": 21762,
+      "testCount": 25
+    },
+    "extensions/matrix/src/matrix/accounts.test.ts": {
+      "durationMs": 18285,
+      "testCount": 16
+    },
+    "extensions/matrix/src/matrix/client/storage.test.ts": {
+      "durationMs": 17251,
+      "testCount": 13
+    },
+    "extensions/matrix/src/matrix/send.test.ts": {
+      "durationMs": 15471,
+      "testCount": 17
+    },
+    "extensions/mattermost/src/dm-policy.contract.test.ts": {
+      "durationMs": 15349,
+      "testCount": 2
+    },
+    "extensions/matrix/src/matrix/thread-bindings.test.ts": {
+      "durationMs": 14053,
+      "testCount": 11
+    },
+    "extensions/openai/provider-catalog.contract.test.ts": {
+      "durationMs": 13306,
+      "testCount": 3
+    },
+    "extensions/line/src/bot-handlers.test.ts": {
+      "durationMs": 13272,
+      "testCount": 23
+    },
+    "extensions/matrix/src/matrix/draft-stream.test.ts": {
+      "durationMs": 12308,
+      "testCount": 13
+    },
     "extensions/line/src/setup-surface.test.ts": {
       "durationMs": 12208.14111328125,
       "testCount": 8
     },
+    "extensions/zai/plugin-registration.contract.test.ts": {
+      "durationMs": 10292,
+      "testCount": 2
+    },
     "extensions/mattermost/src/mattermost/client.retry.test.ts": {
-      "durationMs": 9429.540283203125,
+      "durationMs": 9816,
       "testCount": 17
     },
     "extensions/feishu/src/monitor.webhook-security.test.ts": {
@@ -39,10 +83,6 @@
       "durationMs": 4410.16259765625,
       "testCount": 10
     },
-    "extensions/matrix/src/matrix/send.test.ts": {
-      "durationMs": 4319.607421875,
-      "testCount": 16
-    },
     "extensions/matrix/src/matrix/monitor/events.test.ts": {
       "durationMs": 2489.9775390625,
       "testCount": 29
@@ -50,10 +90,6 @@
     "extensions/feishu/src/bot.test.ts": {
       "durationMs": 1024.728759765625,
       "testCount": 48
-    },
-    "extensions/matrix/src/matrix/thread-bindings.test.ts": {
-      "durationMs": 461.74658203125,
-      "testCount": 11
     },
     "extensions/bluebubbles/src/monitor.test.ts": {
       "durationMs": 453.485595703125,
@@ -124,12 +160,8 @@
       "testCount": 4
     },
     "extensions/line/src/bot-message-context.test.ts": {
-      "durationMs": 155.55517578125,
-      "testCount": 11
-    },
-    "extensions/matrix/src/matrix/client/storage.test.ts": {
-      "durationMs": 153.7314453125,
-      "testCount": 12
+      "durationMs": 9155,
+      "testCount": 14
     },
     "extensions/acpx/src/runtime-internals/mcp-proxy.test.ts": {
       "durationMs": 152.1640625,
@@ -210,10 +242,6 @@
     "extensions/diffs/src/store.test.ts": {
       "durationMs": 88.814453125,
       "testCount": 20
-    },
-    "extensions/matrix/src/cli.test.ts": {
-      "durationMs": 87.73828125,
-      "testCount": 25
     },
     "extensions/tlon/src/core.test.ts": {
       "durationMs": 87.28759765625,
@@ -507,10 +535,6 @@
       "durationMs": 11.179931640625,
       "testCount": 5
     },
-    "extensions/line/src/bot-handlers.test.ts": {
-      "durationMs": 10.427490234375,
-      "testCount": 23
-    },
     "extensions/github-copilot/models.test.ts": {
       "durationMs": 10.251953125,
       "testCount": 20
@@ -570,10 +594,6 @@
     "extensions/line/src/download.test.ts": {
       "durationMs": 7.52587890625,
       "testCount": 4
-    },
-    "extensions/matrix/src/matrix/accounts.test.ts": {
-      "durationMs": 7.3603515625,
-      "testCount": 12
     },
     "extensions/acpx/src/config.test.ts": {
       "durationMs": 7.31298828125,

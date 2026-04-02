@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -13,6 +14,7 @@ import {
   resolveAllowAlwaysPatterns,
   resolveSafeBins,
 } from "./exec-approvals.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 
 describe("resolveAllowAlwaysPatterns", () => {
   function makeExecutable(dir: string, name: string): string {
@@ -28,6 +30,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     dir: string;
     env: Record<string, string | undefined>;
     safeBins: ReturnType<typeof resolveSafeBins>;
+    strictInlineEval?: boolean;
   }) {
     const analysis = evaluateShellAllowlist({
       command: params.command,
@@ -44,6 +47,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         cwd: params.dir,
         env: params.env,
         platform: process.platform,
+        strictInlineEval: params.strictInlineEval,
       }),
     };
   }
@@ -120,16 +124,13 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   }
 
-  function expectPositionalArgvCarrierRejected(command: string) {
-    const dir = makeTempDir();
-    const touch = makeExecutable(dir, "touch");
-    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
-    const safeBins = resolveSafeBins(undefined);
-    const marker = path.join(dir, "marker");
-    const expandedCommand = command.replaceAll("{marker}", marker);
+  function expectShellScriptFallbackRejected(command: string) {
+    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
+    const rcFile = path.join(scriptsDir, "evilrc");
+    fs.writeFileSync(rcFile, "echo blocked\n");
 
     const { persisted } = resolvePersistedPatterns({
-      command: expandedCommand,
+      command,
       dir,
       env,
       safeBins,
@@ -137,14 +138,48 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(persisted).toEqual([]);
 
     const second = evaluateShellAllowlist({
-      command: expandedCommand,
-      allowlist: [{ pattern: touch }],
+      command,
+      allowlist: [{ pattern: script }],
       safeBins,
       cwd: dir,
       env,
       platform: process.platform,
     });
     expect(second.allowlistSatisfied).toBe(false);
+  }
+
+  function expectPositionalArgvCarrierResult(params: {
+    command: string;
+    expectPersisted: boolean;
+  }) {
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+    const command = params.command.replaceAll("{marker}", marker);
+
+    const { persisted } = resolvePersistedPatterns({
+      command,
+      dir,
+      env,
+      safeBins,
+    });
+    if (params.expectPersisted) {
+      expect(persisted).toEqual([touch]);
+    } else {
+      expect(persisted).toEqual([]);
+    }
+
+    const second = evaluateShellAllowlist({
+      command,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(params.expectPersisted);
   }
 
   it("returns direct executable paths for non-shell segments", () => {
@@ -185,6 +220,99 @@ describe("resolveAllowAlwaysPatterns", () => {
       ],
     });
     expect(patterns).toEqual([]);
+  });
+
+  it("persists benign awk interpreters when strict inline-eval is enabled", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const awk = makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: "awk -F, -f script.awk data.csv",
+      dir,
+      env,
+      safeBins,
+      strictInlineEval: true,
+    });
+    expect(persisted).toEqual([awk]);
+
+    const second = evaluateShellAllowlist({
+      command: "awk -F, -f script.awk data.csv",
+      allowlist: persisted.map((pattern) => ({ pattern })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  });
+
+  it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
+    const awk = "C:\\temp\\awk.exe";
+    const resolution = makeMockCommandResolution({
+      execution: makeMockExecutableResolution({
+        rawExecutable: awk,
+        resolvedPath: awk,
+        executableName: "awk",
+      }),
+    });
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: [
+        {
+          raw: `${awk} -F , -f script.awk data.csv`,
+          argv: [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+          resolution,
+        },
+      ],
+      platform: "win32",
+      strictInlineEval: true,
+    });
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        pattern: awk,
+        argPattern: expect.any(String),
+      }),
+    ]);
+    expect(
+      matchAllowlist(
+        entries,
+        resolution.execution ?? null,
+        [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+        "win32",
+      ),
+    ).toEqual(expect.objectContaining({ pattern: awk, argPattern: expect.any(String) }));
+    expect(
+      matchAllowlist(
+        entries,
+        resolution.execution ?? null,
+        [awk, "-f", "other.awk", "secrets.csv"],
+        "win32",
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
+      dir,
+      env,
+      safeBins,
+      strictInlineEval: true,
+    });
+    expect(persisted).toEqual([]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
@@ -283,34 +411,71 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
   });
 
+  it("rejects shell rc and init-file options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
+  });
+
+  it("rejects shell rc and init-file equals options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile=scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file=scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file=scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
+  });
+
   it("rejects shell-wrapper positional argv carriers", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc '$0 "$1"' touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc '$0 "$1"' touch {marker}`,
+      expectPersisted: true,
+    });
   });
 
   it("rejects exec positional argv carriers", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc 'exec -- "$0" "$1"' touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc 'exec -- "$0" "$1"' touch {marker}`,
+      expectPersisted: true,
+    });
   });
 
   it("rejects positional argv carriers when $0 is single-quoted", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc "'$0' "$1"" touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc "'$0' "$1"" touch {marker}`,
+      expectPersisted: false,
+    });
   });
 
   it("rejects positional argv carriers when exec is separated from $0 by a newline", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc "exec
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc "exec
 $0 \\"$1\\"" touch {marker}`,
-    );
+      expectPersisted: false,
+    });
   });
 
   it("rejects positional argv carriers when inline command contains extra shell operations", () => {
@@ -569,6 +734,23 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for caffeinate wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {
     if (process.platform === "win32") {
       return;
@@ -586,6 +768,24 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for sandbox-exec wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand:
+        "/usr/bin/sandbox-exec -p '(deny default) (allow process*)' /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/sandbox-exec -p '(allow default)' /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for time wrapper chains", () => {
     if (process.platform === "win32") {
       return;
@@ -598,6 +798,30 @@ $0 \\"$1\\"" touch {marker}`,
       dir,
       firstCommand: "/usr/bin/time -p /bin/zsh -lc 'echo warmup-ok'",
       secondCommand: "/usr/bin/time -p /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("prevents allow-always bypass for macOS dispatch-wrapper chains", () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'id > marker-arch'",
+      env,
+      persistedPattern: echo,
+    });
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/xcrun /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/xcrun /bin/zsh -lc 'id > marker-xcrun'",
       env,
       persistedPattern: echo,
     });
@@ -757,7 +981,7 @@ $0 \\"$1\\"" touch {marker}`,
     expect(second.allowlistSatisfied).toBe(false);
   });
 
-  it("rejects positional carrier when carried executable is an unknown dispatch carrier", () => {
+  it("allows positional carriers for unknown carried executables when explicitly allowlisted", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -782,6 +1006,6 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       platform: process.platform,
     });
-    expect(second.allowlistSatisfied).toBe(false);
+    expect(second.allowlistSatisfied).toBe(true);
   });
 });

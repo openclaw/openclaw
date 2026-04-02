@@ -189,7 +189,7 @@ export async function verifyDeviceBootstrapToken(params: {
     if (!found) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const [, record] = found;
+    const [tokenKey, record] = found;
 
     const deviceId = params.deviceId.trim();
     const publicKey = params.publicKey.trim();
@@ -198,8 +198,8 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const allowedProfile = resolvePersistedBootstrapProfile(record);
-    // Fail closed for unbound legacy setup codes and for any attempt to redeem
-    // the token outside the issued role/scope allowlist.
+    // Fail closed for any attempt to redeem the token outside the issued
+    // role/scope allowlist before binding it to a concrete device identity.
     if (
       allowedProfile.roles.length === 0 ||
       !bootstrapProfileAllowsRequest({
@@ -211,9 +211,31 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
 
-    // Keep valid setup codes alive until they expire or are explicitly revoked.
-    // Approval happens after bootstrap verification, so consuming the token here
-    // makes post-approval reconnect impossible.
+    const boundDeviceId = record.deviceId?.trim();
+    const boundPublicKey = record.publicKey?.trim();
+    if (boundDeviceId || boundPublicKey) {
+      if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
+        return { ok: false, reason: "bootstrap_token_invalid" };
+      }
+      state[tokenKey] = {
+        ...record,
+        profile: allowedProfile,
+        deviceId,
+        publicKey,
+        lastUsedAtMs: Date.now(),
+      };
+      await persistState(state, params.baseDir);
+      return { ok: true };
+    }
+
+    state[tokenKey] = {
+      ...record,
+      profile: allowedProfile,
+      deviceId,
+      publicKey,
+      lastUsedAtMs: Date.now(),
+    };
+    await persistState(state, params.baseDir);
     return { ok: true };
   });
 }

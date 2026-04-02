@@ -107,7 +107,7 @@ All fields are optional unless noted:
 - `after` (`string`): updated text. Required with `before` when `patch` is omitted.
 - `patch` (`string`): unified diff text. Mutually exclusive with `before` and `after`.
 - `path` (`string`): display filename for before and after mode.
-- `lang` (`string`): language override hint for before and after mode.
+- `lang` (`string`): language override hint for before and after mode. Unknown values fall back to plain text.
 - `title` (`string`): viewer title override.
 - `mode` (`"view" | "file" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
   Deprecated alias: `"image"` behaves like `"file"` and is still accepted for backward compatibility.
@@ -119,7 +119,7 @@ All fields are optional unless noted:
 - `fileScale` (`number`): device scale override (`1`-`4`).
 - `fileMaxWidth` (`number`): max render width in CSS pixels (`640`-`2400`).
 - `ttlSeconds` (`number`): viewer artifact TTL in seconds. Default 1800, max 21600.
-- `baseUrl` (`string`): viewer URL origin override. Must be `http` or `https`, no query/hash.
+- `baseUrl` (`string`): viewer URL origin override. Overrides plugin `viewerBaseUrl`. Must be `http` or `https`, no query/hash.
 
 Validation and limits:
 
@@ -231,6 +231,29 @@ Supported defaults:
 
 Explicit tool parameters override these defaults.
 
+Persistent viewer URL config:
+
+- `viewerBaseUrl` (`string`, optional)
+  - Plugin-owned fallback for returned viewer links when a tool call does not pass `baseUrl`.
+  - Must be `http` or `https`, no query/hash.
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          viewerBaseUrl: "https://gateway.example.com/openclaw",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Security config
 
 - `security.allowRemoteViewer` (`boolean`, default `false`)
@@ -281,10 +304,13 @@ Viewer assets:
 - `/plugins/diffs/assets/viewer.js`
 - `/plugins/diffs/assets/viewer-runtime.js`
 
+The viewer document resolves those assets relative to the viewer URL, so an optional `baseUrl` path prefix is preserved for both asset requests too.
+
 URL construction behavior:
 
-- If `baseUrl` is provided, it is used after strict validation.
-- Without `baseUrl`, viewer URL defaults to loopback `127.0.0.1`.
+- If tool-call `baseUrl` is provided, it is used after strict validation.
+- Else if plugin `viewerBaseUrl` is configured, it is used.
+- Without either override, viewer URL defaults to loopback `127.0.0.1`.
 - If gateway bind mode is `custom` and `gateway.customBindHost` is set, that host is used.
 
 `baseUrl` rules:
@@ -351,8 +377,13 @@ Viewer accessibility issues:
 
 - Viewer URL resolves to `127.0.0.1` by default.
 - For remote access scenarios, either:
+  - set plugin `viewerBaseUrl`, or
   - pass `baseUrl` per tool call, or
   - use `gateway.bind=custom` and `gateway.customBindHost`
+- If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw loopback viewer requests without forwarded client-IP headers fail closed by design.
+- For that proxy topology:
+  - prefer `mode: "file"` or `mode: "both"` when you only need an attachment, or
+  - intentionally enable `security.allowRemoteViewer` and set plugin `viewerBaseUrl` or pass a proxy/public `baseUrl` when you need a shareable viewer URL
 - Enable `security.allowRemoteViewer` only when you intend external viewer access.
 
 Unmodified-lines row has no expand button:

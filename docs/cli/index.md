@@ -45,6 +45,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
+- [`tasks`](/cli/index#tasks)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
@@ -171,6 +172,7 @@ openclaw [--dev] [--profile <name>] <command>
     show
     notify
     cancel
+    flow list|show|cancel
   gateway
     call
     health
@@ -564,7 +566,7 @@ Subcommands:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
 
 Subcommands:
 
@@ -808,6 +810,9 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
+- `tasks flow list` — list active and recent Task Flow flows
+- `tasks flow show <lookup>` — inspect a flow by id or lookup key
+- `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
 
 ## Gateway
 
@@ -905,12 +910,14 @@ Subcommands:
 
 Common RPCs:
 
+- `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge a partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
 `config.get` if a config already exists.
+Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
 
 ## Models
 
