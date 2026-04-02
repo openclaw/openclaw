@@ -73,11 +73,15 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   // Always attempt capability loader when cfg is available so that speech-only
   // plugins like elevenlabs are discovered even when the main registry already
   // contains a different provider (e.g. openai registers both model + speech).
+  // cache: false prevents the loaded registry from replacing the active registry
+  // (activate:false requires cache:false per loadOpenClawPlugins contract).
   const loadOptions =
     params.cfg === undefined
       ? undefined
       : {
           config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
+          cache: false as const,
+          activate: false as const,
         };
   const capabilityRegistry = loadOptions ? resolveRuntimePluginRegistry(loadOptions) : undefined;
   const capabilityProviders = capabilityRegistry?.[params.key] ?? [];
@@ -89,8 +93,5 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     ...capabilityProviders.filter((entry) => !seenIds.has(entry.provider?.id)),
   ];
 
-  if (merged.length > 0) {
-    return merged.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
-  return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  return merged.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
 }

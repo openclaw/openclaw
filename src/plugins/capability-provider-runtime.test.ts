@@ -74,8 +74,11 @@ function expectBundledCompatLoadPath(params: {
     pluginIds: ["openai"],
     env: process.env,
   });
+  expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
     config: params.enablementCompat,
+    activate: false,
+    cache: false,
   });
 }
 
@@ -206,8 +209,14 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith({
-      config: expect.anything(),
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config: { messages: { tts: { provider: "edge" } } },
+      env: process.env,
+    });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      activate: false,
+      cache: false,
+      config: { messages: { tts: { provider: "edge" } } },
     });
   });
 
@@ -238,6 +247,8 @@ describe("resolvePluginCapabilityProviders", () => {
     expectNoResolvedCapabilityProviders(providers);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: expect.anything(),
+      activate: false,
+      cache: false,
     });
   });
 });

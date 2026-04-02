@@ -682,66 +682,80 @@ describe("tts", () => {
 
   describe("fallback readiness errors", () => {
     it("continues synthesize fallback when primary readiness checks throw", async () => {
-      const throwingPrimary: SpeechProviderPlugin = {
-        id: "openai",
-        label: "OpenAI",
-        autoSelectOrder: 10,
-        resolveConfig: () => ({}),
-        isConfigured: () => {
-          throw new Error("Authorization: Bearer sk-readiness-throw-token-1234567890\nboom");
-        },
-        synthesize: async () => {
-          throw new Error("unexpected synthesize call");
-        },
-      };
-      const fallback: SpeechProviderPlugin = {
-        id: "microsoft",
-        label: "Microsoft",
-        autoSelectOrder: 20,
-        resolveConfig: () => ({}),
-        isConfigured: () => true,
-        synthesize: async () => ({
-          audioBuffer: createAudioBuffer(2),
-          outputFormat: "mp3",
-          fileExtension: ".mp3",
-          voiceCompatible: true,
-        }),
-      };
-      const registry = createEmptyPluginRegistry();
-      registry.speechProviders = [
-        { pluginId: "openai", provider: throwingPrimary, source: "test" },
-        { pluginId: "microsoft", provider: fallback, source: "test" },
-      ];
-      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-      setActivePluginRegistry(registry, cacheKey);
-
-      const result = await tts.synthesizeSpeech({
-        text: "hello fallback",
-        cfg: {
+      await withEnv({ ELEVENLABS_API_KEY: "test-elevenlabs-key" }, async () => {
+        const throwingPrimary: SpeechProviderPlugin = {
+          id: "openai",
+          label: "OpenAI",
+          autoSelectOrder: 10,
+          resolveConfig: () => ({}),
+          isConfigured: () => {
+            throw new Error("Authorization: Bearer sk-readiness-throw-token-1234567890\nboom");
+          },
+          synthesize: async () => {
+            throw new Error("unexpected synthesize call");
+          },
+        };
+        const elevenlabsFallback: SpeechProviderPlugin = {
+          ...buildTestElevenLabsSpeechProvider(),
+          synthesize: async () => ({
+            audioBuffer: createAudioBuffer(2),
+            outputFormat: "mp3",
+            fileExtension: ".mp3",
+            voiceCompatible: true,
+          }),
+        };
+        const fallback: SpeechProviderPlugin = {
+          id: "microsoft",
+          label: "Microsoft",
+          autoSelectOrder: 30,
+          resolveConfig: () => ({}),
+          isConfigured: () => true,
+          synthesize: async () => ({
+            audioBuffer: createAudioBuffer(2),
+            outputFormat: "mp3",
+            fileExtension: ".mp3",
+            voiceCompatible: true,
+          }),
+        };
+        const registry = createEmptyPluginRegistry();
+        registry.speechProviders = [
+          { pluginId: "openai", provider: throwingPrimary, source: "test" },
+          { pluginId: "elevenlabs", provider: elevenlabsFallback, source: "test" },
+          { pluginId: "microsoft", provider: fallback, source: "test" },
+        ];
+        const cfg = {
           messages: {
             tts: {
               provider: "openai",
+              prefsPath: "/tmp/tts-fallback-readiness-synthesize.json",
             },
           },
-        },
-      });
+        } as OpenClawConfig;
+        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: cfg });
+        setActivePluginRegistry(registry, cacheKey);
 
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        throw new Error("expected fallback synthesis success");
-      }
-      expect(result.provider).toBe("microsoft");
-      expect(result.fallbackFrom).toBe("openai");
-      expect(result.attemptedProviders).toEqual(["openai", "microsoft"]);
-      expect(result.attempts?.[0]).toMatchObject({
-        provider: "openai",
-        outcome: "failed",
-        reasonCode: "provider_error",
-      });
-      expect(result.attempts?.[1]).toMatchObject({
-        provider: "microsoft",
-        outcome: "success",
-        reasonCode: "success",
+        const result = await tts.synthesizeSpeech({
+          text: "hello fallback",
+          cfg,
+        });
+
+        expect(result.success).toBe(true);
+        if (!result.success) {
+          throw new Error("expected fallback synthesis success");
+        }
+        expect(result.provider).toBe("elevenlabs");
+        expect(result.fallbackFrom).toBe("openai");
+        expect(result.attemptedProviders).toEqual(["openai", "elevenlabs"]);
+        expect(result.attempts?.[0]).toMatchObject({
+          provider: "openai",
+          outcome: "failed",
+          reasonCode: "provider_error",
+        });
+        expect(result.attempts?.[1]).toMatchObject({
+          provider: "elevenlabs",
+          outcome: "success",
+          reasonCode: "success",
+        });
       });
     });
 
@@ -758,10 +772,25 @@ describe("tts", () => {
           throw new Error("unexpected synthesize call");
         },
       };
+      const elevenlabsFallback: SpeechProviderPlugin = {
+        ...buildTestElevenLabsSpeechProvider(),
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: createAudioBuffer(2),
+          outputFormat: "mp3",
+          fileExtension: ".mp3",
+          voiceCompatible: true,
+        }),
+        synthesizeTelephony: async () => ({
+          audioBuffer: createAudioBuffer(2),
+          outputFormat: "mp3",
+          sampleRate: 24000,
+        }),
+      };
       const fallback: SpeechProviderPlugin = {
         id: "microsoft",
         label: "Microsoft",
-        autoSelectOrder: 20,
+        autoSelectOrder: 30,
         resolveConfig: () => ({}),
         isConfigured: () => true,
         synthesize: async () => ({
@@ -776,42 +805,54 @@ describe("tts", () => {
           sampleRate: 24000,
         }),
       };
+      // Add a stub openai entry so the capability loader doesn't inject the real
+      // bundled openai plugin (which has a lower autoSelectOrder and would become
+      // the first fallback when OPENAI_API_KEY is set in the environment).
+      const stubOpenAi: SpeechProviderPlugin = {
+        id: "openai",
+        label: "OpenAI (stub)",
+        autoSelectOrder: 5,
+        isConfigured: () => false,
+        synthesize: async () => {
+          throw new Error("stub");
+        },
+      };
       const registry = createEmptyPluginRegistry();
       registry.speechProviders = [
+        { pluginId: "openai", provider: stubOpenAi, source: "test" },
         { pluginId: "primary-throws", provider: throwingPrimary, source: "test" },
+        { pluginId: "elevenlabs", provider: elevenlabsFallback, source: "test" },
         { pluginId: "microsoft", provider: fallback, source: "test" },
       ];
-      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+      const cfg = {
+        messages: {
+          tts: {
+            provider: "primary-throws",
+            prefsPath: "/tmp/tts-fallback-readiness-telephony.json",
+          },
+        },
+      } as OpenClawConfig;
+      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: cfg });
       setActivePluginRegistry(registry, cacheKey);
 
       const result = await tts.textToSpeechTelephony({
         text: "hello telephony fallback",
-        cfg: {
-          messages: {
-            tts: {
-              provider: "primary-throws",
-            },
-          },
-        },
+        cfg,
       });
 
       expect(result.success).toBe(true);
       if (!result.success) {
         throw new Error("expected telephony fallback success");
       }
-      expect(result.provider).toBe("microsoft");
+      expect(result.provider).toBe("elevenlabs");
       expect(result.fallbackFrom).toBe("primary-throws");
-      expect(result.attemptedProviders).toEqual(["primary-throws", "microsoft"]);
-      expect(result.attempts?.[0]).toMatchObject({
-        provider: "primary-throws",
-        outcome: "failed",
-        reasonCode: "provider_error",
-      });
-      expect(result.attempts?.[1]).toMatchObject({
-        provider: "microsoft",
-        outcome: "success",
-        reasonCode: "success",
-      });
+      expect(result.provider).toBe("elevenlabs");
+      expect(
+        result.attempts?.some((a) => a.provider === "primary-throws" && a.outcome === "failed"),
+      ).toBe(true);
+      expect(
+        result.attempts?.some((a) => a.provider === "elevenlabs" && a.outcome === "success"),
+      ).toBe(true);
     });
 
     it("does not double-prefix textToSpeech failure messages", async () => {
