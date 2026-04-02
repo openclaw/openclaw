@@ -80,8 +80,14 @@ describe("parseMemoryToMB", () => {
     expect(parseMemoryToMB("1t")).toBe(1048576);
   });
 
-  it("treats bare numbers as MB", () => {
-    expect(parseMemoryToMB("4096")).toBe(4096);
+  it("treats bare numbers as bytes (per .wslconfig spec)", () => {
+    expect(parseMemoryToMB("2147483648")).toBe(2048); // 2GB in bytes
+    expect(parseMemoryToMB("4294967296")).toBe(4096); // 4GB in bytes
+    expect(parseMemoryToMB("1048576")).toBe(1); // 1MB in bytes
+  });
+
+  it("parses explicit byte suffix", () => {
+    expect(parseMemoryToMB("2147483648b")).toBe(2048);
   });
 
   it("returns null for null or empty string", () => {
