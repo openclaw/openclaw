@@ -618,8 +618,8 @@ export async function getPageForTargetId(opts: {
     }
     return found;
   }
-  // If Playwright only exposes a single Page, use it as a best-effort fallback.
-  if (accessible.length === 1) {
+  // If Playwright only exposes a single Page total, use it as a best-effort fallback.
+  if (pages.length === 1) {
     return first;
   }
   throw new BrowserTabNotFoundError();

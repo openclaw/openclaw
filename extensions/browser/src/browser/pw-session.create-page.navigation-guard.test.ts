@@ -2,6 +2,7 @@ import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
+import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as navigationGuardModule from "./navigation-guard.js";
 import {
@@ -542,5 +543,69 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
       }),
     ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+  });
+
+  it("does not fall back to another tab when explicit target lookup misses", async () => {
+    const { pageGoto, pageClose, sessionSend, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    sessionSend.mockImplementationOnce(async (method: string) => {
+      if (method === "Target.getTargetInfo") {
+        return { targetInfo: { targetId: "TARGET_2" } };
+      }
+      return {};
+    });
+    await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://example.com",
+    });
+
+    let targetInfoLookups = 0;
+    sessionSend.mockImplementation(async (method: string) => {
+      if (method === "Target.getTargetInfo") {
+        targetInfoLookups += 1;
+        return {
+          targetInfo: { targetId: targetInfoLookups % 2 === 1 ? "TARGET_1" : "TARGET_2" },
+        };
+      }
+      return {};
+    });
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "MISSING_TARGET",
+      }),
+    ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
   });
 });
