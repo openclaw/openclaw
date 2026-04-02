@@ -1849,6 +1849,35 @@ describe("matrix monitor handler draft streaming", () => {
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     await finish();
   });
+
+  it("redacts stale draft and sends the final once when a later preview exceeds the event limit", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "1234" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    prepareMatrixSingleTextMock.mockImplementation((text: string) => {
+      const trimmedText = text.trim();
+      return {
+        trimmedText,
+        convertedText: trimmedText,
+        singleEventLimit: 5,
+        fitsInSingleEvent: trimmedText.length <= 5,
+      };
+    });
+
+    opts.onPartialReply?.({ text: "123456" });
+    await deliver({ text: "123456" }, { kind: "final" });
+
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
 });
 
 describe("matrix monitor handler block streaming config", () => {
