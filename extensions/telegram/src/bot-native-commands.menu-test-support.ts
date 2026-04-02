@@ -31,11 +31,13 @@ const skillCommandMocks = vi.hoisted(() => ({
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
   editMessageTelegram: vi.fn(async () => ({ ok: true as const, messageId: "999", chatId: "100" })),
+  emitTelegramMessageSentHooks: vi.fn(),
 }));
 
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 export const editMessageTelegram = deliveryMocks.editMessageTelegram;
+export const emitTelegramMessageSentHooks = deliveryMocks.emitTelegramMessageSentHooks;
 
 vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
@@ -47,6 +49,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  emitTelegramMessageSentHooks,
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
@@ -69,6 +72,7 @@ export function resetNativeCommandMenuMocks() {
   deliverReplies.mockResolvedValue({ delivered: true });
   editMessageTelegram.mockClear();
   editMessageTelegram.mockResolvedValue({ ok: true as const, messageId: "999", chatId: "100" });
+  emitTelegramMessageSentHooks.mockClear();
 }
 
 export function createCommandBot(): CreateCommandBotResult {

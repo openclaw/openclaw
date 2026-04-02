@@ -14,6 +14,7 @@ import {
   createPrivateCommandContext,
   deliverReplies,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
@@ -288,6 +289,61 @@ describe("registerTelegramNativeCommands", () => {
       expect.stringContaining("Command completed successfully"),
       expect.objectContaining({
         accountId: "default",
+      }),
+    );
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "100",
+        content: "Command completed successfully",
+        messageId: 999,
+        success: true,
+      }),
+    );
+  });
+
+  it("preserves Telegram buttons when editing a metadata-driven progress placeholder", async () => {
+    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage: "Working on it...",
+      },
+      args: "now",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "Choose an option",
+      channelData: {
+        telegram: {
+          buttons: [[{ text: "Approve", callback_data: "approve" }]],
+        },
+      },
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      100,
+      999,
+      "Choose an option",
+      expect.objectContaining({
+        buttons: [[{ text: "Approve", callback_data: "approve" }]],
       }),
     );
     expect(deleteMessage).not.toHaveBeenCalled();
