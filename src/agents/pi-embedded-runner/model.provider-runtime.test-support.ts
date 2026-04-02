@@ -221,7 +221,7 @@ function buildDynamicModel(
             provider: "openai-codex",
             api: "openai-codex-responses",
             baseUrl: OPENAI_CODEX_BASE_URL,
-            contextWindow: 1_050_000,
+            contextWindow: 272_000,
             maxTokens: 128_000,
           },
           fallback,

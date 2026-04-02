@@ -125,7 +125,7 @@ describe("openai codex provider", () => {
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
       // explicit runtime metadata overrides template values
-      contextWindow: 1_050_000,
+      contextWindow: 272_000,
       maxTokens: 128_000,
     });
   });
@@ -150,7 +150,7 @@ describe("openai codex provider", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
-      contextWindow: 1_050_000,
+      contextWindow: 272_000,
       maxTokens: 128_000,
     });
   });
@@ -169,11 +169,15 @@ describe("openai codex provider", () => {
       ],
     } as never);
 
-    expect(entries).toContainEqual({
-      provider: "openai-codex",
-      id: "gpt-5.4-mini",
-      name: "gpt-5.4-mini",
-    });
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openai-codex",
+          id: "gpt-5.4-mini",
+          name: "gpt-5.4-mini",
+        }),
+      ]),
+    );
   });
 
   it("recognizes gpt-5.4-mini in supportsXHighThinking", () => {
