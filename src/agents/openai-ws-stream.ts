@@ -42,7 +42,7 @@ import {
 } from "./openai-ws-message-conversion.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -486,14 +486,14 @@ export function createOpenAIWebSocketStreamFn(
 
       // Respect compat.supportsStore — providers like Gemini reject unknown
       // fields such as `store` with a 400 error.  Fixes #39086.
-      const supportsResponsesStoreField = resolveProviderRequestCapabilities({
+      const supportsResponsesStoreField = resolveProviderRequestPolicyConfig({
         provider: typeof model.provider === "string" ? model.provider : undefined,
         api: typeof model.api === "string" ? model.api : undefined,
         baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
         compat: (model as { compat?: { supportsStore?: boolean } }).compat,
         capability: "llm",
         transport: "websocket",
-      }).supportsResponsesStoreField;
+      }).capabilities.supportsResponsesStoreField;
 
       const payload: Record<string, unknown> = {
         type: "response.create",
