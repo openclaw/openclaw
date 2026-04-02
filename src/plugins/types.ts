@@ -12,6 +12,7 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -445,55 +446,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
-  request?: {
-    headers?: Record<string, string>;
-    auth?:
-      | {
-          mode: "provider-default";
-        }
-      | {
-          mode: "authorization-bearer";
-          token: string;
-        }
-      | {
-          mode: "header";
-          headerName: string;
-          value: string;
-          prefix?: string;
-        };
-    proxy?:
-      | {
-          mode: "env-proxy";
-          tls?: {
-            ca?: string;
-            cert?: string;
-            key?: string;
-            passphrase?: string;
-            serverName?: string;
-            insecureSkipVerify?: boolean;
-          };
-        }
-      | {
-          mode: "explicit-proxy";
-          url: string;
-          tls?: {
-            ca?: string;
-            cert?: string;
-            key?: string;
-            passphrase?: string;
-            serverName?: string;
-            insecureSkipVerify?: boolean;
-          };
-        };
-    tls?: {
-      ca?: string;
-      cert?: string;
-      key?: string;
-      passphrase?: string;
-      serverName?: string;
-      insecureSkipVerify?: boolean;
-    };
-  };
+  request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 

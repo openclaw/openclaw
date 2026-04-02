@@ -137,6 +137,32 @@ describe("provider request config", () => {
     });
   });
 
+  it("drops legacy Authorization when a custom auth header override is configured", () => {
+    const resolved = resolveProviderRequestConfig({
+      provider: "custom-openai",
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+      providerHeaders: {
+        Authorization: "Bearer stale-token",
+        "X-Tenant": "acme",
+      },
+      request: {
+        auth: {
+          mode: "header",
+          headerName: "api-key",
+          value: "secret",
+        },
+      },
+      capability: "llm",
+      transport: "stream",
+    });
+
+    expect(resolved.headers).toEqual({
+      "X-Tenant": "acme",
+      "api-key": "secret",
+    });
+  });
+
   it("builds explicit proxy dispatcher policy from normalized transport config", () => {
     const resolved = resolveProviderRequestConfig({
       provider: "custom-openai",

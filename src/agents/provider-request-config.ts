@@ -299,9 +299,12 @@ function applyResolvedAuthHeader(
     return headers;
   }
   const next = mergeProviderRequestHeaders(headers) ?? Object.create(null);
-  const targetKey = auth.headerName.toLowerCase();
+  const keysToDelete = new Set([auth.headerName.toLowerCase()]);
+  if (auth.mode === "header") {
+    keysToDelete.add("authorization");
+  }
   for (const key of Object.keys(next)) {
-    if (key.toLowerCase() === targetKey) {
+    if (keysToDelete.has(key.toLowerCase())) {
       delete next[key];
     }
   }
