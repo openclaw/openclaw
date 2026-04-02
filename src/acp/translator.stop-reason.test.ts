@@ -295,6 +295,49 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
+  it("keeps accepted prompts pending when the deadline recheck still reports timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = "session-1";
+      const sessionKey = "agent:main:main";
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId,
+        sessionKey,
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+      const promptPromise = agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "hello" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+
+      await Promise.resolve();
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not clear a newer disconnect deadline while reconnect reconciliation is still running", async () => {
     vi.useFakeTimers();
     try {
@@ -353,7 +396,10 @@ describe("acp translator stop reason mapping", () => {
       expect(settleSpy).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
-      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: second disconnect");
+      expect(request).toHaveBeenCalledTimes(3);
+      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
     } finally {
       vi.useRealTimers();
     }
