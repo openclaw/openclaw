@@ -698,7 +698,10 @@ function hasSegmentExecutableMatch(
   const execution = resolveExecutionTargetResolution(segment.resolution);
   const candidates = [execution?.executableName, execution?.rawExecutable, segment.argv[0]];
   for (const candidate of candidates) {
-    const trimmed = candidate?.trim();
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
     if (!trimmed) {
       continue;
     }
