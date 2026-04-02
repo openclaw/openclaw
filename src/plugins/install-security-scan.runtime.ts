@@ -1,6 +1,8 @@
 import path from "node:path";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { getGlobalHookRunner } from "./hook-runner-global.js";
+import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 
 type InstallScanLogger = {
@@ -201,6 +203,88 @@ async function scanFileTarget(params: {
   });
 }
 
+async function runBeforeInstallHook(params: {
+  logger: InstallScanLogger;
+  installLabel: string;
+  origin: string;
+  sourcePath: string;
+  sourcePathKind: "file" | "directory";
+  targetName: string;
+  targetType: "skill" | "plugin";
+  requestKind: PluginInstallRequestKind;
+  requestMode: "install" | "update";
+  requestedSpecifier?: string;
+  builtinScan: BuiltinInstallScan;
+  skill?: {
+    installId: string;
+    installSpec?: {
+      id?: string;
+      kind: "brew" | "node" | "go" | "uv" | "download";
+      label?: string;
+      bins?: string[];
+      os?: string[];
+      formula?: string;
+      package?: string;
+      module?: string;
+      url?: string;
+      archive?: string;
+      extract?: boolean;
+      stripComponents?: number;
+      targetDir?: string;
+    };
+  };
+  plugin?: {
+    contentType: "bundle" | "package" | "file";
+    pluginId: string;
+    packageName?: string;
+    manifestId?: string;
+    version?: string;
+    extensions?: string[];
+  };
+}): Promise<InstallSecurityScanResult | undefined> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_install")) {
+    return undefined;
+  }
+
+  try {
+    const { event, ctx } = createBeforeInstallHookPayload({
+      targetName: params.targetName,
+      targetType: params.targetType,
+      origin: params.origin,
+      sourcePath: params.sourcePath,
+      sourcePathKind: params.sourcePathKind,
+      request: {
+        kind: params.requestKind,
+        mode: params.requestMode,
+        ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
+      },
+      builtinScan: params.builtinScan,
+      ...(params.skill ? { skill: params.skill } : {}),
+      ...(params.plugin ? { plugin: params.plugin } : {}),
+    });
+    const hookResult = await hookRunner.runBeforeInstall(event, ctx);
+    if (hookResult?.block) {
+      const reason = hookResult.blockReason || "Installation blocked by plugin hook";
+      params.logger.warn?.(`WARNING: ${params.installLabel} blocked by plugin hook: ${reason}`);
+      return { blocked: { reason } };
+    }
+    if (hookResult?.findings) {
+      for (const finding of hookResult.findings) {
+        if (finding.severity === "critical" || finding.severity === "warn") {
+          params.logger.warn?.(
+            `Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`,
+          );
+        }
+      }
+    }
+  } catch {
+    // Hook errors are non-fatal.
+  }
+
+  return undefined;
+}
+
 export async function scanBundleInstallSourceRuntime(
   params: InstallSafetyOverrides & {
     logger: InstallScanLogger;
@@ -226,7 +310,26 @@ export async function scanBundleInstallSourceRuntime(
     targetLabel: `Bundle "${params.pluginId}" installation`,
   });
 
-  return builtinBlocked;
+  const hookResult = await runBeforeInstallHook({
+    logger: params.logger,
+    installLabel: `Bundle "${params.pluginId}" installation`,
+    origin: "plugin-bundle",
+    sourcePath: params.sourceDir,
+    sourcePathKind: "directory",
+    targetName: params.pluginId,
+    targetType: "plugin",
+    requestKind: params.requestKind ?? "plugin-dir",
+    requestMode: params.mode ?? "install",
+    requestedSpecifier: params.requestedSpecifier,
+    builtinScan,
+    plugin: {
+      contentType: "bundle",
+      pluginId: params.pluginId,
+      manifestId: params.pluginId,
+      ...(params.version ? { version: params.version } : {}),
+    },
+  });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
 export async function scanPackageInstallSourceRuntime(
@@ -275,7 +378,28 @@ export async function scanPackageInstallSourceRuntime(
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
 
-  return builtinBlocked;
+  const hookResult = await runBeforeInstallHook({
+    logger: params.logger,
+    installLabel: `Plugin "${params.pluginId}" installation`,
+    origin: "plugin-package",
+    sourcePath: params.packageDir,
+    sourcePathKind: "directory",
+    targetName: params.pluginId,
+    targetType: "plugin",
+    requestKind: params.requestKind ?? "plugin-dir",
+    requestMode: params.mode ?? "install",
+    requestedSpecifier: params.requestedSpecifier,
+    builtinScan,
+    plugin: {
+      contentType: "package",
+      pluginId: params.pluginId,
+      ...(params.packageName ? { packageName: params.packageName } : {}),
+      ...(params.manifestId ? { manifestId: params.manifestId } : {}),
+      ...(params.version ? { version: params.version } : {}),
+      extensions: params.extensions.slice(),
+    },
+  });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
 export async function scanFileInstallSourceRuntime(
@@ -301,7 +425,25 @@ export async function scanFileInstallSourceRuntime(
     targetLabel: `Plugin file "${params.pluginId}" installation`,
   });
 
-  return builtinBlocked;
+  const hookResult = await runBeforeInstallHook({
+    logger: params.logger,
+    installLabel: `Plugin file "${params.pluginId}" installation`,
+    origin: "plugin-file",
+    sourcePath: params.filePath,
+    sourcePathKind: "file",
+    targetName: params.pluginId,
+    targetType: "plugin",
+    requestKind: "plugin-file",
+    requestMode: params.mode ?? "install",
+    requestedSpecifier: params.requestedSpecifier,
+    builtinScan,
+    plugin: {
+      contentType: "file",
+      pluginId: params.pluginId,
+      extensions: [path.basename(params.filePath)],
+    },
+  });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
 export async function scanSkillInstallSourceRuntime(params: {
@@ -348,5 +490,21 @@ export async function scanSkillInstallSourceRuntime(params: {
     });
   }
 
-  return builtinBlocked;
+  const hookResult = await runBeforeInstallHook({
+    logger: params.logger,
+    installLabel: `Skill "${params.skillName}" installation`,
+    origin: params.origin,
+    sourcePath: params.sourceDir,
+    sourcePathKind: "directory",
+    targetName: params.skillName,
+    targetType: "skill",
+    requestKind: "skill-install",
+    requestMode: "install",
+    builtinScan,
+    skill: {
+      installId: params.installId,
+      ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+    },
+  });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }

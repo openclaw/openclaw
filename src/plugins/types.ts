@@ -1955,7 +1955,8 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
-  | "before_dispatch";
+  | "before_dispatch"
+  | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1985,6 +1986,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "before_install",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -2505,12 +2507,116 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginInstallTargetType = "skill" | "plugin";
 export type PluginInstallRequestKind =
   | "skill-install"
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
   | "plugin-npm";
+export type PluginInstallSourcePathKind = "file" | "directory";
+
+export type PluginInstallFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+};
+
+export type PluginHookBeforeInstallRequest = {
+  /** Original install entrypoint/provenance. */
+  kind: PluginInstallRequestKind;
+  /** Install mode requested by the caller. */
+  mode: "install" | "update";
+  /** Raw user-facing specifier or path when available. */
+  requestedSpecifier?: string;
+};
+
+export type PluginHookBeforeInstallBuiltinScan = {
+  /** Whether the built-in scan completed successfully. */
+  status: "ok" | "error";
+  /** Number of files the built-in scanner actually inspected. */
+  scannedFiles: number;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: PluginInstallFinding[];
+  /** Scanner failure reason when status=`error`. */
+  error?: string;
+};
+
+export type PluginHookBeforeInstallSkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
+export type PluginHookBeforeInstallSkill = {
+  installId: string;
+  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+};
+
+export type PluginHookBeforeInstallPlugin = {
+  /** Canonical plugin id OpenClaw will install under. */
+  pluginId: string;
+  /** Normalized installable content shape after source resolution. */
+  contentType: "bundle" | "package" | "file";
+  packageName?: string;
+  manifestId?: string;
+  version?: string;
+  extensions?: string[];
+};
+
+// before_install hook
+export type PluginHookBeforeInstallContext = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Original install entrypoint/provenance. */
+  requestKind: PluginInstallRequestKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+};
+
+export type PluginHookBeforeInstallEvent = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Human-readable skill or plugin name. */
+  targetName: string;
+  /** Absolute path to the install target content being scanned. */
+  sourcePath: string;
+  /** Whether the install target content is a file or directory. */
+  sourcePathKind: PluginInstallSourcePathKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+  /** Install request provenance and caller mode. */
+  request: PluginHookBeforeInstallRequest;
+  /** Structured result of the built-in scanner. */
+  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  /** Present when targetType=`skill`. */
+  skill?: PluginHookBeforeInstallSkill;
+  /** Present when targetType=`plugin`. */
+  plugin?: PluginHookBeforeInstallPlugin;
+};
+
+export type PluginHookBeforeInstallResult = {
+  /** Additional findings to merge with built-in scanner results. */
+  findings?: PluginInstallFinding[];
+  /** If true, block the installation entirely. */
+  block?: boolean;
+  /** Human-readable reason for blocking. */
+  blockReason?: string;
+};
 
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
@@ -2622,6 +2728,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_install: (
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
