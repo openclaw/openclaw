@@ -17,7 +17,7 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 
 ## Keep release channel naming aligned
 
-- `stable`: tagged releases only, published to npm `latest` and then mirrored onto npm `beta` unless `beta` already points at a newer prerelease
+- `stable`: tagged releases only, published to npm `beta` by default; operators may target npm `latest` explicitly or promote later
 - `beta`: prerelease tags like `vYYYY.M.D-beta.N`, with npm dist-tag `beta`
 - Prefer `-beta.N`; do not mint new `-1` or `-2` beta suffixes
 - `dev`: moving head on `main`
@@ -234,21 +234,27 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     commit, and rerun all relevant preflights from scratch before continuing.
     Never reuse old preflight results after the commit changes.
 14. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
-    the real publish and pass the successful npm `preflight_run_id`.
+    the real publish, choose `npm_dist_tag` (`beta` default, `latest` only when
+    you intentionally want direct stable publish), and pass the successful npm
+    `preflight_run_id`.
 15. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-16. Start
+16. If the stable release was published to `beta`, start
+    `.github/workflows/openclaw-npm-promote-beta.yml` with the exact stable
+    version after beta validation passes, then verify `latest` now points at
+    that version.
+17. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish with the successful private mac `preflight_run_id` and
     wait for success.
-17. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+18. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
-18. For stable releases, download `macos-appcast-<tag>` from the successful
+19. For stable releases, download `macos-appcast-<tag>` from the successful
     private mac run, update `appcast.xml` on `main`, and verify the feed.
-19. For beta releases, publish the mac assets but expect no shared production
+20. For beta releases, publish the mac assets but expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-20. After publish, verify npm and the attached release artifacts.
+21. After publish, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

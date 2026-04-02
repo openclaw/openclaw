@@ -16,9 +16,17 @@ on:
         description: Existing successful preflight workflow run id to promote without rebuilding
         required: false
         type: string
+      npm_dist_tag:
+        description: npm dist-tag to publish to for stable releases
+        required: true
+        default: beta
+        type: choice
+        options:
+          - beta
+          - latest
 
 concurrency:
-  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', inputs.tag, inputs.npm_dist_tag) || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -36,10 +44,15 @@ jobs:
       - name: Validate tag input format
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
+            echo "Beta prerelease tags must publish to npm dist-tag beta."
             exit 1
           fi
 
@@ -98,6 +111,7 @@ jobs:
           OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_MAIN_REF: origin/main
+          OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
@@ -115,6 +129,7 @@ jobs:
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           PACK_JSON="$(npm pack --json)"
@@ -131,6 +146,7 @@ jobs:
           cp "$PACK_PATH" "$ARTIFACT_DIR/"
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
+          printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Upload prepared npm publish bundle
@@ -180,10 +196,15 @@ jobs:
       - name: Validate tag input format
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
+            echo "Beta prerelease tags must publish to npm dist-tag beta."
             exit 1
           fi
 
@@ -249,24 +270,31 @@ jobs:
       - name: Verify prepared tarball provenance
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           TAG_FILE="preflight-tarball/release-tag.txt"
           SHA_FILE="preflight-tarball/release-sha.txt"
-          if [[ ! -f "$TAG_FILE" || ! -f "$SHA_FILE" ]]; then
+          NPM_DIST_TAG_FILE="preflight-tarball/release-npm-dist-tag.txt"
+          if [[ ! -f "$TAG_FILE" || ! -f "$SHA_FILE" || ! -f "$NPM_DIST_TAG_FILE" ]]; then
             echo "Prepared preflight metadata is missing." >&2
             ls -la preflight-tarball >&2 || true
             exit 1
           fi
           ARTIFACT_RELEASE_TAG="$(tr -d '\r\n' < "$TAG_FILE")"
           ARTIFACT_RELEASE_SHA="$(tr -d '\r\n' < "$SHA_FILE")"
+          ARTIFACT_RELEASE_NPM_DIST_TAG="$(tr -d '\r\n' < "$NPM_DIST_TAG_FILE")"
           if [[ "$ARTIFACT_RELEASE_TAG" != "$RELEASE_TAG" ]]; then
             echo "Prepared preflight tag mismatch: expected $RELEASE_TAG, got $ARTIFACT_RELEASE_TAG" >&2
             exit 1
           fi
           if [[ "$ARTIFACT_RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
             echo "Prepared preflight SHA mismatch: expected $EXPECTED_RELEASE_SHA, got $ARTIFACT_RELEASE_SHA" >&2
+            exit 1
+          fi
+          if [[ "$ARTIFACT_RELEASE_NPM_DIST_TAG" != "$RELEASE_NPM_DIST_TAG" ]]; then
+            echo "Prepared preflight npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $ARTIFACT_RELEASE_NPM_DIST_TAG" >&2
             exit 1
           fi
 
@@ -284,9 +312,8 @@ jobs:
 
       - name: Publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OPENCLAW_PREPACK_PREPARED: "1"
+          OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           publish_target="${{ steps.publish_tarball.outputs.path }}"
