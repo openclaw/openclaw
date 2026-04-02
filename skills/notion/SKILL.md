@@ -15,7 +15,7 @@ Use the Notion API to create/read/update pages, data sources (databases), and bl
 
 ## Setup
 
-1. Create an integration at https://notion.so/my-integrations
+1. Create an integration at [notion.so/my-integrations](https://notion.so/my-integrations)
 2. Copy the API key (starts with `ntn_` or `secret_`)
 3. Store it:
 
@@ -28,17 +28,59 @@ echo "ntn_your_key_here" > ~/.config/notion/api_key
 
 ## API Basics
 
+Local terminal examples below assume your shell already has `NOTION_API_KEY` loaded.
+
+```bash
+export NOTION_API_KEY="$(cat ~/.config/notion/api_key)"
+```
+
+If you are running through OpenClaw with `security=allowlist` and `ask=off`, avoid shell-wrapper
+forms like `NOTION_KEY=$(...)`, `NOTION_KEY=...; curl ...`, or `sh -lc 'curl ...'`. Companion-app
+allowlist mode treats shell control and expansion syntax as an allowlist miss even when
+`/usr/bin/curl` itself is allowlisted. In that setup, prefer a small helper script executed through
+an already-allowlisted interpreter such as `python3`.
+
 All requests need:
 
 ```bash
-NOTION_KEY=$(cat ~/.config/notion/api_key)
 curl -X GET "https://api.notion.com/v1/..." \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json"
 ```
 
 > **Note:** The `Notion-Version` header is required. This skill uses `2025-09-03` (latest). In this version, databases are called "data sources" in the API.
+
+Allowlist-friendly helper example for search:
+
+```python
+import json
+import os
+import sys
+import urllib.request
+
+query = sys.argv[1] if len(sys.argv) > 1 else ""
+payload = json.dumps({"query": query}).encode("utf-8")
+request = urllib.request.Request(
+    "https://api.notion.com/v1/search",
+    data=payload,
+    headers={
+        "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+        "Notion-Version": "2025-09-03",
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+
+with urllib.request.urlopen(request) as response:
+    print(response.read().decode("utf-8"))
+```
+
+Run it with an allowlisted interpreter path, for example:
+
+```bash
+python3 notion-search.py "page title"
+```
 
 ## Common Operations
 
@@ -46,7 +88,7 @@ curl -X GET "https://api.notion.com/v1/..." \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/search" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{"query": "page title"}'
@@ -56,7 +98,7 @@ curl -X POST "https://api.notion.com/v1/search" \
 
 ```bash
 curl "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03"
 ```
 
@@ -64,7 +106,7 @@ curl "https://api.notion.com/v1/pages/{page_id}" \
 
 ```bash
 curl "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03"
 ```
 
@@ -72,7 +114,7 @@ curl "https://api.notion.com/v1/blocks/{page_id}/children" \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -88,7 +130,7 @@ curl -X POST "https://api.notion.com/v1/pages" \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -101,7 +143,7 @@ curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
 
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -119,7 +161,7 @@ curl -X POST "https://api.notion.com/v1/data_sources" \
 
 ```bash
 curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
@@ -129,7 +171,7 @@ curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
 
 ```bash
 curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
