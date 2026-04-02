@@ -20,17 +20,10 @@ import {
   extractAssistantThinking,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
-type LastToolError = {
-  toolName: string;
-  meta?: string;
-  error?: string;
-  timedOut?: boolean;
-  mutatingAction?: boolean;
-  actionFingerprint?: string;
-};
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
@@ -55,8 +48,24 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function shouldIncludeToolErrorDetails(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+  verboseLevel?: VerboseLevel;
+}): boolean {
+  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
+    return true;
+  }
+  return (
+    isExecLikeToolName(params.lastToolError.toolName) &&
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+  );
+}
+
 function resolveToolErrorWarningPolicy(params: {
-  lastToolError: LastToolError;
+  lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
@@ -65,16 +74,11 @@ function resolveToolErrorWarningPolicy(params: {
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  const isCronTimedOutExecToolError =
-    (normalizedToolName === "exec" || normalizedToolName === "bash") &&
-    params.lastToolError.timedOut === true &&
-    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey));
-  const includeDetails =
-    isVerboseToolDetailEnabled(params.verboseLevel) || isCronTimedOutExecToolError;
+  const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
-  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -101,7 +105,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: LastToolError;
+  lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   sessionKey: string;

@@ -58,6 +58,21 @@ internal fun resolvePendingAssistantAutoSend(
   return prompt
 }
 
+internal suspend fun dispatchPendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+  dispatch: suspend (String) -> Boolean,
+): Boolean {
+  val prompt =
+    resolvePendingAssistantAutoSend(
+      pendingPrompt = pendingPrompt,
+      healthOk = healthOk,
+      pendingRunCount = pendingRunCount,
+    ) ?: return false
+  return dispatch(prompt)
+}
+
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
@@ -78,13 +93,19 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   }
 
   LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
-    val prompt =
-      resolvePendingAssistantAutoSend(
+    val accepted =
+      dispatchPendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) ?: return@LaunchedEffect
-    viewModel.sendChat(message = prompt, thinking = thinkingLevel, attachments = emptyList())
+      ) { prompt ->
+        viewModel.sendChatAwaitAcceptance(
+          message = prompt,
+          thinking = thinkingLevel,
+          attachments = emptyList(),
+        )
+      }
+    if (!accepted) return@LaunchedEffect
     viewModel.clearPendingAssistantAutoSend()
   }
 

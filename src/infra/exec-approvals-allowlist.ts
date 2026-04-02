@@ -9,6 +9,7 @@ import {
   resolveCommandResolutionFromArgv,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
+  splitCommandChain,
   splitCommandChainWithOperators,
   type ExecCommandAnalysis,
   type ExecCommandSegment,
@@ -366,9 +367,48 @@ function resolveTrustedSkillExecutionIds(params: {
   return skillIds;
 }
 
+const MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH = 3;
+
+function evaluateShellWrapperInlineChain(params: {
+  inlineCommand: string;
+  context: ExecAllowlistContext;
+  inlineDepth: number;
+  precomputedChainParts?: string[];
+}): { matches: ExecAllowlistEntry[] } | null {
+  if (params.inlineDepth >= MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH) {
+    return null;
+  }
+  if (isWindowsPlatform(params.context.platform)) {
+    return null;
+  }
+  const chainParts = params.precomputedChainParts ?? splitCommandChain(params.inlineCommand);
+  if (!chainParts || chainParts.length <= 1) {
+    return null;
+  }
+
+  const matches: ExecAllowlistEntry[] = [];
+  for (const part of chainParts) {
+    const analysis = analyzeShellCommand({
+      command: part,
+      cwd: params.context.cwd,
+      env: params.context.env,
+      platform: params.context.platform,
+    });
+    if (!analysis.ok) {
+      return null;
+    }
+    const result = evaluateSegments(analysis.segments, params.context, params.inlineDepth);
+    if (!result.satisfied) {
+      return null;
+    }
+    matches.push(...result.matches);
+  }
+  return { matches };
+}
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
+  inlineDepth: number = 0,
 ): {
   satisfied: boolean;
   matches: ExecAllowlistEntry[];
@@ -481,6 +521,24 @@ function evaluateSegments(
         : skillAllow
           ? "skills"
           : null;
+    if (by === null && inlineCommand) {
+      const inlineChainParts = splitCommandChain(inlineCommand);
+      if (inlineChainParts && inlineChainParts.length > 1) {
+        const inlineResult = evaluateShellWrapperInlineChain({
+          inlineCommand,
+          context: params,
+          inlineDepth: inlineDepth + 1,
+          precomputedChainParts: inlineChainParts,
+        });
+        if (inlineResult) {
+          matches.push(...inlineResult.matches);
+          // Keep per-segment metadata aligned with segments: one satisfaction marker
+          // for this wrapper segment, even when the inline payload has multiple parts.
+          segmentSatisfiedBy.push("allowlist");
+          return true;
+        }
+      }
+    }
     segmentSatisfiedBy.push(by);
     return Boolean(by);
   });

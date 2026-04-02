@@ -654,6 +654,102 @@ describe("exec approvals shell analysis", () => {
     it("normalizes safe bin names", () => {
       expect([...normalizeSafeBins([" jq ", "", "JQ", " sort "])]).toEqual(["jq", "sort"]);
     });
+
+    describe("shell wrapper inline compound allowlist", () => {
+      const commonShells = ["sh", "bash", "zsh", "dash", "ksh", "fish", "ash"] as const;
+
+      function writeExecutable(filePath: string) {
+        fs.writeFileSync(filePath, "#!/bin/sh\n", { mode: 0o755 });
+      }
+
+      it.each(commonShells)("evaluates inner chain commands for %s -c wrappers", (shellBinary) => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const dir = makeTempDir();
+        const shellPath = path.join(dir, shellBinary);
+        const catPath = path.join(dir, "cat");
+        const printfPath = path.join(dir, "printf");
+        const gogPath = path.join(dir, "gog-wrapper");
+        writeExecutable(shellPath);
+        writeExecutable(catPath);
+        writeExecutable(printfPath);
+        writeExecutable(gogPath);
+        const env = makePathEnv(dir);
+        try {
+          const result = evaluateShellAllowlist({
+            command: `${shellPath} -c "cat SKILL.md && printf '---CMD---' && gog-wrapper calendar events"`,
+            allowlist: [{ pattern: catPath }, { pattern: printfPath }, { pattern: gogPath }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+          });
+          expect(result.analysisOk).toBe(true);
+          expect(result.allowlistSatisfied).toBe(true);
+          expect(result.allowlistMatches.length).toBe(3);
+          expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+          expect(result.segmentAllowlistEntries).toEqual([null]);
+          expect(result.segmentSatisfiedBy.length).toBe(result.segments.length);
+          expect(result.segmentAllowlistEntries.length).toBe(result.segments.length);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it("rejects wrapper chain when any inner command misses the allowlist", () => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const dir = makeTempDir();
+        const shellPath = path.join(dir, "sh");
+        const catPath = path.join(dir, "cat");
+        const rmPath = path.join(dir, "rm");
+        const gogPath = path.join(dir, "gog-wrapper");
+        writeExecutable(shellPath);
+        writeExecutable(catPath);
+        writeExecutable(rmPath);
+        writeExecutable(gogPath);
+        const env = makePathEnv(dir);
+        try {
+          const result = evaluateShellAllowlist({
+            command: `${shellPath} -c "cat SKILL.md && rm -rf / && gog-wrapper calendar events"`,
+            allowlist: [{ pattern: catPath }, { pattern: gogPath }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+          });
+          expect(result.analysisOk).toBe(true);
+          expect(result.allowlistSatisfied).toBe(false);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it("keeps single-command wrappers unchanged (no recursive allowlist lookup)", () => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const dir = makeTempDir();
+        const shellPath = path.join(dir, "sh");
+        const gogPath = path.join(dir, "gog-wrapper");
+        writeExecutable(shellPath);
+        writeExecutable(gogPath);
+        const env = makePathEnv(dir);
+        try {
+          const result = evaluateShellAllowlist({
+            command: `${shellPath} -c "gog-wrapper calendar events"`,
+            allowlist: [{ pattern: gogPath }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+          });
+          expect(result.analysisOk).toBe(true);
+          expect(result.allowlistSatisfied).toBe(false);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    });
   });
 });
 
