@@ -77,9 +77,11 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
     const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
     const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
+    const imported = pluginRegistry.plugins.filter((p) => p.imported);
 
     const lines = [
       `Loaded: ${loaded.length}`,
+      `Imported: ${imported.length}`,
       `Disabled: ${disabled.length}`,
       `Errors: ${errored.length}`,
       errored.length > 0

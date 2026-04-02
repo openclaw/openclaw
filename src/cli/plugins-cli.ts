@@ -140,6 +140,9 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   if (plugin.activated !== undefined) {
     parts.push(`  activated: ${plugin.activated ? "yes" : "no"}`);
   }
+  if (plugin.imported !== undefined) {
+    parts.push(`  imported: ${plugin.imported ? "yes" : "no"}`);
+  }
   if (plugin.explicitlyEnabled !== undefined) {
     parts.push(`  explicitly enabled: ${plugin.explicitlyEnabled ? "yes" : "no"}`);
   }

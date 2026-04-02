@@ -15,6 +15,8 @@ const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
+const listImportedBundledPluginFacadeIdsMock = vi.fn();
+const listImportedRuntimePluginIdsMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
@@ -45,6 +47,15 @@ vi.mock("./bundled-compat.js", () => ({
     withBundledPluginAllowlistCompatMock(...args),
   withBundledPluginEnablementCompat: (...args: unknown[]) =>
     withBundledPluginEnablementCompatMock(...args),
+}));
+
+vi.mock("../plugin-sdk/facade-runtime.js", () => ({
+  listImportedBundledPluginFacadeIds: (...args: unknown[]) =>
+    listImportedBundledPluginFacadeIdsMock(...args),
+}));
+
+vi.mock("./runtime.js", () => ({
+  listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -247,6 +258,8 @@ describe("buildPluginStatusReport", () => {
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
     withBundledPluginEnablementCompatMock.mockReset();
+    listImportedBundledPluginFacadeIdsMock.mockReset();
+    listImportedRuntimePluginIdsMock.mockReset();
     loadConfigMock.mockReturnValue({});
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
@@ -260,6 +273,8 @@ describe("buildPluginStatusReport", () => {
     withBundledPluginEnablementCompatMock.mockImplementation(
       (params: { config: unknown }) => params.config,
     );
+    listImportedBundledPluginFacadeIdsMock.mockReturnValue([]);
+    listImportedRuntimePluginIdsMock.mockReturnValue([]);
     setPluginLoadResult({ plugins: [] });
   });
 
@@ -425,6 +440,28 @@ describe("buildPluginStatusReport", () => {
     });
 
     expect(report.plugins[0]?.version).toBe("2026.3.23");
+  });
+
+  it("marks plugins as imported when runtime or facade state has loaded them", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({ id: "runtime-loaded" }),
+        createPluginRecord({ id: "facade-loaded" }),
+        createPluginRecord({ id: "cold-plugin" }),
+      ],
+    });
+    listImportedRuntimePluginIdsMock.mockReturnValue(["runtime-loaded"]);
+    listImportedBundledPluginFacadeIdsMock.mockReturnValue(["facade-loaded"]);
+
+    const report = buildPluginStatusReport({ config: {} });
+
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "runtime-loaded", imported: true }),
+        expect.objectContaining({ id: "facade-loaded", imported: true }),
+        expect.objectContaining({ id: "cold-plugin", imported: false }),
+      ]),
+    );
   });
 
   it("builds an inspect report with capability shape and policy", () => {

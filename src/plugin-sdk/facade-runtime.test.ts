@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   canLoadActivatedBundledPluginPublicSurface,
+  listImportedBundledPluginFacadeIds,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
   loadBundledPluginPublicSurfaceModuleSync,
+  resetFacadeRuntimeStateForTest,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
@@ -70,6 +72,7 @@ function createCircularPluginDir(prefix: string): string {
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
+  resetFacadeRuntimeStateForTest();
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -114,6 +117,7 @@ describe("plugin-sdk facade runtime", () => {
     });
     expect(first).toBe(second);
     expect(first.marker).toBe("identity-check");
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
   });
 
   it("breaks circular facade re-entry during module evaluation", () => {

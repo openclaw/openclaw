@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
@@ -16,6 +17,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
+import { listImportedRuntimePluginIds } from "./runtime.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -189,12 +191,17 @@ export function buildPluginStatusReport(params?: {
     env: params?.env,
     logger: createPluginLoaderLogger(log),
   });
+  const importedPluginIds = new Set([
+    ...listImportedRuntimePluginIds(),
+    ...listImportedBundledPluginFacadeIds(),
+  ]);
 
   return {
     workspaceDir,
     ...registry,
     plugins: registry.plugins.map((plugin) => ({
       ...plugin,
+      imported: importedPluginIds.has(plugin.id),
       version: resolveReportedPluginVersion(plugin, params?.env),
     })),
   };

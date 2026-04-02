@@ -190,6 +190,28 @@ export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
 }
 
+function collectLoadedPluginIds(
+  registry: PluginRegistry | null | undefined,
+  ids: Set<string>,
+): void {
+  if (!registry) {
+    return;
+  }
+  for (const plugin of registry.plugins) {
+    if (plugin.status === "loaded") {
+      ids.add(plugin.id);
+    }
+  }
+}
+
+export function listImportedRuntimePluginIds(): string[] {
+  const imported = new Set<string>();
+  collectLoadedPluginIds(state.activeRegistry, imported);
+  collectLoadedPluginIds(state.channel.registry, imported);
+  collectLoadedPluginIds(state.httpRoute.registry, imported);
+  return [...imported].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resetPluginRuntimeStateForTest(): void {
   state.activeRegistry = null;
   state.activeVersion += 1;

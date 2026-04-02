@@ -124,6 +124,30 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
+  it("includes imported plugin counts in the plugins note", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "imported-plugin",
+            imported: true,
+          }),
+          createPluginRecord({
+            id: "cold-plugin",
+            imported: false,
+          }),
+        ],
+      }),
+    );
+    try {
+      const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
+      expect(pluginCalls).toHaveLength(1);
+      expect(String(pluginCalls[0]?.[0])).toContain("Imported: 1");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("omits plugin compatibility note when no legacy compatibility paths are present", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
