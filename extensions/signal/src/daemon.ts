@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type SignalDaemonOpts = {
   cliPath: string;
@@ -130,7 +131,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     });
   });
   child.on("error", (err) => {
-    error(`signal-cli spawn error: ${String(err)}`);
+    error(`signal-cli spawn error: ${formatErrorMessage(err)}`);
     settleExit({ source: "spawn-error", code: null, signal: null });
   });
 

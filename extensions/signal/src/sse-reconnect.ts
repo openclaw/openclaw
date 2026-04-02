@@ -7,6 +7,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { type SignalSseEvent, streamSignalEvents } from "./client.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -67,7 +68,7 @@ export async function runSignalSseLoop({
       if (abortSignal?.aborted) {
         return;
       }
-      runtime.error?.(`Signal SSE stream error: ${String(err)}`);
+      runtime.error?.(`Signal SSE stream error: ${formatErrorMessage(err)}`);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);

@@ -14,6 +14,7 @@ import {
   signalNumberTextInput,
   signalSetupAdapter,
 } from "./setup-core.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const channel = "signal" as const;
 
@@ -67,7 +68,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
         await prompter.note(result.error ?? "signal-cli install failed.", "Signal");
       }
     } catch (error) {
-      await prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
+      await prompter.note(`signal-cli install failed: ${formatErrorMessage(error)}`, "Signal");
     }
   },
   credentials: [],

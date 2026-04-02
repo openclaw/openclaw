@@ -38,6 +38,7 @@ import type {
 } from "./monitor/event-handler.types.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -468,7 +469,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {
-          runtime.error?.(`event handler failed: ${String(err)}`);
+          runtime.error?.(`event handler failed: ${formatErrorMessage(err)}`);
         });
       },
     });

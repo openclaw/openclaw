@@ -5,6 +5,7 @@ import {
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 type SignalGroupPolicy = "open" | "allowlist" | "disabled";
@@ -80,7 +81,7 @@ export async function handleSignalDirectMessageAccess(params: {
         params.log(`signal pairing request sender=${params.senderId}`);
       },
       onReplyError: (err) => {
-        params.log(`signal pairing reply failed for ${params.senderId}: ${String(err)}`);
+        params.log(`signal pairing reply failed for ${params.senderId}: ${formatErrorMessage(err)}`);
       },
     });
   }

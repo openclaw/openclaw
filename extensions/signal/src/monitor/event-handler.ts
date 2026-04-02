@@ -57,6 +57,7 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -250,7 +251,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           }
         : undefined,
       onRecordError: (err) => {
-        logVerbose(`signal: failed updating session meta: ${String(err)}`);
+        logVerbose(`signal: failed updating session meta: ${formatErrorMessage(err)}`);
       },
     });
 
@@ -303,7 +304,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         });
       },
       onError: (err, info) => {
-        deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
+        deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${formatErrorMessage(err)}`));
       },
     });
 
@@ -381,7 +382,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onError: (err) => {
-      deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
+      deps.runtime.error?.(`signal debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
 
@@ -471,7 +472,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     try {
       payload = JSON.parse(event.data) as SignalReceivePayload;
     } catch (err) {
-      deps.runtime.error?.(`failed to parse event: ${String(err)}`);
+      deps.runtime.error?.(`failed to parse event: ${formatErrorMessage(err)}`);
       return;
     }
     if (payload?.exception?.message) {
@@ -729,7 +730,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             }
           }
         } catch (err) {
-          deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+          deps.runtime.error?.(danger(`attachment fetch failed: ${formatErrorMessage(err)}`));
         }
       }
     }
@@ -764,7 +765,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           accountId: deps.accountId,
         });
       } catch (err) {
-        logVerbose(`signal read receipt failed for ${senderDisplay}: ${String(err)}`);
+        logVerbose(`signal read receipt failed for ${senderDisplay}: ${formatErrorMessage(err)}`);
       }
     } else if (
       deps.sendReadReceipts &&

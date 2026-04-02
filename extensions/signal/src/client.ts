@@ -1,6 +1,7 @@
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -126,7 +127,7 @@ export async function signalCheck(
     return {
       ok: false,
       status: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.message : formatErrorMessage(err),
     };
   }
 }
