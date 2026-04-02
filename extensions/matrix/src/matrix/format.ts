@@ -215,6 +215,14 @@ function resolveMentionUserId(match: MatrixMentionCandidate): string | null {
   return match.userId ?? null;
 }
 
+async function resolveMatrixSelfUserId(client: MatrixClient): Promise<string | null> {
+  const getUserId = (client as { getUserId?: () => Promise<string> | string }).getUserId;
+  if (typeof getUserId !== "function") {
+    return null;
+  }
+  return await Promise.resolve(getUserId.call(client)).catch(() => null);
+}
+
 function mutateInlineTokensWithMentions(params: {
   children: MarkdownInlineToken[];
   userIds: string[];
@@ -303,7 +311,7 @@ async function resolveMarkdownMentionState(params: {
   const markdown = maskEscapedMentions(params.markdown ?? "");
   const tokens = md.parse(markdown, {});
   restoreEscapedMentionsInBlockTokens(tokens);
-  const selfUserId = await params.client.getUserId().catch(() => null);
+  const selfUserId = await resolveMatrixSelfUserId(params.client);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
   let roomMentioned = false;

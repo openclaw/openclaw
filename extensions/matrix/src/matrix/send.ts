@@ -407,6 +407,22 @@ export async function sendSingleTextMessageMatrix(
   );
 }
 
+async function getPreviousMatrixEvent(
+  client: MatrixClient,
+  roomId: string,
+  eventId: string,
+): Promise<Record<string, unknown> | null> {
+  const getEvent = (
+    client as {
+      getEvent?: (roomId: string, eventId: string) => Promise<Record<string, unknown>>;
+    }
+  ).getEvent;
+  if (typeof getEvent !== "function") {
+    return null;
+  }
+  return await Promise.resolve(getEvent.call(client, roomId, eventId)).catch(() => null);
+}
+
 export async function editMessageMatrix(
   roomId: string,
   originalEventId: string,
@@ -441,7 +457,7 @@ export async function editMessageMatrix(
         content: newContent,
         markdown: convertedText,
       });
-      const previousEvent = await client.getEvent(resolvedRoom, originalEventId).catch(() => null);
+      const previousEvent = await getPreviousMatrixEvent(client, resolvedRoom, originalEventId);
       const previousContent = resolvePreviousEditContent(previousEvent);
       const replaceMentions = diffMatrixMentions(
         extractMatrixMentions(newContent),
