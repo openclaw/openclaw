@@ -232,6 +232,32 @@ function loadAuthProfileStoreForAgent(
     return asStore;
   }
 
+  // Fallback: if auth-profiles.json exists but uses legacy format (no "profiles" field),
+  // parse it as legacy store and migrate to new format. This handles the common case
+  // where users manually create auth-profiles.json with the old flat structure.
+  // Fixes #59629: auth-profiles.json parsing broken in v2026.3.31 (regression from 2026.3.8)
+  const authPathLegacyRaw = loadJsonFile(authPath);
+  const authPathLegacy = coerceLegacyStore(authPathLegacyRaw);
+  if (authPathLegacy) {
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+    };
+    applyLegacyStore(store, authPathLegacy);
+    const mergedOAuth = mergeOAuthFileIntoStore(store);
+    const syncedCli = syncExternalCliCredentialsTimed(store, { log: !readOnly });
+    const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
+    const shouldWrite =
+      !readOnly && !forceReadOnly && (mergedOAuth || syncedCli || authPathLegacy !== null);
+    if (shouldWrite) {
+      saveJsonFile(authPath, store);
+    }
+    if (!readOnly) {
+      writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), store);
+    }
+    return store;
+  }
+
   // Fallback: inherit auth-profiles from main agent if subagent has none
   if (agentDir && !readOnly) {
     const mainStore = loadPersistedAuthProfileStore();
