@@ -194,7 +194,6 @@ describe("cron service ops regressions", () => {
   });
 
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
-    vi.useRealTimers();
     const store = opsRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
     const job = createIsolatedRegressionJob({
@@ -217,7 +216,10 @@ describe("cron service ops regressions", () => {
       runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
     });
 
-    const result = await run(state, job.id, "force");
+    const resultPromise = run(state, job.id, "force");
+    await abortAwareRunner.waitForStart();
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await resultPromise;
     expect(result).toEqual({ ok: true, ran: true });
     expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
 
