@@ -117,12 +117,22 @@ export function getCategoryDetail(
   category: ContextCategory,
 ): CategoryDetailItem[] {
   switch (category) {
-    case "system-prompt":
+    case "system-prompt": {
+      // Compute the same disjoint core as getCategoryBreakdown so detail rows
+      // sum to the overview total. Workspace files, skills, and tool-list text
+      // are embedded inside projectContextChars; subtract them to get the
+      // core project context, leaving nonProjectContextChars untouched since
+      // it contains framework/runtime prompt text with no embedded segments.
+      const embeddedChars =
+        report.injectedWorkspaceFiles.reduce((s, f) => s + f.injectedChars, 0) +
+        report.skills.promptChars +
+        report.tools.listChars;
+      const coreProjectChars = Math.max(0, report.systemPrompt.projectContextChars - embeddedChars);
       return [
         {
           name: "Project Context",
-          chars: report.systemPrompt.projectContextChars,
-          tokens: estimateTokensFromChars(report.systemPrompt.projectContextChars),
+          chars: coreProjectChars,
+          tokens: estimateTokensFromChars(coreProjectChars),
         },
         {
           name: "Non-Project Context",
@@ -130,6 +140,7 @@ export function getCategoryDetail(
           tokens: estimateTokensFromChars(report.systemPrompt.nonProjectContextChars),
         },
       ];
+    }
     case "workspace-files":
       return report.injectedWorkspaceFiles.map((f) => ({
         name: f.name,

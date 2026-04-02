@@ -26,7 +26,10 @@ import {
 
 type ContextVizView = "overview" | "detail";
 
-const REFRESH_INTERVAL_MS = 2000;
+// Context report only changes between turns, so a high polling cadence is
+// unnecessary and causes expensive transcript scans on sessions.usage.
+// 10 seconds is sufficient; manual refresh via "r" is available for immediacy.
+const REFRESH_INTERVAL_MS = 10_000;
 const SEPARATOR_CHAR = "\u2500";
 
 export type ContextVizOptions = {
@@ -66,14 +69,17 @@ export class ContextVizOverlay implements Component {
     try {
       const report = await this.options.fetchReport();
       if (report) {
-        this.report = report;
-        this.categories = getCategoryBreakdown(report);
-        const totalChars = getTotalChars(report);
-        pushSnapshot(this.history, totalChars);
-        if (this.view === "detail") {
-          const cat = this.categories[this.selectedIndex];
-          if (cat) {
-            this.detailItems = getCategoryDetail(report, cat.category);
+        // Skip update if the report hasn't changed since last fetch
+        if (!this.report || report.generatedAt !== this.report.generatedAt) {
+          this.report = report;
+          this.categories = getCategoryBreakdown(report);
+          const totalChars = getTotalChars(report);
+          pushSnapshot(this.history, totalChars);
+          if (this.view === "detail") {
+            const cat = this.categories[this.selectedIndex];
+            if (cat) {
+              this.detailItems = getCategoryDetail(report, cat.category);
+            }
           }
         }
       }
