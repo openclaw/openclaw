@@ -1,0 +1,34 @@
+{
+  "gateway": {
+    "port": 33388,
+    "bind": "loopback",
+    "mode": "local",
+    "auth": {
+      "mode": "none"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "models": {
+        "doubao": {
+          "alias": "volcengine/doubao-seed-2-0-mini-260215"
+        }
+      }
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": [
+        "./skills/bridge-load-calculation",
+        "./skills/bridge-structure-check",
+        "./skills/bridge-code-query",
+        "./skills/bridge-drawing-review",
+        "./skills/bridge-quantity-survey",
+        "./skills/bridge-seismic-analysis",
+        "./skills/bridge-prestress-calc",
+        "./skills/bridge-foundation-design"
+      ],
+      "watch": false
+    }
+  }
+}

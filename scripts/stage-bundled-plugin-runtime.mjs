@@ -13,6 +13,35 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
 }
 
 function ensureSymlink(targetValue, targetPath, type) {
+  // Windows: use copy instead of symlink to avoid permission issues
+  if (process.platform === "win32") {
+    try {
+      const sourcePath = path.resolve(path.dirname(targetPath), targetValue);
+      if (fs.existsSync(targetPath)) {
+        const stat = fs.lstatSync(targetPath);
+        if (stat.isSymbolicLink() || stat.isFile()) {
+          fs.unlinkSync(targetPath);
+        } else {
+          removePathIfExists(targetPath);
+        }
+      }
+      // Copy file or directory
+      if (fs.lstatSync(sourcePath).isDirectory()) {
+        fs.mkdirSync(targetPath, { recursive: true });
+        copyDir(sourcePath, targetPath);
+      } else {
+        fs.copyFileSync(sourcePath, targetPath);
+      }
+      return;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        console.warn(`Warning: Failed to copy ${targetPath}: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Non-Windows: use symlink
   try {
     fs.symlinkSync(targetValue, targetPath, type);
     return;
@@ -32,6 +61,20 @@ function ensureSymlink(targetValue, targetPath, type) {
 
   removePathIfExists(targetPath);
   fs.symlinkSync(targetValue, targetPath, type);
+}
+
+function copyDir(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDir(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
