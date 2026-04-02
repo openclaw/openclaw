@@ -53,45 +53,35 @@ import {
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 
-function makeRoute(
-  overrides: Partial<{
-    agentId: string;
-    accountId: string;
-    sessionKey: string;
-    mainSessionKey: string;
-  }> = {},
-) {
+type TestRoute = Parameters<typeof buildWhatsAppInboundContext>[0]["route"];
+type TestMsg = Parameters<typeof buildWhatsAppInboundContext>[0]["msg"];
+
+function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   return {
     agentId: "main",
+    channel: "whatsapp",
     accountId: "default",
     sessionKey: "agent:main:whatsapp:direct:+1000",
     mainSessionKey: "agent:main:whatsapp:direct:+1000",
+    lastRoutePolicy: "main",
+    matchedBy: "default",
     ...overrides,
   };
 }
 
-function makeMsg(
-  overrides: Partial<{
-    id: string;
-    from: string;
-    to: string;
-    chatType: "direct" | "group";
-    body: string;
-    timestamp: number;
-    senderName: string;
-    senderJid: string;
-    senderE164: string;
-    groupSubject: string;
-    groupParticipants: Array<{ id: string; name?: string }>;
-    sendComposing: () => Promise<void>;
-  }> = {},
-) {
+function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
   return {
     id: "msg1",
     from: "+1000",
     to: "+2000",
-    chatType: "direct" as const,
+    conversationId: "+1000",
+    accountId: "default",
+    chatId: "+1000",
+    chatType: "direct",
     body: "hi",
+    sendComposing: async () => {},
+    reply: async () => {},
+    sendMedia: async () => {},
     ...overrides,
   };
 }
