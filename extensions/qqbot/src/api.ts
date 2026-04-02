@@ -3,6 +3,7 @@ import os from "node:os";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -105,7 +106,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   } catch (err) {
     debugError(`[qqbot-api:${appId}] <<< Network error:`, err);
     throw new Error(
-      `Network error getting access_token: ${err instanceof Error ? err.message : String(err)}`,
+      `Network error getting access_token: ${err instanceof Error ? err.message : formatErrorMessage(err)}`,
     );
   }
 
@@ -129,7 +130,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   } catch (err) {
     debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
     throw new Error(
-      `Failed to parse access_token response: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to parse access_token response: ${err instanceof Error ? err.message : formatErrorMessage(err)}`,
     );
   }
 
@@ -240,7 +241,7 @@ export async function apiRequest<T = unknown>(
       throw new Error(`Request timeout[${path}]: exceeded ${timeout}ms`);
     }
     debugError(`[qqbot-api] <<< Network error:`, err);
-    throw new Error(`Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Network error [${path}]: ${err instanceof Error ? err.message : formatErrorMessage(err)}`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -262,7 +263,7 @@ export async function apiRequest<T = unknown>(
     data = JSON.parse(rawBody) as T;
   } catch (err) {
     throw new Error(
-      `Failed to parse response[${path}]: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to parse response[${path}]: ${err instanceof Error ? err.message : formatErrorMessage(err)}`,
     );
   }
 
@@ -292,7 +293,7 @@ async function apiRequestWithRetry<T = unknown>(
     try {
       return await apiRequest<T>(accessToken, method, path, body);
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
 
       const errMsg = lastError.message;
       if (

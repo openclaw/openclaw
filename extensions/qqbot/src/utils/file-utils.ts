@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /** Maximum file size accepted by the QQ Bot API. */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -33,7 +34,7 @@ export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): File
     return {
       ok: false,
       size: 0,
-      error: `Failed to read file metadata: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to read file metadata: ${err instanceof Error ? err.message : formatErrorMessage(err)}`,
     };
   }
 }

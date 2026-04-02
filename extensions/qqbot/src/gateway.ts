@@ -59,6 +59,7 @@ import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
 import { isGlobalTTSAvailable, resolveTTSConfig } from "./utils/audio-convert.js";
 import { runDiagnostics } from "./utils/platform.js";
 import { parseFaceTags, parseRefIndices, buildAttachmentSummaries } from "./utils/text-parsing.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 // QQ Bot intents grouped by permission level.
 const INTENTS = {
@@ -1095,7 +1096,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                     timeoutId = null;
                   }
 
-                  const errMsg = String(err);
+                  const errMsg = formatErrorMessage(err);
                   if (errMsg.includes("401") || errMsg.includes("key") || errMsg.includes("auth")) {
                     log?.error(`[qqbot:${account.accountId}] AI auth error: ${errMsg}`);
                   } else {
@@ -1453,7 +1454,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       });
     } catch (err) {
       isConnecting = false;
-      const errMsg = String(err);
+      const errMsg = formatErrorMessage(err);
       log?.error(`[qqbot:${account.accountId}] Connection failed: ${err}`);
 
       // Back off more aggressively after rate-limit failures.

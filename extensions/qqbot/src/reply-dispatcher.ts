@@ -44,6 +44,7 @@ import {
   resolveQQBotLocalMediaPath,
   sanitizeFileName,
 } from "./utils/platform.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export interface MessageTarget {
   type: "c2c" | "guild" | "dm" | "group";
@@ -77,7 +78,7 @@ export async function sendWithTokenRetry<T>(
     const token = await getAccessToken(appId, clientSecret);
     return await sendFn(token);
   } catch (err) {
-    const errMsg = String(err);
+    const errMsg = formatErrorMessage(err);
     if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
       log?.info(`[qqbot:${accountId}] Token may be expired, refreshing...`);
       clearTokenCache(appId);

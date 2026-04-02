@@ -7,6 +7,7 @@
 
 import type { ResolvedQQBotAccount } from "./types.js";
 import { debugLog, debugError } from "./utils/debug-log.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 // Re-export known-user types and functions from the canonical module.
 export type { KnownUser } from "./known-users.js";
@@ -158,7 +159,7 @@ export async function sendProactive(
       timestamp: result.timestamp,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = err instanceof Error ? err.message : formatErrorMessage(err);
     debugError(`[qqbot:proactive] Failed to send message: ${message}`);
 
     return {
@@ -299,7 +300,7 @@ export async function sendProactiveMessageDirect(
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.message : formatErrorMessage(err),
     };
   }
 }

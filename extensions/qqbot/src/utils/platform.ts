@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { debugLog, debugWarn } from "./debug-log.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 // Basic platform information.
 
@@ -306,7 +307,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
   } catch (err) {
     _silkWasmAvailable = false;
     debugWarn(
-      `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : String(err)})`,
+      `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : formatErrorMessage(err)})`,
     );
   }
   return _silkWasmAvailable;
