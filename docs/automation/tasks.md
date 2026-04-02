@@ -226,9 +226,9 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ### Tasks and TaskFlow
 
-[TaskFlow](/automation/clawflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw flows` to inspect the orchestrating flow.
+[TaskFlow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw flows` to inspect the orchestrating flow.
 
-See [TaskFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for details.
+See [TaskFlow](/automation/taskflow) and [CLI: flows](/cli/flows) for details.
 
 ### Tasks and cron
 
@@ -253,7 +253,7 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 ## Related
 
 - [Automation Overview](/automation) — all automation mechanisms at a glance
-- [TaskFlow](/automation/clawflow) — flow orchestration above tasks
+- [TaskFlow](/automation/taskflow) — flow orchestration above tasks
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
