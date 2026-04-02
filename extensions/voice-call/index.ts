@@ -28,11 +28,23 @@ const voiceCallConfigSchema = {
     const providerRaw = raw.provider === "log" ? "mock" : raw.provider;
     const provider = providerRaw ?? (enabled ? "mock" : undefined);
 
+    const rawRealtime = (raw.realtime as Record<string, unknown> | undefined) ?? {};
+    // Apply REALTIME_VOICE_ENABLED before VoiceCallConfigSchema.parse() bakes in
+    // realtime.enabled:false as the Zod schema default. Without this pre-application,
+    // parse() fills in the default, making the value indistinguishable from an explicit
+    // false — and the undefined-check in resolveVoiceCallConfig is never reached even
+    // when the user genuinely omitted the field.
+    const realtimeWithEnv =
+      rawRealtime.enabled === undefined && process.env.REALTIME_VOICE_ENABLED === "true"
+        ? { ...rawRealtime, enabled: true }
+        : rawRealtime;
+
     return VoiceCallConfigSchema.parse({
       ...raw,
       enabled,
       provider,
       fromNumber: raw.fromNumber ?? legacyFrom,
+      realtime: realtimeWithEnv,
     });
   },
   uiHints: {
