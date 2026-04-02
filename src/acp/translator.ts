@@ -685,17 +685,21 @@ export class AcpGatewayAgent implements Agent {
 
       const sendWithProvenanceFallback = async () => {
         try {
-          await this.gateway.request("chat.send", {
-            ...requestParams,
-            systemInputProvenance,
-            systemProvenanceReceipt,
-          });
+          await this.gateway.request(
+            "chat.send",
+            {
+              ...requestParams,
+              systemInputProvenance,
+              systemProvenanceReceipt,
+            },
+            { timeoutMs: null },
+          );
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
-            await this.gateway.request("chat.send", requestParams);
+            await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
             return;
           }
           throw err;

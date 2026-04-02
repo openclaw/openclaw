@@ -83,6 +83,7 @@ describe("acp prompt cwd prefix", () => {
       expect.objectContaining({
         message: expect.stringMatching(/\[Working directory: ~[\\/]openclaw-test\]/),
       }),
+      { timeoutMs: null },
     );
   });
 
@@ -93,6 +94,7 @@ describe("acp prompt cwd prefix", () => {
       expect.objectContaining({
         message: expect.stringContaining("[Working directory: ~\\openclaw-test]"),
       }),
+      { timeoutMs: null },
     );
   });
 
@@ -109,6 +111,7 @@ describe("acp prompt cwd prefix", () => {
         },
         systemProvenanceReceipt: undefined,
       }),
+      { timeoutMs: null },
     );
   });
 
@@ -125,24 +128,28 @@ describe("acp prompt cwd prefix", () => {
         },
         systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),
       }),
+      { timeoutMs: null },
     );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         systemProvenanceReceipt: expect.stringContaining("bridge=openclaw-acp"),
       }),
+      { timeoutMs: null },
     );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         systemProvenanceReceipt: expect.stringContaining(`originSessionId=${TEST_SESSION_ID}`),
       }),
+      { timeoutMs: null },
     );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         systemProvenanceReceipt: expect.stringContaining(`targetSession=${TEST_SESSION_KEY}`),
       }),
+      { timeoutMs: null },
     );
   });
 
@@ -185,6 +192,7 @@ describe("acp prompt cwd prefix", () => {
         },
         systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),
       }),
+      { timeoutMs: null },
     );
     expect(requestSpy).toHaveBeenNthCalledWith(
       2,
@@ -193,6 +201,7 @@ describe("acp prompt cwd prefix", () => {
         systemInputProvenance: expect.anything(),
         systemProvenanceReceipt: expect.anything(),
       }),
+      { timeoutMs: null },
     );
   });
 });
