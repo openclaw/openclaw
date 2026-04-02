@@ -30,6 +30,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
@@ -406,14 +407,14 @@ function registerEventHandlers(
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
     if (fireAndForget) {
       void params.task().catch((err) => {
-        error(`${params.errorMessage}: ${String(err)}`);
+        error(`${params.errorMessage}: ${formatErrorMessage(err)}`);
       });
       return;
     }
     try {
       await params.task();
     } catch (err) {
-      error(`${params.errorMessage}: ${String(err)}`);
+      error(`${params.errorMessage}: ${formatErrorMessage(err)}`);
     }
   };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
@@ -459,7 +460,7 @@ function registerEventHandlers(
         await recordProcessedFeishuMessage(messageId, accountId, log);
       } catch (err) {
         error(
-          `feishu[${accountId}]: failed to record merged dedupe id ${messageId}: ${String(err)}`,
+          `feishu[${accountId}]: failed to record merged dedupe id ${messageId}: ${formatErrorMessage(err)}`,
         );
       }
     }
@@ -542,7 +543,7 @@ function registerEventHandlers(
       for (const entry of entries) {
         releaseFeishuMessageProcessing(entry.message.message_id, accountId);
       }
-      error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
+      error(`feishu[${accountId}]: inbound debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
 
@@ -564,7 +565,7 @@ function registerEventHandlers(
       if (fireAndForget) {
         void processMessage().catch((err) => {
           releaseFeishuMessageProcessing(messageId, accountId);
-          error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+          error(`feishu[${accountId}]: error handling message: ${formatErrorMessage(err)}`);
         });
         return;
       }
@@ -572,7 +573,7 @@ function registerEventHandlers(
         await processMessage();
       } catch (err) {
         releaseFeishuMessageProcessing(messageId, accountId);
-        error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling message: ${formatErrorMessage(err)}`);
       }
     },
     "im.message.message_read_v1": async () => {
@@ -586,7 +587,7 @@ function registerEventHandlers(
         }
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
-        error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling bot added event: ${formatErrorMessage(err)}`);
       }
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
@@ -597,7 +598,7 @@ function registerEventHandlers(
         }
         log(`feishu[${accountId}]: bot removed from chat ${chatId}`);
       } catch (err) {
-        error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling bot removed event: ${formatErrorMessage(err)}`);
       }
     },
     "drive.notice.comment_add_v1": async (data: unknown) => {
@@ -785,13 +786,13 @@ function registerEventHandlers(
           });
         if (fireAndForget) {
           promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
+            error(`feishu[${accountId}]: error handling bot menu event: ${formatErrorMessage(err)}`);
           });
           return;
         }
         await promise;
       } catch (err) {
-        error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling bot menu event: ${formatErrorMessage(err)}`);
       }
     },
     "card.action.trigger": async (data: unknown) => {
@@ -810,13 +811,13 @@ function registerEventHandlers(
         });
         if (fireAndForget) {
           promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+            error(`feishu[${accountId}]: error handling card action: ${formatErrorMessage(err)}`);
           });
         } else {
           await promise;
         }
       } catch (err) {
-        error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling card action: ${formatErrorMessage(err)}`);
       }
     },
   });
