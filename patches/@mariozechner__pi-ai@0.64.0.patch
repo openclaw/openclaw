@@ -1,0 +1,51 @@
+diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
+index bfe654d140667f9d9ffb9cbe699af8b5b53c5223..23f1b20ae9f178ed4960d99aeafc45609a666691 100644
+--- a/dist/providers/openai-codex-responses.js
++++ b/dist/providers/openai-codex-responses.js
+@@ -78,7 +78,7 @@ export const streamOpenAICodexResponses = (model, context, options) => {
+             if (!apiKey) {
+                 throw new Error(`No API key for provider: ${model.provider}`);
+             }
+-            const accountId = extractAccountId(apiKey);
++            const accountId = extractAccountId(apiKey, model.baseUrl);
+             let body = buildRequestBody(model, context, options);
+             const nextBody = await options?.onPayload?.(body, model);
+             if (nextBody !== undefined) {
+@@ -684,7 +684,17 @@ async function parseErrorResponse(response) {
+ // ============================================================================
+ // Auth & Headers
+ // ============================================================================
+-function extractAccountId(token) {
++function isOfficialCodexBaseUrl(baseUrl) {
++    try {
++        const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_CODEX_BASE_URL;
++        const url = new URL(raw);
++        return /(^|\.)chatgpt\.com$/i.test(url.hostname);
++    }
++    catch {
++        return true;
++    }
++}
++function extractAccountId(token, baseUrl) {
+     try {
+         const parts = token.split(".");
+         if (parts.length !== 3)
+@@ -696,6 +706,8 @@ function extractAccountId(token) {
+         return accountId;
+     }
+     catch {
++        if (!isOfficialCodexBaseUrl(baseUrl))
++            return undefined;
+         throw new Error("Failed to extract accountId from token");
+     }
+ }
+@@ -711,7 +723,8 @@ function buildHeaders(initHeaders, additionalHeaders, accountId, token, sessionI
+         headers.set(key, value);
+     }
+     headers.set("Authorization", `Bearer ${token}`);
+-    headers.set("chatgpt-account-id", accountId);
++    if (accountId)
++        headers.set("chatgpt-account-id", accountId);
+     headers.set("originator", "pi");
+     const userAgent = _os ? `pi (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "pi (browser)";
+     headers.set("User-Agent", userAgent);
