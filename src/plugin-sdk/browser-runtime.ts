@@ -13,6 +13,11 @@ export {
   resolveBrowserControlAuth,
   resolveProfile,
 } from "./browser-config.js";
+export {
+  parseBrowserMajorVersion,
+  readBrowserVersion,
+  resolveGoogleChromeExecutableForPlatform,
+} from "./browser-host-inspection.js";
 export { closeTrackedBrowserTabsForSessions, movePathToTrash } from "./browser-maintenance.js";
 import {
   createLazyFacadeObjectValue,
@@ -151,16 +156,10 @@ export const normalizeBrowserRequestPath: FacadeModule["normalizeBrowserRequestP
   loadFacadeModule()["normalizeBrowserRequestPath"](
     ...args,
   )) as FacadeModule["normalizeBrowserRequestPath"];
-export const parseBrowserMajorVersion: FacadeModule["parseBrowserMajorVersion"] = ((...args) =>
-  loadFacadeModule()["parseBrowserMajorVersion"](
-    ...args,
-  )) as FacadeModule["parseBrowserMajorVersion"];
 export const persistBrowserProxyFiles: FacadeModule["persistBrowserProxyFiles"] = ((...args) =>
   loadFacadeModule()["persistBrowserProxyFiles"](
     ...args,
   )) as FacadeModule["persistBrowserProxyFiles"];
-export const readBrowserVersion: FacadeModule["readBrowserVersion"] = ((...args) =>
-  loadFacadeModule()["readBrowserVersion"](...args)) as FacadeModule["readBrowserVersion"];
 export const registerBrowserCli: FacadeModule["registerBrowserCli"] = ((...args) =>
   loadFacadeModule()["registerBrowserCli"](...args)) as FacadeModule["registerBrowserCli"];
 export const registerBrowserRoutes: FacadeModule["registerBrowserRoutes"] = ((...args) =>
@@ -171,11 +170,6 @@ export const resolveExistingPathsWithinRoot: FacadeModule["resolveExistingPathsW
   loadFacadeModule()["resolveExistingPathsWithinRoot"](
     ...args,
   )) as FacadeModule["resolveExistingPathsWithinRoot"];
-export const resolveGoogleChromeExecutableForPlatform: FacadeModule["resolveGoogleChromeExecutableForPlatform"] =
-  ((...args) =>
-    loadFacadeModule()["resolveGoogleChromeExecutableForPlatform"](
-      ...args,
-    )) as FacadeModule["resolveGoogleChromeExecutableForPlatform"];
 export const resolveRequestedBrowserProfile: FacadeModule["resolveRequestedBrowserProfile"] = ((
   ...args
 ) =>
