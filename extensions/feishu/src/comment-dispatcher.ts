@@ -8,7 +8,7 @@ import {
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { CommentFileType } from "./comment-target.js";
-import { replyComment } from "./drive.js";
+import { deliverCommentThreadText } from "./drive.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 export type CreateFeishuCommentReplyDispatcherParams = {
@@ -19,6 +19,7 @@ export type CreateFeishuCommentReplyDispatcherParams = {
   fileToken: string;
   fileType: CommentFileType;
   commentId: string;
+  isWholeComment?: boolean;
 };
 
 export function createFeishuCommentReplyDispatcher(
@@ -63,11 +64,12 @@ export function createFeishuCommentReplyDispatcher(
         }
         const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
         for (const chunk of chunks) {
-          await replyComment(client, {
+          await deliverCommentThreadText(client, {
             file_token: params.fileToken,
             file_type: params.fileType,
             comment_id: params.commentId,
             content: chunk,
+            is_whole_comment: params.isWholeComment,
           });
         }
       },

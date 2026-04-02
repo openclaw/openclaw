@@ -6,8 +6,10 @@ import { normalizeCommentFileType, type CommentFileType } from "./comment-target
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_COMMENT_VERIFY_TIMEOUT_MS = 3_000;
-const FEISHU_COMMENT_REPLY_PAGE_SIZE = 200;
+const FEISHU_COMMENT_REPLY_PAGE_SIZE = 100;
 const FEISHU_COMMENT_REPLY_PAGE_LIMIT = 5;
+const FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS = 1_000;
+const FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT = 6;
 
 type FeishuDriveCommentUserId = {
   open_id?: string;
@@ -39,6 +41,7 @@ type ResolveDriveCommentEventParams = {
   createClient?: (account: ResolvedFeishuAccount) => FeishuRequestClient;
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
+  waitMs?: (ms: number) => Promise<void>;
 };
 
 export type ResolvedDriveCommentEventTurn = {
@@ -49,6 +52,7 @@ export type ResolvedDriveCommentEventTurn = {
   noticeType: "add_comment" | "add_reply";
   fileToken: string;
   fileType: CommentFileType;
+  isWholeComment?: boolean;
   senderId: string;
   senderUserId?: string;
   timestamp?: string;
@@ -73,6 +77,7 @@ type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
 
 type FeishuOpenApiResponse<T> = {
   code?: number;
+  log_id?: string;
   msg?: string;
   data?: T;
 };
@@ -94,6 +99,7 @@ type FeishuDriveCommentReply = {
 
 type FeishuDriveCommentCard = {
   comment_id?: string;
+  is_whole?: boolean;
   quote?: string;
   reply_list?: {
     replies?: FeishuDriveCommentReply[];
@@ -122,6 +128,25 @@ function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    return JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function summarizeCommentRepliesForLog(replies: FeishuDriveCommentReply[]): string {
+  return safeJsonStringify(
+    replies.map((reply) => ({
+      reply_id: reply.reply_id,
+      text_len: extractReplyText(reply)?.length ?? 0,
+    })),
+  );
+}
+
 function encodeQuery(params: Record<string, string | undefined>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -132,6 +157,10 @@ function encodeQuery(params: Record<string, string | undefined>): string {
   }
   const queryString = query.toString();
   return queryString ? `?${queryString}` : "";
+}
+
+async function delayMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildDriveCommentTargetUrl(params: {
@@ -175,6 +204,26 @@ async function requestFeishuOpenApi<T>(params: {
   logger?: (message: string) => void;
   errorLabel: string;
 }): Promise<T | null> {
+  const formatErrorDetails = (error: unknown): string => {
+    if (!isRecord(error)) {
+      return String(error);
+    }
+    const response = isRecord(error.response) ? error.response : undefined;
+    const responseData = isRecord(response?.data) ? response?.data : undefined;
+    const details = {
+      message: typeof error.message === "string" ? error.message : String(error),
+      code: readString(error.code),
+      method: readString(isRecord(error.config) ? error.config.method : undefined),
+      url: readString(isRecord(error.config) ? error.config.url : undefined),
+      http_status: typeof response?.status === "number" ? response.status : undefined,
+      feishu_code:
+        typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
+      feishu_msg: readString(responseData?.msg),
+      feishu_log_id: readString(responseData?.log_id),
+    };
+    return safeJsonStringify(details);
+  };
+
   const result = await raceWithTimeoutAndAbort(
     params.client.request({
       method: params.method,
@@ -186,7 +235,7 @@ async function requestFeishuOpenApi<T>(params: {
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
     .catch((error) => {
-      params.logger?.(`${params.errorLabel}: ${String(error)}`);
+      params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
       return null;
     });
   if (!result) {
@@ -254,8 +303,9 @@ async function fetchDriveCommentReplies(params: {
   timeoutMs: number;
   logger?: (message: string) => void;
   accountId: string;
-}): Promise<FeishuDriveCommentReply[]> {
+}): Promise<{ replies: FeishuDriveCommentReply[]; logIds: string[] }> {
   const replies: FeishuDriveCommentReply[] = [];
+  const logIds: string[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < FEISHU_COMMENT_REPLY_PAGE_LIMIT; page += 1) {
     const response = await requestFeishuOpenApi<FeishuDriveCommentRepliesListResponse>({
@@ -271,10 +321,15 @@ async function fetchDriveCommentReplies(params: {
       logger: params.logger,
       errorLabel: `feishu[${params.accountId}]: failed to fetch comment replies for ${params.commentId}`,
     });
+    if (response?.log_id?.trim()) {
+      logIds.push(response.log_id.trim());
+    }
     if (response?.code !== 0) {
       if (response) {
         params.logger?.(
-          `feishu[${params.accountId}]: failed to fetch comment replies for ${params.commentId}: ${response.msg ?? "unknown error"}`,
+          `feishu[${params.accountId}]: failed to fetch comment replies for ${params.commentId}: ` +
+            `${response.msg ?? "unknown error"} ` +
+            `log_id=${response.log_id?.trim() || "unknown"}`,
         );
       }
       break;
@@ -285,7 +340,7 @@ async function fetchDriveCommentReplies(params: {
     }
     pageToken = response.data.page_token.trim();
   }
-  return replies;
+  return { replies, logIds };
 }
 
 async function fetchDriveCommentContext(params: {
@@ -297,9 +352,11 @@ async function fetchDriveCommentContext(params: {
   timeoutMs: number;
   logger?: (message: string) => void;
   accountId: string;
+  waitMs: (ms: number) => Promise<void>;
 }): Promise<{
   documentTitle?: string;
   documentUrl?: string;
+  isWholeComment?: boolean;
   quoteText?: string;
   rootCommentText?: string;
   targetReplyText?: string;
@@ -335,35 +392,96 @@ async function fetchDriveCommentContext(params: {
 
   const commentCard =
     commentResponse?.code === 0
-      ? ((commentResponse.data?.items ?? []).find(
+      ? (commentResponse.data?.items ?? []).find(
           (item) => item.comment_id?.trim() === params.commentId,
-        ) ?? commentResponse.data?.items?.[0])
+        )
       : undefined;
   const embeddedReplies = commentCard?.reply_list?.replies ?? [];
+  params.logger?.(
+    `feishu[${params.accountId}]: embedded comment replies comment=${params.commentId} ` +
+      `count=${embeddedReplies.length} summary=${summarizeCommentRepliesForLog(embeddedReplies)}`,
+  );
   const embeddedTargetReply = params.replyId
     ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
     : embeddedReplies.at(-1);
 
   let replies = embeddedReplies;
+  let fetchedMatchedReply = params.replyId
+    ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
+    : undefined;
   if (!embeddedTargetReply || replies.length === 0) {
-    const fetchedReplies = await fetchDriveCommentReplies(params);
-    if (fetchedReplies.length > 0) {
-      replies = fetchedReplies;
+    params.logger?.(
+      `feishu[${params.accountId}]: fetching extra comment replies comment=${params.commentId} ` +
+        `requested_reply=${params.replyId ?? "none"} ` +
+        `embedded_count=${embeddedReplies.length} ` +
+        `embedded_hit=${embeddedTargetReply ? "yes" : "no"}`,
+    );
+    const fetched = await fetchDriveCommentReplies(params);
+    if (fetched.replies.length > 0) {
+      params.logger?.(
+        `feishu[${params.accountId}]: fetched extra comment replies comment=${params.commentId} ` +
+          `count=${fetched.replies.length} ` +
+          `log_ids=${safeJsonStringify(fetched.logIds)} ` +
+          `summary=${summarizeCommentRepliesForLog(fetched.replies)}`,
+      );
+      replies = fetched.replies;
+      fetchedMatchedReply = params.replyId
+        ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
+        : undefined;
+    }
+    if (params.replyId && !embeddedTargetReply && !fetchedMatchedReply) {
+      for (let attempt = 1; attempt <= FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT; attempt += 1) {
+        params.logger?.(
+          `feishu[${params.accountId}]: retrying comment reply lookup comment=${params.commentId} ` +
+            `requested_reply=${params.replyId} attempt=${attempt}/${FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT} ` +
+            `delay_ms=${FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS}`,
+        );
+        await params.waitMs(FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS);
+        const retried = await fetchDriveCommentReplies(params);
+        if (retried.replies.length > 0) {
+          params.logger?.(
+            `feishu[${params.accountId}]: fetched retried comment replies comment=${params.commentId} ` +
+              `attempt=${attempt} count=${retried.replies.length} ` +
+              `log_ids=${safeJsonStringify(retried.logIds)} ` +
+              `summary=${summarizeCommentRepliesForLog(retried.replies)}`,
+          );
+          replies = retried.replies;
+        }
+        fetchedMatchedReply = replies.find((reply) => reply.reply_id?.trim() === params.replyId);
+        if (fetchedMatchedReply) {
+          break;
+        }
+      }
     }
   }
 
   const rootReply = replies[0] ?? embeddedReplies[0];
-  const fetchedMatchedReply = params.replyId
-    ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
-    : undefined;
   const targetReply = params.replyId
     ? (embeddedTargetReply ?? fetchedMatchedReply ?? undefined)
     : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
+  const matchSource = params.replyId
+    ? embeddedTargetReply
+      ? "embedded"
+      : fetchedMatchedReply
+        ? "fetched"
+        : "miss"
+    : targetReply === rootReply
+      ? "fallback_root"
+      : targetReply === embeddedTargetReply
+        ? "embedded_latest"
+        : "fetched_latest";
+  params.logger?.(
+    `feishu[${params.accountId}]: comment reply resolution comment=${params.commentId} ` +
+      `requested_reply=${params.replyId ?? "none"} match_source=${matchSource} ` +
+      `root=${safeJsonStringify({ reply_id: rootReply?.reply_id, text_len: extractReplyText(rootReply)?.length ?? 0 })} ` +
+      `target=${safeJsonStringify({ reply_id: targetReply?.reply_id, text_len: extractReplyText(targetReply)?.length ?? 0 })}`,
+  );
   const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
 
   return {
     documentTitle: meta?.title?.trim() || undefined,
     documentUrl: meta?.url?.trim() || undefined,
+    isWholeComment: commentCard?.is_whole,
     quoteText: commentCard?.quote?.trim() || undefined,
     rootCommentText: extractReplyText(rootReply),
     targetReplyText: extractReplyText(targetReply),
@@ -376,6 +494,7 @@ function buildDriveCommentSurfacePrompt(params: {
   fileToken: string;
   commentId: string;
   replyId?: string;
+  isWholeComment?: boolean;
   isMentioned?: boolean;
   documentTitle?: string;
   documentUrl?: string;
@@ -413,12 +532,16 @@ function buildDriveCommentSurfacePrompt(params: {
     `file_type: ${params.fileType}`,
     `comment_id: ${params.commentId}`,
   );
+  if (params.isWholeComment === true) {
+    lines.push("This is a whole-document comment.");
+  }
   if (params.replyId?.trim()) {
     lines.push(`reply_id: ${params.replyId.trim()}`);
   }
   lines.push(
     "This is a Feishu document comment-thread event, not a Feishu IM conversation. Your final text reply will be posted automatically to the current comment thread and will not be sent as an instant message.",
     "If you need to inspect or handle the comment thread, prefer the feishu_drive tools: use list_comments / list_comment_replies to inspect comments, and use reply_comment/add_comment to notify the user after modifying the document.",
+    "Whole-document comments do not support direct replies. When the current comment is whole-document, use feishu_drive.add_comment for any user-visible follow-up instead of reply_comment.",
     'If the comment asks you to modify document content, such as adding, inserting, replacing, or deleting text, tables, or headings, you must first use feishu_doc to actually modify the document. Do not reply with only "done", "I\'ll handle it", or a restated plan without calling tools.',
     'If the comment quotes document content, that quoted text is usually the edit anchor. For requests like "insert xxx below this content", first locate the position around the quoted content, then use feishu_doc to make the change.',
     'If the comment asks you to summarize, explain, rewrite, translate, refine, continue, or review the document content "below", "above", "this paragraph", "this section", or the quoted content, you must also treat the quoted content as the primary target anchor instead of defaulting to the whole document.',
@@ -427,6 +550,11 @@ function buildDriveCommentSurfacePrompt(params: {
     "When document edits are involved, first use feishu_doc.read or feishu_doc.list_blocks to confirm the context, then use feishu_doc writing or updating capabilities to complete the change. After the edit succeeds, notify the user through feishu_drive.reply_comment.",
     "If the document edit fails or you cannot locate the anchor, do not pretend it succeeded. Reply clearly in the comment thread with the reason for failure or the missing information.",
     "If this is a reading-comprehension task, such as summarization, explanation, or extraction, you may directly output the final answer text after confirming the context. The system will automatically reply with that answer in the current comment thread.",
+    "Prefer plain text suitable for a comment thread. Unless the user explicitly asks for Markdown, do not use Markdown headings, bullet lists, numbered lists, tables, blockquotes, or fenced code blocks in the final reply.",
+    "If source content was read in Markdown form, rewrite it into normal plain-text prose before replying in the comment thread instead of copying Markdown syntax through.",
+    'Do not include internal reasoning, analysis, chain-of-thought, scratch work, or any "Reasoning:" / "Thinking:" section in a user-visible reply. Output only the final answer meant for the user, or NO_REPLY when appropriate.',
+    'Do not narrate your plan or execution process in the user-visible reply. Avoid meta lead-ins such as "I will...", "I’ll first...", "I need to...", "The user wants...", "I have updated...", or "I am going to...".',
+    "When the task is complete, reply only with the user-facing result itself, such as the final answer or a concise completion confirmation. Do not include preambles about what you plan to do next.",
     "When you produce a user-visible reply, keep it in the same language as the user's original comment or reply unless they explicitly ask for another language.",
     "If you have already completed the user-visible action through feishu_drive.reply_comment or feishu_drive.add_comment, output NO_REPLY at the end to avoid duplicate sending.",
     "If the user directly asks a question in the comment and a plain text answer is sufficient, output the answer text directly. The system will automatically reply with your final answer in the current comment thread.",
@@ -443,6 +571,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
   noticeType: "add_comment" | "add_reply";
   fileToken: string;
   fileType: CommentFileType;
+  isWholeComment?: boolean;
   senderId: string;
   senderUserId?: string;
   timestamp?: string;
@@ -463,6 +592,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     createClient = (account) => createFeishuClient(account) as FeishuRequestClient,
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
+    waitMs = delayMs,
   } = params;
   const eventId = event.event_id?.trim();
   const commentId = event.comment_id?.trim();
@@ -507,6 +637,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     timeoutMs: verificationTimeoutMs,
     logger,
     accountId,
+    waitMs,
   });
   return {
     eventId,
@@ -515,6 +646,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     noticeType,
     fileToken,
     fileType,
+    isWholeComment: context.isWholeComment,
     senderId,
     senderUserId,
     timestamp: event.timestamp,
@@ -574,6 +706,7 @@ export async function resolveDriveCommentEventTurn(
     fileToken: resolved.fileToken,
     commentId: resolved.commentId,
     replyId: resolved.replyId,
+    isWholeComment: resolved.isWholeComment,
     isMentioned: resolved.isMentioned,
     documentTitle: resolved.context.documentTitle,
     documentUrl: resolved.context.documentUrl,
@@ -590,6 +723,7 @@ export async function resolveDriveCommentEventTurn(
     noticeType: resolved.noticeType,
     fileToken: resolved.fileToken,
     fileType: resolved.fileType,
+    isWholeComment: resolved.isWholeComment,
     senderId: resolved.senderId,
     senderUserId: resolved.senderUserId,
     timestamp: resolved.timestamp,
