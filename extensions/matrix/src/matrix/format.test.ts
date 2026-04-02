@@ -150,6 +150,17 @@ describe("markdownToMatrixHtml", () => {
     });
   });
 
+  it("does not emit mentions for mxid-like tokens with path suffixes", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @alice:example.org/path",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("@alice:example.org/path");
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({});
+  });
+
   it("leaves bare localpart text unmentioned", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice",

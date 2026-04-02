@@ -31,6 +31,7 @@ type MatrixMentionCandidate = {
 
 const ESCAPED_MENTION_SENTINEL = "\uE000";
 const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:]+/g;
+const MATRIX_MENTION_USER_ID_PATTERN = /^@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?::\d+)?$/;
 const TRIMMABLE_MENTION_SUFFIX = /[),.!?:;\]]/;
 
 function shouldSuppressAutoLink(
@@ -124,11 +125,7 @@ function trimMentionSuffix(raw: string, end: number): { raw: string; end: number
 }
 
 function isMatrixMentionUserId(raw: string): boolean {
-  if (!isMatrixQualifiedUserId(raw)) {
-    return false;
-  }
-  const colonIndex = raw.indexOf(":");
-  return colonIndex > 1 && colonIndex < raw.length - 1;
+  return isMatrixQualifiedUserId(raw) && MATRIX_MENTION_USER_ID_PATTERN.test(raw);
 }
 
 function buildMentionCandidate(raw: string, start: number): MatrixMentionCandidate | null {
