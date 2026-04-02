@@ -1,8 +1,7 @@
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { getActiveMatrixClient } from "./active-client.js";
-import { acquireSharedMatrixClient, isBunRuntime, resolveMatrixAuthContext } from "./client.js";
-import { releaseSharedClientInstance } from "./client/shared.js";
+import { isBunRuntime } from "./client/runtime.js";
 import type { MatrixClient } from "./sdk.js";
 
 type ResolvedRuntimeMatrixClient = {
@@ -18,6 +17,28 @@ type MatrixResolvedClientHook = (
   client: MatrixClient,
   context: { preparedByDefault: boolean },
 ) => Promise<void> | void;
+
+type MatrixSharedClientRuntimeDeps = Pick<
+  typeof import("./client.js"),
+  "acquireSharedMatrixClient"
+> &
+  Pick<typeof import("./client/shared.js"), "releaseSharedClientInstance"> &
+  Pick<typeof import("./client/config.js"), "resolveMatrixAuthContext">;
+
+let matrixSharedClientRuntimeDepsPromise: Promise<MatrixSharedClientRuntimeDeps> | undefined;
+
+async function loadMatrixSharedClientRuntimeDeps(): Promise<MatrixSharedClientRuntimeDeps> {
+  matrixSharedClientRuntimeDepsPromise ??= Promise.all([
+    import("./client.js"),
+    import("./client/shared.js"),
+    import("./client/config.js"),
+  ]).then(([clientModule, sharedModule, configModule]) => ({
+    acquireSharedMatrixClient: clientModule.acquireSharedMatrixClient,
+    releaseSharedClientInstance: sharedModule.releaseSharedClientInstance,
+    resolveMatrixAuthContext: configModule.resolveMatrixAuthContext,
+  }));
+  return await matrixSharedClientRuntimeDepsPromise;
+}
 
 async function ensureResolvedClientReadiness(params: {
   client: MatrixClient;
@@ -53,6 +74,8 @@ async function resolveRuntimeMatrixClient(opts: {
   }
 
   const cfg = opts.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+  const { acquireSharedMatrixClient, releaseSharedClientInstance, resolveMatrixAuthContext } =
+    await loadMatrixSharedClientRuntimeDeps();
   const authContext = resolveMatrixAuthContext({
     cfg,
     accountId: opts.accountId,
@@ -62,7 +85,6 @@ async function resolveRuntimeMatrixClient(opts: {
     await opts.onResolved?.(active, { preparedByDefault: false });
     return { client: active, stopOnDone: false };
   }
-
   const client = await acquireSharedMatrixClient({
     cfg,
     timeoutMs: opts.timeoutMs,
