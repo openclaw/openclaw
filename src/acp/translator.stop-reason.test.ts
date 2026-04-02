@@ -396,16 +396,13 @@ describe("acp translator stop reason mapping", () => {
       expect(settleSpy).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(3);
-      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
-        "pending",
-      );
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: second disconnect");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps the disconnect deadline after reconnect when a pre-ack send never started", async () => {
+  it("keeps pre-ack prompts pending after reconnect timeout", async () => {
     vi.useFakeTimers();
     try {
       const sessionId = "session-1";
@@ -440,13 +437,14 @@ describe("acp translator stop reason mapping", () => {
       agent.handleGatewayReconnect();
       await Promise.resolve();
 
-      await vi.advanceTimersByTimeAsync(4_999);
       await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
         "pending",
       );
 
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -550,13 +548,15 @@ describe("acp translator stop reason mapping", () => {
       agent.handleGatewayReconnect();
       await vi.advanceTimersByTimeAsync(5_000);
 
-      await expect(secondPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("rejects only unrecovered prompts after reconnect reconciliation", async () => {
+  it("finishes terminal prompts without rejecting other reconnecting prompts", async () => {
     vi.useFakeTimers();
     try {
       let acceptedRunId: string | undefined;
@@ -621,10 +621,56 @@ describe("acp translator stop reason mapping", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(acceptedPrompt).resolves.toEqual({ stopReason: "end_turn" });
-      await expect(preAckPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      await expect(Promise.race([preAckPrompt, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reconciles prompts started while the gateway is disconnected", async () => {
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:main";
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        throw new Error("gateway closed (1006): connection lost");
+      }
+      if (method === "agent.wait") {
+        return { status: "ok" };
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId,
+      sessionKey,
+      cwd: "/tmp",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    const promptPromise = agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "hello" }],
+      _meta: {},
+    } as unknown as PromptRequest);
+    const settleSpy = vi.fn();
+    void promptPromise.then(
+      (value) => settleSpy({ kind: "resolve", value }),
+      (error) => settleSpy({ kind: "reject", error }),
+    );
+    await Promise.resolve();
+    agent.handleGatewayReconnect();
+
+    await vi.waitFor(() => {
+      expect(settleSpy).toHaveBeenCalledWith({
+        kind: "resolve",
+        value: { stopReason: "end_turn" },
+      });
+    });
   });
 
   it("does not let a stale disconnect deadline reject a newer prompt on the same session", async () => {
