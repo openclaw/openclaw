@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
-import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
+import {
+  collectExecPolicyScopeSnapshots,
+  type ExecPolicyScopeSnapshot,
+} from "../infra/exec-approvals-effective.js";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
@@ -31,7 +34,7 @@ type ConfigSnapshotLike = {
 };
 type ApprovalsTargetSource = "gateway" | "node" | "local";
 type EffectivePolicyReport = {
-  scopes: ReturnType<typeof collectExecPolicySnapshots>;
+  scopes: ExecPolicyScopeSnapshot[];
   note?: string;
 };
 
@@ -177,37 +180,6 @@ async function loadConfigForApprovalsTarget(params: {
   }
 }
 
-function collectExecPolicySnapshots(params: { cfg: OpenClawConfig; approvals: ExecApprovalsFile }) {
-  const snapshots = [
-    resolveExecPolicyScopeSnapshot({
-      approvals: params.approvals,
-      scopeExecConfig: params.cfg.tools?.exec,
-      configPath: "tools.exec",
-      scopeLabel: "tools.exec",
-    }),
-  ];
-  const globalExecConfig = params.cfg.tools?.exec;
-  const configAgentIds = new Set((params.cfg.agents?.list ?? []).map((agent) => agent.id));
-  const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
-    (agentId) => agentId !== "*" && agentId !== "default",
-  );
-  const agentIds = Array.from(new Set([...configAgentIds, ...approvalAgentIds])).toSorted();
-  for (const agentId of agentIds) {
-    const agentConfig = params.cfg.agents?.list?.find((agent) => agent.id === agentId);
-    snapshots.push(
-      resolveExecPolicyScopeSnapshot({
-        approvals: params.approvals,
-        scopeExecConfig: agentConfig?.tools?.exec,
-        globalExecConfig,
-        configPath: `agents.list.${agentId}.tools.exec`,
-        scopeLabel: `agent:${agentId}`,
-        agentId,
-      }),
-    );
-  }
-  return snapshots;
-}
-
 function buildEffectivePolicyReport(params: {
   cfg: OpenClawConfig | null;
   source: ApprovalsTargetSource;
@@ -221,7 +193,7 @@ function buildEffectivePolicyReport(params: {
       };
     }
     return {
-      scopes: collectExecPolicySnapshots({
+      scopes: collectExecPolicyScopeSnapshots({
         cfg: params.cfg,
         approvals: params.approvals,
       }),
@@ -235,7 +207,7 @@ function buildEffectivePolicyReport(params: {
     };
   }
   return {
-    scopes: collectExecPolicySnapshots({
+    scopes: collectExecPolicyScopeSnapshots({
       cfg: params.cfg,
       approvals: params.approvals,
     }),

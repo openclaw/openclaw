@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
@@ -155,6 +156,40 @@ function formatHostSource(params: {
   approvals: ExecApprovalsFile;
 }): string {
   return resolveHostFieldSource(params);
+}
+
+export function collectExecPolicyScopeSnapshots(params: {
+  cfg: OpenClawConfig;
+  approvals: ExecApprovalsFile;
+}): ExecPolicyScopeSnapshot[] {
+  const snapshots = [
+    resolveExecPolicyScopeSnapshot({
+      approvals: params.approvals,
+      scopeExecConfig: params.cfg.tools?.exec,
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    }),
+  ];
+  const globalExecConfig = params.cfg.tools?.exec;
+  const configAgentIds = new Set((params.cfg.agents?.list ?? []).map((agent) => agent.id));
+  const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
+    (agentId) => agentId !== "*" && agentId !== "default",
+  );
+  const agentIds = Array.from(new Set([...configAgentIds, ...approvalAgentIds])).toSorted();
+  for (const agentId of agentIds) {
+    const agentConfig = params.cfg.agents?.list?.find((agent) => agent.id === agentId);
+    snapshots.push(
+      resolveExecPolicyScopeSnapshot({
+        approvals: params.approvals,
+        scopeExecConfig: agentConfig?.tools?.exec,
+        globalExecConfig,
+        configPath: `agents.list.${agentId}.tools.exec`,
+        scopeLabel: `agent:${agentId}`,
+        agentId,
+      }),
+    );
+  }
+  return snapshots;
 }
 
 export function resolveExecPolicyScopeSummary(params: {

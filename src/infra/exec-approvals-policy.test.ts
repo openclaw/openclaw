@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveExecPolicyScopeSummary } from "./exec-approvals-effective.js";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  collectExecPolicyScopeSnapshots,
+  resolveExecPolicyScopeSummary,
+} from "./exec-approvals-effective.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -339,6 +343,51 @@ describe("exec approvals policy helpers", () => {
     expect(summary.askFallback).toEqual({
       effective: "deny",
       source: "OpenClaw default (deny)",
+    });
+  });
+
+  it("collects global, configured-agent, and approvals-only agent scopes", () => {
+    const snapshots = collectExecPolicyScopeSnapshots({
+      cfg: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+        agents: {
+          list: [{ id: "runner" }],
+        },
+      } satisfies OpenClawConfig,
+      approvals: {
+        version: 1,
+        agents: {
+          runner: {
+            security: "allowlist",
+          },
+          batch: {
+            ask: "always",
+          },
+        },
+      },
+    });
+
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual([
+      "tools.exec",
+      "agent:batch",
+      "agent:runner",
+    ]);
+    expect(snapshots[1]?.ask).toMatchObject({
+      requested: "off",
+      requestedSource: "tools.exec.ask",
+      host: "always",
+      effective: "always",
+    });
+    expect(snapshots[2]?.security).toMatchObject({
+      requested: "full",
+      requestedSource: "tools.exec.security",
+      host: "allowlist",
+      effective: "allowlist",
     });
   });
 });
