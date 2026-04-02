@@ -3,13 +3,13 @@ import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginCompatibilityWarnings, buildPluginStatusReport } from "../plugins/status.js";
-import { listFlowRecords } from "../tasks/flow-runtime-internal.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
+import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
 function noteFlowRecoveryHints() {
-  const suspicious = listFlowRecords().flatMap((flow) => {
+  const suspicious = listTaskFlowRecords().flatMap((flow) => {
     const tasks = listTasksForFlowId(flow.flowId);
     const findings: string[] = [];
     if (
