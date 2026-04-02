@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/tinyfish-plugin",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "OpenClaw TinyFish plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
