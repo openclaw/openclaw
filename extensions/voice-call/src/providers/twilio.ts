@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
@@ -205,12 +206,7 @@ export class TwilioProvider implements VoiceCallProvider {
     if (!expected || !token) {
       return false;
     }
-    if (expected.length !== token.length) {
-      const dummy = Buffer.from(expected);
-      crypto.timingSafeEqual(dummy, dummy);
-      return false;
-    }
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token));
+    return safeEqualSecret(expected, token);
   }
 
   /**
