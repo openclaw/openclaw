@@ -290,12 +290,11 @@ export async function agentsAddCommand(
           model: authResult.agentModelOverride,
         });
       }
+      await warnIfModelConfigLooksOff(nextConfig, prompter, {
+        agentId,
+        agentDir,
+      });
     }
-
-    await warnIfModelConfigLooksOff(nextConfig, prompter, {
-      agentId,
-      agentDir,
-    });
 
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
