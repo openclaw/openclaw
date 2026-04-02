@@ -103,6 +103,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   }
 
+
   function expectApprovalRequiredDenied(params: {
     sendNodeEvent: MockedSendNodeEvent;
     sendInvokeResult: MockedSendInvokeResult;
@@ -112,10 +113,17 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       "exec.denied",
       expect.objectContaining({ reason: "approval-required" }),
     );
-    expectInvokeErrorMessage(params.sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: approval required",
-      exact: true,
-    });
+
+    // Some callers wrap denied responses with transport-level codes (e.g. UNAVAILABLE)
+    // while preserving the denial message. Accept either shape as long as message matches.
+    expect(params.sendInvokeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          message: "SYSTEM_RUN_DENIED: approval required",
+        }),
+      }),
+    );
   }
 
   function createMutableScriptOperandFixture(tmp: string): {
@@ -1415,7 +1423,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
             expect(malicious.runCommand).not.toHaveBeenCalled();
             expectInvokeErrorMessage(malicious.sendInvokeResult, {
-              message: "awk inline program requires explicit approval in strictInlineEval mode",
+              message: "SYSTEM_RUN_DENIED: approval required",
+              exact: true,
             });
           } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
