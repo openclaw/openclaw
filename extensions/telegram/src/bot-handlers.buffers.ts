@@ -188,7 +188,7 @@ export function createTelegramInboundBufferRuntime(params: {
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport, telegramCfg.apiRoot);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport, telegramCfg?.apiRoot);
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
