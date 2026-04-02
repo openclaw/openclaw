@@ -176,9 +176,9 @@ async function withTaskRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
     try {
       return await run(root);
     } finally {
-      // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove them.
+      // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove files.
       resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
