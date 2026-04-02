@@ -81,6 +81,9 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
 }) {
   applyConfiguredSessionUsageCacheSettings(params.cfg);
+  void prewarmSessionUsageCache({ cfg: params.cfg, log: params.log }).catch((err) => {
+    params.log.warn(`session usage cache prewarm failed: ${String(err)}`);
+  });
 
   try {
     const stateDir = resolveStateDir(process.env);
@@ -211,10 +214,6 @@ export async function startGatewaySidecars(params: {
 
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
-  });
-
-  void prewarmSessionUsageCache({ cfg: params.cfg, log: params.log }).catch((err) => {
-    params.log.warn(`session usage cache prewarm failed: ${String(err)}`);
   });
 
   if (shouldWakeFromRestartSentinel()) {

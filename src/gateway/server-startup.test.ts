@@ -21,6 +21,7 @@ const resolveModelMock = vi.fn<
 }));
 const resolveAgentSessionDirsMock = vi.fn<(stateDir: unknown) => Promise<string[]>>();
 const applyConfiguredSessionUsageCacheSettingsMock = vi.fn<(cfg: unknown) => void>();
+const prewarmSessionUsageCacheMock = vi.fn<(params: unknown) => Promise<void>>(async () => {});
 
 vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/agent",
@@ -56,6 +57,14 @@ vi.mock("./session-utils.fs.js", async () => {
   };
 });
 
+vi.mock("./session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+  return {
+    ...actual,
+    prewarmSessionUsageCache: (params: unknown) => prewarmSessionUsageCacheMock(params),
+  };
+});
+
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
 
 describe("gateway startup primary model warmup", () => {
@@ -71,6 +80,7 @@ describe("gateway startup primary model warmup", () => {
     resolveAgentSessionDirsMock.mockReset();
     resolveAgentSessionDirsMock.mockResolvedValue([]);
     applyConfiguredSessionUsageCacheSettingsMock.mockClear();
+    prewarmSessionUsageCacheMock.mockClear();
   });
 
   it("prewarms an explicit configured primary model", async () => {
@@ -133,6 +143,36 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(applyConfiguredSessionUsageCacheSettingsMock).toHaveBeenCalledWith(cfg);
+
+    release();
+    await promise;
+  });
+
+  it("starts session usage cache prewarm before the first awaited startup work", async () => {
+    let release!: () => void;
+    const blocked = new Promise<string[]>((resolve) => {
+      release = () => resolve([]);
+    });
+    resolveAgentSessionDirsMock.mockReturnValueOnce(blocked);
+
+    const { startGatewaySidecars } = await import("./server-startup.js");
+    const cfg = {} as OpenClawConfig;
+
+    const promise = startGatewaySidecars({
+      cfg,
+      pluginRegistry: new Map() as never,
+      defaultWorkspaceDir: "/tmp/workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { info: vi.fn(), warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    expect(prewarmSessionUsageCacheMock).toHaveBeenCalledWith({
+      cfg,
+      log: expect.any(Object),
+    });
 
     release();
     await promise;
