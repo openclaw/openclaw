@@ -503,6 +503,21 @@ export type ToolsConfig = {
         };
       };
     } & Record<string, unknown>;
+    /** X (formerly Twitter) search tool configuration using xAI Grok. */
+    x_search?: {
+      /** Enable X search tool (default: true when xAI auth is available via plugin config or XAI_API_KEY). */
+      enabled?: boolean;
+      /** Model id to use for X search. */
+      model?: string;
+      /** Keep inline citations in the xAI response payload when available. */
+      inlineCitations?: boolean;
+      /** Optional max search/tool turns for xAI to use internally. */
+      maxTurns?: number;
+      /** Timeout in seconds for X search requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for X search results. */
+      cacheTtlMinutes?: number;
+    };
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;

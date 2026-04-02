@@ -121,6 +121,17 @@ afterEach(() => {
 });
 
 describe("applyPluginAutoEnable", () => {
+  it("treats an undefined config as empty", () => {
+    const result = applyPluginAutoEnable({
+      config: undefined,
+      env: {},
+    });
+
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
   it("auto-enables built-in channels without appending to plugins.allow", () => {
     const result = applyWithSlackConfig({ plugins: { allow: ["telegram"] } });
 
