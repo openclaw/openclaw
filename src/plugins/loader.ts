@@ -280,6 +280,17 @@ function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function matchesScopedPluginRequest(params: {
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  pluginId: string;
+}): boolean {
+  const scopedIds = params.onlyPluginIdSet;
+  if (!scopedIds) {
+    return true;
+  }
+  return scopedIds.has(params.pluginId);
+}
+
 function resolveRuntimeSubagentMode(
   runtimeOptions: PluginLoadOptions["runtimeOptions"],
 ): "default" | "explicit" | "gateway-bindable" {
@@ -1007,9 +1018,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
     const pluginId = manifestRecord.id;
+    const matchesRequestedScope = matchesScopedPluginRequest({
+      onlyPluginIdSet,
+      pluginId,
+    });
     // Filter again at import time as a final guard. The earlier manifest filter keeps
     // warnings scoped; this one prevents loading/registering anything outside the scope.
-    if (onlyPluginIdSet && !onlyPluginIdSet.has(pluginId)) {
+    if (!matchesRequestedScope) {
       continue;
     }
     const existingOrigin = seenIds.get(pluginId);
@@ -1087,7 +1102,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         })
         ? "setup-runtime"
         : "full"
-      : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
+      : includeSetupOnlyChannelPlugins &&
+          !validateOnly &&
+          onlyPluginIdSet &&
+          manifestRecord.channels.length > 0
         ? "setup-only"
         : null;
 
@@ -1492,7 +1510,12 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const pluginId = manifestRecord.id;
-    if (onlyPluginIdSet && !onlyPluginIdSet.has(pluginId)) {
+    if (
+      !matchesScopedPluginRequest({
+        onlyPluginIdSet,
+        pluginId,
+      })
+    ) {
       continue;
     }
     const existingOrigin = seenIds.get(pluginId);
