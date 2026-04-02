@@ -6,6 +6,8 @@ export type MessagingToolSend = {
   accountId?: string;
   to?: string;
   threadId?: string;
+  /** Set to true when the messaging tool call included text content (content or message field). */
+  hasText?: boolean;
 };
 
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);

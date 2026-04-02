@@ -154,6 +154,11 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
+    // Only suppress when text content was actually sent to the matching target.
+    // Media-only sends should not suppress the subsequent text reply.
+    if (!target.hasText) {
+      return false;
+    }
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
       targetProvider: target?.provider,
