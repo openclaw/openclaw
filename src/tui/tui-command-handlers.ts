@@ -11,6 +11,7 @@ import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
+import { ContextVizOverlay } from "./components/context-viz-overlay.js";
 import {
   createFilterableSelectList,
   createSearchableSelectList,
@@ -238,6 +239,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       },
     );
     openOverlay(settings);
+    tui.requestRender();
+  };
+
+  const openContextViz = () => {
+    const overlay = new ContextVizOverlay({
+      fetchReport: async () => {
+        return await client.getContextReport(state.currentSessionKey);
+      },
+      getTokenInfo: () => ({
+        totalTokens: state.sessionInfo.totalTokens ?? null,
+        contextTokens: state.sessionInfo.contextTokens ?? null,
+      }),
+      onClose: closeOverlayAndRender,
+    });
+    openOverlay(overlay);
     tui.requestRender();
   };
 
@@ -493,6 +509,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
+      case "context":
+        openContextViz();
+        break;
       case "settings":
         openSettings();
         break;
@@ -563,6 +582,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openAgentSelector,
     openSessionSelector,
     openSettings,
+    openContextViz,
     setAgent,
   };
 }

@@ -1,0 +1,156 @@
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+
+export type ContextCategory = "system-prompt" | "workspace-files" | "skills" | "tools";
+
+export type CategoryBreakdown = {
+  category: ContextCategory;
+  label: string;
+  chars: number;
+  tokens: number;
+  itemCount: number;
+};
+
+export type CategoryDetailItem = {
+  name: string;
+  status?: string;
+  chars: number;
+  tokens: number;
+  extra?: string;
+};
+
+export type SessionTokenInfo = {
+  totalTokens: number | null;
+  contextTokens: number | null;
+};
+
+export type ContextSnapshot = {
+  timestamp: number;
+  totalChars: number;
+  totalTokens: number;
+};
+
+export type ContextHistory = {
+  snapshots: ContextSnapshot[];
+  maxCapacity: number;
+};
+
+export function estimateTokensFromChars(chars: number): number {
+  return Math.ceil(Math.max(0, chars) / 4);
+}
+
+export function formatInt(n: number): string {
+  return new Intl.NumberFormat("en-US").format(n);
+}
+
+export function formatCharsAndTokens(chars: number): string {
+  return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
+}
+
+export function createHistory(maxCapacity = 60): ContextHistory {
+  return { snapshots: [], maxCapacity };
+}
+
+export function pushSnapshot(history: ContextHistory, totalChars: number): void {
+  const snapshot: ContextSnapshot = {
+    timestamp: Date.now(),
+    totalChars,
+    totalTokens: estimateTokensFromChars(totalChars),
+  };
+  // Skip if identical to last
+  const last = history.snapshots[history.snapshots.length - 1];
+  if (last && last.totalChars === totalChars) {
+    return;
+  }
+  history.snapshots.push(snapshot);
+  if (history.snapshots.length > history.maxCapacity) {
+    history.snapshots.shift();
+  }
+}
+
+export function getCategoryBreakdown(report: SessionSystemPromptReport): CategoryBreakdown[] {
+  const systemPromptChars = report.systemPrompt.chars;
+  const workspaceChars = report.injectedWorkspaceFiles.reduce((s, f) => s + f.injectedChars, 0);
+  const skillsChars = report.skills.promptChars;
+  const toolsChars = report.tools.listChars + report.tools.schemaChars;
+
+  return [
+    {
+      category: "system-prompt",
+      label: "System Prompt",
+      chars: systemPromptChars,
+      tokens: estimateTokensFromChars(systemPromptChars),
+      itemCount: 1,
+    },
+    {
+      category: "workspace-files",
+      label: "Workspace Files",
+      chars: workspaceChars,
+      tokens: estimateTokensFromChars(workspaceChars),
+      itemCount: report.injectedWorkspaceFiles.length,
+    },
+    {
+      category: "skills",
+      label: "Skills",
+      chars: skillsChars,
+      tokens: estimateTokensFromChars(skillsChars),
+      itemCount: report.skills.entries.length,
+    },
+    {
+      category: "tools",
+      label: "Tools",
+      chars: toolsChars,
+      tokens: estimateTokensFromChars(toolsChars),
+      itemCount: report.tools.entries.length,
+    },
+  ];
+}
+
+export function getCategoryDetail(
+  report: SessionSystemPromptReport,
+  category: ContextCategory,
+): CategoryDetailItem[] {
+  switch (category) {
+    case "system-prompt":
+      return [
+        {
+          name: "Project Context",
+          chars: report.systemPrompt.projectContextChars,
+          tokens: estimateTokensFromChars(report.systemPrompt.projectContextChars),
+        },
+        {
+          name: "Non-Project Context",
+          chars: report.systemPrompt.nonProjectContextChars,
+          tokens: estimateTokensFromChars(report.systemPrompt.nonProjectContextChars),
+        },
+      ];
+    case "workspace-files":
+      return report.injectedWorkspaceFiles.map((f) => ({
+        name: f.name,
+        status: f.missing ? "MISSING" : f.truncated ? "TRUNCATED" : "OK",
+        chars: f.injectedChars,
+        tokens: estimateTokensFromChars(f.injectedChars),
+      }));
+    case "skills":
+      return report.skills.entries
+        .toSorted((a, b) => b.blockChars - a.blockChars)
+        .map((s) => ({
+          name: s.name,
+          chars: s.blockChars,
+          tokens: estimateTokensFromChars(s.blockChars),
+        }));
+    case "tools":
+      return report.tools.entries
+        .toSorted((a, b) => b.schemaChars + b.summaryChars - (a.schemaChars + a.summaryChars))
+        .map((t) => ({
+          name: t.name,
+          chars: t.schemaChars + t.summaryChars,
+          tokens: estimateTokensFromChars(t.schemaChars + t.summaryChars),
+          extra: t.propertiesCount != null ? `${t.propertiesCount} params` : undefined,
+        }));
+  }
+}
+
+export function getTotalChars(report: SessionSystemPromptReport): number {
+  const breakdown = getCategoryBreakdown(report);
+  return breakdown.reduce((s, c) => s + c.chars, 0);
+}

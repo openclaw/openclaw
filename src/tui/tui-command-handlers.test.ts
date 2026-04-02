@@ -98,7 +98,7 @@ describe("tui command handlers", () => {
       setActivityStatus,
     });
 
-    const pending = handleCommand("/context");
+    const pending = handleCommand("/foobar");
     await Promise.resolve();
 
     expect(setActivityStatus).toHaveBeenCalledWith("sending");
@@ -114,14 +114,14 @@ describe("tui command handlers", () => {
   it("forwards unknown slash commands to the gateway", async () => {
     const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness();
 
-    await handleCommand("/context");
+    await handleCommand("/foobar");
 
     expect(addSystem).not.toHaveBeenCalled();
-    expect(addUser).toHaveBeenCalledWith("/context");
+    expect(addUser).toHaveBeenCalledWith("/foobar");
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        message: "/context",
+        message: "/foobar",
       }),
     );
     expect(requestRender).toHaveBeenCalled();
@@ -130,7 +130,7 @@ describe("tui command handlers", () => {
   it("defers local run binding until gateway events provide a real run id", async () => {
     const { handleCommand, noteLocalRunId, state } = createHarness();
 
-    await handleCommand("/context");
+    await handleCommand("/foobar");
 
     expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBeNull();
@@ -189,7 +189,7 @@ describe("tui command handlers", () => {
       setActivityStatus,
     });
 
-    await handleCommand("/context");
+    await handleCommand("/foobar");
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
@@ -216,7 +216,7 @@ describe("tui command handlers", () => {
       isConnected: false,
     });
 
-    await handleCommand("/context");
+    await handleCommand("/foobar");
 
     expect(sendChat).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();

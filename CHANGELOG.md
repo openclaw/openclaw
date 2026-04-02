@@ -3,6 +3,7 @@
 Docs: https://docs.openclaw.ai
 
 ## Unreleased
+
 ### Changes
 
 - Agents/compaction: add `agents.defaults.compaction.notifyUser` so the `🧹 Compacting context...` start notice is opt-in instead of always being shown. (#54251) Thanks @oguricap0327.
@@ -114,14 +115,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-## 2026.3.31
-=======
-### Fixes
-
 - Exec approvals/config: strip invalid `security`, `ask`, and `askFallback` values from `~/.openclaw/exec-approvals.json` during normalization so malformed policy enums fall back cleanly to the documented defaults instead of corrupting runtime policy resolution. (#59112) Thanks @openperf.
 
-## 2026.3.31-beta.1
->>>>>>> 69ad9964b8 (docs(changelog): note invalid exec approvals policy fix)
+## 2026.3.31
 
 ### Breaking
 
