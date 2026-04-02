@@ -95,6 +95,7 @@ describe("describeGeminiVideo", () => {
     expect(headers.get("x-goog-api-key")).toBe("test-key");
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("x-other")).toBe("1");
+    expect(headers.get("user-agent")).toMatch(/^openclaw\/.+/);
 
     const bodyText =
       typeof seenInit?.body === "string"

@@ -134,6 +134,12 @@ export function resolveRuntimeServiceVersion(
   });
 }
 
+export function resolveOpenClawUserAgent(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): string {
+  return `openclaw/${resolveRuntimeServiceVersion(env)}`;
+}
+
 export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,

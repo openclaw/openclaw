@@ -9,6 +9,7 @@ import {
   resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
   resolveBinaryVersion,
+  resolveOpenClawUserAgent,
   resolveRuntimeServiceVersion,
   resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
@@ -142,6 +143,14 @@ describe("version resolution", () => {
         npm_package_version: "1.1.1",
       }),
     ).toBe("9.9.9");
+  });
+
+  it("formats the default OpenClaw user agent from the runtime version", () => {
+    expect(
+      resolveOpenClawUserAgent({
+        OPENCLAW_VERSION: "2026.4.2",
+      }),
+    ).toBe("openclaw/2026.4.2");
   });
 
   it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
