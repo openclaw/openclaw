@@ -184,6 +184,7 @@ function buildEffectivePolicyReport(params: {
   cfg: OpenClawConfig | null;
   source: ApprovalsTargetSource;
   approvals: ExecApprovalsFile;
+  hostPath: string;
 }): EffectivePolicyReport {
   if (params.source === "node") {
     if (!params.cfg) {
@@ -196,6 +197,7 @@ function buildEffectivePolicyReport(params: {
       scopes: collectExecPolicyScopeSnapshots({
         cfg: params.cfg,
         approvals: params.approvals,
+        hostPath: params.hostPath,
       }),
       note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     };
@@ -210,6 +212,7 @@ function buildEffectivePolicyReport(params: {
     scopes: collectExecPolicyScopeSnapshots({
       cfg: params.cfg,
       approvals: params.approvals,
+      hostPath: params.hostPath,
     }),
     note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
   };
@@ -474,6 +477,7 @@ export function registerExecApprovalsCli(program: Command) {
           cfg,
           source,
           approvals: snapshot.file,
+          hostPath: snapshot.path,
         });
         if (opts.json) {
           defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
