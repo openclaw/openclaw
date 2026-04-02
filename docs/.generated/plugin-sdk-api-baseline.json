@@ -51,6 +51,24 @@
           }
         },
         {
+          "declaration": "export type BoundTaskFlowsRuntime = BoundTaskFlowsRuntime;",
+          "exportName": "BoundTaskFlowsRuntime",
+          "kind": "type",
+          "source": {
+            "line": 74,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
+          "declaration": "export type BoundTaskRunsRuntime = BoundTaskRunsRuntime;",
+          "exportName": "BoundTaskRunsRuntime",
+          "kind": "type",
+          "source": {
+            "line": 54,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelAccountSnapshot = ChannelAccountSnapshot;",
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
@@ -447,6 +465,33 @@
           }
         },
         {
+          "declaration": "export type PluginRuntimeTaskFlows = PluginRuntimeTaskFlows;",
+          "exportName": "PluginRuntimeTaskFlows",
+          "kind": "type",
+          "source": {
+            "line": 84,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginRuntimeTaskRuns = PluginRuntimeTaskRuns;",
+          "exportName": "PluginRuntimeTaskRuns",
+          "kind": "type",
+          "source": {
+            "line": 64,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginRuntimeTasks = PluginRuntimeTasks;",
+          "exportName": "PluginRuntimeTasks",
+          "kind": "type",
+          "source": {
+            "line": 94,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
           "declaration": "export type ProviderAuthContext = ProviderAuthContext;",
           "exportName": "ProviderAuthContext",
           "kind": "type",
@@ -588,6 +633,60 @@
           "source": {
             "line": 19,
             "path": "src/plugins/runtime/types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskFlowDetail = TaskFlowDetail;",
+          "exportName": "TaskFlowDetail",
+          "kind": "type",
+          "source": {
+            "line": 74,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskFlowView = TaskFlowView;",
+          "exportName": "TaskFlowView",
+          "kind": "type",
+          "source": {
+            "line": 60,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunAggregateSummary = TaskRunAggregateSummary;",
+          "exportName": "TaskRunAggregateSummary",
+          "kind": "type",
+          "source": {
+            "line": 14,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunCancelResult = TaskRunCancelResult;",
+          "exportName": "TaskRunCancelResult",
+          "kind": "type",
+          "source": {
+            "line": 53,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunDetail = TaskRunView;",
+          "exportName": "TaskRunDetail",
+          "kind": "type",
+          "source": {
+            "line": 51,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunView = TaskRunView;",
+          "exportName": "TaskRunView",
+          "kind": "type",
+          "source": {
+            "line": 23,
+            "path": "src/plugins/runtime/task-domain-types.ts"
           }
         },
         {
@@ -3378,7 +3477,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 191,
+            "line": 206,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3423,7 +3522,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 548,
+            "line": 563,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3432,7 +3531,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 521,
+            "line": 536,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3459,7 +3558,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 285,
+            "line": 300,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3477,7 +3576,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 328,
+            "line": 343,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3702,7 +3801,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 171,
+            "line": 186,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3711,7 +3810,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 183,
+            "line": 198,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3749,6 +3848,24 @@
           "source": {
             "line": 9,
             "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
+          "declaration": "export type BoundTaskFlowsRuntime = BoundTaskFlowsRuntime;",
+          "exportName": "BoundTaskFlowsRuntime",
+          "kind": "type",
+          "source": {
+            "line": 74,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
+          "declaration": "export type BoundTaskRunsRuntime = BoundTaskRunsRuntime;",
+          "exportName": "BoundTaskRunsRuntime",
+          "kind": "type",
+          "source": {
+            "line": 54,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
           }
         },
         {
@@ -3792,7 +3909,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 166,
+            "line": 181,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3947,6 +4064,33 @@
           "source": {
             "line": 54,
             "path": "src/plugins/runtime/types.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginRuntimeTaskFlows = PluginRuntimeTaskFlows;",
+          "exportName": "PluginRuntimeTaskFlows",
+          "kind": "type",
+          "source": {
+            "line": 84,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginRuntimeTaskRuns = PluginRuntimeTaskRuns;",
+          "exportName": "PluginRuntimeTaskRuns",
+          "kind": "type",
+          "source": {
+            "line": 64,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginRuntimeTasks = PluginRuntimeTasks;",
+          "exportName": "PluginRuntimeTasks",
+          "kind": "type",
+          "source": {
+            "line": 94,
+            "path": "src/plugins/runtime/runtime-tasks.ts"
           }
         },
         {
@@ -4334,6 +4478,60 @@
           "source": {
             "line": 9,
             "path": "src/shared/tailscale-status.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskFlowDetail = TaskFlowDetail;",
+          "exportName": "TaskFlowDetail",
+          "kind": "type",
+          "source": {
+            "line": 74,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskFlowView = TaskFlowView;",
+          "exportName": "TaskFlowView",
+          "kind": "type",
+          "source": {
+            "line": 60,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunAggregateSummary = TaskRunAggregateSummary;",
+          "exportName": "TaskRunAggregateSummary",
+          "kind": "type",
+          "source": {
+            "line": 14,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunCancelResult = TaskRunCancelResult;",
+          "exportName": "TaskRunCancelResult",
+          "kind": "type",
+          "source": {
+            "line": 53,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunDetail = TaskRunView;",
+          "exportName": "TaskRunDetail",
+          "kind": "type",
+          "source": {
+            "line": 51,
+            "path": "src/plugins/runtime/task-domain-types.ts"
+          }
+        },
+        {
+          "declaration": "export type TaskRunView = TaskRunView;",
+          "exportName": "TaskRunView",
+          "kind": "type",
+          "source": {
+            "line": 23,
+            "path": "src/plugins/runtime/task-domain-types.ts"
           }
         },
         {
