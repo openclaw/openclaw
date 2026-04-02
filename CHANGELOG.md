@@ -74,6 +74,7 @@ Docs: https://docs.openclaw.ai
 - Dotenv/workspace overrides: block workspace `.env` files from overriding `OPENCLAW_PINNED_PYTHON` and `OPENCLAW_PINNED_WRITE_PYTHON` so trusted helper interpreters cannot be redirected by repo-local env injection. (#58473) Thanks @eleqtrizit.
 - Plugins/install: accept JSON5 syntax in `openclaw.plugin.json` and bundle `plugin.json` manifests during install/validation, so third-party plugins with trailing commas, comments, or unquoted keys no longer fail to install. (#59084) Thanks @singleGanghood.
 - Telegram/exec approvals: rewrite shared `/approve … allow-always` callback payloads to `/approve … always` before Telegram button rendering so plugin approval IDs still fit Telegram's `callback_data` limit and keep the Allow Always action visible. (#59217) Thanks @jameslcowan.
+- Cron/exec timeouts: surface timed-out `exec` and `bash` failures in isolated cron runs even when `verbose: off`, including custom session-target cron jobs, so scheduled runs stop failing silently. (#58247) Thanks @skainguyen1412.
 
 ## 2026.4.2
 
