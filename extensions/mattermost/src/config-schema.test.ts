@@ -29,6 +29,36 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts legacy compatibility fields used by older Mattermost configs", () => {
+    const result = MattermostConfigSchema.safeParse({
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["user-1"],
+      attachments: { enabled: true },
+      sessionPolicy: { mode: "isolated", idleMinutes: 30 },
+      channelOverrides: {
+        channel123: {
+          chatmode: "onmessage",
+        },
+      },
+      groups: {
+        channel123: {
+          requireMention: false,
+          allowFrom: ["user-1"],
+        },
+      },
+      accounts: {
+        main: {
+          attachments: { enabled: true },
+          sessionPolicy: { mode: "isolated" },
+          channelOverrides: { channel456: { chatmode: "oncall" } },
+          groups: { channel456: { requireMention: true } },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects unsupported direct-message reply threading config", () => {
     const result = MattermostConfigSchema.safeParse({
       dm: {

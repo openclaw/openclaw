@@ -63,6 +63,22 @@ const MattermostSlashCommandsSchema = z
   .strict()
   .optional();
 
+const MattermostAllowFromListSchema = z.array(z.union([z.string(), z.number()])).optional();
+
+const MattermostLegacyObjectSchema = z.object({}).passthrough();
+
+const MattermostLegacyGroupSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    allowFrom: MattermostAllowFromListSchema,
+    requireMention: z.boolean().optional(),
+    systemPrompt: z.string().optional(),
+    skills: z.array(z.string()).optional(),
+    tools: z.unknown().optional(),
+    toolsBySender: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -77,9 +93,14 @@ const MattermostAccountSchemaBase = z
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: MattermostAllowFromListSchema,
+    groupAllowFrom: MattermostAllowFromListSchema,
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    // Compatibility fields from pre-plugin Mattermost configs.
+    groups: z.record(z.string(), MattermostLegacyGroupSchema.optional()).optional(),
+    channelOverrides: z.record(z.string(), MattermostLegacyObjectSchema).optional(),
+    sessionPolicy: z.union([z.string(), MattermostLegacyObjectSchema]).optional(),
+    attachments: z.union([z.boolean(), MattermostLegacyObjectSchema]).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
