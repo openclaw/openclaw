@@ -627,6 +627,15 @@ export async function runReplyAgent(params: {
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
+    // Extract replyText from non-error payloads with text
+    const replyText = payloadArray
+      .filter((payload) => !payload.isError && typeof payload.text === "string")
+      .map((payload) => payload.text as string)
+      .join(" ")
+      .replace(/[\r\n\t]+/g, " ")
+      .trim()
+      .slice(0, 240);
+
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
@@ -669,6 +678,7 @@ export async function runReplyAgent(params: {
           ?.replace(/[\r\n\t]+/g, " ")
           .trim()
           .slice(0, 240),
+        replyText: replyText || undefined,
       });
     }
 

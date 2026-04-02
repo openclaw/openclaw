@@ -33,6 +33,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   thinkLevel?: string;
   status?: string;
   triggerText?: string;
+  replyText?: string;
 };
 
 export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
@@ -56,6 +57,8 @@ export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
   errorMessage?: string;
   /** Estimated cost in USD for this single LLM call. */
   costUsd?: number;
+  requestText?: string;
+  replyText?: string;
 };
 
 export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
