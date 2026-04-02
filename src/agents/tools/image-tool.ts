@@ -1,9 +1,14 @@
+import { resolve, isAbsolute } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+  type MediaUnderstandingProvider,
+} from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
@@ -164,11 +169,12 @@ async function runImagePrompt(params: {
         provider,
         providerRegistry as Map<string, MediaUnderstandingProvider>,
       );
-      if (!imageProvider) {
-        throw new Error(`No media-understanding provider registered for ${provider}`);
-      }
-      if (params.images.length > 1 && imageProvider.describeImages) {
-        const described = await imageProvider.describeImages({
+      if (
+        params.images.length > 1 &&
+        (imageProvider?.describeImages || !imageProvider?.describeImage)
+      ) {
+        const describeImages = imageProvider?.describeImages ?? describeImagesWithModel;
+        const described = await describeImages({
           images: params.images.map((image, index) => ({
             buffer: image.buffer,
             fileName: `image-${index + 1}`,
@@ -184,12 +190,10 @@ async function runImagePrompt(params: {
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
-      if (!imageProvider.describeImage) {
-        throw new Error(`Provider does not support image analysis: ${provider}`);
-      }
+      const describeImage = imageProvider?.describeImage ?? describeImageWithModel;
       if (params.images.length === 1) {
         const image = params.images[0];
-        const described = await imageProvider.describeImage({
+        const described = await describeImage({
           buffer: image.buffer,
           fileName: "image-1",
           mime: image.mimeType,
@@ -206,7 +210,7 @@ async function runImagePrompt(params: {
 
       const parts: string[] = [];
       for (const [index, image] of params.images.entries()) {
-        const described = await imageProvider.describeImage({
+        const described = await describeImage({
           buffer: image.buffer,
           fileName: `image-${index + 1}`,
           mime: image.mimeType,
@@ -400,6 +404,19 @@ export function createImageTool(options?: {
           }
           if (imageRaw.startsWith("~")) {
             return resolveUserPath(imageRaw);
+          }
+          // Resolve relative paths against workspaceDir so agents can reference
+          // workspace-relative paths (e.g. "inbox/photo.png") without needing to
+          // know the absolute workspace location — matching the read tool behaviour.
+          if (
+            !isDataUrl &&
+            !isFileUrl &&
+            !isHttpUrl &&
+            !looksLikeWindowsDrivePath &&
+            !isAbsolute(imageRaw) &&
+            options?.workspaceDir
+          ) {
+            return resolve(options.workspaceDir, imageRaw);
           }
           return imageRaw;
         })();

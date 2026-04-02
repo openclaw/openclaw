@@ -15,6 +15,8 @@ type RegistryState = {
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
   key: string | null;
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
+  importedPluginIds: Set<string>;
 };
 
 const state: RegistryState = (() => {
@@ -36,10 +38,16 @@ const state: RegistryState = (() => {
         version: 0,
       },
       key: null,
+      runtimeSubagentMode: "default",
+      importedPluginIds: new Set<string>(),
     };
   }
   return globalState[REGISTRY_STATE];
 })();
+
+export function recordImportedPluginId(pluginId: string): void {
+  state.importedPluginIds.add(pluginId);
+}
 
 function installSurfaceRegistry(
   surface: RegistrySurfaceState,
@@ -71,12 +79,17 @@ function syncTrackedSurface(
   installSurfaceRegistry(surface, registry, false);
 }
 
-export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
+export function setActivePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey?: string,
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
+) {
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
+  state.runtimeSubagentMode = runtimeSubagentMode;
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
@@ -175,8 +188,45 @@ export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
 
+export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "gateway-bindable" {
+  return state.runtimeSubagentMode;
+}
+
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
+}
+
+function collectLoadedPluginIds(
+  registry: PluginRegistry | null | undefined,
+  ids: Set<string>,
+): void {
+  if (!registry) {
+    return;
+  }
+  for (const plugin of registry.plugins) {
+    if (plugin.status === "loaded" && plugin.format !== "bundle") {
+      ids.add(plugin.id);
+    }
+  }
+}
+
+/**
+ * Returns plugin ids that were imported by plugin runtime or registry loading in
+ * the current process.
+ *
+ * This is a process-level view, not a fresh import trace: cached registry reuse
+ * still counts because the plugin code was loaded earlier in this process.
+ * Explicit loader import tracking covers plugins that were imported but later
+ * ended in an error state during registration.
+ * Bundle-format plugins are excluded because they can be "loaded" from metadata
+ * without importing any JS entrypoint.
+ */
+export function listImportedRuntimePluginIds(): string[] {
+  const imported = new Set(state.importedPluginIds);
+  collectLoadedPluginIds(state.activeRegistry, imported);
+  collectLoadedPluginIds(state.channel.registry, imported);
+  collectLoadedPluginIds(state.httpRoute.registry, imported);
+  return [...imported].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resetPluginRuntimeStateForTest(): void {
@@ -185,4 +235,6 @@ export function resetPluginRuntimeStateForTest(): void {
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
   state.key = null;
+  state.runtimeSubagentMode = "default";
+  state.importedPluginIds.clear();
 }

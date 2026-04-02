@@ -10,10 +10,13 @@ import {
 import {
   maxAsk,
   minSecurity,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
   type ExecAsk,
+  type ExecApprovalDecision,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { logWarn } from "../logger.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
@@ -24,6 +27,23 @@ import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
+export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
+const loggedExecApprovalFollowupFailures = new Set<string>();
+
+function rememberExecApprovalFollowupFailureKey(key: string): boolean {
+  if (loggedExecApprovalFollowupFailures.has(key)) {
+    return false;
+  }
+  loggedExecApprovalFollowupFailures.add(key);
+  // Bound memory growth for long-lived processes that see many unique approval failures.
+  if (loggedExecApprovalFollowupFailures.size > MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS) {
+    const oldestKey = loggedExecApprovalFollowupFailures.values().next().value;
+    if (typeof oldestKey === "string") {
+      loggedExecApprovalFollowupFailures.delete(oldestKey);
+    }
+  }
+  return true;
+}
 
 export type ExecHostApprovalContext = {
   approvals: ResolvedExecApprovals;
@@ -46,6 +66,10 @@ export type ExecApprovalUnavailableReason =
   | "no-approval-route"
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported";
+
+function isHeadlessExecTrigger(trigger?: string): boolean {
+  return trigger === "cron";
+}
 
 export type RegisteredExecApprovalRequestContext = {
   approvalId: string;
@@ -322,6 +346,38 @@ export function createExecApprovalDecisionState(params: {
   };
 }
 
+export function shouldResolveExecApprovalUnavailableInline(params: {
+  trigger?: string;
+  unavailableReason: ExecApprovalUnavailableReason | null;
+  preResolvedDecision: string | null | undefined;
+}): boolean {
+  return (
+    isHeadlessExecTrigger(params.trigger) &&
+    params.unavailableReason === "no-approval-route" &&
+    params.preResolvedDecision === null
+  );
+}
+
+export function buildHeadlessExecApprovalDeniedMessage(params: {
+  trigger?: string;
+  host: "gateway" | "node";
+  security: ExecSecurity;
+  ask: ExecAsk;
+  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+}): string {
+  const runLabel = params.trigger === "cron" ? "Cron runs" : "Headless runs";
+  return [
+    `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
+    `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
+    "Stricter values from tools.exec and ~/.openclaw/exec-approvals.json both apply.",
+    "Fix one of these:",
+    '- align both files to security="full" and ask="off" for trusted local automation',
+    "- keep allowlist mode and add an explicit allowlist entry for this command",
+    "- enable Web UI, terminal UI, or chat exec approvals and rerun interactively",
+    'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
+  ].join("\n");
+}
+
 export async function sendExecApprovalFollowupResult(
   target: ExecApprovalFollowupTarget,
   resultText: string,
@@ -334,13 +390,20 @@ export async function sendExecApprovalFollowupResult(
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
-  }).catch(() => {});
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${target.approvalId}:${message}`;
+    if (!rememberExecApprovalFollowupFailureKey(key)) {
+      return;
+    }
+    logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
+  });
 }
 
 export function buildExecApprovalPendingToolResult(params: {
   host: "gateway" | "node";
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   warningText: string;
   approvalId: string;
   approvalSlug: string;
@@ -348,8 +411,10 @@ export function buildExecApprovalPendingToolResult(params: {
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
+  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   return {
     content: [
       {
@@ -366,6 +431,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 warningText: params.warningText,
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
+                allowedDecisions,
                 command: params.command,
                 cwd: params.cwd,
                 host: params.host,
@@ -391,6 +457,7 @@ export function buildExecApprovalPendingToolResult(params: {
             approvalId: params.approvalId,
             approvalSlug: params.approvalSlug,
             expiresAtMs: params.expiresAtMs,
+            allowedDecisions,
             host: params.host,
             command: params.command,
             cwd: params.cwd,

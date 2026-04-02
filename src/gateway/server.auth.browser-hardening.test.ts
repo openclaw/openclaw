@@ -224,6 +224,32 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("rejects browser-origin connects that claim to be tui clients", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: "https://attacker.example" });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            version: "1.0.0",
+            platform: "darwin",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("rate-limits browser-origin auth failures on loopback even when loopback exemption is enabled", async () => {
     testState.gatewayAuth = {
       mode: "token",
@@ -247,6 +273,38 @@ describe("gateway auth browser hardening", () => {
         expect(second.error?.message ?? "").toContain("retry later");
       } finally {
         secondWs.close();
+      }
+    });
+  });
+
+  test("omits sensitive gateway paths from low-privilege hello-ok snapshots", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      try {
+        const payload = (await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          device: null,
+        })) as {
+          type: "hello-ok";
+          snapshot?: {
+            configPath?: unknown;
+            stateDir?: unknown;
+            authMode?: unknown;
+          };
+        };
+        // connectReq scopes are evaluated after auth and unbound-scope clearing, so this assertion
+        // verifies the effective low-privilege session view rather than self-declared client scopes.
+        const snapshot = payload.snapshot as
+          | { configPath?: unknown; stateDir?: unknown; authMode?: unknown }
+          | undefined;
+        expect(snapshot).toBeDefined();
+        expect(snapshot?.configPath).toBeUndefined();
+        expect(snapshot?.stateDir).toBeUndefined();
+        expect(snapshot?.authMode).toBeUndefined();
+      } finally {
+        ws.close();
       }
     });
   });

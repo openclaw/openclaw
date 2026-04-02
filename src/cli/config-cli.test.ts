@@ -23,6 +23,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
     mockWriteConfigFile(cfg, options),
+  replaceConfigFile: (params: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { unsetPaths?: string[][] };
+  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -51,8 +55,10 @@ function buildSnapshot(params: {
     exists: true,
     raw: JSON.stringify(params.resolved),
     parsed: params.resolved,
+    sourceConfig: params.resolved,
     resolved: params.resolved,
     valid: true,
+    runtimeConfig: params.config,
     config: params.config,
     issues: [],
     warnings: [],
@@ -89,8 +95,10 @@ function makeInvalidSnapshot(params: {
     exists: true,
     raw: "{}",
     parsed: {},
+    sourceConfig: {},
     resolved: {},
     valid: false,
+    runtimeConfig: {},
     config: {},
     issues: params.issues,
     warnings: [],
@@ -225,24 +233,6 @@ describe("config cli", () => {
       expect(written).not.toHaveProperty("sessions.persistence");
       expect(written.gateway?.port).toBe(18789);
       expect(written.gateway?.auth).toEqual({ mode: "token" });
-    });
-
-    it("auto-seeds a valid Ollama provider when setting only models.providers.ollama.apiKey", async () => {
-      const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
-      };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "set", "models.providers.ollama.apiKey", '"ollama-local"']);
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
-      expect(written.models?.providers?.ollama).toEqual({
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
-        models: [],
-        apiKey: "ollama-local", // pragma: allowlist secret
-      });
     });
 
     it("drops gateway.auth.password when switching mode to token", async () => {
@@ -434,8 +424,10 @@ describe("config cli", () => {
         raw: null,
         parsed: {},
         resolved: {},
+        sourceConfig: {},
         valid: true,
         config: {},
+        runtimeConfig: {},
         issues: [],
         warnings: [],
         legacyIssues: [],
@@ -628,6 +620,56 @@ describe("config cli", () => {
       });
     });
 
+    it("fails early when unsupported mutable paths are assigned SecretRef objects (builder mode)", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "hooks.token",
+          "--ref-provider",
+          "default",
+          "--ref-source",
+          "env",
+          "--ref-id",
+          "HOOK_TOKEN",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Config policy validation failed: unsupported SecretRef usage"),
+      );
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+    });
+
+    it("fails early when parent-object writes include unsupported SecretRef objects", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "hooks",
+          '{"token":{"source":"env","provider":"default","id":"HOOK_TOKEN"}}',
+          "--strict-json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Config policy validation failed: unsupported SecretRef usage"),
+      );
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+    });
+
     it("supports provider builder mode under secrets.providers.<alias>", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
@@ -714,6 +756,93 @@ describe("config cli", () => {
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("Dry run failed: config schema validation failed."),
       );
+    });
+
+    it("fails dry-run when unsupported mutable paths receive SecretRef objects in value/json mode", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "hooks.token",
+          '{"source":"env","provider":"default","id":"HOOK_TOKEN"}',
+          "--strict-json",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Dry run failed: config schema validation failed."),
+      );
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+    });
+
+    it("aggregates policy failures across batch entries", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "--batch-json",
+          '[{"path":"hooks.token","ref":{"source":"env","provider":"default","id":"HOOK_TOKEN"}},{"path":"commands.ownerDisplaySecret","ref":{"source":"env","provider":"default","id":"OWNER_DISPLAY_SECRET"}}]',
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("commands.ownerDisplaySecret"),
+      );
+    });
+
+    it("does not duplicate policy errors in --dry-run --json mode for parent-object writes", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "hooks",
+          '{"token":{"source":"env","provider":"default","id":"HOOK_TOKEN"}}',
+          "--strict-json",
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        ok: boolean;
+        checks: { schema: boolean; resolvability: boolean; resolvabilityComplete: boolean };
+        errors?: Array<{ kind: string; message: string; ref?: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.checks.schema).toBe(true);
+      const hooksTokenErrors =
+        payload.errors?.filter(
+          (entry) => entry.kind === "schema" && entry.message.includes("hooks.token"),
+        ) ?? [];
+      expect(hooksTokenErrors).toHaveLength(1);
     });
 
     it("logs a dry-run note when value mode performs no validation checks", async () => {
@@ -1213,6 +1342,46 @@ describe("config cli", () => {
       expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
       expect(
         payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
+      ).toBe(true);
+    });
+
+    it("keeps distinct resolvability failures when messages are identical but refs differ", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "--batch-json",
+          '[{"path":"channels.discord.token","ref":{"source":"exec","provider":"default","id":"DISCORD_BOT_TOKEN"}},{"path":"channels.telegram.botToken","ref":{"source":"exec","provider":"default","id":"TELEGRAM_BOT_TOKEN"}}]',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        ok: boolean;
+        errors?: Array<{ kind: string; message: string; ref?: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      const resolvabilityErrors =
+        payload.errors?.filter((entry) => entry.kind === "resolvability") ?? [];
+      expect(resolvabilityErrors).toHaveLength(2);
+      expect(
+        resolvabilityErrors.some((entry) => entry.ref === "exec:default:DISCORD_BOT_TOKEN"),
+      ).toBe(true);
+      expect(
+        resolvabilityErrors.some((entry) => entry.ref === "exec:default:TELEGRAM_BOT_TOKEN"),
       ).toBe(true);
     });
 

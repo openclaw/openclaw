@@ -132,6 +132,75 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Fast: on");
   });
 
+  it("shows configured text verbosity for the active model", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  textVerbosity: "low",
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Text: low");
+  });
+
+  it("shows per-agent text verbosity overrides for the active model", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  textVerbosity: "high",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                text_verbosity: "low",
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      agentId: "main",
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Text: low");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
@@ -1200,6 +1269,30 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("prefers provider-qualified context windows for fresh bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "sess-anthropic-qualified-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).not.toContain("Context: 25k/200k");
+  });
+
   it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
     const text = buildStatusMessage({
       config: {
@@ -1285,7 +1378,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast on|off");
+    expect(buildHelpMessage()).toContain("/fast status|on|off");
   });
 });
 

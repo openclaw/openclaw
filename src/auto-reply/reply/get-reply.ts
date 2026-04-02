@@ -22,12 +22,41 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
-import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+
+let sessionResetModelRuntimePromise: Promise<
+  typeof import("./session-reset-model.runtime.js")
+> | null = null;
+let stageSandboxMediaRuntimePromise: Promise<
+  typeof import("./stage-sandbox-media.runtime.js")
+> | null = null;
+
+function loadSessionResetModelRuntime() {
+  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
+  return sessionResetModelRuntimePromise;
+}
+
+function loadStageSandboxMediaRuntime() {
+  stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
+  return stageSandboxMediaRuntimePromise;
+}
+
+let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
+  null;
+let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null = null;
+
+function loadHookRunnerGlobal() {
+  hookRunnerGlobalPromise ??= import("../../plugins/hook-runner-global.js");
+  return hookRunnerGlobalPromise;
+}
+
+function loadOriginRouting() {
+  originRoutingPromise ??= import("./origin-routing.js");
+  return originRoutingPromise;
+}
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -222,21 +251,24 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
 
-  await applyResetModelOverride({
-    cfg,
-    agentId,
-    resetTriggered,
-    bodyStripped,
-    sessionCtx,
-    ctx: finalized,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-  });
+  if (resetTriggered && bodyStripped?.trim()) {
+    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+    await applyResetModelOverride({
+      cfg,
+      agentId,
+      resetTriggered,
+      bodyStripped,
+      sessionCtx,
+      ctx: finalized,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+    });
+  }
 
   const channelModelOverride = resolveChannelModelOverride({
     cfg,
@@ -249,6 +281,7 @@ export async function getReplyFromConfig(
         : undefined) ??
       finalized.Provider,
     groupId: groupResolution?.id ?? sessionEntry.groupId,
+    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
     groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
     groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,
@@ -400,13 +433,42 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
-  await stageSandboxMedia({
-    ctx,
-    sessionCtx,
-    cfg,
-    sessionKey,
-    workspaceDir,
-  });
+  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_reply")) {
+    const { resolveOriginMessageProvider } = await loadOriginRouting();
+    const hookMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Provider,
+    });
+    const hookResult = await hookRunner.runBeforeAgentReply(
+      { cleanedBody },
+      {
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionId,
+        workspaceDir,
+        messageProvider: hookMessageProvider,
+        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+        channelId: hookMessageProvider,
+      },
+    );
+    if (hookResult?.handled) {
+      return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+    }
+  }
+
+  if (sessionKey && hasInboundMedia(ctx)) {
+    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    await stageSandboxMedia({
+      ctx,
+      sessionCtx,
+      cfg,
+      sessionKey,
+      workspaceDir,
+    });
+  }
 
   return runPreparedReply({
     ctx,

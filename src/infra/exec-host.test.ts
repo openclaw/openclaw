@@ -48,7 +48,7 @@ describe("requestExecHostViaSocket", () => {
     const call = requestJsonlSocketMock.mock.calls[0]?.[0] as
       | {
           socketPath: string;
-          payload: string;
+          requestLine: string;
           timeoutMs: number;
           accept: (msg: unknown) => unknown;
         }
@@ -59,7 +59,7 @@ describe("requestExecHostViaSocket", () => {
 
     expect(call.socketPath).toBe("/tmp/socket");
     expect(call.timeoutMs).toBe(20_000);
-    const payload = JSON.parse(call.payload) as {
+    const payload = JSON.parse(call.requestLine) as {
       type: string;
       id: string;
       nonce: string;

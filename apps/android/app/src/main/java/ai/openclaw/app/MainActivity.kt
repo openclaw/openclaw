@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    handleAssistantIntent(intent)
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
 
@@ -69,5 +70,16 @@ class MainActivity : ComponentActivity() {
   override fun onStop() {
     viewModel.setForeground(false)
     super.onStop()
+  }
+
+  override fun onNewIntent(intent: android.content.Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleAssistantIntent(intent)
+  }
+
+  private fun handleAssistantIntent(intent: android.content.Intent?) {
+    val request = parseAssistantLaunchIntent(intent) ?: return
+    viewModel.handleAssistantLaunch(request)
   }
 }

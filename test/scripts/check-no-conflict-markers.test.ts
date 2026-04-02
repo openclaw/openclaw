@@ -77,7 +77,7 @@ describe("check-no-conflict-markers", () => {
     git(rootDir, "config", "user.email", "test@example.com");
     git(rootDir, "config", "user.name", "Test User");
 
-    const scriptFile = path.join(rootDir, "scripts", "generate-bundled-plugin-metadata.mjs");
+    const scriptFile = path.join(rootDir, "scripts", "bundled-plugin-metadata-runtime.mjs");
     fs.mkdirSync(path.dirname(scriptFile), { recursive: true });
     fs.writeFileSync(
       scriptFile,
@@ -89,7 +89,7 @@ describe("check-no-conflict-markers", () => {
         ">>>>>>> branch",
       ].join("\n"),
     );
-    git(rootDir, "add", "scripts/generate-bundled-plugin-metadata.mjs");
+    git(rootDir, "add", "scripts/bundled-plugin-metadata-runtime.mjs");
 
     const violations = findConflictMarkersInFiles(listTrackedFiles(rootDir));
 

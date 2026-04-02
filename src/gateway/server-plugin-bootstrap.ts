@@ -1,5 +1,6 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -23,6 +24,7 @@ type GatewayPluginBootstrapParams = {
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
   logDiagnostics?: boolean;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
@@ -56,17 +58,25 @@ function logGatewayPluginDiagnostics(params: {
 }
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  installGatewayPluginRuntimeEnvironment(params.cfg);
+  const autoEnabled = applyPluginAutoEnable({
+    config: params.cfg,
+    env: process.env,
+  });
+  const resolvedConfig = autoEnabled.config;
+  installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
-    cfg: params.cfg,
+    cfg: resolvedConfig,
+    activationSourceConfig: params.cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,
     baseMethods: params.baseMethods,
+    pluginIds: params.pluginIds,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
-  primeConfiguredBindingRegistry({ cfg: params.cfg });
+  primeConfiguredBindingRegistry({ cfg: resolvedConfig });
   if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.diagnostics.length > 0) {
     logGatewayPluginDiagnostics({
       diagnostics: loaded.pluginRegistry.diagnostics,

@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { TeamsHttpStream } from "./streaming-message.js";
@@ -28,13 +29,14 @@ export function createTeamsReplyStreamController(params: {
         sendActivity: (activity) => params.context.sendActivity(activity),
         feedbackLoopEnabled: params.feedbackLoopEnabled,
         onError: (err) => {
-          params.log.debug?.(`stream error: ${err instanceof Error ? err.message : String(err)}`);
+          params.log.debug?.(`stream error: ${formatUnknownError(err)}`);
         },
       })
     : undefined;
 
   let streamReceivedTokens = false;
   let informativeUpdateSent = false;
+  let pendingFinalize: Promise<void> | undefined;
 
   return {
     async onReplyStart(): Promise<void> {
@@ -54,11 +56,44 @@ export function createTeamsReplyStreamController(params: {
     },
 
     preparePayload(payload: ReplyPayload): ReplyPayload | undefined {
-      if (!stream || !streamReceivedTokens || !stream.hasContent) {
+      if (!stream || !streamReceivedTokens) {
         return payload;
       }
 
       const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+
+      // Stream failed after partial delivery (e.g. > 4000 chars). Send only
+      // the unstreamed suffix via block delivery to avoid duplicate text.
+      if (stream.isFailed) {
+        streamReceivedTokens = false;
+
+        if (!payload.text) {
+          return payload;
+        }
+
+        const streamedLength = stream.streamedLength;
+        if (streamedLength <= 0) {
+          return payload;
+        }
+
+        const remainingText = payload.text.slice(streamedLength);
+        if (!remainingText) {
+          return hasMedia ? { ...payload, text: undefined } : undefined;
+        }
+
+        return { ...payload, text: remainingText };
+      }
+
+      if (!stream.hasContent || stream.isFinalized) {
+        return payload;
+      }
+
+      // Stream handled this text segment. Finalize it and reset so any
+      // subsequent text segments (after tool calls) use fallback delivery.
+      // finalize() is idempotent; the later call in markDispatchIdle is a no-op.
+      streamReceivedTokens = false;
+      pendingFinalize = stream.finalize();
+
       if (!hasMedia) {
         return undefined;
       }
@@ -66,6 +101,7 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<void> {
+      await pendingFinalize;
       await stream?.finalize();
     },
 

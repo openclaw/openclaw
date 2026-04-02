@@ -1,9 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { runWebSearch } from "./runtime.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
 type TestPluginWebSearchConfig = {
   webSearch?: {
@@ -11,37 +8,94 @@ type TestPluginWebSearchConfig = {
   };
 };
 
+const { resolveBundledPluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(
+      () => [],
+    ),
+    resolveRuntimeWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
+  }));
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+  resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+}));
+
+function createProvider(params: {
+  pluginId: string;
+  id: string;
+  credentialPath: string;
+  autoDetectOrder?: number;
+  requiresCredential?: boolean;
+  getCredentialValue?: PluginWebSearchProviderEntry["getCredentialValue"];
+  getConfiguredCredentialValue?: PluginWebSearchProviderEntry["getConfiguredCredentialValue"];
+  createTool?: PluginWebSearchProviderEntry["createTool"];
+}): PluginWebSearchProviderEntry {
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} runtime provider`,
+    envVars: [`${params.id.toUpperCase()}_API_KEY`],
+    placeholder: `${params.id}-...`,
+    signupUrl: `https://example.com/${params.id}`,
+    credentialPath: params.credentialPath,
+    autoDetectOrder: params.autoDetectOrder,
+    requiresCredential: params.requiresCredential,
+    getCredentialValue: params.getCredentialValue ?? (() => undefined),
+    setCredentialValue: () => {},
+    getConfiguredCredentialValue: params.getConfiguredCredentialValue,
+    createTool:
+      params.createTool ??
+      (() => ({
+        description: params.id,
+        parameters: {},
+        execute: async (args) => ({ ...args, provider: params.id }),
+      })),
+  };
+}
+
 describe("web search runtime", () => {
+  let runWebSearch: typeof import("./runtime.js").runWebSearch;
+  let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
+  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+
+  beforeAll(async () => {
+    ({ runWebSearch } = await import("./runtime.js"));
+    ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
+      await import("../secrets/runtime.js"));
+  });
+
+  beforeEach(() => {
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolveRuntimeWebSearchProvidersMock.mockReset();
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([]);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([]);
+  });
+
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
     clearSecretsRuntimeSnapshot();
   });
 
   it("executes searches through the active plugin registry", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push({
-      pluginId: "custom-search",
-      pluginName: "Custom Search",
-      provider: {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createProvider({
+        pluginId: "custom-search",
         id: "custom",
-        label: "Custom Search",
-        hint: "Custom runtime provider",
-        envVars: ["CUSTOM_SEARCH_API_KEY"],
-        placeholder: "custom-...",
-        signupUrl: "https://example.com/signup",
         credentialPath: "tools.web.search.custom.apiKey",
         autoDetectOrder: 1,
         getCredentialValue: () => "configured",
-        setCredentialValue: () => {},
         createTool: () => ({
           description: "custom",
           parameters: {},
           execute: async (args) => ({ ...args, ok: true }),
         }),
-      },
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
+      }),
+    ]);
 
     await expect(
       runWebSearch({
@@ -55,48 +109,25 @@ describe("web search runtime", () => {
   });
 
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push({
+    const provider = createProvider({
       pluginId: "custom-search",
-      pluginName: "Custom Search",
-      provider: {
-        id: "custom",
-        label: "Custom Search",
-        hint: "Custom runtime provider",
-        envVars: ["CUSTOM_SEARCH_API_KEY"],
-        placeholder: "custom-...",
-        signupUrl: "https://example.com/signup",
-        credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
-        autoDetectOrder: 1,
-        getCredentialValue: () => undefined,
-        setCredentialValue: () => {},
-        getConfiguredCredentialValue: (config) => {
-          const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
-            | TestPluginWebSearchConfig
-            | undefined;
-          return pluginConfig?.webSearch?.apiKey;
-        },
-        setConfiguredCredentialValue: (configTarget, value) => {
-          configTarget.plugins = {
-            ...configTarget.plugins,
-            entries: {
-              ...configTarget.plugins?.entries,
-              "custom-search": {
-                enabled: true,
-                config: { webSearch: { apiKey: value } },
-              },
-            },
-          };
-        },
-        createTool: () => ({
-          description: "custom",
-          parameters: {},
-          execute: async (args) => ({ ...args, ok: true }),
-        }),
+      id: "custom",
+      credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
+      autoDetectOrder: 1,
+      getConfiguredCredentialValue: (config) => {
+        const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
+          | TestPluginWebSearchConfig
+          | undefined;
+        return pluginConfig?.webSearch?.apiKey;
       },
-      source: "test",
+      createTool: () => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({ ...args, ok: true }),
+      }),
     });
-    setActivePluginRegistry(registry);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([provider]);
 
     const config: OpenClawConfig = {
       plugins: {
@@ -124,32 +155,68 @@ describe("web search runtime", () => {
     });
   });
 
+  it("treats non-env SecretRefs as configured credentials for provider auto-detect", async () => {
+    const provider = createProvider({
+      pluginId: "custom-search",
+      id: "custom",
+      credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
+      autoDetectOrder: 1,
+      getConfiguredCredentialValue: (config) => {
+        const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
+          | TestPluginWebSearchConfig
+          | undefined;
+        return pluginConfig?.webSearch?.apiKey;
+      },
+      createTool: () => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({ ...args, ok: true }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "custom-search": {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "file",
+                  provider: "vault",
+                  id: "/providers/custom-search/apiKey",
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(
+      runWebSearch({
+        config,
+        args: { query: "hello" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "hello", ok: true },
+    });
+  });
+
   it("falls back to a keyless provider when no credentials are available", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push({
-      pluginId: "duckduckgo",
-      pluginName: "DuckDuckGo",
-      provider: {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createProvider({
+        pluginId: "duckduckgo",
         id: "duckduckgo",
-        label: "DuckDuckGo Search (experimental)",
-        hint: "Keyless fallback",
-        requiresCredential: false,
-        envVars: [],
-        placeholder: "(no key needed)",
-        signupUrl: "https://duckduckgo.com/",
         credentialPath: "",
         autoDetectOrder: 100,
+        requiresCredential: false,
         getCredentialValue: () => "duckduckgo-no-key-needed",
-        setCredentialValue: () => {},
-        createTool: () => ({
-          description: "duckduckgo",
-          parameters: {},
-          execute: async (args) => ({ ...args, provider: "duckduckgo" }),
-        }),
-      },
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
+      }),
+    ]);
 
     await expect(
       runWebSearch({
@@ -163,21 +230,13 @@ describe("web search runtime", () => {
   });
 
   it("prefers the active runtime-selected provider when callers omit runtime metadata", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push({
-      pluginId: "alpha-search",
-      pluginName: "Alpha Search",
-      provider: {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createProvider({
+        pluginId: "alpha-search",
         id: "alpha",
-        label: "Alpha Search",
-        hint: "Alpha runtime provider",
-        envVars: ["ALPHA_SEARCH_API_KEY"],
-        placeholder: "alpha-...",
-        signupUrl: "https://example.com/alpha",
         credentialPath: "tools.web.search.alpha.apiKey",
         autoDetectOrder: 1,
         getCredentialValue: () => "alpha-configured",
-        setCredentialValue: () => {},
         createTool: ({ runtimeMetadata }) => ({
           description: "alpha",
           parameters: {},
@@ -187,23 +246,13 @@ describe("web search runtime", () => {
             runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
           }),
         }),
-      },
-      source: "test",
-    });
-    registry.webSearchProviders.push({
-      pluginId: "beta-search",
-      pluginName: "Beta Search",
-      provider: {
+      }),
+      createProvider({
+        pluginId: "beta-search",
         id: "beta",
-        label: "Beta Search",
-        hint: "Beta runtime provider",
-        envVars: ["BETA_SEARCH_API_KEY"],
-        placeholder: "beta-...",
-        signupUrl: "https://example.com/beta",
         credentialPath: "tools.web.search.beta.apiKey",
         autoDetectOrder: 2,
         getCredentialValue: () => "beta-configured",
-        setCredentialValue: () => {},
         createTool: ({ runtimeMetadata }) => ({
           description: "beta",
           parameters: {},
@@ -213,10 +262,9 @@ describe("web search runtime", () => {
             runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
           }),
         }),
-      },
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
+      }),
+    ]);
+
     activateSecretsRuntimeSnapshot({
       sourceConfig: {},
       config: {},
@@ -229,11 +277,8 @@ describe("web search runtime", () => {
           diagnostics: [],
         },
         fetch: {
-          firecrawl: {
-            active: false,
-            apiKeySource: "missing",
-            diagnostics: [],
-          },
+          providerSource: "none",
+          diagnostics: [],
         },
         diagnostics: [],
       },

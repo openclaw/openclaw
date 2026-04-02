@@ -1,20 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
-import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
+import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
   initSessionState: vi.fn(),
-}));
-
-registerGetReplyCommonMocks();
-
-vi.mock("../../link-understanding/apply.runtime.js", () => ({
-  applyLinkUnderstanding: vi.fn(async () => undefined),
-}));
-vi.mock("../../media-understanding/apply.runtime.js", () => ({
-  applyMediaUnderstanding: vi.fn(async () => undefined),
 }));
 vi.mock("./directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
