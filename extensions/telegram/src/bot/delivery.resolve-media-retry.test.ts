@@ -545,4 +545,58 @@ describe("resolveMedia original filename preservation", () => {
     );
     expect(result).not.toBeNull();
   });
+
+  it("constructs correct download URL with custom apiRoot for documents", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const customApiRoot = "http://192.168.1.50:8081/custom-bot-api";
+    const ctx = makeCtx("document", getFile);
+    const result = await resolveMedia(
+      ctx,
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      customApiRoot,
+    );
+
+    // Verify the URL uses the custom apiRoot, not the default Telegram API
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `${customApiRoot}/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
+      }),
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("constructs correct download URL with custom apiRoot for stickers", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker-data"),
+      contentType: "image/webp",
+      fileName: "file_0.webp",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.webp",
+      contentType: "image/webp",
+    });
+
+    const customApiRoot = "http://localhost:8081/bot";
+    const ctx = makeCtx("sticker", getFile);
+    const result = await resolveMedia(
+      ctx,
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      customApiRoot,
+    );
+
+    // Verify the URL uses the custom apiRoot for sticker downloads
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `${customApiRoot}/file/bot${BOT_TOKEN}/stickers/file_0.webp`,
+      }),
+    );
+    expect(result).not.toBeNull();
+  });
 });
