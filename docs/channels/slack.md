@@ -487,7 +487,9 @@ Exec approval prompts can route natively through Slack using interactive buttons
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 
-Configuration uses the shared `approvals.exec` config with Slack targets:
+Configuration requires **two** parts: the top-level routing config and a Slack-channel-specific `execApprovals` block.
+
+**Step 1 — Top-level routing** (routes approval prompts to Slack):
 
 ```json5
 {
@@ -499,6 +501,36 @@ Configuration uses the shared `approvals.exec` config with Slack targets:
   },
 }
 ```
+
+**Step 2 — Slack channel config** (enables the Slack approval client and sets approvers):
+
+```json5
+{
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+        // List Slack user IDs who can approve or deny exec requests.
+        // Note: channels.slack.allowFrom is NOT automatically used here —
+        // approvers must be listed explicitly, or set via commands.ownerAllowFrom.
+        approvers: ["U12345678"],
+      },
+    },
+  },
+}
+```
+
+<Warning>
+Both blocks are required. If `channels.slack.execApprovals.enabled` is missing or false,
+OpenClaw will report "chat exec approvals are not enabled on Slack" even when the
+top-level `approvals.exec` config is present.
+</Warning>
+
+**Approver resolution order:**
+1. `channels.slack.execApprovals.approvers` — explicit list (recommended)
+2. `commands.ownerAllowFrom` — fallback if no explicit approvers are set
+
+Existing `channels.slack.allowFrom` entries are **not** automatically used as exec approvers.
 
 Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 
