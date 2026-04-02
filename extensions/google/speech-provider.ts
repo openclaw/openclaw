@@ -4,9 +4,18 @@ import type {
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
+import { parseGeminiAuth } from "./api.js";
 
 const DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts";
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+
+function resolveGeminiApiKey(configuredKey?: string): string | undefined {
+  return (
+    configuredKey ||
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY
+  );
+}
 
 type GeminiProviderConfig = {
   apiKey?: string;
@@ -119,20 +128,18 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async () => await listGeminiVoices(),
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        readGeminiProviderConfig(providerConfig).apiKey || process.env.GEMINI_API_KEY,
-      ),
+      Boolean(resolveGeminiApiKey(readGeminiProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const config = readGeminiProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.GEMINI_API_KEY;
+      const apiKey = resolveGeminiApiKey(config.apiKey);
       if (!apiKey) {
-        throw new Error("GEMINI_API_KEY not configured");
+        throw new Error("Gemini API key not configured (set GEMINI_API_KEY or GOOGLE_API_KEY)");
       }
 
       const modelId =
         trimToUndefined(req.providerOverrides?.modelId) ?? config.modelId;
       const voiceId = trimToUndefined(req.providerOverrides?.voiceId);
-      const url = `${config.baseUrl}/${modelId}:generateContent?key=${apiKey}`;
+      const url = `${config.baseUrl}/${modelId}:generateContent`;
 
       const text = req.text.slice(0, 4096);
 
@@ -156,9 +163,13 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
         generationConfig,
       };
 
+      const authHeaders = parseGeminiAuth(apiKey);
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders.headers,
+        },
         body: JSON.stringify(requestBody),
         signal,
       });
