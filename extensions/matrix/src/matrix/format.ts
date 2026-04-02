@@ -112,8 +112,7 @@ function isMentionStartBoundary(charBefore: string | undefined): boolean {
   return !charBefore || !/[A-Za-z0-9_]/.test(charBefore);
 }
 
-function trimMentionSuffix(match: MatrixMentionCandidate): MatrixMentionCandidate | null {
-  let { raw, end } = match;
+function trimMentionSuffix(raw: string, end: number): { raw: string; end: number } | null {
   while (raw.length > 1 && TRIMMABLE_MENTION_SUFFIX.test(raw.at(-1) ?? "")) {
     raw = raw.slice(0, -1);
     end -= 1;
@@ -121,25 +120,39 @@ function trimMentionSuffix(match: MatrixMentionCandidate): MatrixMentionCandidat
   if (!raw.startsWith("@") || raw === "@") {
     return null;
   }
-  return { ...match, raw, end };
+  return { raw, end };
+}
+
+function isMatrixMentionUserId(raw: string): boolean {
+  if (!isMatrixQualifiedUserId(raw)) {
+    return false;
+  }
+  const colonIndex = raw.indexOf(":");
+  return colonIndex > 1 && colonIndex < raw.length - 1;
 }
 
 function buildMentionCandidate(raw: string, start: number): MatrixMentionCandidate | null {
-  const isRoomMention = raw.toLowerCase() === "@room";
-  const base: MatrixMentionCandidate = {
-    raw,
-    start,
-    end: start + raw.length,
-    kind: isRoomMention ? "room" : "user",
-  };
-  if (isRoomMention) {
-    return trimMentionSuffix(base);
+  const normalized = trimMentionSuffix(raw, start + raw.length);
+  if (!normalized) {
+    return null;
   }
-  const userCandidate = isMatrixQualifiedUserId(raw) ? { ...base, userId: raw } : null;
+  const kind = normalized.raw.toLowerCase() === "@room" ? "room" : "user";
+  const base: MatrixMentionCandidate = {
+    raw: normalized.raw,
+    start,
+    end: normalized.end,
+    kind,
+  };
+  if (kind === "room") {
+    return base;
+  }
+  const userCandidate = isMatrixMentionUserId(normalized.raw)
+    ? { ...base, userId: normalized.raw }
+    : null;
   if (!userCandidate) {
     return null;
   }
-  return trimMentionSuffix(userCandidate);
+  return userCandidate;
 }
 
 function collectMentionCandidates(text: string): MatrixMentionCandidate[] {

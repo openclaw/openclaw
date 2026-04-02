@@ -111,6 +111,45 @@ describe("markdownToMatrixHtml", () => {
     });
   });
 
+  it("treats sentence-ending room mentions as room mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @room.",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("hello @room.");
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({
+      room: true,
+    });
+  });
+
+  it("treats colon-suffixed room mentions as room mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @room:",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("hello @room:");
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({
+      room: true,
+    });
+  });
+
+  it("trims punctuation before storing mentioned user ids", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @alice:example.org.",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain('href="https://matrix.to/#/%40alice%3Aexample.org"');
+    expect(result.html).toContain("@alice:example.org</a>.");
+    expect(result.mentions).toEqual({
+      user_ids: ["@alice:example.org"],
+    });
+  });
+
   it("leaves bare localpart text unmentioned", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice",
