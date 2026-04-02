@@ -14,6 +14,7 @@ import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import {
   applyTestPluginDefaults,
+  normalizePluginId,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
@@ -794,7 +795,9 @@ function warnAboutUntrackedLoadedPlugins(params: {
     if (plugin.status !== "loaded" || plugin.origin === "bundled") {
       continue;
     }
-    if (allowSet.has(plugin.id)) {
+    // Normalize plugin ID to match how allowlist entries are normalized
+    const normalizedPluginId = normalizePluginId(plugin.id);
+    if (allowSet.has(normalizedPluginId)) {
       continue;
     }
     if (
