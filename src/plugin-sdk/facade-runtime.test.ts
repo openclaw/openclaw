@@ -7,6 +7,7 @@ import {
   canLoadActivatedBundledPluginPublicSurface,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
   loadBundledPluginPublicSurfaceModuleSync,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 const tempDirs: string[] = [];
@@ -162,6 +163,12 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
       }),
     ).toThrow(/Bundled plugin public surface access blocked/);
+    expect(
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync({
+        dirName: "discord",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toBeNull();
   });
 
   it("allows runtime-api facade loads when the bundled plugin is explicitly enabled", () => {

@@ -31,6 +31,7 @@ const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "media-understanding-core",
   "speech-core",
 ]);
+const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
@@ -129,7 +130,7 @@ function readFacadeBoundaryConfigSafely(): OpenClawConfig {
   try {
     return loadConfig();
   } catch {
-    return {};
+    return EMPTY_FACADE_BOUNDARY_CONFIG;
   }
 }
 
@@ -339,6 +340,17 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
     throw new Error(
       `Bundled plugin public surface access blocked for "${pluginLabel}" via ${params.dirName}/${params.artifactBasename}: ${access.reason ?? "plugin runtime is not activated"}`,
     );
+  }
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+}): T | null {
+  const access = resolveBundledPluginPublicSurfaceAccess(params);
+  if (!access.allowed) {
+    return null;
   }
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }

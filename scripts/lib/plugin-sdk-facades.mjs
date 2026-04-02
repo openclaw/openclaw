@@ -567,7 +567,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-surface",
     source: pluginSource("line", "runtime-api.js"),
-    loadPolicy: "activated",
+    // This surface is also used by passive reply normalization helpers.
+    // Keep it loadable without requiring the LINE plugin to be activated.
     exports: [
       "CardAction",
       "createActionCard",

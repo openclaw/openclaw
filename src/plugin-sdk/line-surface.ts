@@ -4,11 +4,11 @@ type FacadeEntry = PluginSdkFacadeTypeMap["line-surface"];
 type FacadeModule = FacadeEntry["module"];
 import {
   createLazyFacadeObjectValue,
-  loadActivatedBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "line",
     artifactBasename: "runtime-api.js",
   });
