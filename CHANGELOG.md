@@ -106,6 +106,7 @@ Docs: https://docs.openclaw.ai
 - Auth/OpenAI Codex: persist plugin-refreshed OAuth credentials to `auth-profiles.json` before returning them, so rotated Codex refresh tokens survive restart and stop falling into `refresh_token_reused` loops. (#53082)
 - Agents/Anthropic: honor explicit `cacheRetention` for custom providers using `anthropic-messages`, so Anthropic-compatible proxy providers can reuse prompt caching when they opt in. (#59049) Thanks @wwerst and @vincentkoc.
 - Discord/gateway: hand reconnect ownership back to Carbon, keep runtime status aligned with close/reconnect state, and force-stop sockets that open without reaching READY so Discord monitors recover promptly instead of waiting on stale health timeouts. (#59019) Thanks @obviyus
+- QQBot/voice: lazy-load `silk-wasm` in `audio-convert.ts` so qqbot still starts when the optional voice dependency is missing, while voice encode/decode degrades gracefully instead of crashing at module load time. (#58829) Thanks @WideLee.
 - Config/Telegram: migrate removed `channels.telegram.groupMentionsOnly` into `channels.telegram.groups["*"].requireMention` on load so legacy configs no longer crash at startup. (#55336) thanks @jameslcowan.
 
 ### Fixes
