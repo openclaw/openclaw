@@ -89,6 +89,7 @@ describe("resolveSlackThreadContextData", () => {
       sessionKey: "thread-session",
       allowFromLower: ["u1"],
       allowNameMatching: false,
+      contextVisibilityMode: "allowlist",
       envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
       effectiveDirectMedia: null,
     });
@@ -134,6 +135,7 @@ describe("resolveSlackThreadContextData", () => {
       sessionKey: "thread-session",
       allowFromLower: ["alice"],
       allowNameMatching: true,
+      contextVisibilityMode: "allowlist",
       envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
       effectiveDirectMedia: null,
     });

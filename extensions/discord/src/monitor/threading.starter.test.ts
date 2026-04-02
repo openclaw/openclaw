@@ -31,15 +31,16 @@ describe("resolveDiscordThreadStarter", () => {
       {
         content: "   ",
         embeds: [{ title: "Alert", description: "Details" }],
-        author: { username: "Alice", discriminator: "0" },
+        author: { id: "u1", username: "Alice", discriminator: "0" },
         timestamp: "2026-02-24T12:00:00.000Z",
       },
       () => 123,
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       text: "Alert\nDetails",
       author: "Alice",
+      authorId: "u1",
       timestamp: 123,
     });
   });
@@ -58,5 +59,26 @@ describe("resolveDiscordThreadStarter", () => {
       throw new Error("starter content should have produced a resolved starter payload");
     }
     expect(result.text).toBe("starter content");
+  });
+
+  it("preserves username, tag, and role metadata for downstream visibility checks", async () => {
+    const result = await resolveStarter(
+      {
+        content: "starter content",
+        author: { id: "u1", username: "Alice", discriminator: "1234" },
+        member: {
+          roles: ["role-1", "role-2"],
+        },
+      } as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({
+      author: "Alice#1234",
+      authorId: "u1",
+      authorName: "Alice",
+      authorTag: "Alice#1234",
+      memberRoleIds: ["role-1", "role-2"],
+    });
   });
 });

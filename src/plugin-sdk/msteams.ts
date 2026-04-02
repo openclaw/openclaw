@@ -56,6 +56,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { resolveChannelContextVisibilityMode } from "../config/context-visibility.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -97,6 +98,10 @@ export {
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
+export {
+  filterSupplementalContextItems,
+  shouldIncludeSupplementalContext,
+} from "../security/context-visibility.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
 export { loadWebMedia } from "./web-media.js";

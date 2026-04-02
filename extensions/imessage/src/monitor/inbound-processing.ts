@@ -11,6 +11,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  resolveChannelContextVisibilityMode,
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
@@ -24,6 +25,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
+  evaluateSupplementalContextVisibility,
 } from "openclaw/plugin-sdk/security-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -377,6 +379,37 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const replyContext = describeReplyContext(params.message);
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "imessage",
+    accountId: params.accountId,
+  });
+  const replySenderAllowed =
+    !isGroup || effectiveGroupAllowFrom.length === 0
+      ? true
+      : replyContext?.sender
+        ? isAllowedIMessageSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender: replyContext.sender,
+            chatId,
+            chatGuid,
+            chatIdentifier,
+          })
+        : false;
+  const filteredReplyContext =
+    !replyContext ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: replySenderAllowed,
+    }).include
+      ? replyContext
+      : null;
+  if (replyContext && !filteredReplyContext && isGroup) {
+    params.logVerbose?.(
+      `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
+    );
+  }
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
@@ -469,7 +502,7 @@ export function resolveIMessageInboundDecision(params: {
     route,
     bodyText,
     createdAt,
-    replyContext,
+    replyContext: filteredReplyContext,
     effectiveWasMentioned,
     commandAuthorized,
     effectiveDmAllowFrom,
