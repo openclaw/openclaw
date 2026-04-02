@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
+import { buildDockerExecArgs } from "./bash-tools.shared.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -382,6 +383,17 @@ describe("exec host env validation", () => {
     );
     expect(executedCommand).toContain("'$HOME'");
     expect(executedCommand).not.toContain(" $HOME");
+
+    const dockerArgs = buildDockerExecArgs({
+      containerName: "sandbox-test",
+      command: executedCommand,
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+    const bootstrapArg = dockerArgs[dockerArgs.length - 3];
+    const dockerCommandArg = dockerArgs[dockerArgs.length - 1];
+    expect(bootstrapArg).toBe('exec /bin/sh -c "$1"');
+    expect(dockerCommandArg).toBe(executedCommand);
   });
 
   it.each([

@@ -663,6 +663,48 @@ function renderShellEnvAssignmentToken(token: string): string | null {
   return `${parsed.key}=${shellEscapeSingleArg(parsed.value)}`;
 }
 
+function renderCanonicalSegmentFromArgvTokens(
+  tokens: string[],
+): { ok: true; rendered: string } | { ok: false } {
+  let leadingAssignments = 0;
+  while (
+    leadingAssignments < tokens.length &&
+    parseShellEnvAssignmentToken(tokens[leadingAssignments] ?? "") !== null
+  ) {
+    leadingAssignments += 1;
+  }
+  if (leadingAssignments > tokens.length) {
+    return { ok: false };
+  }
+
+  const renderedAssignments: string[] = [];
+  for (let i = 0; i < leadingAssignments; i += 1) {
+    const assignmentToken = tokens[i] ?? "";
+    const renderedAssignment = renderShellEnvAssignmentToken(assignmentToken);
+    if (!renderedAssignment) {
+      return { ok: false };
+    }
+    renderedAssignments.push(renderedAssignment);
+  }
+
+  const renderedArgv = renderQuotedArgv(tokens.slice(leadingAssignments));
+  const rendered = [renderedAssignments.join(" "), renderedArgv]
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return { ok: true, rendered };
+}
+
+export function isCanonicalEnforcedShellCommand(segments: ExecCommandSegment[]): boolean {
+  return segments.every((segment) => {
+    const argv = splitShellArgs(segment.raw);
+    if (!argv || argv.length === 0) {
+      return false;
+    }
+    const rendered = renderCanonicalSegmentFromArgvTokens(argv);
+    return rendered.ok && rendered.rendered === segment.raw.trim();
+  });
+}
+
 function finalizeRebuiltShellCommand(
   rebuilt: ReturnType<typeof rebuildShellCommandFromSource>,
   expectedSegmentCount?: number,
@@ -759,33 +801,11 @@ export function buildEnforcedShellCommand(params: {
       if (!argv) {
         return { ok: false, reason: "segment execution plan unavailable" };
       }
-
-      let leadingAssignments = 0;
-      while (
-        leadingAssignments < seg.argv.length &&
-        parseShellEnvAssignmentToken(seg.argv[leadingAssignments] ?? "") !== null
-      ) {
-        leadingAssignments += 1;
-      }
-      if (leadingAssignments > argv.length) {
+      const rendered = renderCanonicalSegmentFromArgvTokens(argv);
+      if (!rendered.ok) {
         return { ok: false, reason: "segment execution plan unavailable" };
       }
-
-      const renderedAssignments: string[] = [];
-      for (let i = 0; i < leadingAssignments; i += 1) {
-        const assignmentToken = seg.argv[i] ?? "";
-        const renderedAssignment = renderShellEnvAssignmentToken(assignmentToken);
-        if (!renderedAssignment) {
-          return { ok: false, reason: "segment execution plan unavailable" };
-        }
-        renderedAssignments.push(renderedAssignment);
-      }
-
-      const renderedArgv = renderQuotedArgv(argv.slice(leadingAssignments));
-      const rendered = [renderedAssignments.join(" "), renderedArgv]
-        .filter((part) => part.length > 0)
-        .join(" ");
-      return { ok: true, rendered };
+      return rendered;
     },
   });
   return finalizeRebuiltShellCommand(rebuilt, params.segments.length);

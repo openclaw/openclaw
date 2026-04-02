@@ -122,6 +122,19 @@ describe("buildDockerExecArgs", () => {
     expect(commandArg).toContain("'hi'");
   });
 
+  it("keeps already-enforced canonical commands unchanged", () => {
+    const canonicalCommand = "FOO='bar' '/bin/echo' 'hello'";
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: canonicalCommand,
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toBe(canonicalCommand);
+  });
+
   it("rejects unsupported shell token commands", () => {
     expect(() =>
       buildDockerExecArgs({

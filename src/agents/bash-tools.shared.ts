@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   analyzeShellCommand,
   buildEnforcedShellCommand,
+  isCanonicalEnforcedShellCommand,
 } from "../infra/exec-approvals-analysis.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -104,9 +105,10 @@ export function buildDockerExecArgs(params: {
   const bootstrapScript = hasCustomPath
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; exec /bin/sh -c "$1"'
     : 'exec /bin/sh -c "$1"';
-  // Use absolute path for sh to avoid dependency on PATH resolution during exec.
-  // Pass the runtime command as a positional argument to avoid concatenating it into
-  // the bootstrap shell script.
+  // Run a login shell first (`sh -lc`) to source profile state, then execute an inner
+  // `sh -c "$1"` where ARG1 carries the full command string. This keeps command data
+  // out of the bootstrap script body and avoids string concatenation injection.
+  // `openclaw-docker-exec` is argv[0] for the inner shell and `plannedCommand` is `$1`.
   args.push(
     params.containerName,
     "/bin/sh",
@@ -134,6 +136,9 @@ function buildDockerShellCommand(params: {
     throw new Error(
       `Security Violation: unsupported sandbox shell syntax (${analysis.reason ?? "unable to parse command"}).`,
     );
+  }
+  if (isCanonicalEnforcedShellCommand(analysis.segments)) {
+    return params.command;
   }
 
   const enforced = buildEnforcedShellCommand({
