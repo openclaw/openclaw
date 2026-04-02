@@ -69,6 +69,13 @@ function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean 
   return false;
 }
 
+function unwrapErrorCause(err: unknown): unknown {
+  if (err instanceof Error && err.cause !== undefined) {
+    return err.cause;
+  }
+  return err;
+}
+
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();
@@ -359,7 +366,8 @@ export async function runBeforeToolCallHook(args: {
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
-    log.error(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(err)}`);
+    const cause = unwrapErrorCause(err);
+    log.error(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(cause)}`);
     return {
       blocked: true,
       reason: BEFORE_TOOL_CALL_HOOK_FAILURE_REASON,

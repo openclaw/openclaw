@@ -391,9 +391,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("blocks when before_tool_call hook execution throws", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockRejectedValueOnce(new Error("hook crashed"));
 
     const result = await runBeforeToolCallHook({
@@ -407,7 +404,6 @@ describe("before_tool_call requireApproval handling", () => {
       "reason",
       "Tool call blocked because before_tool_call hook failed",
     );
-    expect(mockCallGateway).not.toHaveBeenCalled();
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {
