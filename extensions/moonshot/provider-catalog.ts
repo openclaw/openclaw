@@ -1,3 +1,4 @@
+import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
@@ -51,24 +52,14 @@ const MOONSHOT_MODEL_CATALOG = [
   },
 ] as const;
 
-function normalizeMoonshotBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return trimmed.replace(/\/+$/, "").toLowerCase();
-  }
-}
-
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
-  const normalized = normalizeMoonshotBaseUrl(baseUrl);
-  return normalized === MOONSHOT_BASE_URL || normalized === MOONSHOT_CN_BASE_URL;
+  return resolveProviderRequestCapabilities({
+    provider: "moonshot",
+    api: "openai-completions",
+    baseUrl,
+    capability: "llm",
+    transport: "stream",
+  }).supportsNativeStreamingUsageCompat;
 }
 
 function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {

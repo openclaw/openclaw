@@ -7,7 +7,9 @@ import type { GatewayRequestContext, GatewayRequestOptions } from "./server-meth
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
-const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
+const applyPluginAutoEnable = vi.hoisted(() =>
+  vi.fn(({ config }) => ({ config, changes: [], autoEnabledReasons: {} })),
+);
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
@@ -67,6 +69,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   speechProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  webFetchProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -190,7 +193,9 @@ beforeAll(async () => {
 beforeEach(() => {
   loadOpenClawPlugins.mockReset();
   resolveGatewayStartupPluginIds.mockReset().mockReturnValue(["discord", "telegram"]);
-  applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({ config, changes: [] }));
+  applyPluginAutoEnable
+    .mockReset()
+    .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
@@ -274,7 +279,13 @@ describe("loadGatewayPlugins", () => {
 
   test("loads gateway plugins from the auto-enabled config snapshot", async () => {
     const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
+    });
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
 
     loadGatewayPluginsForTest();
@@ -287,6 +298,42 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: {},
+        autoEnabledReasons: {
+          slack: ["slack configured"],
+        },
+      }),
+    );
+  });
+
+  test("re-derives auto-enable reasons when only activationSourceConfig is provided", async () => {
+    const rawConfig = { channels: { slack: { enabled: true } } };
+    const resolvedConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
+    applyPluginAutoEnable.mockReturnValue({
+      config: resolvedConfig,
+      changes: [],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
+    });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest({
+      cfg: resolvedConfig,
+      activationSourceConfig: rawConfig,
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: {
+          slack: ["slack configured"],
+        },
       }),
     );
   });
@@ -587,7 +634,13 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const cfg = {};
     const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
+    });
     loadGatewayStartupPluginsForTest({ cfg });
 
     expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg: autoEnabledConfig });
@@ -604,7 +657,11 @@ describe("loadGatewayPlugins", () => {
         },
       },
     };
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
     const runtime = await createSubagentRuntime(serverPlugins, {});
     serverPlugins.setFallbackGatewayContext(createTestContext("auto-enabled-bootstrap-policy"));
 

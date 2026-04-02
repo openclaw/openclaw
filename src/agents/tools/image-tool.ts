@@ -1,3 +1,4 @@
+import { resolve, isAbsolute } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { checkPathGuardStrict } from "../../security/path-guard.js";
@@ -405,6 +406,19 @@ export function createImageTool(options?: {
           }
           if (imageRaw.startsWith("~")) {
             return resolveUserPath(imageRaw);
+          }
+          // Resolve relative paths against workspaceDir so agents can reference
+          // workspace-relative paths (e.g. "inbox/photo.png") without needing to
+          // know the absolute workspace location — matching the read tool behaviour.
+          if (
+            !isDataUrl &&
+            !isFileUrl &&
+            !isHttpUrl &&
+            !looksLikeWindowsDrivePath &&
+            !isAbsolute(imageRaw) &&
+            options?.workspaceDir
+          ) {
+            return resolve(options.workspaceDir, imageRaw);
           }
           return imageRaw;
         })();

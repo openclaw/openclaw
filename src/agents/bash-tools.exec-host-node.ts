@@ -7,6 +7,7 @@ import {
   evaluateShellAllowlist,
   hasDurableExecApproval,
   requiresExecApproval,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import {
@@ -167,7 +168,7 @@ export async function executeNodeHostCommand(
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
           agentId: params.agentId,
-          overrides: { security: "allowlist" },
+          overrides: { security: "full" },
         });
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         const allowlistEval = evaluateShellAllowlist({
@@ -415,6 +416,7 @@ export async function executeNodeHostCommand(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
         nodeId,
       });
     }
