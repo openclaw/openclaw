@@ -399,6 +399,7 @@ type MessageToolOptions = {
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
+  currentMessageTs?: string;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
@@ -755,6 +756,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         clientDisplayName: "agent",
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       };
+      const hasCurrentMessageTs =
+        typeof options?.currentMessageTs === "string" && options.currentMessageTs.trim().length > 0;
       const hasCurrentMessageId =
         typeof options?.currentMessageId === "number" ||
         (typeof options?.currentMessageId === "string" &&
@@ -764,6 +767,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.currentChannelId ||
         options?.currentChannelProvider ||
         options?.currentThreadTs ||
+        hasCurrentMessageTs ||
         hasCurrentMessageId ||
         options?.replyToMode ||
         options?.hasRepliedRef
@@ -771,6 +775,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               currentChannelId: options?.currentChannelId,
               currentChannelProvider: options?.currentChannelProvider,
               currentThreadTs: options?.currentThreadTs,
+              currentMessageTs: options?.currentMessageTs,
               currentMessageId: options?.currentMessageId,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,

@@ -306,6 +306,28 @@ describe("message tool explicit target guard", () => {
 });
 
 describe("message tool path passthrough", () => {
+  it("passes currentMessageTs into tool context for Slack reaction inference", async () => {
+    mockSendResult({ channel: "slack", to: "C123" });
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "slack",
+      currentChannelId: "C123",
+      currentMessageTs: "1710000000.123456",
+    });
+
+    await tool.execute("1", {
+      action: "react",
+      target: "C123",
+      emoji: ":thumbsup:",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0] as {
+      toolContext?: { currentMessageTs?: string };
+    };
+    expect(call.toolContext?.currentMessageTs).toBe("1710000000.123456");
+  });
+
   it.each([
     { field: "path", value: "~/Downloads/voice.ogg" },
     { field: "filePath", value: "./tmp/note.m4a" },
