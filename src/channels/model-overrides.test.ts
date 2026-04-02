@@ -7,6 +7,7 @@ import { resolveChannelModelOverride } from "./model-overrides.js";
 
 describe("resolveChannelModelOverride", () => {
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 

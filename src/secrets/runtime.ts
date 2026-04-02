@@ -83,7 +83,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
       agentDir: entry.agentDir,
       store: structuredClone(entry.store),
     })),
-    authStoreMtimes: { ...(snapshot.authStoreMtimes ?? {}) },
+    authStoreMtimes: snapshot.authStoreMtimes ? { ...snapshot.authStoreMtimes } : undefined,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     webTools: structuredClone(snapshot.webTools),
   };

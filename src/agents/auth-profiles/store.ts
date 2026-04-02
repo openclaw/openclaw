@@ -33,6 +33,7 @@ const loadedAuthStoreCache = new Map<
   string,
   { mtimeMs: number | null; syncedAtMs: number; store: AuthProfileStore }
 >();
+const staleRuntimeAuthStoreSnapshotKeys = new Set<string>();
 
 // Map of auth store path -> mtime when the runtime snapshot was loaded.
 // Used to detect if a specific on-disk auth-profiles.json was modified externally
@@ -48,10 +49,16 @@ function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
   return structuredClone(store);
 }
 
+function invalidateRuntimeAuthProfileStoreSnapshots(): void {
+  runtimeAuthStoreSnapshots.clear();
+  runtimeSnapshotMtimes.clear();
+  staleRuntimeAuthStoreSnapshotKeys.clear();
+}
+
 function invalidateRuntimeAuthProfileStoreSnapshot(agentDir?: string): void {
   const key = resolveRuntimeStoreKey(agentDir);
   runtimeAuthStoreSnapshots.delete(key);
-  runtimeSnapshotMtimes.delete(key);
+  staleRuntimeAuthStoreSnapshotKeys.add(key);
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
@@ -73,7 +80,7 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
   if (mainLoadedMtime !== undefined) {
     const mainMtime = readAuthStoreMtimeMs(mainAuthPath);
     if (mainMtime !== null && mainMtime > mainLoadedMtime) {
-      invalidateRuntimeAuthProfileStoreSnapshot();
+      invalidateRuntimeAuthProfileStoreSnapshots();
       return null;
     }
   }
@@ -109,6 +116,9 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
   if (requestedStore) {
     return cloneAuthProfileStore(requestedStore);
   }
+  if (staleRuntimeAuthStoreSnapshotKeys.has(requestedKey)) {
+    return null;
+  }
   if (mainStore) {
     return cloneAuthProfileStore(mainStore);
   }
@@ -123,6 +133,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
   // Clear stale mtime keys from prior activations before populating fresh ones.
   // This prevents removed agent paths from causing false-positive staleness detection.
   runtimeSnapshotMtimes.clear();
+  staleRuntimeAuthStoreSnapshotKeys.clear();
 
   // Capture mtime for each auth store file represented by entries.
   // Use snapshotMtimes from prepare time if available, otherwise stat at activation time.
@@ -138,17 +149,15 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
-    runtimeAuthStoreSnapshots.set(
-      resolveRuntimeStoreKey(entry.agentDir),
-      cloneAuthProfileStore(entry.store),
-    );
+    const key = resolveRuntimeStoreKey(entry.agentDir);
+    staleRuntimeAuthStoreSnapshotKeys.delete(key);
+    runtimeAuthStoreSnapshots.set(key, cloneAuthProfileStore(entry.store));
   }
 }
 
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
-  runtimeAuthStoreSnapshots.clear();
+  invalidateRuntimeAuthProfileStoreSnapshots();
   loadedAuthStoreCache.clear();
-  runtimeSnapshotMtimes.clear();
 }
 
 function readAuthStoreMtimeMs(authPath: string): number | null {
@@ -680,6 +689,7 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
   if (newMtime !== null) {
     runtimeSnapshotMtimes.set(runtimeKey, newMtime);
   }
+  staleRuntimeAuthStoreSnapshotKeys.delete(runtimeKey);
   if (runtimeAuthStoreSnapshots.has(runtimeKey)) {
     runtimeAuthStoreSnapshots.set(runtimeKey, cloneAuthProfileStore(payload));
   }
