@@ -25,18 +25,10 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointUsesDefaultCleartextPortForBareWsUrls() {
+  fun parseGatewayEndpointRejectsNonLoopbackCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://gateway.example")
 
-    assertEquals(
-      GatewayEndpointConfig(
-        host = "gateway.example",
-        port = 18789,
-        tls = false,
-        displayUrl = "http://gateway.example:18789",
-      ),
-      parsed,
-    )
+    assertNull(parsed)
   }
 
   @Test
@@ -55,30 +47,115 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointKeepsExplicitNonDefaultPortInDisplayUrl() {
-    val parsed = parseGatewayEndpoint("http://gateway.example:8080")
+  fun parseGatewayEndpointAllowsLoopbackCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://127.0.0.1")
 
     assertEquals(
       GatewayEndpointConfig(
-        host = "gateway.example",
-        port = 8080,
+        host = "127.0.0.1",
+        port = 18789,
         tls = false,
-        displayUrl = "http://gateway.example:8080",
+        displayUrl = "http://127.0.0.1:18789",
       ),
       parsed,
     )
   }
 
   @Test
-  fun parseGatewayEndpointKeepsExplicitCleartextPort80InDisplayUrl() {
-    val parsed = parseGatewayEndpoint("http://gateway.example:80")
+  fun parseGatewayEndpointAllowsLocalhostCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://localhost:18789")
 
     assertEquals(
       GatewayEndpointConfig(
-        host = "gateway.example",
+        host = "localhost",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://localhost:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsAndroidEmulatorCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://10.0.2.2:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "10.0.2.2",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://10.0.2.2:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsIpv6LoopbackCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[::1]")
+
+    assertEquals("::1", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+    assertEquals("http://[::1]:18789", parsed?.displayUrl)
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsIpv4MappedIpv6LoopbackCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[::ffff:127.0.0.1]")
+
+    assertEquals("::ffff:127.0.0.1", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+    assertEquals("http://[::ffff:127.0.0.1]:18789", parsed?.displayUrl)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsCleartextLoopbackPrefixBypassHost() {
+    val parsed = parseGatewayEndpoint("http://127.attacker.example:80")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsNonLoopbackIpv6CleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[2001:db8::1]")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsLinkLocalIpv6ZoneCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsUnspecifiedIpv4CleartextHttpUrls() {
+    val parsed = parseGatewayEndpoint("http://0.0.0.0:80")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsUnspecifiedIpv6CleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[::]")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsLoopbackCleartextHttpUrls() {
+    val parsed = parseGatewayEndpoint("http://localhost:80")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "localhost",
         port = 80,
         tls = false,
-        displayUrl = "http://gateway.example:80",
+        displayUrl = "http://localhost:80",
       ),
       parsed,
     )
@@ -130,6 +207,16 @@ class GatewayConfigResolverTest {
   fun resolveScannedSetupCodeRejectsJsonWithNonStringSetupCode() {
     val qrJson = """{"setupCode":{"nested":"value"}}"""
     val resolved = resolveScannedSetupCode(qrJson)
+    assertNull(resolved)
+  }
+
+  @Test
+  fun resolveScannedSetupCodeRejectsNonLoopbackCleartextGateway() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://attacker.example:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCode(setupCode)
+
     assertNull(resolved)
   }
 
@@ -208,10 +295,10 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
-        savedManualHost = "192.168.31.100",
+        savedManualHost = "127.0.0.1",
         savedManualPort = "18789",
         savedManualTls = false,
-        manualHostInput = "192.168.31.100",
+        manualHostInput = "127.0.0.1",
         manualPortInput = "18789",
         manualTlsInput = false,
         fallbackBootstrapToken = "bootstrap-1",
@@ -219,7 +306,7 @@ class GatewayConfigResolverTest {
         fallbackPassword = "",
       )
 
-    assertEquals("192.168.31.100", resolved?.host)
+    assertEquals("127.0.0.1", resolved?.host)
     assertEquals(18789, resolved?.port)
     assertEquals(false, resolved?.tls)
     assertEquals("bootstrap-1", resolved?.bootstrapToken)
@@ -233,10 +320,10 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
-        savedManualHost = "192.168.31.100",
+        savedManualHost = "127.0.0.1",
         savedManualPort = "18789",
         savedManualTls = false,
-        manualHostInput = "192.168.31.100",
+        manualHostInput = "127.0.0.1",
         manualPortInput = "18789",
         manualTlsInput = false,
         fallbackBootstrapToken = "bootstrap-1",
@@ -255,10 +342,10 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
-        savedManualHost = "192.168.31.100",
+        savedManualHost = "127.0.0.1",
         savedManualPort = "18789",
         savedManualTls = false,
-        manualHostInput = "192.168.31.101",
+        manualHostInput = "127.0.0.2",
         manualPortInput = "18789",
         manualTlsInput = false,
         fallbackBootstrapToken = "bootstrap-1",
@@ -267,7 +354,27 @@ class GatewayConfigResolverTest {
       )
 
     assertEquals("", resolved?.bootstrapToken)
-    assertEquals("192.168.31.101", resolved?.host)
+    assertEquals("127.0.0.2", resolved?.host)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigRejectsNonLoopbackManualCleartextEndpoint() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.100",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertNull(resolved)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {

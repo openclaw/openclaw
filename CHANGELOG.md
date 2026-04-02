@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Exec/Windows: reject malformed drive-less rooted executable paths like `:\Users\...` so approval and allowlist candidate resolution no longer treat them as cwd-relative commands. (#58040) Thanks @SnowSky1.
 - Exec/preflight: fail closed on complex interpreter invocations that would otherwise skip script-content validation, and correctly inspect quoted script paths before host execution. Thanks @pgondhi987.
 - Exec/Windows: include Windows-compatible env override keys like `ProgramFiles(x86)` in system-run approval binding so changed approved values are rejected instead of silently passing unbound. (#59182) Thanks @pgondhi987.
+- Android/gateway: require TLS for non-loopback remote gateway endpoints while still allowing local loopback and emulator cleartext setup flows. (#58475) Thanks @eleqtrizit.
 - Exec/Windows: hide transient console windows for `runExec` and `runCommandWithTimeout` child-process launches, matching other Windows exec paths and stopping visible shell flashes during tool runs. (#59466) Thanks @lawrence3699.
 
 ## 2026.4.2-beta.1
