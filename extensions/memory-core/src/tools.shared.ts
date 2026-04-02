@@ -128,8 +128,7 @@ export function buildMemorySearchUnavailableResult(error: string | undefined) {
       "Memory search is unavailable because node:sqlite is not available in this Node.js runtime. " +
       "The built-in SQLite module requires Node.js 22.5+ compiled with SQLite support.";
     action =
-      "Upgrade to Node.js 22.5+ (with SQLite support) or configure an external embedding provider " +
-      "(e.g. OpenAI, Ollama) via memory.provider in openclaw.json. " +
+      "Upgrade to Node.js 22.5+ (with SQLite support). " +
       "See https://docs.openclaw.ai/memory for setup instructions.";
   } else if (isQuotaError) {
     warning = "Memory search is unavailable because the embedding provider quota is exhausted.";
