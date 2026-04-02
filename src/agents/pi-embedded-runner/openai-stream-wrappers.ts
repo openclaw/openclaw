@@ -6,8 +6,7 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search.js";
-import { resolveProviderRequestCapabilities } from "../provider-attribution.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -28,14 +27,14 @@ function resolveOpenAIRequestCapabilities(model: {
   baseUrl?: unknown;
   compat?: { supportsStore?: boolean };
 }) {
-  return resolveProviderRequestCapabilities({
+  return resolveProviderRequestPolicyConfig({
     provider: typeof model.provider === "string" ? model.provider : undefined,
     api: typeof model.api === "string" ? model.api : undefined,
     baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
     compat: model.compat,
     capability: "llm",
     transport: "stream",
-  });
+  }).capabilities;
 }
 
 function shouldApplyOpenAIAttributionHeaders(model: {
@@ -502,7 +501,7 @@ export function createOpenAIAttributionHeadersWrapper(
     }
     return underlying(model, context, {
       ...options,
-      headers: resolveProviderRequestHeaders({
+      headers: resolveProviderRequestPolicyConfig({
         provider: attributionProvider,
         api: typeof model.api === "string" ? model.api : undefined,
         baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
@@ -510,7 +509,7 @@ export function createOpenAIAttributionHeadersWrapper(
         transport: "stream",
         callerHeaders: options?.headers,
         precedence: "defaults-win",
-      }),
+      }).headers,
     });
   };
 }
