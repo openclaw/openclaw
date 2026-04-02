@@ -34,7 +34,7 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
-        id: "demo-default-on-sidecar",
+        id: "browser",
         channels: [],
         origin: "bundled",
         enabledByDefault: true,
@@ -50,7 +50,7 @@ function createManifestRegistryFixture() {
         cliBackends: ["demo-cli"],
       },
       {
-        id: "demo-bundled-sidecar",
+        id: "voice-call",
         channels: [],
         origin: "bundled",
         enabledByDefault: undefined,
@@ -93,24 +93,37 @@ function createStartupConfig(params: {
   providerIds?: string[];
   modelId?: string;
   channelIds?: string[];
+  allowPluginIds?: string[];
+  noConfiguredChannels?: boolean;
 }) {
   return {
-    ...(params.channelIds?.length
+    ...(params.noConfiguredChannels
       ? {
-          channels: Object.fromEntries(
-            params.channelIds.map((channelId) => [channelId, { enabled: true }]),
-          ),
+          channels: {},
         }
-      : {}),
+      : params.channelIds?.length
+        ? {
+            channels: Object.fromEntries(
+              params.channelIds.map((channelId) => [channelId, { enabled: true }]),
+            ),
+          }
+        : {}),
     ...(params.enabledPluginIds?.length
       ? {
           plugins: {
+            ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
           },
         }
-      : {}),
+      : params.allowPluginIds?.length
+        ? {
+            plugins: {
+              allow: params.allowPluginIds,
+            },
+          }
+        : {}),
     ...(params.providerIds?.length
       ? {
           models: {
@@ -144,8 +157,10 @@ function createStartupConfig(params: {
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
-      const configuredChannelIds = Object.keys(config.channels ?? {});
-      return configuredChannelIds.length > 0 ? configuredChannelIds : ["demo-channel"];
+      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+        return Object.keys(config.channels ?? {});
+      }
+      return ["demo-channel"];
     });
     loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
   });
@@ -154,36 +169,44 @@ describe("resolveGatewayStartupPluginIds", () => {
     [
       "includes only configured channel plugins at idle startup",
       createStartupConfig({
-        enabledPluginIds: ["demo-bundled-sidecar"],
+        enabledPluginIds: ["voice-call"],
         modelId: "demo-cli/demo-model",
       }),
-      ["demo-channel"],
+      ["demo-channel", "browser", "voice-call"],
     ],
     [
-      "skips bundled plugins with enabledByDefault: true until a runtime path needs them",
+      "keeps bundled startup sidecars with enabledByDefault at idle startup",
       {} as OpenClawConfig,
-      ["demo-channel"],
+      ["demo-channel", "browser"],
     ],
     [
       "keeps provider plugins out of idle startup when only provider config references them",
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
-      ["demo-channel"],
+      ["demo-channel", "browser"],
     ],
     [
-      "keeps non-channel sidecars out of idle startup even when explicitly enabled",
+      "includes explicitly enabled non-channel sidecars in startup scope",
       createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
+        enabledPluginIds: ["demo-global-sidecar", "voice-call"],
       }),
-      ["demo-channel"],
+      ["demo-channel", "browser", "voice-call", "demo-global-sidecar"],
+    ],
+    [
+      "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
+      createStartupConfig({
+        allowPluginIds: ["browser"],
+        noConfiguredChannels: true,
+      }),
+      ["browser"],
     ],
     [
       "includes every configured channel plugin and excludes other channels",
       createStartupConfig({
         channelIds: ["demo-channel", "demo-other-channel"],
       }),
-      ["demo-channel", "demo-other-channel"],
+      ["demo-channel", "demo-other-channel", "browser"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
