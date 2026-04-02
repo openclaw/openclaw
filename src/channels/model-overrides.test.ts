@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -8,6 +9,10 @@ import { resolveChannelModelOverride } from "./model-overrides.js";
 describe("resolveChannelModelOverride", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([
@@ -170,6 +175,15 @@ describe("resolveChannelModelOverride", () => {
 
   it("keeps bundled Feishu parent fallback matching before registry bootstrap", () => {
     resetPluginRuntimeStateForTest();
+    setRuntimeConfigSnapshot({
+      plugins: {
+        entries: {
+          feishu: {
+            enabled: true,
+          },
+        },
+      },
+    });
 
     const resolved = resolveChannelModelOverride({
       cfg: {
