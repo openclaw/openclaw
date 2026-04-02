@@ -24,6 +24,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
         return undefined;
     }
   }),
+  resolveProviderReplayPolicyWithPlugin: vi.fn(() => undefined),
   resetProviderRuntimeHookCacheForTest: vi.fn(),
 }));
 

@@ -73,7 +73,6 @@ describe("probeTelegram retry logic", () => {
   });
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ probeTelegram, resetTelegramProbeFetcherCacheForTests } = await import("./probe.js"));
   });
 

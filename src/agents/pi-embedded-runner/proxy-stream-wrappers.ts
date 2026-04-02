@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
+import { resolveProviderRequestAttributionHeaders } from "../provider-attribution.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -111,7 +111,13 @@ export function createOpenRouterWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const attributionHeaders = resolveProviderAttributionHeaders("openrouter");
+    const attributionHeaders = resolveProviderRequestAttributionHeaders({
+      provider: typeof model.provider === "string" ? model.provider : "openrouter",
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+    });
     return streamWithPayloadPatch(
       underlying,
       model,

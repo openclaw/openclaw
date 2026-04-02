@@ -1,3 +1,12 @@
+import type {
+  ProviderRequestCapability,
+  ProviderRequestTransport,
+} from "../agents/provider-attribution.js";
+import { resolveProviderRequestAttributionHeaders } from "../agents/provider-attribution.js";
+import {
+  resolveProviderRequestConfig,
+  type ResolvedProviderRequestConfig,
+} from "../agents/provider-request-config.js";
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
@@ -8,6 +17,88 @@ const MAX_ERROR_CHARS = 300;
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
   const raw = baseUrl?.trim() || fallback;
   return raw.replace(/\/+$/, "");
+}
+
+export function applyProviderRequestHeaders(params: {
+  headers?: HeadersInit;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+  capability?: ProviderRequestCapability;
+  transport?: ProviderRequestTransport;
+}): Headers {
+  const headers = new Headers(params.headers);
+  if (params.defaultHeaders) {
+    for (const [key, value] of Object.entries(params.defaultHeaders)) {
+      if (!headers.has(key)) {
+        headers.set(key, value);
+      }
+    }
+  }
+  const attributionHeaders = resolveProviderRequestAttributionHeaders({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: params.capability ?? "other",
+    transport: params.transport ?? "http",
+  });
+  if (!attributionHeaders) {
+    return headers;
+  }
+  for (const [key, value] of Object.entries(attributionHeaders)) {
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
+  }
+  return headers;
+}
+
+export function resolveProviderHttpRequestConfig(params: {
+  baseUrl?: string;
+  defaultBaseUrl: string;
+  allowPrivateNetwork?: boolean;
+  headers?: HeadersInit;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  api?: string;
+  capability?: ProviderRequestCapability;
+  transport?: ProviderRequestTransport;
+}): {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  requestConfig: ResolvedProviderRequestConfig;
+} {
+  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
+  const requestConfigParams: Parameters<typeof resolveProviderRequestConfig>[0] = {
+    provider: params.provider ?? "",
+    baseUrl,
+    capability: params.capability ?? "other",
+    transport: params.transport ?? "http",
+  };
+  if (params.api !== undefined) {
+    requestConfigParams.api = params.api;
+  }
+  if (params.defaultHeaders !== undefined) {
+    requestConfigParams.providerHeaders = params.defaultHeaders;
+  }
+  const requestConfig = resolveProviderRequestConfig(requestConfigParams);
+
+  return {
+    baseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
+    headers: applyProviderRequestHeaders({
+      headers: params.headers,
+      defaultHeaders: requestConfig.headers,
+      provider: params.provider,
+      api: params.api,
+      baseUrl,
+      capability: params.capability,
+      transport: params.transport,
+    }),
+    requestConfig,
+  };
 }
 
 export async function fetchWithTimeoutGuarded(
