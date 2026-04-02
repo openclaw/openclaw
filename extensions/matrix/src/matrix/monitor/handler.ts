@@ -1145,18 +1145,26 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           })
         : undefined;
       draftStreamRef = draftStream;
+      type PendingDraftBoundary = {
+        messageGeneration: number;
+        endOffset: number;
+      };
       // Track the current draft block start plus any queued block-end offsets
       // inside the model's cumulative partial text so multiple block
       // boundaries can drain in order even when Matrix delivery lags behind.
+      let currentDraftMessageGeneration = 0;
       let currentDraftBlockOffset = 0;
       let latestDraftFullText = "";
-      const pendingDraftBoundaryOffsets: number[] = [];
+      let latestQueuedDraftBoundaryOffset = 0;
+      const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       // Set after the first final payload consumes the draft event so
       // subsequent finals go through normal delivery.
       let draftConsumed = false;
 
       const getDisplayableDraftText = () => {
-        const nextDraftBoundaryOffset = pendingDraftBoundaryOffsets[0];
+        const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
+          (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
+        )?.endOffset;
         if (nextDraftBoundaryOffset === undefined) {
           return latestDraftFullText.slice(currentDraftBlockOffset);
         }
@@ -1172,18 +1180,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const queueDraftBlockBoundary = (payload: ReplyPayload) => {
         const payloadTextLength = payload.text?.length ?? 0;
-        const lastQueuedBoundaryOffset =
-          pendingDraftBoundaryOffsets[pendingDraftBoundaryOffsets.length - 1] ??
-          currentDraftBlockOffset;
-        pendingDraftBoundaryOffsets.push(
-          Math.max(latestDraftFullText.length, lastQueuedBoundaryOffset + payloadTextLength),
+        latestQueuedDraftBoundaryOffset = Math.max(
+          latestDraftFullText.length,
+          latestQueuedDraftBoundaryOffset + payloadTextLength,
         );
+        pendingDraftBoundaries.push({
+          messageGeneration: currentDraftMessageGeneration,
+          endOffset: latestQueuedDraftBoundaryOffset,
+        });
       };
 
       const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
-        const completedBoundaryOffset = pendingDraftBoundaryOffsets.shift();
-        if (completedBoundaryOffset !== undefined) {
-          currentDraftBlockOffset = completedBoundaryOffset;
+        const completedBoundary = pendingDraftBoundaries.shift();
+        if (completedBoundary) {
+          if (completedBoundary.messageGeneration === currentDraftMessageGeneration) {
+            currentDraftBlockOffset = completedBoundary.endOffset;
+          }
           return;
         }
         if (options?.fallbackToLatestEnd) {
@@ -1192,9 +1204,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       };
 
       const resetDraftBlockOffsets = () => {
+        currentDraftMessageGeneration += 1;
         currentDraftBlockOffset = 0;
         latestDraftFullText = "";
-        pendingDraftBoundaryOffsets.length = 0;
+        latestQueuedDraftBoundaryOffset = 0;
       };
 
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
