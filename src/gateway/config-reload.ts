@@ -16,11 +16,13 @@ export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
+  fallbackToRestart: boolean;
 };
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
   debounceMs: 300,
+  fallbackToRestart: true,
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
@@ -67,7 +69,10 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
     typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
       ? Math.max(0, Math.floor(debounceRaw))
       : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
+  const fallbackRaw = cfg.gateway?.reload?.fallbackToRestart;
+  const fallbackToRestart =
+    typeof fallbackRaw === "boolean" ? fallbackRaw : DEFAULT_RELOAD_SETTINGS.fallbackToRestart;
+  return { mode, debounceMs, fallbackToRestart };
 }
 
 export type GatewayConfigReloader = {
@@ -176,11 +181,16 @@ export function startGatewayConfigReloader(opts: {
     }
     if (plan.restartGateway) {
       if (settings.mode === "hot") {
-        opts.log.warn(
-          `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
-            ", ",
-          )})`,
-        );
+        if (settings.fallbackToRestart) {
+          opts.log.info(
+            `config reload requires gateway restart; hot mode falling back to restart (${plan.restartReasons.join(", ")})`,
+          );
+          queueRestart(plan, nextConfig);
+        } else {
+          opts.log.warn(
+            `config reload requires gateway restart; hot mode skipping restart-required changes (${plan.restartReasons.join(", ")})`,
+          );
+        }
         return;
       }
       queueRestart(plan, nextConfig);
