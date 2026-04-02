@@ -132,6 +132,32 @@ describe("detectCommandObfuscation", () => {
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("var-expansion-obfuscation");
     });
+
+    it("does NOT flag multiline shell commands that include inline Python assignments and normal shell loop variables", () => {
+      const result = detectCommandObfuscation(
+        `HA_TOKEN=$(cat ~/.cache/openclaw/ha_token)
+
+echo "=== Neptune HA: Mean sensors ==="
+for sensor in iaq_co2_10m_mean iaq_pm2_5_15m_mean iaq_voc_index_5m_mean iaq_nox_index_5m_mean; do
+  result=$(curl -s -H "Authorization: Bearer $HA_TOKEN" http://100.102.154.2:8123/api/states/sensor.$sensor 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{d.get(\\"state\\",\\"?\\")} (restored={d.get(\\"attributes\\",{}).get(\\"restored\\",False)})')" 2>/dev/null)
+  echo "  sensor.$sensor = $result"
+done
+
+echo -e "\\n=== Neptune HA: Binary sensors ==="
+for sensor in iaq_co2_high iaq_pm2_5_warn iaq_pm2_5_high iaq_voc_high iaq_nox_high; do
+  state=$(curl -s -H "Authorization: Bearer $HA_TOKEN" http://100.102.154.2:8123/api/states/binary_sensor.$sensor 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('state','?'))" 2>/dev/null)
+  echo "  binary_sensor.$sensor = $state"
+done
+
+echo -e "\\n=== Neptune HA: Automations ==="
+for auto in iaq_airgradient_alerts_co2_pm_voc_nox iaq_all_clear iaq_snooze_button_handler iaq_end_snooze; do
+  result=$(curl -s -H "Authorization: Bearer $HA_TOKEN" http://100.102.154.2:8123/api/states/automation.$auto 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); a=d.get('attributes',{}); print(f'{d.get(\\"state\\",\\"?\\")} last_triggered={a.get(\\"last_triggered\\",\\"never\\")}')" 2>/dev/null)
+  echo "  automation.$auto = $result"
+done`,
+      );
+      expect(result.detected).toBe(false);
+      expect(result.matchedPatterns).not.toContain("var-expansion-obfuscation");
+    });
   });
 
   describe("inline interpreter encoded execution", () => {

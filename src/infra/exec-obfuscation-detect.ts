@@ -165,7 +165,8 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   {
     id: "var-expansion-obfuscation",
     description: "Variable assignment chain with expansion (potential obfuscation)",
-    regex: /(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]|\{[a-zA-Z_])/,
+    regex:
+      /(?:^|[;\n\r])\s*(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]\w{0,2}\b|\{[a-zA-Z_]\w{0,2}\})/,
   },
 ];
 
