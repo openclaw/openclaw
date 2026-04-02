@@ -178,6 +178,8 @@ diff --git a/src/example.ts b/src/example.ts
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
 - Artifacts are ephemeral and stored in the plugin temp subfolder (`$TMPDIR/openclaw-diffs`).
 - Default viewer URLs use loopback (`127.0.0.1`) unless you set `baseUrl` (or use `gateway.bind=custom` + `gateway.customBindHost`).
+- If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw `127.0.0.1` viewer requests without forwarded client-IP headers fail closed by design.
+- In that topology, prefer `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and pass a proxy/public `baseUrl` when you need a shareable viewer URL.
 - Remote viewer misses are throttled to reduce token-guess abuse.
 - PNG or PDF rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
 - If your delivery channel compresses images heavily (for example Telegram or WhatsApp), prefer `fileFormat: "pdf"` to preserve readability.
