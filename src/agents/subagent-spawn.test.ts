@@ -157,4 +157,50 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
   });
+
+  it("pins admin-only methods to operator.admin and preserves least-privilege for others (#59428)", async () => {
+    const capturedCalls: Array<{ method?: string; scopes?: string[] }> = [];
+
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; scopes?: string[] }) => {
+        capturedCalls.push({ method: request.method, scopes: request.scopes });
+        if (request.method === "agent") {
+          return { runId: "run-1" };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify per-method scope routing",
+        model: "openai-codex/gpt-5.4",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "acct-1",
+        agentTo: "user-1",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(capturedCalls.length).toBeGreaterThan(0);
+
+    for (const call of capturedCalls) {
+      if (call.method === "sessions.patch" || call.method === "sessions.delete") {
+        // Admin-only methods must be pinned to operator.admin.
+        expect(call.scopes).toEqual(["operator.admin"]);
+      } else {
+        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope
+        // so the gateway preserves least-privilege and senderIsOwner stays false.
+        expect(call.scopes).toBeUndefined();
+      }
+    }
+  });
 });
