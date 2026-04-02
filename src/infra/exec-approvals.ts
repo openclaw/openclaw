@@ -189,8 +189,14 @@ export function resolveExecApprovalsPath(): string {
   // Allow environment override for testing and operator escape hatch.
   // This is intentionally unconditional to support operators who need to
   // relocate the approvals file without modifying the home directory.
-  if (process.env.OPENCLAW_EXEC_APPROVALS_FILE) {
-    return process.env.OPENCLAW_EXEC_APPROVALS_FILE;
+  const override = process.env.OPENCLAW_EXEC_APPROVALS_FILE;
+  if (override) {
+    const candidate = path.resolve(override);
+    // Validate: must be absolute path to prevent accidental relative path manipulation
+    if (!path.isAbsolute(candidate)) {
+      throw new Error(`OPENCLAW_EXEC_APPROVALS_FILE must be an absolute path, got: ${override}`);
+    }
+    return candidate;
   }
   return expandHomePrefix(DEFAULT_FILE);
 }
@@ -451,6 +457,18 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
+  // Reject symlinks to prevent write-through attacks
+  try {
+    const stats = fs.lstatSync(filePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error("Refusing to write approvals file through symlink");
+    }
+  } catch (err) {
+    // File doesn't exist yet, that's fine - lstat throws ENOENT
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
   ensureDir(filePath);
   fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
   try {
