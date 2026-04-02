@@ -156,6 +156,33 @@ describe("exec-command-resolution", () => {
     });
   });
 
+  it("supports virtual Linux resolution without host filesystem probing", () => {
+    const virtualAbsolutePath = "/__openclaw_virtual__/bin/python3";
+    const virtualResolution = resolveCommandResolutionFromArgv(
+      [virtualAbsolutePath, "--version"],
+      undefined,
+      {},
+      { platform: "linux", resolutionMode: "virtual" },
+    );
+    expect(virtualResolution?.execution.resolvedPath).toBe(virtualAbsolutePath);
+
+    const hostResolution = resolveCommandResolutionFromArgv(
+      [virtualAbsolutePath, "--version"],
+      undefined,
+      {},
+      { platform: "linux" },
+    );
+    expect(hostResolution?.execution.resolvedPath).toBeUndefined();
+
+    const virtualBareResolution = resolveCommandResolutionFromArgv(
+      ["python3", "--version"],
+      undefined,
+      { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      { platform: "linux", resolutionMode: "virtual" },
+    );
+    expect(virtualBareResolution?.execution.resolvedPath).toBeUndefined();
+  });
+
   it("unwraps transparent env and nice wrappers to the effective executable", () => {
     const fixture = createPathExecutableFixture();
 

@@ -74,4 +74,41 @@ describe("executable path helpers", () => {
     );
     expect(resolveExecutablePath("~/missing-tool", { env: { HOME: homeDir } })).toBeUndefined();
   });
+
+  it("supports virtual resolution mode for container/runtime path planning", () => {
+    const virtualAbsolutePath = "/__openclaw_virtual__/bin/python3";
+    expect(
+      resolveExecutablePath(virtualAbsolutePath, {
+        platform: "linux",
+        resolutionMode: "virtual",
+      }),
+    ).toBe(virtualAbsolutePath);
+
+    expect(
+      resolveExecutablePath("python3", {
+        env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+        platform: "linux",
+        resolutionMode: "virtual",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses target-platform path semantics in virtual mode", () => {
+    const windowsAbsolute = "C:\\Windows\\System32\\cmd.exe";
+
+    expect(
+      resolveExecutablePath(windowsAbsolute, {
+        cwd: "/workspace",
+        platform: "linux",
+        resolutionMode: "virtual",
+      }),
+    ).toBe("/workspace/C:\\Windows\\System32\\cmd.exe");
+
+    expect(
+      resolveExecutablePath(windowsAbsolute, {
+        platform: "win32",
+        resolutionMode: "virtual",
+      }),
+    ).toBe(path.win32.normalize(windowsAbsolute));
+  });
 });

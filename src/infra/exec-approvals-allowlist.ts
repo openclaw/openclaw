@@ -38,6 +38,10 @@ function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
 }
 
+function getPathModuleForPlatform(platform?: string | null): typeof path.posix {
+  return isWindowsPlatform(platform) ? path.win32 : path.posix;
+}
+
 export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
   if (!Array.isArray(entries)) {
     return new Set();
@@ -125,6 +129,7 @@ type ExecAllowlistContext = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  resolutionMode?: "host" | "virtual";
   trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: readonly SkillBinTrustEntry[];
   autoAllowSkills?: boolean;
@@ -138,6 +143,7 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
     cwd: params.cwd,
     env: params.env,
     platform: params.platform,
+    resolutionMode: params.resolutionMode,
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
@@ -391,26 +397,37 @@ function evaluateSegments(
     const allowlistSegment =
       effectiveArgv === segment.argv ? segment : { ...segment, argv: effectiveArgv };
     const executableResolution = resolvePolicyTargetResolution(segment.resolution);
-    const candidatePath = resolvePolicyTargetCandidatePath(segment.resolution, params.cwd);
+    const candidatePath = resolvePolicyTargetCandidatePath(
+      segment.resolution,
+      params.cwd,
+      params.platform,
+    );
     const candidateResolution =
       candidatePath && executableResolution
         ? { ...executableResolution, resolvedPath: candidatePath }
         : executableResolution;
-    const executableMatch = matchAllowlist(params.allowlist, candidateResolution);
+    const executableMatch = matchAllowlist(params.allowlist, candidateResolution, {
+      platform: params.platform,
+    });
     const inlineCommand = extractShellWrapperInlineCommand(allowlistSegment.argv);
     const shellScriptCandidatePath =
       inlineCommand === null
         ? resolveShellWrapperScriptCandidatePath({
             segment: allowlistSegment,
             cwd: params.cwd,
+            platform: params.platform,
           })
         : undefined;
     const shellScriptMatch = shellScriptCandidatePath
-      ? matchAllowlist(params.allowlist, {
-          rawExecutable: shellScriptCandidatePath,
-          resolvedPath: shellScriptCandidatePath,
-          executableName: path.basename(shellScriptCandidatePath),
-        })
+      ? matchAllowlist(
+          params.allowlist,
+          {
+            rawExecutable: shellScriptCandidatePath,
+            resolvedPath: shellScriptCandidatePath,
+            executableName: path.basename(shellScriptCandidatePath),
+          },
+          { platform: params.platform },
+        )
       : null;
     const match = executableMatch ?? shellScriptMatch;
     if (match) {
@@ -548,6 +565,7 @@ function hasDisqualifyingShellWrapperScriptOption(token: string): boolean {
 function resolveShellWrapperScriptCandidatePath(params: {
   segment: ExecCommandSegment;
   cwd?: string;
+  platform?: string | null;
 }): string | undefined {
   if (!isShellWrapperSegment(params.segment)) {
     return undefined;
@@ -596,13 +614,14 @@ function resolveShellWrapperScriptCandidatePath(params: {
   if (!scriptToken) {
     return undefined;
   }
-  if (path.isAbsolute(scriptToken)) {
-    return scriptToken;
+  const targetPath = getPathModuleForPlatform(params.platform);
+  if (targetPath.isAbsolute(scriptToken)) {
+    return targetPath.normalize(scriptToken);
   }
 
   const expanded = scriptToken.startsWith("~") ? expandHomePrefix(scriptToken) : scriptToken;
   const base = params.cwd && params.cwd.trim().length > 0 ? params.cwd : process.cwd();
-  return path.resolve(base, expanded);
+  return targetPath.resolve(base, expanded);
 }
 
 function collectAllowAlwaysPatterns(params: {
@@ -610,6 +629,7 @@ function collectAllowAlwaysPatterns(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  resolutionMode?: "host" | "virtual";
   strictInlineEval?: boolean;
   depth: number;
   out: Set<string>;
@@ -628,10 +648,17 @@ function collectAllowAlwaysPatterns(params: {
       : {
           raw: trustPlan.argv.join(" "),
           argv: trustPlan.argv,
-          resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
+          resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env, {
+            platform: params.platform,
+            resolutionMode: params.resolutionMode,
+          }),
         };
 
-  const candidatePath = resolveExecutionTargetCandidatePath(segment.resolution, params.cwd);
+  const candidatePath = resolveExecutionTargetCandidatePath(
+    segment.resolution,
+    params.cwd,
+    params.platform,
+  );
   if (!candidatePath) {
     return;
   }
@@ -654,6 +681,7 @@ function collectAllowAlwaysPatterns(params: {
     const scriptPath = resolveShellWrapperScriptCandidatePath({
       segment,
       cwd: params.cwd,
+      platform: params.platform,
     });
     if (scriptPath) {
       params.out.add(scriptPath);
@@ -665,6 +693,7 @@ function collectAllowAlwaysPatterns(params: {
     cwd: params.cwd,
     env: params.env,
     platform: params.platform,
+    resolutionMode: params.resolutionMode,
   });
   if (!nested.ok) {
     return;
@@ -675,6 +704,7 @@ function collectAllowAlwaysPatterns(params: {
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      resolutionMode: params.resolutionMode,
       strictInlineEval: params.strictInlineEval,
       depth: params.depth + 1,
       out: params.out,
@@ -692,6 +722,7 @@ export function resolveAllowAlwaysPatterns(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  resolutionMode?: "host" | "virtual";
   strictInlineEval?: boolean;
 }): string[] {
   const patterns = new Set<string>();
@@ -701,6 +732,7 @@ export function resolveAllowAlwaysPatterns(params: {
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      resolutionMode: params.resolutionMode,
       strictInlineEval: params.strictInlineEval,
       depth: 0,
       out: patterns,
@@ -716,6 +748,7 @@ export function evaluateShellAllowlist(
   params: {
     command: string;
     env?: NodeJS.ProcessEnv;
+    resolutionMode?: "host" | "virtual";
   } & ExecAllowlistContext,
 ): ExecAllowlistAnalysis {
   const allowlistContext = pickExecAllowlistContext(params);
@@ -743,6 +776,7 @@ export function evaluateShellAllowlist(
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      resolutionMode: params.resolutionMode,
     });
     if (!analysis.ok) {
       return analysisFailure();
@@ -764,6 +798,7 @@ export function evaluateShellAllowlist(
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      resolutionMode: params.resolutionMode,
     });
     if (!analysis.ok) {
       return null;

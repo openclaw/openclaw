@@ -356,6 +356,34 @@ describe("exec host env validation", () => {
     ).rejects.toThrow("exec denied: allowlist miss");
   });
 
+  it("allows sandbox allowlist absolute Linux paths without host fs probing", async () => {
+    const runtimePath = "/__openclaw_virtual__/bin/python3";
+    execApprovalsMocks.resolveExecApprovals.mockImplementation(() => ({
+      ...createExecApprovals(),
+      allowlist: [{ pattern: runtimePath }],
+    }));
+
+    let executedCommand = "";
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "allowlist",
+      ask: "off",
+      sandbox: createRecordingSandbox((command) => {
+        executedCommand = command;
+      }),
+    });
+
+    const result = await tool.execute("call-sandbox-virtual-resolution", {
+      command: `${runtimePath} --version`,
+    });
+
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
+      executedCommand,
+    );
+    expect(executedCommand).toContain(runtimePath);
+    expect(executedCommand).toContain("'--version'");
+  });
+
   it("quotes sandbox allowlist-approved command arguments before execution", async () => {
     const execPathReal =
       fs.realpathSync.native?.(process.execPath) ?? fs.realpathSync(process.execPath);

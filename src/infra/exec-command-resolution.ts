@@ -3,7 +3,10 @@ import path from "node:path";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
-import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
+import {
+  resolveExecutablePath as resolveExecutableCandidatePath,
+  type ExecutableResolutionMode,
+} from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export type ExecutableResolution = {
@@ -21,6 +24,22 @@ export type CommandResolution = {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
+
+type CommandResolutionOptions = {
+  platform?: string | null;
+  resolutionMode?: ExecutableResolutionMode;
+};
+
+function isWindowsPlatform(platform?: string | null): boolean {
+  return String(platform ?? process.platform)
+    .trim()
+    .toLowerCase()
+    .startsWith("win");
+}
+
+function getPathModuleForPlatform(platform?: string | null): typeof path.posix {
+  return isWindowsPlatform(platform) ? path.win32 : path.posix;
+}
 
 function isCommandResolution(
   resolution: CommandResolution | ExecutableResolution | null,
@@ -61,14 +80,20 @@ function buildExecutableResolution(
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    platform?: string | null;
+    resolutionMode?: ExecutableResolutionMode;
   },
 ): ExecutableResolution {
   const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
     cwd: params.cwd,
     env: params.env,
+    platform: params.platform,
+    resolutionMode: params.resolutionMode,
   });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  const executableName = resolvedPath
+    ? getPathModuleForPlatform(params.platform).basename(resolvedPath)
+    : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
@@ -82,6 +107,8 @@ function buildCommandResolution(params: {
   policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+  resolutionMode?: ExecutableResolutionMode;
   effectiveArgv: string[];
   wrapperChain: string[];
   policyBlocked: boolean;
@@ -123,6 +150,7 @@ export function resolveCommandResolution(
   command: string,
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  options?: CommandResolutionOptions,
 ): CommandResolution | null {
   const rawExecutable = parseFirstToken(command);
   if (!rawExecutable) {
@@ -135,6 +163,8 @@ export function resolveCommandResolution(
     policyBlocked: false,
     cwd,
     env,
+    platform: options?.platform,
+    resolutionMode: options?.resolutionMode,
   });
 }
 
@@ -142,6 +172,7 @@ export function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  options?: CommandResolutionOptions,
 ): CommandResolution | null {
   const plan = resolveExecWrapperTrustPlan(argv);
   const effectiveArgv = plan.argv;
@@ -158,12 +189,15 @@ export function resolveCommandResolutionFromArgv(
     blockedWrapper: plan.blockedWrapper,
     cwd,
     env,
+    platform: options?.platform,
+    resolutionMode: options?.resolutionMode,
   });
 }
 
 function resolveExecutableCandidatePathFromResolution(
   resolution: ExecutableResolution | null | undefined,
   cwd?: string,
+  platform?: string | null,
 ): string | undefined {
   if (!resolution) {
     return undefined;
@@ -176,14 +210,15 @@ function resolveExecutableCandidatePathFromResolution(
     return undefined;
   }
   const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
+  const targetPath = getPathModuleForPlatform(platform);
   if (!expanded.includes("/") && !expanded.includes("\\")) {
     return undefined;
   }
-  if (path.isAbsolute(expanded)) {
-    return expanded;
+  if (targetPath.isAbsolute(expanded)) {
+    return targetPath.normalize(expanded);
   }
   const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-  return path.resolve(base, expanded);
+  return targetPath.resolve(base, expanded);
 }
 
 export function resolveExecutionTargetResolution(
@@ -207,48 +242,56 @@ export function resolvePolicyTargetResolution(
 export function resolveExecutionTargetCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
+  platform?: string | null,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
     isCommandResolution(resolution) ? resolution.execution : resolution,
     cwd,
+    platform,
   );
 }
 
 export function resolvePolicyTargetCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
+  platform?: string | null,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
     isCommandResolution(resolution) ? resolution.policy : resolution,
     cwd,
+    platform,
   );
 }
 
 export function resolveApprovalAuditCandidatePath(
   resolution: CommandResolution | null,
   cwd?: string,
+  platform?: string | null,
 ): string | undefined {
-  return resolvePolicyTargetCandidatePath(resolution, cwd);
+  return resolvePolicyTargetCandidatePath(resolution, cwd, platform);
 }
 
 // Legacy alias kept while callers migrate to explicit target naming.
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
+  platform?: string | null,
 ): string | undefined {
-  return resolveExecutionTargetCandidatePath(resolution, cwd);
+  return resolveExecutionTargetCandidatePath(resolution, cwd, platform);
 }
 
 export function resolvePolicyAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
+  platform?: string | null,
 ): string | undefined {
-  return resolvePolicyTargetCandidatePath(resolution, cwd);
+  return resolvePolicyTargetCandidatePath(resolution, cwd, platform);
 }
 
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: ExecutableResolution | null,
+  options?: { platform?: string | null },
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
@@ -273,10 +316,11 @@ export function matchAllowlist(
       const expanded = rawExecutable.startsWith("~")
         ? expandHomePrefix(rawExecutable)
         : rawExecutable;
-      if (!path.isAbsolute(expanded)) {
+      const targetPath = getPathModuleForPlatform(options?.platform);
+      if (!targetPath.isAbsolute(expanded)) {
         return undefined;
       }
-      return expanded;
+      return targetPath.normalize(expanded);
     })();
   if (!allowlistCandidatePath) {
     return null;

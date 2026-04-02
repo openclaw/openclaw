@@ -739,6 +739,7 @@ export function createExecTool(
             cwd: workdir,
             env,
             platform: sandboxShellPlatform,
+            resolutionMode: "virtual",
             trustedSafeBinDirs,
           });
           if (!allowlistEval.analysisOk || !allowlistEval.allowlistSatisfied) {
@@ -758,6 +759,7 @@ export function createExecTool(
             const resolvedPath = resolveApprovalAuditCandidatePath(
               allowlistEval.segments[0]?.resolution ?? null,
               workdir,
+              sandboxShellPlatform,
             );
             const seen = new Set<string>();
             for (const match of allowlistEval.allowlistMatches) {
