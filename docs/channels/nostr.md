@@ -132,7 +132,7 @@ Notes:
 
 Enforcement notes:
 
-- Sender policy is checked before signature verification and NIP-04 decryption.
+- Inbound event signatures are verified before sender policy and NIP-04 decryption, so forged events are rejected early.
 - Pairing replies are sent without processing the original DM body.
 - Inbound DMs are rate-limited and oversized payloads are dropped before decrypt.
 
@@ -240,7 +240,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - Never commit private keys.
 - Use environment variables for keys.
 - Consider `allowlist` for production bots.
-- Pairing and allowlist policy is enforced before decrypt, so unknown senders cannot force full crypto work.
+- Signatures are verified before sender policy, and sender policy is enforced before decrypt, so forged events are rejected early and unknown senders cannot force full crypto work.
 
 ## Limitations (MVP)
 
