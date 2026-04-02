@@ -222,9 +222,9 @@ function createLazyGoogleSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: (ctx) => getProvider().resolveConfig?.(ctx) ?? {},
     resolveTalkConfig: (ctx) => getProvider().resolveTalkConfig?.(ctx) ?? {},
     resolveTalkOverrides: (ctx) => getProvider().resolveTalkOverrides?.(ctx) ?? {},
-    listVoices: async (req) => await getProvider().listVoices?.(req),
+    listVoices: (req) => getProvider().listVoices?.(req) ?? Promise.resolve([]),
     isConfigured: (req) => getProvider().isConfigured?.(req) ?? false,
-    synthesize: async (req) => await getProvider().synthesize(req),
+    synthesize: (req) => getProvider().synthesize(req),
   };
 }
 
