@@ -13,13 +13,19 @@ export {
   resolveBrowserControlAuth,
   resolveProfile,
 } from "./browser-config.js";
+export {
+  parseBrowserMajorVersion,
+  readBrowserVersion,
+  resolveGoogleChromeExecutableForPlatform,
+} from "./browser-host-inspection.js";
+export { closeTrackedBrowserTabsForSessions, movePathToTrash } from "./browser-maintenance.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "browser",
     artifactBasename: "runtime-api.js",
   });
@@ -71,11 +77,6 @@ export const browserTabAction: FacadeModule["browserTabAction"] = ((...args) =>
   loadFacadeModule()["browserTabAction"](...args)) as FacadeModule["browserTabAction"];
 export const browserTabs: FacadeModule["browserTabs"] = ((...args) =>
   loadFacadeModule()["browserTabs"](...args)) as FacadeModule["browserTabs"];
-export const closeTrackedBrowserTabsForSessions: FacadeModule["closeTrackedBrowserTabsForSessions"] =
-  ((...args) =>
-    loadFacadeModule()["closeTrackedBrowserTabsForSessions"](
-      ...args,
-    )) as FacadeModule["closeTrackedBrowserTabsForSessions"];
 export const createBrowserControlContext: FacadeModule["createBrowserControlContext"] = ((
   ...args
 ) =>
@@ -139,8 +140,6 @@ export const isPersistentBrowserProfileMutation: FacadeModule["isPersistentBrows
     loadFacadeModule()["isPersistentBrowserProfileMutation"](
       ...args,
     )) as FacadeModule["isPersistentBrowserProfileMutation"];
-export const movePathToTrash: FacadeModule["movePathToTrash"] = ((...args) =>
-  loadFacadeModule()["movePathToTrash"](...args)) as FacadeModule["movePathToTrash"];
 export const normalizeBrowserFormField: FacadeModule["normalizeBrowserFormField"] = ((...args) =>
   loadFacadeModule()["normalizeBrowserFormField"](
     ...args,
@@ -157,16 +156,10 @@ export const normalizeBrowserRequestPath: FacadeModule["normalizeBrowserRequestP
   loadFacadeModule()["normalizeBrowserRequestPath"](
     ...args,
   )) as FacadeModule["normalizeBrowserRequestPath"];
-export const parseBrowserMajorVersion: FacadeModule["parseBrowserMajorVersion"] = ((...args) =>
-  loadFacadeModule()["parseBrowserMajorVersion"](
-    ...args,
-  )) as FacadeModule["parseBrowserMajorVersion"];
 export const persistBrowserProxyFiles: FacadeModule["persistBrowserProxyFiles"] = ((...args) =>
   loadFacadeModule()["persistBrowserProxyFiles"](
     ...args,
   )) as FacadeModule["persistBrowserProxyFiles"];
-export const readBrowserVersion: FacadeModule["readBrowserVersion"] = ((...args) =>
-  loadFacadeModule()["readBrowserVersion"](...args)) as FacadeModule["readBrowserVersion"];
 export const registerBrowserCli: FacadeModule["registerBrowserCli"] = ((...args) =>
   loadFacadeModule()["registerBrowserCli"](...args)) as FacadeModule["registerBrowserCli"];
 export const registerBrowserRoutes: FacadeModule["registerBrowserRoutes"] = ((...args) =>
@@ -177,11 +170,6 @@ export const resolveExistingPathsWithinRoot: FacadeModule["resolveExistingPathsW
   loadFacadeModule()["resolveExistingPathsWithinRoot"](
     ...args,
   )) as FacadeModule["resolveExistingPathsWithinRoot"];
-export const resolveGoogleChromeExecutableForPlatform: FacadeModule["resolveGoogleChromeExecutableForPlatform"] =
-  ((...args) =>
-    loadFacadeModule()["resolveGoogleChromeExecutableForPlatform"](
-      ...args,
-    )) as FacadeModule["resolveGoogleChromeExecutableForPlatform"];
 export const resolveRequestedBrowserProfile: FacadeModule["resolveRequestedBrowserProfile"] = ((
   ...args
 ) =>
