@@ -187,11 +187,14 @@ private struct TalkWaveRings: View {
     var body: some View {
         ZStack {
             ForEach(0..<3, id: \.self) { idx in
-                let speed: Double = self.phase == .speaking ? 1.4 : self.phase == .listening ? 0.9 : self.phase == .loading ? 0.5 : 0.6
+                let speed: Double = self.phase == .speaking ? 1.4 : self.phase == .listening ? 0.9 : self
+                    .phase == .loading ? 0.5 : 0.6
                 let progress = (time * speed + Double(idx) * 0.28).truncatingRemainder(dividingBy: 1)
-                let amplitude: Double = self.phase == .speaking ? 0.95 : self.phase == .listening ? 0.5 + self.level * 0.7 : self.phase == .loading ? 0.5 : 0.35
+                let amplitude: Double = self.phase == .speaking ? 0.95 : self.phase == .listening ? 0.5 + self
+                    .level * 0.7 : self.phase == .loading ? 0.5 : 0.35
                 let scale = 0.75 + progress * amplitude + (self.phase == .listening ? self.level * 0.15 : 0)
-                let alpha = self.phase == .speaking ? 0.72 : self.phase == .listening ? 0.58 + self.level * 0.28 : self.phase == .loading ? 0.5 : 0.4
+                let alpha = self.phase == .speaking ? 0.72 : self.phase == .listening ? 0.58 + self.level * 0.28 : self
+                    .phase == .loading ? 0.5 : 0.4
                 Circle()
                     .stroke(self.accent.opacity(alpha - progress * 0.3), lineWidth: 1.6)
                     .scaleEffect(scale)

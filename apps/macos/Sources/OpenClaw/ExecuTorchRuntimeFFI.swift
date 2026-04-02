@@ -22,12 +22,10 @@ private struct PqtTranscribeConfig {
 
 private typealias PqtTokenCallback = @convention(c) (
     _ piece: UnsafePointer<CChar>?,
-    _ userData: UnsafeMutableRawPointer?
-) -> Void
+    _ userData: UnsafeMutableRawPointer?) -> Void
 private typealias PqtRunnerCreateFn = @convention(c) (
     _ config: UnsafeRawPointer?,
-    _ outRunner: UnsafeMutablePointer<PqtRunnerRef?>?
-) -> Int32
+    _ outRunner: UnsafeMutablePointer<PqtRunnerRef?>?) -> Int32
 private typealias PqtRunnerDestroyFn = @convention(c) (_ runner: PqtRunnerRef?) -> Void
 private typealias PqtRunnerTranscribeFn = @convention(c) (
     _ runner: PqtRunnerRef?,
@@ -36,8 +34,7 @@ private typealias PqtRunnerTranscribeFn = @convention(c) (
     _ config: UnsafeRawPointer?,
     _ callback: PqtTokenCallback?,
     _ userData: UnsafeMutableRawPointer?,
-    _ outNumGeneratedTokens: UnsafeMutablePointer<Int32>?
-) -> Int32
+    _ outNumGeneratedTokens: UnsafeMutablePointer<Int32>?) -> Int32
 private typealias PqtLastErrorFn = @convention(c) () -> UnsafePointer<CChar>?
 
 private final class PqtTokenSink: @unchecked Sendable {
@@ -74,8 +71,8 @@ private let ffiVerboseLogging = ProcessInfo.processInfo.environment["OPENCLAW_EX
 
 private func pqtSwiftTokenCallback(
     _ piece: UnsafePointer<CChar>?,
-    _ userData: UnsafeMutableRawPointer?
-) {
+    _ userData: UnsafeMutableRawPointer?)
+{
     guard let piece, let userData else {
         if ffiVerboseLogging {
             ffiLog.warning("executorch.ffi: token callback with nil piece or userData")
@@ -103,8 +100,8 @@ final class PqtRuntimeHandle: @unchecked Sendable {
         runnerCreateFn: PqtRunnerCreateFn,
         runnerDestroyFn: PqtRunnerDestroyFn,
         runnerTranscribeFn: PqtRunnerTranscribeFn,
-        lastErrorFn: PqtLastErrorFn
-    ) {
+        lastErrorFn: PqtLastErrorFn)
+    {
         self.library = library
         self.runnerCreateFn = runnerCreateFn
         self.runnerDestroyFn = runnerDestroyFn
@@ -145,8 +142,8 @@ final class PqtRuntimeHandle: @unchecked Sendable {
     private static func loadSymbol<T>(
         _ library: UnsafeMutableRawPointer,
         name: String,
-        as _: T.Type
-    ) throws -> T {
+        as _: T.Type) throws -> T
+    {
         _ = dlerror()
         guard let symbol = dlsym(library, name) else {
             let dlError = dlerror().flatMap { String(validatingUTF8: $0) } ?? "unknown dlsym error"
@@ -165,8 +162,8 @@ final class PqtRuntimeHandle: @unchecked Sendable {
         modelPath: String,
         tokenizerPath: String,
         dataPath: String? = nil,
-        warmup: Bool
-    ) throws -> PqtRunnerRef {
+        warmup: Bool) throws -> PqtRunnerRef
+    {
         var runner: PqtRunnerRef?
 
         let createStatus: Int32 = modelPath.withCString { modelC in
@@ -206,8 +203,8 @@ final class PqtRuntimeHandle: @unchecked Sendable {
     func transcribe(
         runner: PqtRunnerRef,
         samples: [Float],
-        maxNewTokens: Int32 = 160
-    ) throws -> String {
+        maxNewTokens: Int32 = 160) throws -> String
+    {
         guard !samples.isEmpty else { return "" }
         var generatedTokens: Int32 = 0
         let collector = PqtTokenCollector()

@@ -19,34 +19,40 @@ private final class AudioRingBuffer: @unchecked Sendable {
         buffer.deallocate()
     }
 
-    var count: Int { min(totalCount, capacity) }
+    var count: Int {
+        min(self.totalCount, self.capacity)
+    }
+
+    var isEmpty: Bool {
+        self.totalCount == 0
+    }
 
     func append(_ samples: [Float]) {
         guard !samples.isEmpty else { return }
         for s in samples {
-            buffer[writeIndex] = s
-            writeIndex = (writeIndex + 1) % capacity
-            totalCount += 1
+            self.buffer[self.writeIndex] = s
+            self.writeIndex = (self.writeIndex + 1) % self.capacity
+            self.totalCount += 1
         }
     }
 
     /// Last `n` samples (newest at end). Returns [] if n <= 0 or no data.
     func suffix(_ n: Int) -> [Float] {
-        let c = count
+        let c = self.count
         let take = min(n, c)
         guard take > 0 else { return [] }
         var result = [Float]()
         result.reserveCapacity(take)
-        let start = (writeIndex - take + capacity) % capacity
+        let start = (writeIndex - take + self.capacity) % self.capacity
         for i in 0..<take {
-            result.append(buffer[(start + i) % capacity])
+            result.append(self.buffer[(start + i) % self.capacity])
         }
         return result
     }
 
     func removeAll() {
-        writeIndex = 0
-        totalCount = 0
+        self.writeIndex = 0
+        self.totalCount = 0
     }
 }
 
@@ -56,10 +62,10 @@ private final class ConsumedState: @unchecked Sendable {
     private var consumed = false
     /// Returns true only the first time; thereafter returns false.
     func consume() -> Bool {
-        lock.lock()
+        self.lock.lock()
         defer { lock.unlock() }
-        if consumed { return false }
-        consumed = true
+        if self.consumed { return false }
+        self.consumed = true
         return true
     }
 }
@@ -76,7 +82,7 @@ actor ExecuTorchSTTBridge {
     private let logger = Logger(subsystem: "ai.openclaw", category: "executorch.stt")
     private static let verboseLogging = ProcessInfo.processInfo.environment["OPENCLAW_EXECUTORCH_DEBUG"] == "1"
 
-    enum State: Sendable, Equatable {
+    enum State: Equatable {
         case idle
         case loading
         case ready
@@ -92,7 +98,7 @@ actor ExecuTorchSTTBridge {
     /// Second argument: when true, the string is a full revised hypothesis (replace, do not merge).
     private var onTranscript: ((String, Bool) -> Void)?
     private var rollingBuffer: AudioRingBuffer?
-    private static let rollingBufferCapacity = 16_000 * 30
+    private static let rollingBufferCapacity = 16000 * 30
     private var offlinePollTask: Task<Void, Never>?
     private var observedChunkCount = 0
     private var offlinePollingActive = false
@@ -109,7 +115,7 @@ actor ExecuTorchSTTBridge {
     private var recentFinalizeLatencies: [Double] = []
     private static let maxLatencySamples = 32
 
-    // VAD/energy gate: skip decode when audio is quiet to save compute
+    /// VAD/energy gate: skip decode when audio is quiet to save compute
     private var rollingRMS: Double = 0
     /// Peak per-chunk RMS this listening session (used to reject single-token STT hallucinations on silence).
     private var sessionPeakRMS: Double = 0
@@ -121,11 +127,11 @@ actor ExecuTorchSTTBridge {
     private static let minProbeIntervalSeconds = 1.2
 
     // Poll cadence (nanoseconds)
-    private static let pollIntervalBootstrapNs: UInt64 = 280_000_000   // 280ms before first transcript
-    private static let pollIntervalActiveNs: UInt64 = 400_000_000     // 400ms when we have transcript
-    private static let pollIntervalIdleNs: UInt64 = 800_000_000       // 800ms when quiet
-    private static let minOfflineWindowSamples = 16_000                // 1s at 16kHz
-    private static let maxOfflineWindowSamples = 32_000               // 2s (was 6s)
+    private static let pollIntervalBootstrapNs: UInt64 = 280_000_000 // 280ms before first transcript
+    private static let pollIntervalActiveNs: UInt64 = 400_000_000 // 400ms when we have transcript
+    private static let pollIntervalIdleNs: UInt64 = 800_000_000 // 800ms when quiet
+    private static let minOfflineWindowSamples = 16000 // 1s at 16kHz
+    private static let maxOfflineWindowSamples = 32000 // 2s (was 6s)
     private static let finalizeRecentSpeechWindowSeconds: CFAbsoluteTime = 1.25
     private static let emissionResumeGuardSeconds: CFAbsoluteTime = 0.35
     private static let weakFinalizeTokens: Set<String> = ["uh", "um", "hmm", "huh", "okay", "ok"]
@@ -148,7 +154,9 @@ actor ExecuTorchSTTBridge {
         #endif
     }
 
-    var currentState: State { state }
+    var currentState: State {
+        self.state
+    }
 
     // MARK: - Configuration
 
@@ -185,10 +193,12 @@ actor ExecuTorchSTTBridge {
         if let resolved = Self.resolveExistingPath(in: modelDir, candidates: Self.modelCandidates) {
             return resolved
         }
-        return "\(modelDir)/model.pte"
+        return "\(self.modelDir)/model.pte"
     }
 
-    var tokenizerPath: String { "\(modelDir)/tokenizer.model" }
+    var tokenizerPath: String {
+        "\(self.modelDir)/tokenizer.model"
+    }
 
     // MARK: - Health Check
 
@@ -208,50 +218,50 @@ actor ExecuTorchSTTBridge {
     // MARK: - Runtime Lifecycle
 
     func loadModel() async throws {
-        logger.info("executorch.stt: loadModel() entered, state=\(String(describing: self.state))")
-        guard case .idle = state else {
-            if case .ready = state {
-                logger.info("executorch.stt: loadModel() already ready, skipping")
+        self.logger.info("executorch.stt: loadModel() entered, state=\(String(describing: self.state))")
+        guard case .idle = self.state else {
+            if case .ready = self.state {
+                self.logger.info("executorch.stt: loadModel() already ready, skipping")
                 return
             }
-            if case .listening = state {
-                logger.info("executorch.stt: loadModel() already listening, skipping")
+            if case .listening = self.state {
+                self.logger.info("executorch.stt: loadModel() already listening, skipping")
                 return
             }
-            logger.error("executorch.stt: loadModel() invalid state, throwing alreadyRunning")
+            self.logger.error("executorch.stt: loadModel() invalid state, throwing alreadyRunning")
             throw ExecuTorchError.alreadyRunning
         }
 
-        let runtimePath = runtimeLibraryPath
-        let modelPathResolved = modelPath
-        logger.info(
-            "executorch.stt: paths — runtime=\(runtimePath, privacy: .public) model=\(modelPathResolved, privacy: .public) tokenizer=\(tokenizerPath, privacy: .public)")
-        let check = checkAvailability()
+        let runtimePath = self.runtimeLibraryPath
+        let modelPathResolved = self.modelPath
+        self.logger.info(
+            "executorch.stt: paths — runtime=\(runtimePath, privacy: .public) model=\(modelPathResolved, privacy: .public) tokenizer=\(self.tokenizerPath, privacy: .public)")
+        let check = self.checkAvailability()
         guard check.available else {
             let msg = "Missing: \(check.missing.joined(separator: ", "))"
-            logger.error("executorch.stt: availability check failed — \(msg, privacy: .public)")
-            state = .error(msg)
+            self.logger.error("executorch.stt: availability check failed — \(msg, privacy: .public)")
+            self.state = .error(msg)
             throw ExecuTorchError.filesNotFound(msg)
         }
-        logger.info("executorch.stt: availability check OK")
+        self.logger.info("executorch.stt: availability check OK")
 
-        state = .loading
-        logger.info("executorch.stt: loading embedded runtime from \(runtimePath, privacy: .public)...")
+        self.state = .loading
+        self.logger.info("executorch.stt: loading embedded runtime from \(runtimePath, privacy: .public)...")
         do {
             let runtime = try PqtRuntimeHandle.load(libraryPath: runtimePath)
-            logger.info("executorch.stt: runtime loaded, creating runner...")
+            self.logger.info("executorch.stt: runtime loaded, creating runner...")
             let runner = try runtime.createRunner(
                 modelPath: modelPathResolved,
-                tokenizerPath: tokenizerPath,
+                tokenizerPath: self.tokenizerPath,
                 dataPath: nil,
                 warmup: true)
             self.runtime = runtime
             self.runner = runner
             self.setReady()
-            logger.info("executorch.stt: loadModel() complete — ready")
+            self.logger.info("executorch.stt: loadModel() complete — ready")
         } catch {
             let message = error.localizedDescription
-            logger.error("executorch.stt: loadModel failed — \(message, privacy: .public)")
+            self.logger.error("executorch.stt: loadModel failed — \(message, privacy: .public)")
             self.state = .error(message)
             self.runner = nil
             self.runtime = nil
@@ -263,13 +273,13 @@ actor ExecuTorchSTTBridge {
 
     /// `onTranscript` second parameter is `true` when the model revised the whole phrase (replace, not merge).
     func startListening(onTranscript: @escaping (String, Bool) -> Void) throws {
-        logger.info("executorch.stt: startListening() entered, state=\(String(describing: self.state))")
-        guard case .ready = state else {
-            logger.error("executorch.stt: startListening() not ready, state=\(String(describing: self.state))")
+        self.logger.info("executorch.stt: startListening() entered, state=\(String(describing: self.state))")
+        guard case .ready = self.state else {
+            self.logger.error("executorch.stt: startListening() not ready, state=\(String(describing: self.state))")
             throw ExecuTorchError.notReady
         }
-        guard runtime != nil, runner != nil else {
-            logger.error("executorch.stt: startListening() runtime or runner nil")
+        guard self.runtime != nil, self.runner != nil else {
+            self.logger.error("executorch.stt: startListening() runtime or runner nil")
             throw ExecuTorchError.notReady
         }
 
@@ -285,21 +295,22 @@ actor ExecuTorchSTTBridge {
         self.emissionResumeGuardUntil = 0
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
-        logger.info("executorch.stt: using offline-poll transcription (Parakeet)")
+        self.logger.info("executorch.stt: using offline-poll transcription (Parakeet)")
 
         let bridge = self
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let hwFormat = inputNode.outputFormat(forBus: 0)
-        logger.info("executorch.stt: audio hwFormat sampleRate=\(hwFormat.sampleRate) channels=\(hwFormat.channelCount)")
+        self.logger
+            .info("executorch.stt: audio hwFormat sampleRate=\(hwFormat.sampleRate) channels=\(hwFormat.channelCount)")
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
-            logger.error("executorch.stt: invalid hw format — microphone not available")
+            self.logger.error("executorch.stt: invalid hw format — microphone not available")
             throw ExecuTorchError.microphoneNotAvailable
         }
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
+            sampleRate: 16000,
             channels: 1,
             interleaved: false)
         else {
@@ -307,14 +318,14 @@ actor ExecuTorchSTTBridge {
         }
 
         guard let converter = AVAudioConverter(from: hwFormat, to: targetFormat) else {
-            logger.error("executorch.stt: AVAudioConverter creation failed")
+            self.logger.error("executorch.stt: AVAudioConverter creation failed")
             throw ExecuTorchError.audioConversionFailed
         }
-        logger.info("executorch.stt: installing tap, starting audio engine...")
+        self.logger.info("executorch.stt: installing tap, starting audio engine...")
 
-        let sampleRateRatio = 16_000.0 / hwFormat.sampleRate
+        let sampleRateRatio = 16000.0 / hwFormat.sampleRate
         var enqueueCount = 0
-        let logEnqueue = logger
+        let logEnqueue = self.logger
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { buffer, _ in
             let consumedState = ConsumedState()
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * sampleRateRatio) + 1
@@ -349,9 +360,10 @@ actor ExecuTorchSTTBridge {
 
         do {
             try engine.start()
-            logger.info("executorch.stt: audio engine started — listening")
+            self.logger.info("executorch.stt: audio engine started — listening")
         } catch {
-            logger.error("executorch.stt: audio engine start failed — \(error.localizedDescription, privacy: .public)")
+            self.logger
+                .error("executorch.stt: audio engine start failed — \(error.localizedDescription, privacy: .public)")
             inputNode.removeTap(onBus: 0)
             throw ExecuTorchError.launchFailed("Audio engine start failed: \(error.localizedDescription)")
         }
@@ -374,7 +386,7 @@ actor ExecuTorchSTTBridge {
             _ = self.pollOfflineTranscribeOnce(force: true)
         }
 
-        logger.info(
+        self.logger.info(
             "executorch.stt: startListening() complete — state=listening (offline poll active)")
     }
 
@@ -400,7 +412,7 @@ actor ExecuTorchSTTBridge {
         if case .listening = self.state {
             self.state = .ready
         }
-        logger.info("ExecuTorch STT stopped listening")
+        self.logger.info("ExecuTorch STT stopped listening")
     }
 
     func shutdown() {
@@ -412,19 +424,19 @@ actor ExecuTorchSTTBridge {
         self.runtime = nil
         self.state = .idle
         self.transcriptBuffer = ""
-        logger.info("ExecuTorch STT shutdown")
+        self.logger.info("ExecuTorch STT shutdown")
     }
 
     // MARK: - Private
 
     private func setReady() {
         self.state = .ready
-        logger.info("ExecuTorch model loaded — ready")
+        self.logger.info("ExecuTorch model loaded — ready")
     }
 
     func getAndClearTranscript() -> String {
-        let result = transcriptBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        transcriptBuffer = ""
+        let result = self.transcriptBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.transcriptBuffer = ""
         return result
     }
 
@@ -450,7 +462,7 @@ actor ExecuTorchSTTBridge {
             self.lastVoicedActivityAt = CFAbsoluteTimeGetCurrent()
         }
         if self.observedChunkCount == 1 || self.observedChunkCount % 50 == 0 {
-            logger.info(
+            self.logger.info(
                 "executorch.stt: observe chunkCount=\(self.observedChunkCount) rollingSamples=\(buf.count)")
         }
 
@@ -473,11 +485,11 @@ actor ExecuTorchSTTBridge {
             self.emissionResumeGuardUntil = now + Self.emissionResumeGuardSeconds
             self.rollingBuffer?.removeAll()
             self.minSamplesReadyTime = nil
-            logger.info(
+            self.logger.info(
                 "executorch.stt: emission enabled with resumeGuardMs=\(Int(Self.emissionResumeGuardSeconds * 1000))")
         } else {
             self.emissionResumeGuardUntil = 0
-            logger.info("executorch.stt: emission disabled and transient transcript state cleared")
+            self.logger.info("executorch.stt: emission disabled and transient transcript state cleared")
         }
     }
 
@@ -500,9 +512,9 @@ actor ExecuTorchSTTBridge {
         baseTranscript: String,
         delta: String,
         hadRecentSpeech: Bool,
-        hadSessionSpeech: Bool
-    ) -> Bool {
-        finalizeDeltaDecision(
+        hadSessionSpeech: Bool) -> Bool
+    {
+        self.finalizeDeltaDecision(
             baseTranscript: baseTranscript,
             delta: delta,
             hadRecentSpeech: hadRecentSpeech,
@@ -511,26 +523,26 @@ actor ExecuTorchSTTBridge {
 
     /// Drop one-word hallucinations when no audio chunk reached the voiced threshold this session.
     private static func shouldRejectFullBufferHallucination(transcript: String, sessionPeakRMS: Double) -> Bool {
-        let cleaned = cleanModelOutput(transcript)
-        let tokens = normalizedTokens(cleaned)
+        let cleaned = self.cleanModelOutput(transcript)
+        let tokens = self.normalizedTokens(cleaned)
         guard tokens.count == 1, let t = tokens.first else { return false }
-        guard fullBufferHallucinationTokens.contains(t) else { return false }
-        return sessionPeakRMS < Double(rmsThreshold)
+        guard self.fullBufferHallucinationTokens.contains(t) else { return false }
+        return sessionPeakRMS < Double(self.rmsThreshold)
     }
 
     private static func finalizeDeltaDecision(
         baseTranscript: String,
         delta: String,
         hadRecentSpeech: Bool,
-        hadSessionSpeech: Bool
-    ) -> FinalizeDeltaDecision {
-        let base = cleanModelOutput(baseTranscript)
-        let cleanedDelta = cleanModelOutput(delta)
+        hadSessionSpeech: Bool) -> FinalizeDeltaDecision
+    {
+        let base = self.cleanModelOutput(baseTranscript)
+        let cleanedDelta = self.cleanModelOutput(delta)
         guard !cleanedDelta.isEmpty else { return .rejectEmpty }
-        guard containsLetterOrDigit(cleanedDelta) else { return .rejectNonLexical }
+        guard self.containsLetterOrDigit(cleanedDelta) else { return .rejectNonLexical }
 
-        let baseTokens = normalizedTokens(base)
-        let deltaTokens = normalizedTokens(cleanedDelta)
+        let baseTokens = self.normalizedTokens(base)
+        let deltaTokens = self.normalizedTokens(cleanedDelta)
         guard !deltaTokens.isEmpty else { return .rejectNonLexical }
 
         if !hadSessionSpeech, baseTokens.isEmpty {
@@ -539,7 +551,7 @@ actor ExecuTorchSTTBridge {
         guard hadRecentSpeech else { return .rejectNoRecentSpeech }
 
         if deltaTokens.count == 1, let token = deltaTokens.first {
-            if weakFinalizeTokens.contains(token) {
+            if self.weakFinalizeTokens.contains(token) {
                 return .rejectWeakSingleToken
             }
             if let lastBaseToken = baseTokens.last, lastBaseToken == token, baseTokens.count >= 3 {
@@ -554,11 +566,11 @@ actor ExecuTorchSTTBridge {
     func recordFinalizeLatency() {
         guard let start = sessionStartTime else { return }
         let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
-        recentFinalizeLatencies.append(elapsed)
-        if recentFinalizeLatencies.count > Self.maxLatencySamples {
-            recentFinalizeLatencies.removeFirst()
+        self.recentFinalizeLatencies.append(elapsed)
+        if self.recentFinalizeLatencies.count > Self.maxLatencySamples {
+            self.recentFinalizeLatencies.removeFirst()
         }
-        logLatencyStats()
+        self.logLatencyStats()
     }
 
     /// Transcribe the entire rolling buffer as a single utterance for maximum accuracy.
@@ -566,32 +578,32 @@ actor ExecuTorchSTTBridge {
     func forceFullBufferDecode() -> String {
         guard case .listening = self.state else { return "" }
         guard let runtime = self.runtime, let runner = self.runner else { return "" }
-        guard let buf = self.rollingBuffer, buf.count > 0 else { return "" }
+        guard let buf = self.rollingBuffer, !buf.isEmpty else { return "" }
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
 
         let allSamples = buf.suffix(buf.count)
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
-            var transcript = Self.cleanModelOutput(
-                try runtime.transcribe(
+            var transcript = try Self.cleanModelOutput(
+                runtime.transcribe(
                     runner: runner,
                     samples: allSamples,
                     maxNewTokens: Self.fullBufferMaxNewTokens))
             if Self.shouldRejectFullBufferHallucination(transcript: transcript, sessionPeakRMS: self.sessionPeakRMS) {
-                logger.info(
+                self.logger.info(
                     "executorch.stt: full-buffer decode rejected likely silence hallucination " +
                         "peakRMS=\(self.sessionPeakRMS) text=\(transcript.prefix(40), privacy: .public)")
                 transcript = ""
             }
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-            logger.info(
+            self.logger.info(
                 "executorch.stt: full-buffer decode done in \(String(format: "%.0f", elapsed))ms " +
                     "samples=\(allSamples.count) chars=\(transcript.count)")
             return transcript
         } catch {
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-            logger.error(
+            self.logger.error(
                 "executorch.stt: full-buffer decode failed after \(String(format: "%.0f", elapsed))ms — " +
                     "\(error.localizedDescription, privacy: .public)")
             return ""
@@ -615,26 +627,28 @@ actor ExecuTorchSTTBridge {
             hadRecentSpeech: hadRecentSpeech,
             hadSessionSpeech: self.hasEmittedFirstTokenThisSession)
         if decision != .accept {
-            logger.info(
+            self.logger.info(
                 "executorch.stt: finalize tail rejected reason=\(decision.rawValue, privacy: .public) baseChars=\(base.count) deltaChars=\(delta.count) hadRecentSpeech=\(hadRecentSpeech) hadSessionSpeech=\(self.hasEmittedFirstTokenThisSession)")
             return ""
         }
         if Self.verboseLogging {
-            logger.info(
+            self.logger.info(
                 "executorch.stt: finalize tail accepted baseChars=\(base.count) deltaChars=\(delta.count) hadRecentSpeech=\(hadRecentSpeech)")
         }
         return delta
     }
 
     private func logLatencyStats() {
-        let first = recentFirstTokenLatencies.sorted()
-        let finalize = recentFinalizeLatencies.sorted()
+        let first = self.recentFirstTokenLatencies.sorted()
+        let finalize = self.recentFinalizeLatencies.sorted()
         let p50First = Self.percentile(first, 0.5)
         let p90First = Self.percentile(first, 0.9)
         let p50Final = Self.percentile(finalize, 0.5)
         let p90Final = Self.percentile(finalize, 0.9)
-        logger.info(
-            "executorch.stt: latency firstToken p50=\(String(format: "%.0f", p50First ?? 0))ms p90=\(String(format: "%.0f", p90First ?? 0))ms n=\(first.count) | finalize p50=\(String(format: "%.0f", p50Final ?? 0))ms p90=\(String(format: "%.0f", p90Final ?? 0))ms n=\(finalize.count)")
+        self.logger.info(
+            "executorch.stt: latency firstToken p50=\(String(format: "%.0f", p50First ?? 0))ms " +
+                "p90=\(String(format: "%.0f", p90First ?? 0))ms n=\(first.count) | finalize " +
+                "p50=\(String(format: "%.0f", p50Final ?? 0))ms p90=\(String(format: "%.0f", p90Final ?? 0))ms n=\(finalize.count)")
     }
 
     private static func percentile(_ sorted: [Double], _ p: Double) -> Double? {
@@ -653,7 +667,7 @@ actor ExecuTorchSTTBridge {
             let now = CFAbsoluteTimeGetCurrent()
             if now < self.emissionResumeGuardUntil {
                 if Self.verboseLogging {
-                    logger.info(
+                    self.logger.info(
                         "executorch.stt: poll skipped during resume guard remainingMs=\(Int((self.emissionResumeGuardUntil - now) * 1000))")
                 }
                 return false
@@ -663,7 +677,8 @@ actor ExecuTorchSTTBridge {
         guard let (delta, replaceHypothesis) = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: force)
         else { return false }
         if Self.verboseLogging {
-            logger.info("executorch.stt: offline emitted \(delta.count) chars: \"\(delta.prefix(80), privacy: .public)\"")
+            self.logger
+                .info("executorch.stt: offline emitted \(delta.count) chars: \"\(delta.prefix(80), privacy: .public)\"")
         }
         if self.emissionEnabled {
             self.transcriptBuffer += delta
@@ -676,8 +691,8 @@ actor ExecuTorchSTTBridge {
 
     private func decodeOfflineDelta(
         maxNewTokens: Int32,
-        force: Bool
-    ) -> (delta: String, replaceHypothesis: Bool)? {
+        force: Bool) -> (delta: String, replaceHypothesis: Bool)?
+    {
         guard case .listening = self.state else { return nil }
         if !self.offlinePollingActive {
             return nil
@@ -696,7 +711,9 @@ actor ExecuTorchSTTBridge {
             if isQuiet {
                 self.quietFrameCount += 1
                 let timeSinceProbe = now - self.lastProbeTime
-                if self.quietFrameCount < Self.maxQuietFramesBeforeProbe, timeSinceProbe < Self.minProbeIntervalSeconds {
+                if self.quietFrameCount < Self.maxQuietFramesBeforeProbe,
+                   timeSinceProbe < Self.minProbeIntervalSeconds
+                {
                     return nil
                 }
             } else {
@@ -713,16 +730,20 @@ actor ExecuTorchSTTBridge {
         let samples = buf.suffix(windowSamples)
         let prevLen = self.lastOfflineTranscript.count
         if Self.verboseLogging {
-            logger.info("executorch.stt: offline poll begin samples=\(samples.count) previousChars=\(prevLen) maxNewTokens=\(maxNewTokens)")
+            self.logger
+                .info(
+                    "executorch.stt: offline poll begin samples=\(samples.count) previousChars=\(prevLen) maxNewTokens=\(maxNewTokens)")
         }
 
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
-            let transcript = Self.cleanModelOutput(
-                try runtime.transcribe(runner: runner, samples: samples, maxNewTokens: maxNewTokens))
+            let transcript = try Self.cleanModelOutput(
+                runtime.transcribe(runner: runner, samples: samples, maxNewTokens: maxNewTokens))
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             if Self.verboseLogging {
-                logger.info("executorch.stt: offline poll done in \(String(format: "%.0f", elapsed))ms chars=\(transcript.count)")
+                self.logger
+                    .info(
+                        "executorch.stt: offline poll done in \(String(format: "%.0f", elapsed))ms chars=\(transcript.count)")
             }
             guard !transcript.isEmpty else { return nil }
             let previous = self.lastOfflineTranscript
@@ -747,7 +768,7 @@ actor ExecuTorchSTTBridge {
             return (delta, replaceHypothesis)
         } catch {
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-            logger.error(
+            self.logger.error(
                 "executorch.stt: offline transcribe failed after \(String(format: "%.0f", elapsed))ms — \(error.localizedDescription, privacy: .public)")
             return nil
         }
@@ -831,16 +852,16 @@ extension ExecuTorchSTTBridge {
     }
 
     nonisolated static func _testDeltaSuffix(previous: String, current: String) -> String {
-        deltaSuffix(previous: previous, current: current)
+        self.deltaSuffix(previous: previous, current: current)
     }
 
     nonisolated static func _testShouldAcceptFinalizeDelta(
         baseTranscript: String,
         delta: String,
         hadRecentSpeech: Bool,
-        hadSessionSpeech: Bool
-    ) -> Bool {
-        shouldAcceptFinalizeDelta(
+        hadSessionSpeech: Bool) -> Bool
+    {
+        self.shouldAcceptFinalizeDelta(
             baseTranscript: baseTranscript,
             delta: delta,
             hadRecentSpeech: hadRecentSpeech,
@@ -861,12 +882,12 @@ enum ExecuTorchError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .filesNotFound(let detail): return "ExecuTorch files not found: \(detail)"
-        case .launchFailed(let detail): return "Failed to launch runtime: \(detail)"
-        case .notReady: return "Runtime not ready"
-        case .alreadyRunning: return "Runtime already running"
-        case .microphoneNotAvailable: return "No microphone available"
-        case .audioConversionFailed: return "Audio format conversion failed"
+        case let .filesNotFound(detail): "ExecuTorch files not found: \(detail)"
+        case let .launchFailed(detail): "Failed to launch runtime: \(detail)"
+        case .notReady: "Runtime not ready"
+        case .alreadyRunning: "Runtime already running"
+        case .microphoneNotAvailable: "No microphone available"
+        case .audioConversionFailed: "Audio format conversion failed"
         }
     }
 }

@@ -12,19 +12,19 @@ enum TalkModePhase: String {
 /// STT backend selection for Talk Mode.
 enum TalkSttBackend: String, CaseIterable {
     case appleSpeech = "apple"
-    case executorch = "executorch"
+    case executorch
 
     var displayName: String {
         switch self {
-        case .appleSpeech: return "Apple Speech"
-        case .executorch: return "ExecuTorch Parakeet-TDT"
+        case .appleSpeech: "Apple Speech"
+        case .executorch: "ExecuTorch Parakeet-TDT"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .appleSpeech: return "Built-in on-device recognition"
-        case .executorch: return "Parakeet TDT 0.6B — low-latency command recognition"
+        case .appleSpeech: "Built-in on-device recognition"
+        case .executorch: "Parakeet TDT 0.6B — low-latency command recognition"
         }
     }
 }

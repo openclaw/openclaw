@@ -58,7 +58,7 @@ enum PermissionManager {
     }
 
     private static func ensureNotifications(interactive: Bool) async -> Bool {
-        guard Self.canQueryUserNotificationCenter else { return false }
+        guard self.canQueryUserNotificationCenter else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
 

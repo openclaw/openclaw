@@ -48,7 +48,10 @@ actor TalkModeRuntime {
     private var rmsTask: Task<Void, Never>?
     private let rmsMeter = RMSMeter()
     private var useExecuTorch = false
-    private var etBridge: ExecuTorchSTTBridge { ExecuTorchSTTBridge.shared }
+    private var etBridge: ExecuTorchSTTBridge {
+        ExecuTorchSTTBridge.shared
+    }
+
     private var etTranscriptTask: Task<Void, Never>?
 
     private var captureTask: Task<Void, Never>?
@@ -163,7 +166,9 @@ actor TalkModeRuntime {
         }
         self.logger.debug("talk: reloading config...")
         await self.reloadConfig()
-        self.logger.debug("talk: STT backend from app state: \(String(describing: backendFromApp.rawValue), privacy: .public) → useExecuTorch=\(self.useExecuTorch)")
+        self.logger
+            .debug(
+                "talk: STT backend from app state: \(String(describing: backendFromApp.rawValue), privacy: .public) → useExecuTorch=\(self.useExecuTorch)")
         if self.useExecuTorch {
             self.logger.debug("talk: STT backend ExecuTorch Parakeet-TDT — loading model...")
             await MainActor.run { TalkModeController.shared.updatePhase(.loading) }
@@ -228,7 +233,8 @@ actor TalkModeRuntime {
     private func handleExecuTorchLoadFailure() async {
         await self.etBridge.shutdown()
         self.useExecuTorch = false
-        self.logger.debug("talk: STT backend falling back to Apple Speech (Speech Recognition re-checked in startRecognition)")
+        self.logger
+            .debug("talk: STT backend falling back to Apple Speech (Speech Recognition re-checked in startRecognition)")
     }
 
     private func handleExecuTorchRecognitionFailure(_ error: Error) async {
@@ -267,7 +273,9 @@ actor TalkModeRuntime {
         // Mic-only users may start with ExecuTorch; after load/capture failure we fall back to Apple
         // Speech, which requires Speech Recognition. Re-check here so we prompt instead of a dead listen UI.
         if !PermissionManager.talkModePermissionsGranted(useExecuTorch: false) {
-            self.logger.debug("talk: Apple Speech path — requesting Speech Recognition (needed after ExecuTorch fallback or if permissions changed)")
+            self.logger
+                .debug(
+                    "talk: Apple Speech path — requesting Speech Recognition (needed after ExecuTorch fallback or if permissions changed)")
             let granted = await PermissionManager.ensureTalkModePermissions(useExecuTorch: false, interactive: true)
             if !granted {
                 self.logger.warning("talk: Apple Speech aborted — Speech Recognition not granted")
@@ -604,8 +612,7 @@ actor TalkModeRuntime {
         self.lastInterruptedAtSeconds = nil
         return TalkPromptBuilder.build(
             transcript: transcript,
-            interruptedAtSeconds: interrupted
-        )
+            interruptedAtSeconds: interrupted)
     }
 
     private func waitForAssistantText(
@@ -951,7 +958,7 @@ actor TalkModeRuntime {
 
     private static func effectiveSilenceWindow(configured: TimeInterval, useExecuTorch: Bool) -> TimeInterval {
         if useExecuTorch {
-            return max(configured, Self.execuTorchMinSilenceWindowSeconds)
+            return max(configured, self.execuTorchMinSilenceWindowSeconds)
         }
         return configured
     }
@@ -1070,25 +1077,26 @@ actor TalkModeRuntime {
 #if DEBUG
 extension TalkModeRuntime {
     static func _testMergeTranscriptForFinalize(base: String, tail: String) -> String {
-        mergeTranscriptForFinalize(base: base, tail: tail)
+        self.mergeTranscriptForFinalize(base: base, tail: tail)
     }
 
     static func _testEffectiveSilenceWindow(configured: TimeInterval, useExecuTorch: Bool) -> TimeInterval {
-        effectiveSilenceWindow(configured: configured, useExecuTorch: useExecuTorch)
+        self.effectiveSilenceWindow(configured: configured, useExecuTorch: useExecuTorch)
     }
 
     func _testHandleExecuTorchLoadFailure() async -> (useExecuTorch: Bool, bridgeState: ExecuTorchSTTBridge.State) {
         self.useExecuTorch = true
         await self.etBridge._testSetState(.error("test"))
         await self.handleExecuTorchLoadFailure()
-        return (self.useExecuTorch, await self.etBridge.currentState)
+        return await (self.useExecuTorch, self.etBridge.currentState)
     }
 
-    func _testHandleExecuTorchRecognitionFailure() async -> (useExecuTorch: Bool, bridgeState: ExecuTorchSTTBridge.State) {
+    func _testHandleExecuTorchRecognitionFailure() async
+    -> (useExecuTorch: Bool, bridgeState: ExecuTorchSTTBridge.State) {
         self.useExecuTorch = true
         await self.etBridge._testSetState(.ready)
         await self.handleExecuTorchRecognitionFailure(ExecuTorchError.audioConversionFailed)
-        return (self.useExecuTorch, await self.etBridge.currentState)
+        return await (self.useExecuTorch, self.etBridge.currentState)
     }
 }
 #endif
