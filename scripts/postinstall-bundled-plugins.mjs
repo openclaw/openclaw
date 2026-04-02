@@ -152,35 +152,33 @@ export function runBundledPluginPostinstall(params = {}) {
     return;
   }
 
-  try {
-    const nestedEnv = createNestedNpmInstallEnv(env);
-    const npmRunner =
-      params.npmRunner ??
-      resolveNpmRunner({
-        env: nestedEnv,
-        execPath: params.execPath,
-        existsSync: pathExists,
-        platform: params.platform,
-        comSpec: params.comSpec,
-        npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
-      });
-    const result = spawn(npmRunner.command, npmRunner.args, {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: npmRunner.env ?? nestedEnv,
-      stdio: "pipe",
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+  const nestedEnv = createNestedNpmInstallEnv(env);
+  const npmRunner =
+    params.npmRunner ??
+    resolveNpmRunner({
+      env: nestedEnv,
+      execPath: params.execPath,
+      existsSync: pathExists,
+      platform: params.platform,
+      comSpec: params.comSpec,
+      npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
     });
-    if (result.status !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      throw new Error(output || "npm install failed");
-    }
-    log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
-  } catch (e) {
-    // Non-fatal: gateway will surface the missing dep via doctor.
-    log.warn(`[postinstall] could not install bundled plugin deps: ${String(e)}`);
+  const result = spawn(npmRunner.command, npmRunner.args, {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env: npmRunner.env ?? nestedEnv,
+    stdio: "pipe",
+    shell: npmRunner.shell,
+    windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+  });
+  if (result.status !== 0) {
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    const detail = output || "npm install failed";
+    throw new Error(
+      `[postinstall] could not install bundled plugin deps (${missingSpecs.join(", ")}): ${detail}`,
+    );
   }
+  log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

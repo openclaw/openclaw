@@ -71,7 +71,7 @@ describe("bundled plugin postinstall", () => {
         acpx: "0.4.0",
       },
     });
-    const spawnSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: { HOME: "/tmp/home" },
@@ -89,6 +89,35 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(spawnSync).toHaveBeenCalled();
+  });
+
+  it("fails published installs when bundled plugin deps cannot be restored", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.41.1",
+      },
+    });
+
+    expect(() =>
+      runBundledPluginPostinstall({
+        env: { HOME: "/tmp/home" },
+        extensionsDir,
+        packageRoot,
+        npmRunner: createBareNpmRunner([
+          "install",
+          "--omit=dev",
+          "--no-save",
+          "--package-lock=false",
+          "grammy@1.41.1",
+        ]),
+        spawnSync: vi.fn(() => ({ status: 1, stderr: "sharp build error", stdout: "" })),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow(
+      "[postinstall] could not install bundled plugin deps (grammy@1.41.1): sharp build error",
+    );
   });
 
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
