@@ -15,7 +15,6 @@ import {
   type FailoverReason,
 } from "../../pi-embedded-helpers.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "../../xai-auth-trace.js";
 import { describeUnknownError } from "../utils.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
@@ -285,11 +284,6 @@ export function createEmbeddedRunAuthController(params: {
 
   const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
     const apiKeyInfo = await resolveApiKeyForCandidate(candidate);
-    if (shouldTraceProviderAuth(params.getRuntimeModel().provider)) {
-      params.log.info(
-        `[xai-auth] auth-controller resolved api key: source=${apiKeyInfo.source} mode=${apiKeyInfo.mode} profile=${apiKeyInfo.profileId ?? candidate ?? "none"} key=${summarizeProviderAuthKey(apiKeyInfo.apiKey)}`,
-      );
-    }
     params.setApiKeyInfo(apiKeyInfo);
     const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
     if (!apiKeyInfo.apiKey) {
@@ -322,22 +316,12 @@ export function createEmbeddedRunAuthController(params: {
         profileId: apiKeyInfo.profileId,
       },
     });
-    if (shouldTraceProviderAuth(runtimeModel.provider)) {
-      params.log.info(
-        `[xai-auth] auth-controller prepared runtime auth: returnedKey=${summarizeProviderAuthKey(preparedAuth?.apiKey)} baseUrl=${preparedAuth?.baseUrl ?? runtimeModel.baseUrl ?? "default"} expiresAt=${preparedAuth?.expiresAt ?? "none"}`,
-      );
-    }
     if (preparedAuth?.baseUrl) {
       params.setRuntimeModel({ ...runtimeModel, baseUrl: preparedAuth.baseUrl });
       params.setEffectiveModel({ ...params.getEffectiveModel(), baseUrl: preparedAuth.baseUrl });
     }
     if (preparedAuth?.apiKey) {
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-      if (shouldTraceProviderAuth(runtimeModel.provider)) {
-        params.log.info(
-          `[xai-auth] auth-controller set runtime api key from prepared auth: key=${summarizeProviderAuthKey(preparedAuth.apiKey)}`,
-        );
-      }
       params.setRuntimeAuthState({
         sourceApiKey: apiKeyInfo.apiKey,
         authMode: apiKeyInfo.mode,
@@ -351,11 +335,6 @@ export function createEmbeddedRunAuthController(params: {
     }
     if (!runtimeAuthHandled) {
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
-      if (shouldTraceProviderAuth(runtimeModel.provider)) {
-        params.log.info(
-          `[xai-auth] auth-controller set runtime api key directly: key=${summarizeProviderAuthKey(apiKeyInfo.apiKey)}`,
-        );
-      }
       params.setRuntimeAuthState(null);
     }
     params.setLastProfileId(apiKeyInfo.profileId);

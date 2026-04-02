@@ -13,6 +13,10 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
+const BUNDLED_EXTENSION_IDS = readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && entry.name !== "shared")
+  .map((entry) => entry.name)
+  .toSorted((left, right) => right.length - left.length);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -169,6 +173,13 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
 ];
 
+const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
+  {
+    path: bundledPluginFile("tlon", "src/config-schema.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/core["']/],
+  },
+];
+
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "acpx",
   "bluebubbles",
@@ -178,6 +189,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "diffs",
   "feishu",
   "google",
+  "imessage",
   "irc",
   "llm-task",
   "line",
@@ -361,6 +373,8 @@ function collectExtensionFiles(extensionId: string): string[] {
       normalizedFullPath.includes(".spec.") ||
       normalizedFullPath.includes(".fixture.") ||
       normalizedFullPath.includes(".snap") ||
+      normalizedFullPath.includes("test-support") ||
+      entryName === "test-support.ts" ||
       entryName === "runtime-api.ts",
   });
   extensionFilesCache.set(extensionId, files);
@@ -448,6 +462,32 @@ function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string
   }
 }
 
+function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): void {
+  const normalizedFile = file.replaceAll("\\", "/");
+  const currentExtensionId =
+    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
+  if (!currentExtensionId) {
+    return;
+  }
+  for (const specifier of imports) {
+    if (!specifier.startsWith("openclaw/plugin-sdk/")) {
+      continue;
+    }
+    const targetSubpath = specifier.slice("openclaw/plugin-sdk/".length);
+    const targetExtensionId =
+      BUNDLED_EXTENSION_IDS.find(
+        (extensionId) =>
+          targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
+      ) ?? null;
+    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
+      continue;
+    }
+    expect.fail(
+      `${file} should not import another bundled plugin facade, got ${specifier}. Promote shared helpers to a neutral plugin-sdk subpath instead.`,
+    );
+  }
+}
+
 describe("channel import guardrails", () => {
   it("keeps channel helper modules off their own SDK barrels", () => {
     for (const source of SAME_CHANNEL_SDK_GUARDS) {
@@ -469,13 +509,22 @@ describe("channel import guardrails", () => {
     }
   });
 
+  it("keeps channel config schemas off the broad core sdk barrel", () => {
+    for (const source of CHANNEL_CONFIG_SCHEMA_GUARDS) {
+      const text = readSource(source.path);
+      for (const pattern of source.forbiddenPatterns) {
+        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
+      }
+    }
+  });
+
   it("keeps bundled extension source files off root and compat plugin-sdk imports", () => {
     for (const file of collectExtensionSourceFiles()) {
-      const analysis = getSourceAnalysis(file);
-      expect(analysis.text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
+      const text = readSource(file);
+      expect(text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
         /["']openclaw\/plugin-sdk["']/,
       );
-      expect(analysis.text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
+      expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
         /["']openclaw\/plugin-sdk\/compat["']/,
       );
     }
@@ -484,8 +533,8 @@ describe("channel import guardrails", () => {
   it("keeps bundled extension source files off legacy core send-deps src imports", () => {
     const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
     for (const file of collectExtensionSourceFiles()) {
-      const analysis = getSourceAnalysis(file);
-      expect(analysis.text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
+      const text = readSource(file);
+      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
         legacyCoreSendDepsImport,
       );
     }
@@ -493,8 +542,8 @@ describe("channel import guardrails", () => {
 
   it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
-      const analysis = getSourceAnalysis(file);
-      expect(analysis.text, `${file} should not import plugin-private src paths`).not.toMatch(
+      const text = readSource(file);
+      expect(text, `${file} should not import plugin-private src paths`).not.toMatch(
         /["'][^"']*extensions\/[^/"']+\/src\//,
       );
     }
@@ -503,6 +552,12 @@ describe("channel import guardrails", () => {
   it("keeps extension production files off other extensions' private src imports", () => {
     for (const file of collectExtensionSourceFiles()) {
       expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+    }
+  });
+
+  it("keeps extension production files off other bundled plugin sdk facades", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      expectNoCrossPluginSdkFacadeImports(file, getSourceAnalysis(file).importSpecifiers);
     }
   });
 
@@ -533,11 +588,11 @@ describe("channel import guardrails", () => {
         ) {
           continue;
         }
-        const { text } = getSourceAnalysis(file);
+        const text = readSource(file);
         expect(
           text,
           `${normalized} should import ${extensionId} helpers via the local api barrel`,
-        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}["']`, "u"));
+        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}(?:["'/])`, "u"));
       }
     }
   });

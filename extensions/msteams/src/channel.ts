@@ -28,6 +28,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
@@ -328,6 +329,7 @@ function describeMSTeamsMessageTool({
           "react",
           "reactions",
           "search",
+          "member-info",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -379,6 +381,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             configured: account.configured,
           }),
       },
+      auth: msTeamsApprovalAuth,
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
@@ -622,6 +625,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     readOptionalTrimmedString(ctx.params, "filename") ??
                     readOptionalTrimmedString(ctx.params, "title"),
                   mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
                 });
                 return jsonActionResultWithDetails(
                   {
@@ -838,6 +842,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 return jsonMSTeamsOkActionResult("search", result);
               },
             });
+          }
+
+          if (ctx.action === "member-info") {
+            const userId = typeof ctx.params.userId === "string" ? ctx.params.userId.trim() : "";
+            if (!userId) {
+              return actionError("member-info requires a userId.");
+            }
+            const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });
+            return jsonMSTeamsOkActionResult("member-info", result);
           }
 
           // Return null to fall through to default handler

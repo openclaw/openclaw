@@ -102,6 +102,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
     sessions: MemoryQmdSessionSchema.optional(),
@@ -218,6 +219,12 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    headers: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
   })
   .catchall(z.unknown());
 
@@ -443,6 +450,8 @@ export const OpenClawSchema = z
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
+            overloadedProfileRotations: z.number().int().nonnegative().optional(),
+            overloadedBackoffMs: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),

@@ -129,6 +129,48 @@ With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
 
 This lets **multiple people** share one Gateway server while keeping their AI “brains” and data isolated.
 
+## Cross-agent QMD memory search
+
+If one agent should search another agent's QMD session transcripts, add
+extra collections under `agents.list[].memorySearch.qmd.extraCollections`.
+Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent
+should inherit the same shared transcript collections.
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/workspaces/main",
+      memorySearch: {
+        qmd: {
+          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
+        },
+      },
+    },
+    list: [
+      {
+        id: "main",
+        workspace: "~/workspaces/main",
+        memorySearch: {
+          qmd: {
+            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+          },
+        },
+      },
+      { id: "family", workspace: "~/workspaces/family" },
+    ],
+  },
+  memory: {
+    backend: "qmd",
+    qmd: { includeDefaultMemory: false },
+  },
+}
+```
+
+The extra collection path can be shared across agents, but the collection name
+stays explicit when the path is outside the agent workspace. Paths inside the
+workspace remain agent-scoped so each agent keeps its own transcript search set.
+
 ## One WhatsApp number, multiple people (DM split)
 
 You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "direct"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
@@ -550,3 +592,11 @@ If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.
+
+## Related
+
+- [Channel Routing](/channels/channel-routing) — how messages route to agents
+- [Sub-Agents](/tools/subagents) — spawning background agent runs
+- [ACP Agents](/tools/acp-agents) — running external coding harnesses
+- [Presence](/concepts/presence) — agent presence and availability
+- [Session](/concepts/session) — session isolation and routing

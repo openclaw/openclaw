@@ -144,18 +144,23 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
     fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
+      procps hostname curl git lsof openssl python3 python-is-python3
 
 # Optional runtime Bun installation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BUN=1 -f Dockerfile.custom .
 # This keeps Bun available in the final runtime image instead of build-stage only.
+# Install Bun under the non-root runtime user's home so `USER node` can execute it.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BUN" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates unzip && \
+      install -d -m 0755 /home/node && \
+      install -d -m 0755 /home/node/.bun && \
       set -eux; \
+      export HOME=/home/node; \
+      export BUN_INSTALL=/home/node/.bun; \
       for attempt in 1 2 3 4 5; do \
         if curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL https://bun.sh/install | bash; then \
           break; \
@@ -165,9 +170,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         fi; \
         sleep $((attempt * 2)); \
       done && \
-      ln -sf /root/.bun/bin/bun /usr/local/bin/bun; \
+      chown -R node:node /home/node/.bun && \
+      ln -sf /home/node/.bun/bin/bun /usr/local/bin/bun; \
     fi
-ENV PATH="/root/.bun/bin:${PATH}"
+ENV BUN_INSTALL=/home/node/.bun
+ENV PATH="/home/node/.bun/bin:${PATH}"
 
 RUN chown node:node /app
 

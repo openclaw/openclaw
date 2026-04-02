@@ -26,18 +26,6 @@ function ensureChangelogEntry(changelogPath: string, version: string): boolean {
   return true;
 }
 
-function stripWorkspaceOpenclawDevDependency(pkg: PackageJson): boolean {
-  const devDeps = pkg.devDependencies;
-  if (!devDeps || devDeps.openclaw !== "workspace:*") {
-    return false;
-  }
-  delete devDeps.openclaw;
-  if (Object.keys(devDeps).length === 0) {
-    delete pkg.devDependencies;
-  }
-  return true;
-}
-
 export function syncPluginVersions(rootDir = resolve(".")) {
   const rootPackagePath = join(rootDir, "package.json");
   const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
@@ -54,7 +42,6 @@ export function syncPluginVersions(rootDir = resolve(".")) {
   const updated: string[] = [];
   const changelogged: string[] = [];
   const skipped: string[] = [];
-  const strippedWorkspaceDevDeps: string[] = [];
 
   for (const dir of dirs) {
     const packagePath = join(extensionsDir, dir.name, "package.json");
@@ -75,13 +62,8 @@ export function syncPluginVersions(rootDir = resolve(".")) {
       changelogged.push(pkg.name);
     }
 
-    const removedWorkspaceDevDependency = stripWorkspaceOpenclawDevDependency(pkg);
-    if (removedWorkspaceDevDependency) {
-      strippedWorkspaceDevDeps.push(pkg.name);
-    }
-
     const versionChanged = pkg.version !== targetVersion;
-    if (!versionChanged && !removedWorkspaceDevDependency) {
+    if (!versionChanged) {
       skipped.push(pkg.name);
       continue;
     }
@@ -96,13 +78,12 @@ export function syncPluginVersions(rootDir = resolve(".")) {
     updated,
     changelogged,
     skipped,
-    strippedWorkspaceDevDeps,
   };
 }
 
 if (import.meta.main) {
   const summary = syncPluginVersions();
   console.log(
-    `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Stripped workspace devDeps: ${summary.strippedWorkspaceDevDeps.length}. Skipped: ${summary.skipped.length}.`,
+    `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Skipped: ${summary.skipped.length}.`,
   );
 }
