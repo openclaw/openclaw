@@ -192,4 +192,101 @@ describe("acp translator stop reason mapping", () => {
       vi.useRealTimers();
     }
   });
+
+  it("reconciles a missed final event on reconnect via agent.wait", async () => {
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:main";
+    let runId: string | undefined;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        runId = params?.idempotencyKey as string | undefined;
+        return {};
+      }
+      if (method === "agent.wait") {
+        return { status: "ok" };
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId,
+      sessionKey,
+      cwd: "/tmp",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+    const promptPromise = agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "hello" }],
+      _meta: {},
+    } as unknown as PromptRequest);
+
+    await vi.waitFor(() => {
+      expect(runId).toBeDefined();
+    });
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    agent.handleGatewayReconnect();
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(request).toHaveBeenCalledWith(
+      "agent.wait",
+      {
+        runId,
+        timeoutMs: 0,
+      },
+      { timeoutMs: null },
+    );
+  });
+
+  it("clears the disconnect deadline on reconnect when agent.wait reports the run still active", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = "session-1";
+      const sessionKey = "agent:main:main";
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          expect(params).toEqual({
+            runId: expect.any(String),
+            timeoutMs: 0,
+          });
+          return { status: "timeout" };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId,
+        sessionKey,
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+      const promptPromise = agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "hello" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      const settleSpy = vi.fn();
+      void promptPromise.then(
+        (value) => settleSpy({ kind: "resolve", value }),
+        (error) => settleSpy({ kind: "reject", error }),
+      );
+
+      await Promise.resolve();
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(settleSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

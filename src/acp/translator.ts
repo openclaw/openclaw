@@ -143,6 +143,11 @@ type SessionSnapshot = SessionPresentation & {
   usage?: SessionUsageSnapshot;
 };
 
+type AgentWaitResult = {
+  status?: "ok" | "error" | "timeout";
+  error?: string;
+};
+
 type GatewayTranscriptMessage = {
   role?: unknown;
   content?: unknown;
@@ -432,8 +437,8 @@ export class AcpGatewayAgent implements Agent {
   }
 
   handleGatewayReconnect(): void {
-    this.clearDisconnectTimer();
     this.log("gateway reconnected");
+    void this.reconcilePendingPromptsOnReconnect();
   }
 
   handleGatewayDisconnect(reason: string): void {
@@ -1019,6 +1024,47 @@ export class AcpGatewayAgent implements Agent {
       this.sessionStore.clearActiveRun(pending.sessionId);
     }
     this.pendingPrompts.clear();
+  }
+
+  private async reconcilePendingPromptsOnReconnect(): Promise<void> {
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+      return;
+    }
+
+    const pendingEntries = [...this.pendingPrompts.entries()];
+    for (const [sessionId, pending] of pendingEntries) {
+      if (this.pendingPrompts.get(sessionId) !== pending) {
+        continue;
+      }
+      let result: AgentWaitResult | undefined;
+      try {
+        result = await this.gateway.request<AgentWaitResult>(
+          "agent.wait",
+          {
+            runId: pending.idempotencyKey,
+            timeoutMs: 0,
+          },
+          { timeoutMs: null },
+        );
+      } catch (err) {
+        this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+        continue;
+      }
+
+      if (this.pendingPrompts.get(sessionId) !== pending) {
+        continue;
+      }
+      if (result?.status === "ok") {
+        await this.finishPrompt(sessionId, pending, "end_turn");
+        continue;
+      }
+      if (result?.status === "error") {
+        void this.finishPrompt(sessionId, pending, "end_turn");
+      }
+    }
+
+    this.clearDisconnectTimer();
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {
