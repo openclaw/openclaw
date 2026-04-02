@@ -70,7 +70,7 @@ function expectResolvedProviders(providers: unknown, expected: unknown[]) {
   expect(providers).toEqual(expected);
 }
 
-function expectLastLoadPluginsCall(params?: {
+function expectLastRuntimeRegistryLoad(params?: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
 }) {
@@ -127,7 +127,7 @@ function expectAutoEnabledProviderLoad(params: { rawConfig: unknown; autoEnabled
     config: params.rawConfig,
     env: process.env,
   });
-  expectBundledProviderLoad({ config: params.autoEnabledConfig });
+  expectProviderRuntimeRegistryLoad({ config: params.autoEnabledConfig });
 }
 
 function expectResolvedAllowlistState(params?: {
@@ -136,7 +136,7 @@ function expectResolvedAllowlistState(params?: {
   expectedEntries?: Record<string, { enabled?: boolean }>;
   expectedOnlyPluginIds?: readonly string[];
 }) {
-  expectLastLoadPluginsCall(
+  expectLastRuntimeRegistryLoad(
     params?.expectedOnlyPluginIds ? { onlyPluginIds: params.expectedOnlyPluginIds } : undefined,
   );
 
@@ -158,7 +158,7 @@ function expectOwningPluginIds(provider: string, expectedPluginIds?: readonly st
   expect(resolveOwningPluginIdsForProvider({ provider })).toEqual(expectedPluginIds);
 }
 
-function expectBundledProviderLoad(params?: { config?: unknown; env?: NodeJS.ProcessEnv }) {
+function expectProviderRuntimeRegistryLoad(params?: { config?: unknown; env?: NodeJS.ProcessEnv }) {
   expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ...(params?.config ? { config: params.config } : {}),
@@ -293,7 +293,7 @@ describe("resolvePluginProviders", () => {
       bundledProviderVitestCompat: true,
     });
 
-    expectLastLoadPluginsCall();
+    expectLastRuntimeRegistryLoad();
     expect(getLastResolvedPluginConfig()).toEqual(
       expect.objectContaining({
         plugins: expect.objectContaining({
@@ -317,7 +317,7 @@ describe("resolvePluginProviders", () => {
         onlyPluginIds: ["google"],
       });
 
-      expectLastLoadPluginsCall({
+      expectLastRuntimeRegistryLoad({
         onlyPluginIds: ["google"],
       });
       expect(getLastResolvedPluginConfig()).toEqual(
@@ -369,7 +369,7 @@ describe("resolvePluginProviders", () => {
       bundledProviderAllowlistCompat: true,
     });
 
-    expectLastLoadPluginsCall({
+    expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
     });
   });
