@@ -630,3 +630,56 @@ export function resolveTelegramApiBase(apiRoot?: string): string {
 
   return parsed.origin + parsed.pathname.replace(/\/+$/, "");
 }
+
+function isIpv4LoopbackOrPrivate(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (lower === "localhost") {
+    return true;
+  }
+  if (/^127(?:\.\d{1,3}){3}$/.test(lower)) {
+    return true;
+  }
+  const ipv4Match = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ipv4Match) {
+    return false;
+  }
+  const octets = ipv4Match.slice(1).map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+function isIpv6LoopbackOrPrivate(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd")
+  );
+}
+
+function isLoopbackOrPrivateTelegramApiHost(hostname: string): boolean {
+  return isIpv4LoopbackOrPrivate(hostname) || isIpv6LoopbackOrPrivate(hostname);
+}
+
+export function resolveTelegramHeartbeatApiBase(apiRoot?: string): string {
+  const apiBase = resolveTelegramApiBase(apiRoot);
+  const parsed = new URL(apiBase);
+  const hostname = parsed.hostname.toLowerCase();
+
+  if (hostname === TELEGRAM_API_HOSTNAME) {
+    return apiBase;
+  }
+
+  if (isLoopbackOrPrivateTelegramApiHost(hostname)) {
+    return apiBase;
+  }
+
+  throw new Error(
+    `Invalid Telegram apiRoot for heartbeat probing: ${apiBase}. ` +
+      "Heartbeat probes only support api.telegram.org or loopback/private-network custom Bot API hosts to avoid sending bot tokens to arbitrary endpoints.",
+  );
+}
