@@ -100,7 +100,7 @@ describe("TelegramExecApprovalHandler", () => {
             },
             {
               text: "Allow Always",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-always",
+              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 always",
               style: "primary",
             },
             {

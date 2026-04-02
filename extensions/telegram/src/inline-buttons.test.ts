@@ -100,6 +100,34 @@ describe("buildTelegramInteractiveButtons", () => {
       }),
     ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
   });
+
+  it("rewrites /approve allow-always callbacks to always so plugin IDs fit Telegram limits", () => {
+    const pluginApprovalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Always",
+                value: `/approve ${pluginApprovalId} allow-always`,
+                style: "primary",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow Always",
+          callback_data: `/approve ${pluginApprovalId} always`,
+          style: "primary",
+        },
+      ],
+    ]);
+  });
 });
 
 describe("resolveTelegramInlineButtons", () => {
