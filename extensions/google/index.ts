@@ -20,6 +20,7 @@ import {
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
+import { buildGeminiSpeechProvider } from "./speech-provider.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_GEMINI_CLI_PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -40,7 +41,6 @@ type GoogleOauthApiKeyCredential = {
 let googleGeminiCliProviderPromise: Promise<ProviderPlugin> | null = null;
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
-let googleSpeechProviderPromise: Promise<SpeechProviderPlugin> | null = null;
 
 type GoogleMediaUnderstandingProvider = MediaUnderstandingProvider & {
   describeImage: NonNullable<MediaUnderstandingProvider["describeImage"]>;
@@ -106,16 +106,6 @@ async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMed
     throw new Error("google media understanding provider missing required handlers");
   }
   return provider as GoogleMediaUnderstandingProvider;
-}
-
-
-async function loadGoogleSpeechProvider(): Promise<SpeechProviderPlugin> {
-  if (!googleSpeechProviderPromise) {
-    googleSpeechProviderPromise = import("./speech-provider.js").then((mod) =>
-      mod.buildGeminiSpeechProvider(),
-    );
-  }
-  return await googleSpeechProviderPromise;
 }
 
 function createLazyGoogleGeminiCliProvider(): ProviderPlugin {
@@ -216,36 +206,25 @@ function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvide
 
 
 function createLazyGoogleSpeechProvider(): SpeechProviderPlugin {
+  let cached: SpeechProviderPlugin | undefined;
+  const getProvider = () => {
+    if (!cached) {
+      cached = buildGeminiSpeechProvider();
+    }
+    return cached;
+  };
   return {
     id: "gemini",
     label: "Google Gemini TTS",
     aliases: ["google-tts"],
     autoSelectOrder: 25,
     models: ["gemini-2.5-flash-preview-tts"],
-    resolveConfig: async (ctx) => {
-      const provider = await loadGoogleSpeechProvider();
-      return provider.resolveConfig?.(ctx) ?? {};
-    },
-    resolveTalkConfig: async (ctx) => {
-      const provider = await loadGoogleSpeechProvider();
-      return provider.resolveTalkConfig?.(ctx) ?? {};
-    },
-    resolveTalkOverrides: async (ctx) => {
-      const provider = await loadGoogleSpeechProvider();
-      return provider.resolveTalkOverrides?.(ctx) ?? {};
-    },
-    listVoices: async (req) => {
-      const provider = await loadGoogleSpeechProvider();
-      return await provider.listVoices?.(req);
-    },
-    isConfigured: async (req) => {
-      const provider = await loadGoogleSpeechProvider();
-      return provider.isConfigured?.(req) ?? false;
-    },
-    synthesize: async (req) => {
-      const provider = await loadGoogleSpeechProvider();
-      return await provider.synthesize(req);
-    },
+    resolveConfig: (ctx) => getProvider().resolveConfig?.(ctx) ?? {},
+    resolveTalkConfig: (ctx) => getProvider().resolveTalkConfig?.(ctx) ?? {},
+    resolveTalkOverrides: (ctx) => getProvider().resolveTalkOverrides?.(ctx) ?? {},
+    listVoices: async (req) => await getProvider().listVoices?.(req),
+    isConfigured: (req) => getProvider().isConfigured?.(req) ?? false,
+    synthesize: async (req) => await getProvider().synthesize(req),
   };
 }
 
