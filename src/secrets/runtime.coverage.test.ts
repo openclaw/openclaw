@@ -3,6 +3,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
+import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
@@ -113,9 +114,7 @@ function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string)
 }
 
 function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
-  return entry.id === "tools.web.x_search.apiKey"
-    ? "plugins.entries.xai.config.webSearch.apiKey"
-    : entry.pathPattern;
+  return canonicalizeSecretTargetCoverageId(entry.id);
 }
 
 function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
