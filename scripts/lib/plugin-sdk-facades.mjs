@@ -221,6 +221,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       DEFAULT_OPENCLAW_BROWSER_COLOR: "./browser-config.js",
       DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "./browser-config.js",
       DEFAULT_UPLOAD_DIR: "./browser-config.js",
+      closeTrackedBrowserTabsForSessions: "./browser-maintenance.js",
+      movePathToTrash: "./browser-maintenance.js",
       redactCdpUrl: "./browser-config.js",
       resolveBrowserConfig: "./browser-config.js",
       resolveBrowserControlAuth: "./browser-config.js",

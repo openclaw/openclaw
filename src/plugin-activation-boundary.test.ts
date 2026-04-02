@@ -34,6 +34,7 @@ describe("plugin activation boundary", () => {
         DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
         DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
         DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_UPLOAD_DIR;
+        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-runtime.js").closeTrackedBrowserTabsForSessions;
         redactCdpUrl: typeof import("./plugin-sdk/browser-runtime.js").redactCdpUrl;
         resolveBrowserConfig: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserConfig;
         resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserControlAuth;
@@ -77,6 +78,7 @@ describe("plugin activation boundary", () => {
       DEFAULT_OPENCLAW_BROWSER_COLOR: module.DEFAULT_OPENCLAW_BROWSER_COLOR,
       DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: module.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
       DEFAULT_UPLOAD_DIR: module.DEFAULT_UPLOAD_DIR,
+      closeTrackedBrowserTabsForSessions: module.closeTrackedBrowserTabsForSessions,
       redactCdpUrl: module.redactCdpUrl,
       resolveBrowserConfig: module.resolveBrowserConfig,
       resolveBrowserControlAuth: module.resolveBrowserControlAuth,
@@ -143,9 +145,16 @@ describe("plugin activation boundary", () => {
         cdpHost: "127.0.0.1",
       }),
     );
-    expect(browser.redactCdpUrl("wss://user:secret@example.com/devtools/browser/123")).not.toContain(
-      "secret",
-    );
+    expect(
+      browser.redactCdpUrl("wss://user:secret@example.com/devtools/browser/123"),
+    ).not.toContain("secret");
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps browser cleanup helpers cold when browser is disabled", async () => {
+    const browser = await importBrowserHelpers();
+
+    await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
