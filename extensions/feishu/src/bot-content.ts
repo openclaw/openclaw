@@ -228,11 +228,21 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   return lines.join("\n");
 }
 
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
+export function checkBotMentioned(
+  event: FeishuMessageLike,
+  botOpenId?: string,
+  ignoreAtAll?: boolean,
+): boolean {
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
+  // Check for @所有人 (broadcast) mention
+  const hasAtAll = (event.message.content ?? "").includes("@_all");
+  if (hasAtAll) {
+    // When ignoreAtAll is true, @所有人 does not count as a bot mention
+    if (ignoreAtAll) {
+      return false;
+    }
     return true;
   }
   const mentions = event.message.mentions ?? [];
