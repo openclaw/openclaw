@@ -210,6 +210,19 @@ describe("resolveMattermostEffectiveReplyToId", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("uses threadRootId for DM Thread messages (prioritize thread over kind===direct)", () => {
+    // When a DM opens a thread, threadRootId should take precedence so replies go
+    // to the existing thread instead of creating a new one.
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+        threadRootId: "root-456",
+      }),
+    ).toBe("root-456");
+  });
 });
 
 describe("resolveMattermostThreadSessionContext", () => {

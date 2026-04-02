@@ -175,6 +175,9 @@ export function resolveMattermostEffectiveReplyToId(params: {
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
+  // Check threadRootId first — a DM Thread message should reply to the thread,
+  // not go to a new thread. Only fall through to kind===direct logic when there
+  // is no threadRootId.
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
