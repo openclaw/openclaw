@@ -1,15 +1,21 @@
-import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
-
-type FacadeEntry = PluginSdkFacadeTypeMap["xai"];
-type FacadeModule = FacadeEntry["module"];
-
-function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
-    dirName: "xai",
-    artifactBasename: "api.js",
-  });
+export function normalizeXaiModelId(id: string): string {
+  if (id === "grok-4-fast-reasoning") {
+    return "grok-4-fast";
+  }
+  if (id === "grok-4-1-fast-reasoning") {
+    return "grok-4-1-fast";
+  }
+  if (id === "grok-4.20-experimental-beta-0304-reasoning") {
+    return "grok-4.20-beta-latest-reasoning";
+  }
+  if (id === "grok-4.20-experimental-beta-0304-non-reasoning") {
+    return "grok-4.20-beta-latest-non-reasoning";
+  }
+  if (id === "grok-4.20-reasoning") {
+    return "grok-4.20-beta-latest-reasoning";
+  }
+  if (id === "grok-4.20-non-reasoning") {
+    return "grok-4.20-beta-latest-non-reasoning";
+  }
+  return id;
 }
-
-export const normalizeXaiModelId: FacadeModule["normalizeXaiModelId"] = ((...args) =>
-  loadFacadeModule()["normalizeXaiModelId"](...args)) as FacadeModule["normalizeXaiModelId"];

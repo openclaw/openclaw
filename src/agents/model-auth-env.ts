@@ -1,6 +1,6 @@
 import { getEnvApiKey } from "@mariozechner/pi-ai";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { hasAnthropicVertexAvailableAuth } from "../plugin-sdk/anthropic-vertex.js";
+import { hasAnthropicVertexAvailableAuth } from "../plugin-sdk/anthropic-vertex-auth-presence.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
