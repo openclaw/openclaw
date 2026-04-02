@@ -28,6 +28,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -695,7 +696,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
-    const key = requestedKey ?? buildDashboardSessionKey(agentId);
+    const loweredRequestedKey = requestedKey?.toLowerCase();
+    const key = requestedKey
+      ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
+        ? loweredRequestedKey
+        : toAgentStoreSessionKey({
+            agentId,
+            requestKey: requestedKey,
+            mainKey: cfg.session?.mainKey,
+          })
+      : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
     const created = await updateSessionStore(target.storePath, async (store) => {

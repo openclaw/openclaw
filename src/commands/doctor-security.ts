@@ -6,15 +6,8 @@ import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
-import {
-  loadExecApprovals,
-  maxAsk,
-  minSecurity,
-  resolveExecApprovalsFromFile,
-  type ExecApprovalsFile,
-  type ExecAsk,
-  type ExecSecurity,
-} from "../infra/exec-approvals.js";
+import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
+import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
@@ -79,86 +72,59 @@ function execAskRank(value: ExecAsk): number {
   }
 }
 
-function resolveHostExecPolicy(params: {
-  approvals: ExecApprovalsFile;
-  execConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
-  agentId?: string;
-}): {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  securitySource: string;
-  askSource: string;
-} {
-  const basePath = "~/.openclaw/exec-approvals.json";
-  const agentEntry =
-    params.agentId && params.approvals.agents && params.approvals.agents[params.agentId]
-      ? params.approvals.agents[params.agentId]
-      : undefined;
-  const defaults = params.approvals.defaults;
-  const configuredSecurity = params.execConfig?.security ?? "allowlist";
-  const configuredAsk = params.execConfig?.ask ?? "on-miss";
-  const resolved = resolveExecApprovalsFromFile({
-    file: params.approvals,
-    agentId: params.agentId,
-    overrides: {
-      security: configuredSecurity,
-      ask: configuredAsk,
-    },
-  });
-  const security = minSecurity(configuredSecurity, resolved.agent.security);
-  const ask = resolved.agent.ask === "off" ? "off" : maxAsk(configuredAsk, resolved.agent.ask);
-  return {
-    security,
-    ask,
-    securitySource: agentEntry?.security
-      ? `${basePath} agents.${params.agentId}.security`
-      : defaults?.security
-        ? `${basePath} defaults.security`
-        : "caller tool policy fallback",
-    askSource: agentEntry?.ask
-      ? `${basePath} agents.${params.agentId}.ask`
-      : defaults?.ask
-        ? `${basePath} defaults.ask`
-        : "caller tool policy fallback",
-  };
-}
-
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const approvals = loadExecApprovals();
+  const defaultRequestedSecuritySource = "OpenClaw default (full)";
+  const defaultRequestedAskSource = "OpenClaw default (off)";
 
   const maybeWarn = (params: {
     scopeLabel: string;
-    execConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    scopeExecConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    globalExecConfig?: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
     agentId?: string;
   }) => {
-    const execConfig = params.execConfig;
-    if (!execConfig || (!execConfig.security && !execConfig.ask)) {
+    const scopeExecConfig = params.scopeExecConfig;
+    const globalExecConfig = params.globalExecConfig;
+    if (
+      !scopeExecConfig?.security &&
+      !scopeExecConfig?.ask &&
+      !globalExecConfig?.security &&
+      !globalExecConfig?.ask
+    ) {
       return;
     }
-    const host = resolveHostExecPolicy({
+    const snapshot = resolveExecPolicyScopeSnapshot({
       approvals,
-      execConfig,
+      scopeExecConfig,
+      globalExecConfig,
+      configPath:
+        params.scopeLabel === "tools.exec"
+          ? "tools.exec"
+          : `agents.list.${params.agentId}.tools.exec`,
+      scopeLabel: params.scopeLabel,
       agentId: params.agentId,
     });
+    const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
+    const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
     const securityConflict =
-      execConfig.security !== undefined &&
-      execSecurityRank(execConfig.security) > execSecurityRank(host.security);
+      securityConfigured &&
+      execSecurityRank(snapshot.security.requested) > execSecurityRank(snapshot.security.effective);
     const askConflict =
-      execConfig.ask !== undefined && execAskRank(execConfig.ask) < execAskRank(host.ask);
+      askConfigured && execAskRank(snapshot.ask.requested) < execAskRank(snapshot.ask.effective);
     if (!securityConflict && !askConflict) {
       return;
     }
 
     const configParts: string[] = [];
     const hostParts: string[] = [];
-    if (execConfig.security !== undefined) {
-      configParts.push(`security="${execConfig.security}"`);
-      hostParts.push(`${host.securitySource}="${host.security}"`);
+    if (securityConflict) {
+      configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+      hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
     }
-    if (execConfig.ask !== undefined) {
-      configParts.push(`ask="${execConfig.ask}"`);
-      hostParts.push(`${host.askSource}="${host.ask}"`);
+    if (askConflict) {
+      configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
+      hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
     }
 
     warnings.push(
@@ -166,7 +132,7 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
         `- ${params.scopeLabel} is broader than the host exec policy.`,
         `  Config: ${configParts.join(", ")}`,
         `  Host: ${hostParts.join(", ")}`,
-        `  Effective host exec stays security="${host.security}" ask="${host.ask}" because the stricter side wins.`,
+        `  Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
         "  Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
         `  Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
       ].join("\n"),
@@ -175,13 +141,14 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
 
   maybeWarn({
     scopeLabel: "tools.exec",
-    execConfig: cfg.tools?.exec,
+    scopeExecConfig: cfg.tools?.exec,
   });
 
   for (const agent of cfg.agents?.list ?? []) {
     maybeWarn({
       scopeLabel: `agents.list.${agent.id}.tools.exec`,
-      execConfig: agent.tools?.exec,
+      scopeExecConfig: agent.tools?.exec,
+      globalExecConfig: cfg.tools?.exec,
       agentId: agent.id,
     });
   }

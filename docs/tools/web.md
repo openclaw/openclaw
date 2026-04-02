@@ -193,8 +193,9 @@ Provider-specific config (API keys, base URLs, modes) lives under
 `plugins.entries.<plugin>.config.webSearch.*`. See the provider pages for
 examples.
 
-For `x_search`, configure `tools.web.x_search.*` directly. It uses the same
-`XAI_API_KEY` fallback as Grok web search.
+For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
+same `XAI_API_KEY` fallback as Grok web search.
+Legacy `tools.web.x_search.*` config is auto-migrated by `openclaw doctor --fix`.
 When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
 OpenClaw can also offer optional `x_search` setup with the same key.
 This is a separate follow-up step inside the Grok path, not a separate top-level
@@ -280,16 +281,22 @@ tool on the request that serves this tool call.
 
 ```json5
 {
-  tools: {
-    web: {
-      x_search: {
-        enabled: true,
-        apiKey: "xai-...", // optional if XAI_API_KEY is set
-        model: "grok-4-1-fast-non-reasoning",
-        inlineCitations: false,
-        maxTurns: 2,
-        timeoutSeconds: 30,
-        cacheTtlMinutes: 15,
+  plugins: {
+    entries: {
+      xai: {
+        config: {
+          xSearch: {
+            enabled: true,
+            model: "grok-4-1-fast-non-reasoning",
+            inlineCitations: false,
+            maxTurns: 2,
+            timeoutSeconds: 30,
+            cacheTtlMinutes: 15,
+          },
+          webSearch: {
+            apiKey: "xai-...", // optional if XAI_API_KEY is set
+          },
+        },
       },
     },
   },

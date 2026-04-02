@@ -14,6 +14,12 @@ commands on a real host (`gateway` or `node`). Think of it like a safety interlo
 commands are allowed only when policy + allowlist + (optional) user approval all agree.
 Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
 Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
+Host exec also uses the local approvals state on that machine. A host-local
+`ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
+session or config defaults request `ask: "on-miss"`.
+Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
+`openclaw approvals get --node <id|name|ip>` to inspect the requested policy,
+host policy sources, and the effective result.
 
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).
@@ -85,6 +91,68 @@ Example schema:
 }
 ```
 
+## No-approval "YOLO" mode
+
+If you want host exec to run without approval prompts, you must open **both** policy layers:
+
+- requested exec policy in OpenClaw config (`tools.exec.*`)
+- host-local approvals policy in `~/.openclaw/exec-approvals.json`
+
+This is now the default host behavior unless you tighten it explicitly:
+
+- `tools.exec.security`: `full` on `gateway`/`node`
+- `tools.exec.ask`: `off`
+- host `askFallback`: `full`
+
+If you want a more conservative setup, tighten either layer back to `allowlist` / `on-miss`
+or `deny`.
+
+Persistent gateway-host "never prompt" setup:
+
+```bash
+openclaw config set tools.exec.host gateway
+openclaw config set tools.exec.security full
+openclaw config set tools.exec.ask off
+openclaw gateway restart
+```
+
+Then set the host approvals file to match:
+
+```bash
+openclaw approvals set --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+For a node host, apply the same approvals file on that node instead:
+
+```bash
+openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+Session-only shortcut:
+
+- `/exec security=full ask=off` changes only the current session.
+- `/elevated full` is a break-glass shortcut that also skips exec approvals for that session.
+
+If the host approvals file stays stricter than config, the stricter host policy still wins.
+
 ## Policy knobs
 
 ### Security (`exec.security`)
@@ -98,6 +166,7 @@ Example schema:
 - **off**: never prompt.
 - **on-miss**: prompt only when allowlist does not match.
 - **always**: prompt on every command.
+- `allow-always` durable trust does not suppress prompts when effective ask mode is `always`
 
 ### Ask fallback (`askFallback`)
 
@@ -132,6 +201,7 @@ Allowlists are **per agent**. If multiple agents exist, switch which agent youâ€
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
 Patterns should resolve to **binary paths** (basename-only entries are ignored).
 Legacy `agents.default` entries are migrated to `agents.main` on load.
+Shell chains such as `echo ok && pwd` still need every top-level segment to satisfy allowlist rules.
 
 Examples:
 

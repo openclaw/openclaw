@@ -1,11 +1,13 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
+import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
   extraParamsOverride?: Parameters<typeof applyExtraParamsToAgent>[4];
   modelId: string;
+  model?: Parameters<typeof applyExtraParamsToAgent>[8];
   provider: string;
 }) {
   const agent: { streamFn?: StreamFn } = {};
@@ -16,6 +18,10 @@ function applyAndExpectWrapped(params: {
     params.provider,
     params.modelId,
     params.extraParamsOverride,
+    undefined,
+    undefined,
+    undefined,
+    params.model,
   );
 
   expect(agent.streamFn).toBeDefined();
@@ -143,5 +149,69 @@ describe("cacheRetention default behavior", () => {
       modelId: "claude-3-sonnet",
       provider: "anthropic",
     });
+  });
+
+  it("respects cacheRetention for custom provider with anthropic-messages API", () => {
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "litellm/claude-sonnet-4-6": {
+                params: {
+                  cacheRetention: "long" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+      modelId: "claude-sonnet-4-6",
+      model: { api: "anthropic-messages" } as Parameters<typeof applyExtraParamsToAgent>[8],
+      provider: "litellm",
+    });
+  });
+
+  it("passes cacheRetention 'long' through for custom anthropic-messages provider", () => {
+    expect(resolveCacheRetention({ cacheRetention: "long" }, "litellm", "anthropic-messages")).toBe(
+      "long",
+    );
+  });
+
+  it("does not default to caching for custom provider without explicit config", () => {
+    expect(resolveCacheRetention(undefined, "litellm", "anthropic-messages")).toBeUndefined();
+  });
+
+  it("passes cacheRetention 'none' through for custom anthropic-messages provider", () => {
+    expect(resolveCacheRetention({ cacheRetention: "none" }, "litellm", "anthropic-messages")).toBe(
+      "none",
+    );
+  });
+
+  it("respects cacheRetention 'short' for custom anthropic-messages provider", () => {
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "litellm/claude-opus-4-6": {
+                params: {
+                  cacheRetention: "short" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+      modelId: "claude-opus-4-6",
+      model: { api: "anthropic-messages" } as Parameters<typeof applyExtraParamsToAgent>[8],
+      provider: "litellm",
+    });
+  });
+
+  it("passes cacheRetention 'short' through for custom anthropic-messages provider", () => {
+    expect(
+      resolveCacheRetention({ cacheRetention: "short" }, "litellm", "anthropic-messages"),
+    ).toBe("short");
   });
 });
