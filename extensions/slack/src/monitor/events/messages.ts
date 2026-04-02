@@ -9,12 +9,23 @@ import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
-function isSelfAuthoredSlackMessageEvent(message: SlackMessageEvent, botUserId: string): boolean {
-  if (!botUserId) {
+function isSelfAuthoredSlackMessageEvent(
+  message: SlackMessageEvent,
+  botUserId: string,
+  botId: string,
+): boolean {
+  if (!botUserId && !botId) {
     return false;
   }
   if (message.subtype !== "message_changed") {
-    return message.user === botUserId;
+    // Check both user ID (U-prefix) and bot ID (B-prefix) since bot_message
+    // subtypes carry bot_id without a user field.  With ignoreSelf disabled
+    // on Bolt, this is the only gate preventing message loops from the bot's
+    // own outbound messages.
+    return (
+      (Boolean(botUserId) && message.user === botUserId) ||
+      (Boolean(botId) && message.bot_id === botId)
+    );
   }
   const changed = message as SlackMessageChangedEvent & {
     message?: { edited?: { user?: string } };
@@ -37,7 +48,7 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
-      if (isSelfAuthoredSlackMessageEvent(message, ctx.botUserId)) {
+      if (isSelfAuthoredSlackMessageEvent(message, ctx.botUserId, ctx.botId)) {
         return;
       }
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);

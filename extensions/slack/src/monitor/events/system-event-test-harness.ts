@@ -10,6 +10,8 @@ export type SlackSystemEventTestOverrides = {
   allowFrom?: string[];
   channelType?: "im" | "channel";
   channelUsers?: string[];
+  botUserId?: string;
+  botId?: string;
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
@@ -23,6 +25,8 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
   const ctx = {
     app,
     runtime: { error: () => {} },
+    botUserId: overrides?.botUserId ?? "U_BOT",
+    botId: overrides?.botId ?? "B_BOT",
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,

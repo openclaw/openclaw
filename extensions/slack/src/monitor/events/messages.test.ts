@@ -193,6 +193,61 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
   });
 
+  it("drops bot_message events whose bot_id matches the app bot (self-filter)", async () => {
+    // With ignoreSelf disabled on Bolt, bot_message subtypes carry bot_id
+    // without a user field.  The self-filter must check bot_id to prevent
+    // message loops from the bot's own outbound messages.
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open", botId: "B_BOT" },
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        channel: "D1",
+        bot_id: "B_BOT",
+        text: "bot reply",
+        ts: "200.100",
+      },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("allows bot_message events from a different bot", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open", botId: "B_BOT" },
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        channel: "D1",
+        bot_id: "B_OTHER",
+        text: "external bot reply",
+        ts: "200.200",
+      },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops self-authored regular messages by user ID", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open", botUserId: "U_BOT" },
+      event: {
+        type: "message",
+        channel: "D1",
+        user: "U_BOT",
+        text: "self message",
+        ts: "200.300",
+      },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
   it("passes regular message events to the message handler", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "message",
