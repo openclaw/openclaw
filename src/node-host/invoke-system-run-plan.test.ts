@@ -839,6 +839,24 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
+  it("allows pnpm dlx package binaries with interpreter-like data tails", () => {
+    withFakeRuntimeBin({
+      binName: "pnpm",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-data-tail-"));
+        try {
+          fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
+          expectApprovalPlanWithoutMutableOperand(
+            ["pnpm", "dlx", "cowsay", "tsx", "./run.ts"],
+            tmp,
+          );
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
   it("treats -- as the end of pnpm dlx option parsing", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],

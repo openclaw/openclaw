@@ -898,29 +898,19 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
       idx += 1;
       continue;
     }
-    return pnpmDlxTailMayNeedStableBinding(argv.slice(idx + 1), cwd);
+    return true;
   }
 
   return true;
 }
 
 function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined): boolean {
-  for (let idx = 0; idx < argv.length; idx += 1) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token || token === "--") {
-      continue;
-    }
-    const candidateArgv = argv.slice(idx);
-    const snapshot = resolveMutableFileOperandSnapshotSync({
-      argv: candidateArgv,
-      cwd,
-      shellCommand: null,
-    });
-    if (snapshot.ok && snapshot.snapshot) {
-      return true;
-    }
-  }
-  return false;
+  const snapshot = resolveMutableFileOperandSnapshotSync({
+    argv,
+    cwd,
+    shellCommand: null,
+  });
+  return snapshot.ok && snapshot.snapshot !== null;
 }
 
 export function resolveMutableFileOperandSnapshotSync(params: {
