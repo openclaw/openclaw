@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Diagnostics/call-trace: add per-call LLM and tool tracing under `diagnostics.callTrace` — when enabled, emits one `model.call` JSONL record per LLM API call (tokens, cost, duration of that exact call) and optionally one `tool.call` record per internal tool execution (duration, error status). Controlled by `diagnostics.callTrace.{ enabled, logLlmCalls, logToolCalls, dir, retainDays }`. Implemented via `message_start/message_end` hooks in the subscriber (no `streamFn` wrapping — zero risk to stream internals). JSONL files land in `calls/YYYY-MM-DD.jsonl` and `tools/YYYY-MM-DD.jsonl` under the configured dir (default: `~/.openclaw/call-traces/`).
+- Diagnostics/call-trace: add per-call LLM and tool tracing under `diagnostics.callTrace` — when enabled, emits one `model.call` JSONL record per LLM API call (tokens, cost, duration of that exact call) and optionally one `tool.call` record per internal tool execution (duration, error status). Controlled by `diagnostics.callTrace.{ enabled, logLlmCalls, logToolCalls, dir, retainDays }`. Implemented via `message_start/message_end` hooks in the subscriber (no `streamFn` wrapping — zero risk to stream internals). JSONL files land in a single `YYYY-MM-DD.jsonl` per day under the configured dir (default: `~/.openclaw/call-traces/`); the `type` field distinguishes `model.call` from `tool.call` records.
 
 ## 2026.3.31
 
