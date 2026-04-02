@@ -2,6 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
   clearPendingQueueItemsForRun,
@@ -159,6 +160,33 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   if (!defaults?.mainSessionKey) {
     return;
   }
+
+  // Detect if user has already selected a specific session (not an alias like "main")
+  // If they have, we should NOT override their choice with the defaults
+  const parsedCurrent = parseAgentSessionKey(host.sessionKey);
+  const mainKey = defaults.mainKey?.trim() || "main";
+  const isUserSelectedSession =
+    parsedCurrent &&
+    host.sessionKey !== "main" &&
+    host.sessionKey !== mainKey &&
+    host.sessionKey !== defaults.mainSessionKey;
+
+  if (isUserSelectedSession) {
+    // User has selected a specific session; preserve their choice
+    // Only normalize lastActiveSessionKey, don't override current sessionKey
+    const resolvedLastActiveSessionKey = normalizeSessionKeyForDefaults(
+      host.settings.lastActiveSessionKey,
+      defaults,
+    );
+    if (resolvedLastActiveSessionKey !== host.settings.lastActiveSessionKey) {
+      applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+        ...host.settings,
+        lastActiveSessionKey: resolvedLastActiveSessionKey,
+      });
+    }
+    return; // Keep user's session selection
+  }
+
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
     host.settings.sessionKey,

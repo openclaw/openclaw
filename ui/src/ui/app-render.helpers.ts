@@ -76,8 +76,8 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
         }
         event.preventDefault();
         if (tab === "chat") {
-          const mainSessionKey = resolveSidebarChatSessionKey(state);
-          if (state.sessionKey !== mainSessionKey) {
+          if (!state.sessionKey) {
+            const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
             void state.loadAssistantIdentity();
           }
@@ -156,7 +156,13 @@ export function renderChatSessionSelect(state: AppViewState) {
                   group.options,
                   (entry) => entry.key,
                   (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>${entry.label}</option>`,
+                    html`<option
+                      value=${entry.key}
+                      title=${entry.title}
+                      ?selected=${entry.key === state.sessionKey}
+                    >
+                      ${entry.label}
+                    </option>`,
                 )}
               </optgroup>`,
           )}
@@ -428,7 +434,13 @@ export function renderChatMobileToggle(state: AppViewState) {
                   <optgroup label=${group.label}>
                     ${group.options.map(
                       (opt) => html`
-                        <option value=${opt.key} title=${opt.title}>${opt.label}</option>
+                        <option
+                          value=${opt.key}
+                          title=${opt.title}
+                          ?selected=${opt.key === state.sessionKey}
+                        >
+                          ${opt.label}
+                        </option>
                       `,
                     )}
                   </optgroup>
