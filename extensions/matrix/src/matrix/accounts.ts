@@ -1,13 +1,16 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../account-selection.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
-import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
-import { resolveMatrixConfigForAccount } from "./client.js";
+import {
+  findMatrixAccountConfig,
+  resolveMatrixAccountConfig,
+  resolveMatrixBaseConfig,
+} from "./account-config.js";
+import { resolveMatrixConfigForAccount } from "./resolved-config.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
 
 export type ResolvedMatrixAccount = {
@@ -95,7 +98,7 @@ export function resolveMatrixAccount(params: {
   const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
-  const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
+  const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId, env });
   const explicitAuthConfig =
     accountId === DEFAULT_ACCOUNT_ID
       ? base
@@ -130,18 +133,4 @@ export function resolveMatrixAccount(params: {
   };
 }
 
-export function resolveMatrixAccountConfig(params: {
-  cfg: CoreConfig;
-  accountId?: string | null;
-}): MatrixConfig {
-  const accountId = normalizeAccountId(params.accountId);
-  return resolveMergedAccountConfig<MatrixConfig>({
-    channelConfig: resolveMatrixBaseConfig(params.cfg),
-    accounts: params.cfg.channels?.matrix?.accounts as
-      | Record<string, Partial<MatrixConfig>>
-      | undefined,
-    accountId,
-    normalizeAccountId,
-    nestedObjectKeys: ["dm", "actions"],
-  });
-}
+export { resolveMatrixAccountConfig } from "./account-config.js";

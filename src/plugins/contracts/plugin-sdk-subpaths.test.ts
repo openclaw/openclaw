@@ -22,8 +22,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
-import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
   BaseProbeResult,
   BaseTokenResolution,
@@ -36,14 +35,15 @@ import type {
   ChannelStatusIssue,
   ChannelThreadingContext,
   ChannelThreadingToolContext,
-} from "../channels/plugins/types.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi } from "../plugins/types.js";
+} from "../../channels/plugins/types.js";
 import type {
   ChannelMessageActionContext as SharedChannelMessageActionContext,
   OpenClawPluginApi as SharedOpenClawPluginApi,
   PluginRuntime as SharedPluginRuntime,
-} from "./channel-plugin-common.js";
+} from "../../plugin-sdk/channel-plugin-common.js";
+import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
+import type { PluginRuntime } from "../runtime/types.js";
+import type { OpenClawPluginApi } from "../types.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");

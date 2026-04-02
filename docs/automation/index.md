@@ -51,19 +51,18 @@ The most effective setups combine multiple mechanisms:
 3. **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
 4. **Standing Orders** give the agent persistent context ("always check the project board before replying").
 5. **Background Tasks** automatically track all detached work so you can inspect and audit it.
-6. **ClawFlow** groups related detached tasks into a single flow when the work needs a higher-level job view.
 
 See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for a detailed comparison of the two scheduling mechanisms.
 
-## ClawFlow
+## Older ClawFlow references
 
-ClawFlow sits above [Background Tasks](/automation/tasks). Tasks still track the detached runs, while ClawFlow groups related task runs into one job that you can inspect or cancel from the CLI.
+Older release notes and docs may mention `ClawFlow` or `openclaw flows`, but the current CLI surface in this repo is `openclaw tasks`.
 
-See [ClawFlow](/automation/clawflow) for the flow overview and [CLI: flows](/cli/flows) for the command surface.
+See [Background Tasks](/automation/tasks) for the supported task ledger commands, plus [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes.
 
 ## Related
 
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — detailed comparison guide
-- [ClawFlow](/automation/clawflow) — flow-level orchestration above tasks
+- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
 - [Troubleshooting](/automation/troubleshooting) — debugging automation issues
 - [Configuration Reference](/gateway/configuration-reference) — all config keys

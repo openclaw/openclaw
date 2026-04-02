@@ -210,6 +210,17 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser-runtime",
     source: pluginSource("browser", "runtime-api.js"),
+    directExports: {
+      DEFAULT_AI_SNAPSHOT_MAX_CHARS: "./browser-config.js",
+      DEFAULT_BROWSER_EVALUATE_ENABLED: "./browser-config.js",
+      DEFAULT_OPENCLAW_BROWSER_COLOR: "./browser-config.js",
+      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "./browser-config.js",
+      DEFAULT_UPLOAD_DIR: "./browser-config.js",
+      redactCdpUrl: "./browser-config.js",
+      resolveBrowserConfig: "./browser-config.js",
+      resolveBrowserControlAuth: "./browser-config.js",
+      resolveProfile: "./browser-config.js",
+    },
     exports: [
       "BrowserBridge",
       "BrowserCreateProfileResult",
@@ -1427,6 +1438,7 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
     ? resolveFacadeSourceExportKinds(params.repoRoot, entry.source)
     : new Map();
   const explicitFunctionExports = new Set(entry.functionExports ?? []);
+  const directExportSources = entry.directExports ?? {};
   const exportNames = entry.exportAll
     ? Array.from(sourceExportKinds.keys()).toSorted((left, right) => left.localeCompare(right))
     : entry.runtimeApiPreExportsPath
@@ -1440,6 +1452,10 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
   let needsLazyObjectHelper = false;
   for (const exportName of exportNames ?? []) {
     if (explicitTypeExports.has(exportName)) {
+      continue;
+    }
+    if (directExportSources[exportName]) {
+      valueExports.push(exportName);
       continue;
     }
     const kind = sourceExportKinds.get(exportName);
@@ -1479,6 +1495,25 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       );
     }
   }
+  const directExportsBySource = new Map();
+  for (const exportName of valueExports) {
+    const sourcePath = directExportSources[exportName];
+    if (!sourcePath) {
+      continue;
+    }
+    const exportsForSource = directExportsBySource.get(sourcePath) ?? [];
+    exportsForSource.push(exportName);
+    directExportsBySource.set(sourcePath, exportsForSource);
+  }
+  if (directExportsBySource.size > 0) {
+    for (const [sourcePath, exportNamesForSource] of [...directExportsBySource.entries()].toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      lines.push(
+        `export { ${exportNamesForSource.toSorted((left, right) => left.localeCompare(right)).join(", ")} } from ${JSON.stringify(sourcePath)};`,
+      );
+    }
+  }
   if (valueExports.length) {
     const runtimeImports = ["loadBundledPluginPublicSurfaceModuleSync"];
     if (needsLazyArrayHelper) {
@@ -1510,6 +1545,9 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       listFacadeEntrySourcePaths(entry).map((sourcePath, index) => [sourcePath, index]),
     );
     for (const exportName of valueExports) {
+      if (directExportSources[exportName]) {
+        continue;
+      }
       const kind = sourceExportKinds.get(exportName);
       const isExplicitFunctionExport = explicitFunctionExports.has(exportName);
       const sourcePath = entry.exportSources?.[exportName] ?? entry.source;

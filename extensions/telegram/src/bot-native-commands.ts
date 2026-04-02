@@ -15,13 +15,13 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
   TELEGRAM_COMMAND_NAME_PATTERN,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/telegram-command-config";
 import type {
   ReplyToMode,
   TelegramAccountConfig,
@@ -956,6 +956,7 @@ export const registerTelegramNativeCommands = ({
           senderId,
           channel: "telegram",
           isAuthorizedSender: commandAuthorized,
+          sessionKey: route.sessionKey,
           commandBody,
           config: runtimeCfg,
           from,
