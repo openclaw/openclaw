@@ -94,6 +94,7 @@ function expectPendingApprovalText(
     nodeId?: string;
     interactive?: boolean;
     allowedDecisions?: string;
+    cwdText?: string;
   },
 ) {
   expect(result.details.status).toBe("approval-pending");
@@ -107,7 +108,7 @@ function expectPendingApprovalText(
   if (options.nodeId) {
     expect(pendingText).toContain(`Node: ${options.nodeId}`);
   }
-  expect(pendingText).toContain(`CWD: ${process.cwd()}`);
+  expect(pendingText).toContain(`CWD: ${options.cwdText ?? process.cwd()}`);
   expect(pendingText).toContain("Command:\n```sh\n");
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
@@ -283,6 +284,7 @@ describe("exec approvals", () => {
       nodeId: "node-1",
       interactive: true,
       allowedDecisions: "allow-once|deny",
+      cwdText: "(node default)",
     });
     const approvalId = details.approvalId;
 
@@ -385,6 +387,43 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(prepareCwd).toBe(remoteWorkdir);
+  });
+
+  it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
+    const gatewayWorkspace = "/gateway/workspace";
+    let prepareHasCwd = false;
+    let prepareCwd: string | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: { cwd?: string } };
+        if (invoke.command === "system.run.prepare") {
+          prepareHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
+          prepareCwd = invoke.params?.cwd;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      cwd: gatewayWorkspace,
+    });
+
+    const result = await tool.execute("call-node-default-cwd", {
+      command: "/bin/pwd",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(prepareHasCwd).toBe(false);
+    expect(prepareCwd).toBeUndefined();
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {
