@@ -28,7 +28,7 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
 function resolveAnthropicVertexAdcCredentialsPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const explicitCredentialsPath = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
+  const explicitCredentialsPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
   if (explicitCredentialsPath) {
     return existsSync(explicitCredentialsPath) ? explicitCredentialsPath : undefined;
   }
