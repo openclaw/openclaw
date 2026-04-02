@@ -1423,7 +1423,11 @@ export type WebFetchProviderPlugin = {
   autoDetectOrder?: number;
   /** Canonical plugin-owned config path for this provider's primary fetch credential. */
   credentialPath: string;
-  /** Legacy or inactive credential paths that should warn but not activate this provider. */
+  /**
+   * Legacy or inactive credential paths that should warn but not activate this provider.
+   * Include credentialPath here when overriding the list, because runtime classification
+   * treats inactiveSecretPaths as the full inactive surface for this provider.
+   */
   inactiveSecretPaths?: string[];
   getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;

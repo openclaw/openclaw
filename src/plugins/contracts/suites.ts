@@ -156,6 +156,7 @@ export function installWebFetchProviderContractSuite(params: {
     expect(provider.credentialPath.trim()).not.toBe("");
     if (provider.inactiveSecretPaths) {
       expect(provider.inactiveSecretPaths).toEqual([...new Set(provider.inactiveSecretPaths)]);
+      // Runtime inactive-path classification uses inactiveSecretPaths as the complete list.
       expect(provider.inactiveSecretPaths).toContain(provider.credentialPath);
     }
 

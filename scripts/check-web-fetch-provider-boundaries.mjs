@@ -17,14 +17,21 @@ const ignoredDirNames = new Set([
   "extensions",
   "node_modules",
 ]);
-const focusedCoreFiles = new Set([
-  "src/agents/tools/web-fetch.ts",
-  "src/agents/tools/web-tools.ts",
-  "src/plugins/web-fetch-providers.ts",
-  "src/plugins/web-fetch-providers.runtime.ts",
-  "src/secrets/runtime-web-tools.ts",
-  "src/web-fetch/runtime.ts",
+const allowedFiles = new Set([
+  "src/agents/tools/web-fetch.test-harness.ts",
+  "src/config/legacy-web-fetch.ts",
+  "src/config/zod-schema.agent-runtime.ts",
+  "src/plugins/bundled-provider-auth-env-vars.generated.ts",
+  "src/secrets/target-registry-data.ts",
 ]);
+const suspiciousPatterns = [
+  /fetchFirecrawlContent/,
+  /firecrawl-fetch-provider\.js/,
+  /createFirecrawlWebFetchProvider/,
+  /providerId:\s*"firecrawl"/,
+  /provider:\s*"firecrawl"/,
+  /id:\s*"firecrawl"/,
+];
 
 async function walkFiles(rootDir) {
   const out = [];
@@ -61,13 +68,16 @@ export async function collectWebFetchProviderBoundaryViolations() {
   const violations = [];
   for (const filePath of files) {
     const relativeFile = normalizeRepoPath(filePath);
-    if (!focusedCoreFiles.has(relativeFile) || relativeFile.includes(".test.")) {
+    if (allowedFiles.has(relativeFile) || relativeFile.includes(".test.")) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
     const lines = content.split(/\r?\n/);
     for (const [index, line] of lines.entries()) {
-      if (!line.includes("firecrawl") && !line.includes("fetchFirecrawlContent")) {
+      if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
+        continue;
+      }
+      if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
         continue;
       }
       violations.push({
