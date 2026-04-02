@@ -84,15 +84,18 @@ const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
-  lastRoutePolicy: "main" as const,
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
