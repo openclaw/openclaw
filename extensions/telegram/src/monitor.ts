@@ -71,6 +71,14 @@ const isGrammyHttpError = (err: unknown): boolean => {
   return (err as { name?: string }).name === "HttpError";
 };
 
+type TelegramMonitorPollingRuntime = typeof import("./monitor-polling.runtime.js");
+type TelegramPollingSessionInstance = InstanceType<
+  TelegramMonitorPollingRuntime["TelegramPollingSession"]
+>;
+type TelegramExecApprovalHandlerInstance = InstanceType<
+  TelegramMonitorPollingRuntime["TelegramExecApprovalHandler"]
+>;
+
 let telegramMonitorPollingRuntimePromise:
   | Promise<typeof import("./monitor-polling.runtime.js")>
   | undefined;
@@ -91,8 +99,8 @@ async function loadTelegramMonitorWebhookRuntime() {
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
-  let pollingSession: TelegramPollingSession | undefined;
-  let execApprovalsHandler: TelegramExecApprovalHandler | undefined;
+  let pollingSession: TelegramPollingSessionInstance | undefined;
+  let execApprovalsHandler: TelegramExecApprovalHandlerInstance | undefined;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
