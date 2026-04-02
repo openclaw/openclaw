@@ -278,6 +278,7 @@ flowchart TD
 
     - If `tools.exec.host` is unset, the default is `auto`.
     - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
     - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
     - Unset `tools.exec.ask` defaults to `off`.
     - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
