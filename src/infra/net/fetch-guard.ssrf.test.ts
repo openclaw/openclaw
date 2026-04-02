@@ -411,4 +411,61 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("skips local DNS pre-flight in trusted proxy mode (fake-ip compatibility)", async () => {
+    // Simulates Clash TUN fake-ip: the local resolver returns a non-routable
+    // placeholder address (198.18.x.x) for every hostname. In STRICT mode this
+    // would trigger an SSRF block; in TRUSTED_ENV_PROXY mode the DNS lookup
+    // must be skipped entirely so the proxy can resolve the real address.
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    const fakeIpLookup = vi.fn(async () => [
+      { address: "198.18.0.1", family: 4 },
+    ]) as unknown as NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://example.com/resource",
+      fetchImpl,
+      lookupFn: fakeIpLookup,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // The fake-ip lookupFn must never be called — DNS is delegated to the proxy.
+    expect(fakeIpLookup).not.toHaveBeenCalled();
+    await result.release();
+  });
+
+  it("still blocks private IP literals in trusted proxy mode (no proxy configured)", async () => {
+    // TRUSTED_ENV_PROXY only bypasses DNS pre-flight when a proxy is actually
+    // configured. Without a proxy the SSRF guard must still apply for literal
+    // private IPs (caught by the hostname/IP pre-check inside
+    // resolvePinnedHostnameWithPolicy).
+    vi.unstubAllEnvs();
+    // Ensure no proxy env vars bleed in from other tests.
+    for (const key of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "ALL_PROXY",
+      "all_proxy",
+    ]) {
+      delete process.env[key];
+    }
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://192.168.1.1/admin",
+        fetchImpl,
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

@@ -1,7 +1,7 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   closeDispatcher,
@@ -188,17 +188,29 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
-        policy: params.policy,
-      });
+      // When a trusted env proxy is configured, delegate DNS resolution entirely
+      // to the proxy. Performing a local DNS pre-flight check first would fail
+      // in environments where the system resolver returns non-routable placeholder
+      // addresses (e.g. Clash TUN fake-ip mode returns 198.18.x.x), causing a
+      // spurious SSRF block even though the proxy itself would resolve correctly.
+      //
+      // Use hasEnvHttpProxyConfigured (not hasProxyEnvConfigured) so the gate
+      // matches undici's EnvHttpProxyAgent semantics exactly: ALL_PROXY/all_proxy
+      // are ignored by undici and must not cause the SSRF pre-flight to be skipped.
+      const protocol = parsedUrl.protocol === "https:" ? "https" : "http";
       const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasEnvHttpProxyConfigured(protocol);
       if (canUseTrustedEnvProxy) {
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+      } else {
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
+        if (params.pinDns !== false) {
+          dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        }
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
