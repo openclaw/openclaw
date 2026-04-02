@@ -2739,17 +2739,73 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(
-      (snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
-    ).toBeUndefined();
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
     expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
       webSearch: {
         apiKey: "xai-runtime-key",
       },
-      xSearch: {
-        enabled: true,
-        model: "grok-4-1-fast",
+    });
+  });
+
+  it("still migrates legacy x_search auth when general legacy migration returns an invalid config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+            groups: [],
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+    });
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key-invalid-config",
       },
     });
+  });
+
+  it("does not force-enable xai at runtime for knob-only x_search config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
   });
 });

@@ -381,4 +381,21 @@ describe("registerStatusHealthSessionsCommands", () => {
       runtime,
     );
   });
+
+  it("uses TaskFlow wording for the alias command help", () => {
+    const program = new Command();
+    registerStatusHealthSessionsCommands(program);
+
+    const flowsCommand = program.commands.find((command) => command.name() === "flows");
+    expect(flowsCommand?.description()).toContain("TaskFlow");
+    expect(flowsCommand?.commands.find((command) => command.name() === "list")?.description()).toBe(
+      "List tracked TaskFlows",
+    );
+    expect(flowsCommand?.commands.find((command) => command.name() === "show")?.description()).toBe(
+      "Show one TaskFlow by flow id or owner key",
+    );
+    expect(
+      flowsCommand?.commands.find((command) => command.name() === "cancel")?.description(),
+    ).toBe("Cancel a running TaskFlow");
+  });
 });

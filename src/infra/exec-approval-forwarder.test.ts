@@ -95,7 +95,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
             },
             {
               label: "Allow Always",
-              value: `/approve ${params.request.id} always`,
+              value: `/approve ${params.request.id} allow-always`,
               style: "primary",
             },
             {
@@ -115,7 +115,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
         buttons: [
           [
             { text: "Allow Once", callback_data: `/approve ${params.request.id} allow-once` },
-            { text: "Allow Always", callback_data: `/approve ${params.request.id} always` },
+            { text: "Allow Always", callback_data: `/approve ${params.request.id} allow-always` },
           ],
           [{ text: "Deny", callback_data: `/approve ${params.request.id} deny` }],
         ],
@@ -465,7 +465,7 @@ describe("exec approval forwarder", () => {
                     },
                     {
                       label: "Allow Always",
-                      value: "/approve req-1 always",
+                      value: "/approve req-1 allow-always",
                       style: "primary",
                     },
                     {
