@@ -48,7 +48,7 @@ export function resolveProviderHttpRequestConfig(params: {
   const headers = new Headers(requestConfig.headers);
 
   return {
-    baseUrl: requestConfig.baseUrl ?? normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl)!,
+    baseUrl: requestConfig.baseUrl!,
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     requestConfig,

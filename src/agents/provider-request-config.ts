@@ -63,6 +63,11 @@ type ResolveProviderRequestPolicyConfigParams = {
   allowPrivateNetwork?: boolean;
 };
 
+export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;
+export function normalizeBaseUrl(
+  baseUrl: string | undefined,
+  fallback?: string,
+): string | undefined;
 export function normalizeBaseUrl(
   baseUrl: string | undefined,
   fallback?: string,
@@ -160,6 +165,9 @@ export function resolveProviderRequestConfig(params: {
   return {
     api: resolved.api,
     baseUrl: resolved.baseUrl,
+    // Model resolution intentionally excludes attribution headers. Those are
+    // applied later at transport/request time so native-host gating stays tied
+    // to the final resolved route instead of the catalog/config merge step.
     headers: mergeProviderRequestHeaders(
       params.discoveredHeaders,
       params.providerHeaders,
