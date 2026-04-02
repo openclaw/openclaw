@@ -26,7 +26,15 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
-        id: "demo-default-on-sidecar",
+        id: "demo-other-channel",
+        channels: ["demo-other-channel"],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "browser",
         channels: [],
         origin: "bundled",
         enabledByDefault: true,
@@ -42,7 +50,7 @@ function createManifestRegistryFixture() {
         cliBackends: ["demo-cli"],
       },
       {
-        id: "demo-bundled-sidecar",
+        id: "voice-call",
         channels: [],
         origin: "bundled",
         enabledByDefault: undefined,
@@ -84,17 +92,38 @@ function createStartupConfig(params: {
   enabledPluginIds?: string[];
   providerIds?: string[];
   modelId?: string;
+  channelIds?: string[];
+  allowPluginIds?: string[];
+  noConfiguredChannels?: boolean;
 }) {
   return {
+    ...(params.noConfiguredChannels
+      ? {
+          channels: {},
+        }
+      : params.channelIds?.length
+        ? {
+            channels: Object.fromEntries(
+              params.channelIds.map((channelId) => [channelId, { enabled: true }]),
+            ),
+          }
+        : {}),
     ...(params.enabledPluginIds?.length
       ? {
           plugins: {
+            ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
           },
         }
-      : {}),
+      : params.allowPluginIds?.length
+        ? {
+            plugins: {
+              allow: params.allowPluginIds,
+            },
+          }
+        : {}),
     ...(params.providerIds?.length
       ? {
           models: {
@@ -127,37 +156,57 @@ function createStartupConfig(params: {
 
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
-    listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
+      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+        return Object.keys(config.channels ?? {});
+      }
+      return ["demo-channel"];
+    });
     loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
   });
 
   it.each([
     [
-      "includes configured channels and explicitly enabled bundled sidecars",
+      "includes only configured channel plugins at idle startup",
       createStartupConfig({
-        enabledPluginIds: ["demo-bundled-sidecar"],
+        enabledPluginIds: ["voice-call"],
         modelId: "demo-cli/demo-model",
       }),
-      ["demo-channel", "demo-provider-plugin", "demo-bundled-sidecar"],
+      ["demo-channel", "browser", "voice-call"],
     ],
     [
-      "skips bundled plugins with enabledByDefault: true until something references them",
+      "keeps bundled startup sidecars with enabledByDefault at idle startup",
       {} as OpenClawConfig,
-      ["demo-channel"],
+      ["demo-channel", "browser"],
     ],
     [
-      "auto-loads bundled plugins referenced by configured provider ids",
+      "keeps provider plugins out of idle startup when only provider config references them",
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
-      ["demo-channel", "demo-provider-plugin"],
+      ["demo-channel", "browser"],
     ],
     [
-      "keeps non-bundled sidecars out of startup unless explicitly enabled",
+      "includes explicitly enabled non-channel sidecars in startup scope",
       createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
+        enabledPluginIds: ["demo-global-sidecar", "voice-call"],
       }),
-      ["demo-channel", "demo-global-sidecar"],
+      ["demo-channel", "browser", "voice-call", "demo-global-sidecar"],
+    ],
+    [
+      "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
+      createStartupConfig({
+        allowPluginIds: ["browser"],
+        noConfiguredChannels: true,
+      }),
+      ["browser"],
+    ],
+    [
+      "includes every configured channel plugin and excludes other channels",
+      createStartupConfig({
+        channelIds: ["demo-channel", "demo-other-channel"],
+      }),
+      ["demo-channel", "demo-other-channel", "browser"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
