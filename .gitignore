@@ -23,10 +23,6 @@ ui/test-results/
 packages/dashboard-next/.next/
 packages/dashboard-next/out/
 
-# Local PR notes (do not commit)
-PR39764_CONTEXT.md
-PR_39672_COMMIT_TEXT.md
-
 # Mise configuration files
 mise.toml
 
