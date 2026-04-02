@@ -26,6 +26,7 @@ export type ListChannelsMSTeamsResult = {
     description: string | undefined;
     membershipType: string | undefined;
   }>;
+  truncated?: boolean;
 };
 
 export type GetChannelInfoMSTeamsParams = {
@@ -64,11 +65,15 @@ export async function listChannelsMSTeams(
   const MAX_PAGES = 10;
   let page = 0;
   while (nextPath && page < MAX_PAGES) {
-    const res = await fetchGraphJson<
-      GraphResponse<GraphTeamsChannel> & { "@odata.nextLink"?: string }
-    >({ token, path: nextPath });
+    type PagedChannelResponse = GraphResponse<GraphTeamsChannel> & {
+      "@odata.nextLink"?: string;
+    };
+    const res: PagedChannelResponse = await fetchGraphJson<PagedChannelResponse>({
+      token,
+      path: nextPath,
+    });
     collected.push(...(res.value ?? []));
-    const nextLink = res["@odata.nextLink"];
+    const nextLink: string | undefined = res["@odata.nextLink"];
     // Strip the Graph API root so fetchGraphJson receives a relative path
     nextPath = nextLink ? nextLink.replace("https://graph.microsoft.com/v1.0", "") : undefined;
     page++;
@@ -79,7 +84,7 @@ export async function listChannelsMSTeams(
     description: ch.description,
     membershipType: ch.membershipType,
   }));
-  return { channels };
+  return { channels, truncated: !!nextPath };
 }
 
 // ---------------------------------------------------------------------------

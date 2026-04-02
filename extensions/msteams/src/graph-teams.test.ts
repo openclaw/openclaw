@@ -118,6 +118,7 @@ describe("listChannelsMSTeams", () => {
 
     expect(result.channels).toHaveLength(3);
     expect(result.channels.map((ch) => ch.id)).toEqual(["ch-1", "ch-2", "ch-3"]);
+    expect(result.truncated).toBe(false);
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(3);
 
     // Second call should use the relative path stripped from the nextLink
@@ -150,6 +151,7 @@ describe("listChannelsMSTeams", () => {
     // Should stop at 10 pages even though more nextLinks are available
     expect(result.channels).toHaveLength(10);
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(10);
+    expect(result.truncated).toBe(true);
   });
 });
 
