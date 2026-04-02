@@ -510,6 +510,13 @@ export function loadGatewayPlugins(params: {
       workspaceDir: params.workspaceDir,
       env: process.env,
     });
+  const previousGatewaySubagentRuntime = getGatewaySubagentRuntime();
+  const gatewaySubagentRuntime = createGatewaySubagentRuntime();
+  setGatewaySubagentRuntime(gatewaySubagentRuntime);
+  const previousSharedRuntimeOptions = getSharedPluginRuntimeOptions();
+  setSharedPluginRuntimeOptions({
+    allowGatewaySubagentBinding: true,
+  });
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable");
@@ -518,13 +525,6 @@ export function loadGatewayPlugins(params: {
       gatewayMethods: [...params.baseMethods],
     };
   }
-  const previousGatewaySubagentRuntime = getGatewaySubagentRuntime();
-  const gatewaySubagentRuntime = createGatewaySubagentRuntime();
-  setGatewaySubagentRuntime(gatewaySubagentRuntime);
-  const previousSharedRuntimeOptions = getSharedPluginRuntimeOptions();
-  setSharedPluginRuntimeOptions({
-    allowGatewaySubagentBinding: true,
-  });
   let pluginRegistry;
   try {
     pluginRegistry = loadOpenClawPlugins({

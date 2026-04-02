@@ -376,7 +376,7 @@ describe("loadGatewayPlugins", () => {
 
   test("stores gateway binding in shared runtime options instead of a concrete subagent", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    loadGatewayPluginsForTest();
+    loadGatewayPluginsForTest({ pluginIds: [] });
 
     expect(sharedRuntimeOptionsModule.getSharedPluginRuntimeOptions()).toEqual({
       allowGatewaySubagentBinding: true,
