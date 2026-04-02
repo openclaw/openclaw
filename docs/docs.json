@@ -1785,6 +1785,7 @@
               {
                 "group": "扩展",
                 "pages": [
+                  "zh-CN/plugins/community",
                   "zh-CN/plugins/voice-call",
                   "zh-CN/plugins/zalouser",
                   "zh-CN/plugins/manifest",
@@ -1795,6 +1796,7 @@
               {
                 "group": "自动化",
                 "pages": [
+                  "zh-CN/automation/index",
                   "zh-CN/automation/hooks",
                   "zh-CN/automation/cron-jobs",
                   "zh-CN/automation/cron-vs-heartbeat",
@@ -2060,6 +2062,7 @@
                   "zh-CN/reference/token-use",
                   "zh-CN/reference/api-usage-costs",
                   "zh-CN/reference/transcript-hygiene",
+                  "zh-CN/reference/prompt-caching",
                   "zh-CN/date-time"
                 ]
               },
