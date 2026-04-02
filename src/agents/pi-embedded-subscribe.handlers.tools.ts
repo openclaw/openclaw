@@ -4,6 +4,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -165,6 +166,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
   expiresAtMs?: number;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   host: "gateway" | "node";
   command: string;
   cwd?: string;
@@ -193,6 +195,12 @@ function readExecApprovalPendingDetails(result: unknown): {
     approvalId,
     approvalSlug,
     expiresAtMs: typeof details.expiresAtMs === "number" ? details.expiresAtMs : undefined,
+    allowedDecisions: Array.isArray(details.allowedDecisions)
+      ? details.allowedDecisions.filter(
+          (decision): decision is ExecApprovalDecision =>
+            decision === "allow-once" || decision === "allow-always" || decision === "deny",
+        )
+      : undefined,
     host,
     command,
     cwd: typeof details.cwd === "string" ? details.cwd : undefined,
@@ -263,6 +271,7 @@ async function emitToolResultOutput(params: {
         buildExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
+          allowedDecisions: approvalPending.allowedDecisions,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,

@@ -6,6 +6,7 @@ import {
   createChannelNativeApprovalRuntime,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalCommandDisplay,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
   type ExecApprovalDecision,
   type ExecApprovalRequest,
@@ -99,6 +100,8 @@ function buildSlackPendingApprovalBlocks(request: ExecApprovalRequest): SlackBlo
       text: "",
       interactive: buildApprovalInteractiveReply({
         approvalId: request.id,
+        ask: request.request.ask,
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(request.request),
       }),
     }) ?? [];
   return [

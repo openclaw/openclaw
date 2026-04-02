@@ -10,8 +10,10 @@ import {
 import {
   maxAsk,
   minSecurity,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
   type ExecAsk,
+  type ExecApprovalDecision,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
@@ -409,8 +411,10 @@ export function buildExecApprovalPendingToolResult(params: {
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
+  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   return {
     content: [
       {
@@ -427,6 +431,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 warningText: params.warningText,
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
+                allowedDecisions,
                 command: params.command,
                 cwd: params.cwd,
                 host: params.host,
@@ -452,6 +457,7 @@ export function buildExecApprovalPendingToolResult(params: {
             approvalId: params.approvalId,
             approvalSlug: params.approvalSlug,
             expiresAtMs: params.expiresAtMs,
+            allowedDecisions,
             host: params.host,
             command: params.command,
             cwd: params.cwd,

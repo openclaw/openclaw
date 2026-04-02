@@ -17,6 +17,9 @@ Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; i
 Host exec also uses the local approvals state on that machine. A host-local
 `ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
 session or config defaults request `ask: "on-miss"`.
+Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
+`openclaw approvals get --node <id|name|ip>` to inspect the requested policy,
+host policy sources, and the effective result.
 
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).

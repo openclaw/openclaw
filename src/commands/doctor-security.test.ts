@@ -188,6 +188,46 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("stricter side wins");
   });
 
+  it("attributes broader host policy warnings to wildcard agent entries", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+        },
+        agents: {
+          "*": {
+            security: "allowlist",
+            ask: "always",
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          agents: {
+            list: [
+              {
+                id: "runner",
+                tools: {
+                  exec: {
+                    security: "full",
+                    ask: "off",
+                  },
+                },
+              },
+            ],
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
+    expect(message).toContain('agents.*.security="allowlist"');
+    expect(message).toContain('agents.*.ask="always"');
+  });
+
   it("does not invent a deny host policy when exec-approvals defaults.security is unset", async () => {
     await withExecApprovalsFile(
       {
@@ -265,6 +305,40 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     const message = lastMessage();
     expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
+    expect(message).toContain('agents.runner.security="allowlist"');
+    expect(message).toContain('agents.runner.ask="always"');
+  });
+
+  it("warns when an agent inherits broader global tools.exec policy than the matching host agent policy", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          runner: {
+            security: "allowlist",
+            ask: "always",
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              security: "full",
+              ask: "off",
+            },
+          },
+          agents: {
+            list: [{ id: "runner" }],
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
+    expect(message).toContain('tools.exec.security="full"');
+    expect(message).toContain('tools.exec.ask="off"');
     expect(message).toContain('agents.runner.security="allowlist"');
     expect(message).toContain('agents.runner.ask="always"');
   });

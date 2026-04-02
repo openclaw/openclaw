@@ -93,13 +93,14 @@ function expectPendingApprovalText(
     host: "gateway" | "node";
     nodeId?: string;
     interactive?: boolean;
+    allowedDecisions?: string;
   },
 ) {
   expect(result.details.status).toBe("approval-pending");
   const details = result.details as { approvalId: string; approvalSlug: string };
   const pendingText = getResultText(result);
   expect(pendingText).toContain(
-    `Reply with: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
+    `Reply with: /approve ${details.approvalSlug} ${options.allowedDecisions ?? "allow-once|allow-always|deny"}`,
   );
   expect(pendingText).toContain(`full ${details.approvalId}`);
   expect(pendingText).toContain(`Host: ${options.host}`);
@@ -111,7 +112,11 @@ function expectPendingApprovalText(
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
-    expect(pendingText).toContain("Background mode requires pre-approved policy");
+    expect(pendingText).toContain(
+      (options.allowedDecisions ?? "").includes("allow-always")
+        ? "Background mode requires pre-approved policy"
+        : "Background mode requires host policy that allows pre-approval",
+    );
   }
   return details;
 }
@@ -277,6 +282,7 @@ describe("exec approvals", () => {
       host: "node",
       nodeId: "node-1",
       interactive: true,
+      allowedDecisions: "allow-once|deny",
     });
     const approvalId = details.approvalId;
 
@@ -460,6 +466,13 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
+    expect(result.details).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    expect(getResultText(result)).toContain("Reply with: /approve ");
+    expect(getResultText(result)).toContain("allow-once|deny");
+    expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
+    expect(getResultText(result)).toContain("Allow Always is unavailable");
   });
 
   it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
@@ -528,6 +541,9 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
+    expect(result.details).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -1240,6 +1256,7 @@ describe("exec approvals", () => {
     expectPendingApprovalText(result, {
       command: "npm view diver name version description",
       host: "gateway",
+      allowedDecisions: "allow-once|deny",
     });
   });
 
@@ -1278,6 +1295,7 @@ describe("exec approvals", () => {
     const details = expectPendingApprovalText(result, {
       command: "npm view diver name version description",
       host: "gateway",
+      allowedDecisions: "allow-once|deny",
     });
     expect(getResultText(result)).toContain(`/approve ${details.approvalSlug} allow-once`);
     expect(getResultText(result)).not.toContain(getExecApprovalApproverDmNoticeText());
