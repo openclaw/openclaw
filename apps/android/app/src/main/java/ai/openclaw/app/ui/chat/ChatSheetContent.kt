@@ -60,6 +60,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatDraft by viewModel.chatDraft.collectAsState()
 
   LaunchedEffect(Unit) {
     viewModel.loadChat(mainSessionKey)
@@ -118,10 +119,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
       ChatComposer(
+        draftText = chatDraft,
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
         attachments = attachments,
+        onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
         onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
         onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
