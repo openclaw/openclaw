@@ -12,6 +12,7 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
@@ -603,7 +604,13 @@ export async function runCronIsolatedAgentTurn(params: {
         await runPrompt(commandBody);
         break;
       } catch (err) {
-        if (err instanceof LiveSessionModelSwitchError) {
+        const switchErr =
+          err instanceof LiveSessionModelSwitchError
+            ? err
+            : err instanceof FailoverError && err.cause instanceof LiveSessionModelSwitchError
+              ? err.cause
+              : undefined;
+        if (switchErr) {
           modelSwitchRetries += 1;
           if (modelSwitchRetries > MAX_MODEL_SWITCH_RETRIES) {
             logWarn(
@@ -612,13 +619,15 @@ export async function runCronIsolatedAgentTurn(params: {
             throw err;
           }
           liveSelection = {
-            provider: err.provider,
-            model: err.model,
-            authProfileId: err.authProfileId,
-            authProfileIdSource: err.authProfileId ? err.authProfileIdSource : undefined,
+            provider: switchErr.provider,
+            model: switchErr.model,
+            authProfileId: switchErr.authProfileId,
+            authProfileIdSource: switchErr.authProfileId
+              ? switchErr.authProfileIdSource
+              : undefined,
           };
-          fallbackProvider = err.provider;
-          fallbackModel = err.model;
+          fallbackProvider = switchErr.provider;
+          fallbackModel = switchErr.model;
           syncSessionEntryLiveSelection();
           // Persist the corrected model before retrying so sessions_list
           // reflects the real model even if the retry also fails.

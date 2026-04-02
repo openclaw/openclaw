@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import {
   clearFastTestEnv,
@@ -267,6 +268,45 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     // Circuit breaker: max 2 retries → 3 total attempts (initial + 2 retries)
     expect(callCount).toBe(3);
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("retry limit reached"));
+  });
+
+  it("retries when runWithModelFallback wraps LiveSessionModelSwitchError in FailoverError (#59657)", async () => {
+    // When the fallback chain has only one candidate, runWithModelFallback
+    // wraps LiveSessionModelSwitchError into a FailoverError (with the
+    // original as `cause`) before re-throwing.  The cron retry loop must
+    // unwrap it so the model-switch retry still fires.
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const wrappedError = new FailoverError(switchError.message, {
+      reason: "overloaded",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      cause: switchError,
+    });
+
+    let callCount = 0;
+    runWithModelFallbackMock.mockImplementation(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (p: string, m: string) => Promise<unknown>;
+      }) => {
+        callCount++;
+        if (callCount === 1) {
+          throw wrappedError;
+        }
+        expect(params.provider).toBe("anthropic");
+        expect(params.model).toBe("claude-sonnet-4-6");
+        return makeSuccessfulRunResult("claude-sonnet-4-6");
+      },
+    );
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(callCount).toBe(2);
   });
 
   it("does not retry when the thrown error is not a LiveSessionModelSwitchError", async () => {

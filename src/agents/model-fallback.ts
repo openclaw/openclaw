@@ -794,6 +794,7 @@ export async function runWithModelFallback<T>(params: {
           reason: "overloaded",
           provider: candidate.provider,
           model: candidate.model,
+          cause: err,
         });
         lastError = switchNormalized;
         const described = describeFailoverError(switchNormalized);
