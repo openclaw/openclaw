@@ -1,39 +1,39 @@
 ---
-name: 回复风格偏好
-description: 用户喜欢简洁回复，不要 trailing summary
+name: Reply Style Preference
+description: User prefers concise replies without trailing summaries
 type: feedback
 ---
 
-# 回复风格
+# Reply Style
 
-**规则：** 回复要简洁，不要在结尾总结刚做的事情
+**Rule:** Keep replies concise, no trailing summaries at the end.
 
-**Why:** 用户说"我可以自己读 diff"，不喜欢 AI 在结尾加"完成了 X、Y、Z"的总结
+**Why:** User said "I can read the diff myself" - doesn't want AI to add "Completed X, Y, Z" summaries.
 
-**How to apply:**
+**How to Apply:**
 
-- 所有会话中，完成工作后直接结束
-- 不要加"完成了 X、Y、Z"的总结
-- 如果有重要更新，用简短的 bullet points
+- End responses directly after completing work
+- No "Completed X, Y, Z" summaries
+- Use brief bullet points for important updates
 
-## 示例
+## Example
 
-❌ 不要这样：
-
-```
-好的，我已经帮你完成了记忆系统迁移！
-1. 运行了重构脚本
-2. 更新了 MEMORY.md
-3. 创建了新的目录结构
-如果有任何问题请告诉我~
-```
-
-✅ 要这样：
+❌ Don't do this:
 
 ```
-✅ 迁移完成！
+Okay, I've completed the memory system migration for you!
+1. Ran the refactor script
+2. Updated MEMORY.md
+3. Created new directory structure
+Let me know if you have any questions~
+```
 
-下一步：
-1. 检查 MEMORY.md 索引
-2. 确认无误后删除旧文件
+✅ Do this:
+
+```
+✅ Migration complete!
+
+Next steps:
+1. Review MEMORY.md index
+2. Delete old files after verification
 ```
