@@ -1939,6 +1939,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "pre_route"
   | "inbound_claim"
   | "message_received"
   | "message_sending"
@@ -1969,6 +1970,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "pre_route",
   "inbound_claim",
   "message_received",
   "message_sending",
@@ -2201,6 +2203,42 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   parentConversationId?: string;
   senderId?: string;
   messageId?: string;
+};
+
+// pre_route hook
+export type PluginHookPreRouteContext = PluginHookInboundClaimContext & {
+  sessionKey?: string;
+};
+
+export type PluginHookPreRouteEvent = {
+  from: string;
+  content: string;
+  body?: string;
+  bodyForAgent?: string;
+  transcript?: string;
+  timestamp?: number;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  threadId?: string | number;
+  messageId?: string;
+  isGroup: boolean;
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookPreRouteResult = {
+  handled: boolean;
+  routeOverride?: {
+    sessionKey: string;
+    agentId?: string;
+    accountId?: string;
+  };
 };
 
 export type PluginHookInboundClaimEvent = {
@@ -2657,6 +2695,11 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  pre_route: (
+    event: PluginHookPreRouteEvent,
+    ctx: PluginHookPreRouteContext,
+    signal?: AbortSignal,
+  ) => Promise<PluginHookPreRouteResult | void> | PluginHookPreRouteResult | void;
   inbound_claim: (
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,

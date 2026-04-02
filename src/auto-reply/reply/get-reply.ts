@@ -142,10 +142,12 @@ export async function getReplyFromConfig(
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
-  const agentId = resolveSessionAgentId({
-    sessionKey: agentSessionKey,
-    config: cfg,
-  });
+  const agentId =
+    opts?.agentIdOverride?.trim() ||
+    resolveSessionAgentId({
+      sessionKey: agentSessionKey,
+      config: cfg,
+    });
   const mergedSkillFilter = mergeSkillFilters(
     opts?.skillFilter,
     resolveAgentSkillsFilter(cfg, agentId),

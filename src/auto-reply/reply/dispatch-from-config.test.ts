@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   PluginHookBeforeDispatchResult,
+  PluginHookPreRouteResult,
   PluginTargetedInboundClaimOutcome,
 } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -44,6 +45,9 @@ const hookMocks = vi.hoisted(() => ({
     runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
       async () => ({ status: "no_handler" as const }),
     ),
+    runPreRoute: vi.fn<
+      (_event: unknown, _ctx: unknown, _signal?: AbortSignal) => Promise<PluginHookPreRouteResult | undefined>
+    >(async () => undefined),
     runMessageReceived: vi.fn(async () => {}),
     runBeforeDispatch: vi.fn<
       (_event: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
@@ -340,6 +344,8 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logSessionStateChange.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runPreRoute.mockClear();
+    hookMocks.runner.runPreRoute.mockResolvedValue(undefined);
     hookMocks.runner.runInboundClaim.mockClear();
     hookMocks.runner.runInboundClaim.mockResolvedValue(undefined);
     hookMocks.runner.runInboundClaimForPlugin.mockClear();
@@ -2097,6 +2103,38 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
+  it("skips pre_route for duplicate inbound messages", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "agent:isolated:telegram:direct:alice",
+        accountId: "router-a",
+      },
+    });
+
+    const cfg = emptyConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      MessageSid: "msg-duplicate-pre-route-1",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchTwiceWithFreshDispatchers({
+      ctx,
+      cfg,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runPreRoute).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses local discord exec approval tool prompts when discord approvals are enabled", async () => {
     setNoAbort();
     const cfg = {
@@ -2220,6 +2258,317 @@ describe("dispatchReplyFromConfig", () => {
         conversationId: "telegram:999",
       }),
     );
+  });
+
+  it("applies pre_route session/account overrides to the current turn", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route" || hookName === "message_received") as (
+        hookName?: string,
+      ) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "agent:isolated:telegram:direct:alice",
+        accountId: "router-a",
+      },
+    });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      AccountId: "default",
+      SessionKey: "agent:main:main",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+      MessageSid: "msg-pre-route-1",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(hookMocks.runner.runPreRoute).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:isolated:telegram:direct:alice",
+      expect.any(Object),
+    );
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:isolated:telegram:direct:alice",
+        accountId: "router-a",
+      }),
+    );
+  });
+
+  it("resolves accountId from session store when pre_route overrides only sessionKey", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "agent:isolated:telegram:direct:alice",
+      },
+    });
+    sessionStoreMocks.currentEntry = {
+      lastAccountId: "router-from-store",
+    };
+
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      AccountId: "default",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-pre-route-account-fallback-1",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:isolated:telegram:direct:alice",
+        accountId: "router-from-store",
+      }),
+    );
+  });
+
+  it("syncs native command target session when pre_route overrides the route", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "agent:codex-acp:session-override",
+      },
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-original",
+      AccountId: "router-a",
+      MessageSid: "msg-pre-route-native-target-1",
+      CommandBody: "/new hello",
+      BodyForCommands: "/new hello",
+      BodyForAgent: "/new hello",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(sessionStoreMocks.resolveSessionStoreEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex-acp:session-override",
+      }),
+    );
+  });
+
+  it("consumes pre_route agentId override for session store lookup", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "session:override:without-embedded-agent",
+        agentId: "codex",
+      },
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-pre-route-agent-id-1",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(sessionStoreMocks.resolveStorePath).toHaveBeenCalledWith(undefined, {
+      agentId: "codex",
+    });
+  });
+
+  it("threads pre_route agentId override into reply execution", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "session:override:without-embedded-agent",
+        agentId: "codex",
+      },
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-pre-route-agent-id-forward-1",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "ok" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        agentIdOverride: "codex",
+      }),
+      undefined,
+    );
+  });
+
+  it("uses native command target session in pre_route hook context", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue(undefined);
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-target",
+      MessageSid: "msg-pre-route-native-context-1",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(hookMocks.runner.runPreRoute).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey: "agent:codex-acp:session-target",
+      }),
+    );
+  });
+
+  it("preserves native command target session when pre_route does not override", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-original",
+      MessageSid: "msg-native-target-preserve-1",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(sessionStoreMocks.resolveSessionStoreEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex-acp:session-original",
+      }),
+    );
+  });
+
+  it("continues dispatch when pre_route blocks past timeout", async () => {
+    setNoAbort();
+    vi.useFakeTimers();
+    try {
+      hookMocks.runner.hasHooks.mockImplementation(
+        ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+      );
+      hookMocks.runner.runPreRoute.mockImplementation(
+        () => new Promise<PluginHookPreRouteResult>(() => {}),
+      );
+
+      const cfg = emptyConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        AccountId: "default",
+        SessionKey: "agent:main:main",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+        MessageSid: "msg-pre-route-timeout-1",
+      });
+
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_001);
+      await dispatchPromise;
+
+      expect(hookMocks.runner.runPreRoute).toHaveBeenCalledTimes(1);
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          accountId: "default",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not broadcast inbound claims without a core-owned plugin binding", async () => {

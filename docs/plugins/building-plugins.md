@@ -166,6 +166,7 @@ Hook guard semantics to keep in mind:
 - `before_install`: `{ block: false }` is treated as no decision.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
+- `pre_route`: blocking hook that runs before dispatch; `{ handled: true, routeOverride }` applies to the current inbound turn.
 
 The `/approve` command handles both exec and plugin approvals with automatic fallback. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 

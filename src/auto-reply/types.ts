@@ -80,6 +80,8 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Override the resolved agent id for this turn (e.g. from a pre_route hook routeOverride). */
+  agentIdOverride?: string;
 };
 
 export type ReplyPayload = {
