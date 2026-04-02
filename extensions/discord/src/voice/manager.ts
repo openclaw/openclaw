@@ -688,6 +688,18 @@ export class DiscordVoiceManager {
             const resource = voiceSdk.createAudioResource(pcmStream, {
               inputType: voiceSdk.StreamType.Raw,
             });
+            // Debug: monitor stream and player events
+            let chunkCount = 0;
+            let totalBytes = 0;
+            pcmStream.on("data", (chunk: Buffer) => { chunkCount++; totalBytes += chunk.length; });
+            pcmStream.on("end", () => logger.warn(`discord voice: pcmStream ended: ${chunkCount} chunks, ${totalBytes} bytes`));
+            pcmStream.on("error", (err: Error) => logger.warn(`discord voice: pcmStream error: ${err.message}`));
+            resource.playStream.on("error", (err: Error) => logger.warn(`discord voice: resource playStream error: ${err.message}`));
+            entry.player.on("error", (err: unknown) => logger.warn(`discord voice: player error: ${err instanceof Error ? err.message : String(err)}`));
+            entry.player.on(voiceSdk.AudioPlayerStatus.Playing, () => logger.warn(`discord voice: player -> Playing`));
+            entry.player.on(voiceSdk.AudioPlayerStatus.Idle, () => logger.warn(`discord voice: player -> Idle`));
+            entry.player.on(voiceSdk.AudioPlayerStatus.AutoPaused, () => logger.warn(`discord voice: player -> AutoPaused`));
+            entry.player.on(voiceSdk.AudioPlayerStatus.Buffering, () => logger.warn(`discord voice: player -> Buffering`));
             entry.player.play(resource);
             await voiceSdk
               .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
