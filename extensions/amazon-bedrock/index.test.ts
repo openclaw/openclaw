@@ -152,6 +152,26 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  describe("buildReplayPolicy — assistant-first ordering fix", () => {
+    it("enables assistant-first ordering fix for non-Claude models", async () => {
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const policy = provider.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelId: "amazon.nova-pro-v1:0",
+      } as never);
+      expect(policy).toMatchObject({ applyAssistantFirstOrderingFix: true });
+    });
+
+    it("does not enable assistant-first ordering fix for Claude models", async () => {
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const policy = provider.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelId: "us.anthropic.claude-sonnet-4-6-v1",
+      } as never);
+      expect(policy).not.toHaveProperty("applyAssistantFirstOrderingFix", true);
+    });
+  });
+
   describe("guardrail config schema", () => {
     it("defines discovery and guardrail objects with the expected shape", () => {
       const pluginJson = JSON.parse(
