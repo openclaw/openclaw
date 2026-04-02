@@ -310,7 +310,7 @@ export const OpenClawSchema = z
         callTrace: z
           .object({
             enabled: z.boolean().optional(),
-            logLlmUsage: z.boolean().optional(),
+            logLlmFlows: z.boolean().optional(),
             logLlmCalls: z.boolean().optional(),
             logToolCalls: z.boolean().optional(),
             dir: z.string().optional(),

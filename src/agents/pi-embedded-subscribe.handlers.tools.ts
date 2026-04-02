@@ -179,6 +179,103 @@ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
   return parts.length > 0 ? parts.join(", ") : "no file changes recorded";
 }
 
+/**
+ * Extract key input params from tool call args for the `toolInput` field in tool.call traces.
+ * Only picks the most relevant field(s) per tool type to keep records compact.
+ */
+function extractToolInput(toolName: string, args: unknown): Record<string, unknown> | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const a = args as Record<string, unknown>;
+  const n = toolName.trim().toLowerCase();
+  // exec / bash
+  if (n === "exec" || n === "bash") {
+    const cmd = a.command ?? a.cmd;
+    if (cmd != null) {
+      return { command: cmd };
+    }
+  }
+  // read / write
+  if (n === "read" || n === "write") {
+    const p = a.path ?? a.file ?? a.filePath ?? a.file_path;
+    if (p != null) {
+      return { path: p };
+    }
+  }
+  // edit
+  if (n === "edit") {
+    const p = a.path ?? a.file ?? a.filePath ?? a.file_path;
+    if (p != null) {
+      return { path: p };
+    }
+  }
+  // web_search
+  if (n === "web_search") {
+    const q = a.query;
+    if (q != null) {
+      return { query: q };
+    }
+  }
+  // web_fetch / browser
+  if (n === "web_fetch" || n === "browser") {
+    const u = a.url;
+    if (u != null) {
+      return { url: u };
+    }
+  }
+  // message
+  if (n === "message") {
+    const result: Record<string, unknown> = {};
+    if (a.action != null) {
+      result.action = a.action;
+    }
+    if (a.target != null) {
+      result.target = a.target;
+    }
+    if (a.channel != null) {
+      result.channel = a.channel;
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+  // tts
+  if (n === "tts") {
+    const t = a.text;
+    if (t != null) {
+      return { text: typeof t === "string" ? t.slice(0, 100) : t };
+    }
+  }
+  // image_generate / image
+  if (n === "image_generate" || n === "image") {
+    const p = a.prompt;
+    if (p != null) {
+      return { prompt: typeof p === "string" ? p.slice(0, 100) : p };
+    }
+  }
+  // memory_search
+  if (n === "memory_search") {
+    const q = a.query;
+    if (q != null) {
+      return { query: q };
+    }
+  }
+  // sessions_spawn / sessions_send
+  if (n === "sessions_spawn" || n === "sessions_send") {
+    const result: Record<string, unknown> = {};
+    if (a.agentId != null) {
+      result.agentId = a.agentId;
+    }
+    if (a.label != null) {
+      result.label = a.label;
+    }
+    if (a.sessionKey != null) {
+      result.sessionKey = a.sessionKey;
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+  return undefined;
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
@@ -767,12 +864,14 @@ export async function handleToolExecutionEnd(
     const errorMessage = isToolError
       ? extractToolErrorMessage(sanitizeToolResult(result))
       : undefined;
+    const toolInput = extractToolInput(toolName, startData.args);
     ctx.params.onToolCallComplete({
       toolName,
       toolCallId,
       durationMs,
       isError: Boolean(isToolError),
       ...(errorMessage ? { errorMessage } : {}),
+      ...(toolInput ? { toolInput } : {}),
     });
   }
   const callSummary = ctx.state.toolMetaById.get(toolCallId);

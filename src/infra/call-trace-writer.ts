@@ -1,14 +1,17 @@
 /**
  * call-trace-writer.ts
  *
- * Subscribes to `model.call` and `tool.call` diagnostic events and appends them
- * to a single JSONL file per day under `diagnostics.callTrace.dir`.
+ * Subscribes to `model.call`, `tool.call`, and `model.usage` diagnostic events
+ * and appends them to daily JSONL files under `diagnostics.callTrace.dir`.
  *
- * File pattern: <dir>/YYYY-MM-DD.jsonl
+ * File patterns:
+ *   <dir>/calls/YYYY-MM-DD.jsonl — model.call + tool.call records
+ *   <dir>/flows/YYYY-MM-DD.jsonl — model.usage (per-turn aggregate) records
+ *
  * Each line is a JSON object with a `type` field:
- *   - "model.usage": full per-turn aggregate (usage, cost, context, trigger metadata)
- *   - "model.call":  per-LLM-call record (tokens for that call, duration)
- *   - "tool.call":   per-tool record (duration, error status)
+ *   - "model.call":  per-LLM-call record (tokens, cost, duration, flowId, agentId)
+ *   - "tool.call":   per-tool record (duration, error status, flowId, agentId, toolInput)
+ *   - "model.usage": full per-turn aggregate (usage, cost, context, trigger metadata) — flows/ only
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -31,6 +34,7 @@ function dateStamp(): string {
 }
 
 function appendJsonl(filePath: string, record: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, JSON.stringify(record) + "\n", "utf8");
 }
 
@@ -54,8 +58,12 @@ function purgeOldFiles(dir: string, retainDays: number): void {
 }
 
 /**
- * Start listening for call-trace diagnostic events and writing them to a
- * single JSONL file per day. Returns an unsubscribe function.
+ * Start listening for call-trace diagnostic events and writing them to daily
+ * JSONL files:
+ *   - calls/YYYY-MM-DD.jsonl  → model.call + tool.call
+ *   - flows/YYYY-MM-DD.jsonl  → model.usage (per-turn aggregate)
+ *
+ * Returns an unsubscribe function.
  */
 export function startCallTraceWriter(config: OpenClawConfig): (() => void) | undefined {
   if (!isDiagnosticsEnabled(config)) {
@@ -66,10 +74,10 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
     return undefined;
   }
 
-  const logLlmUsage = ct.logLlmUsage !== false; // default true  — model.usage (per-turn aggregate)
-  const logLlmCalls = ct.logLlmCalls !== false; // default true  — model.call  (per-LLM-call)
-  const logToolCalls = ct.logToolCalls === true; // default false — tool.call   (per-tool)
-  if (!logLlmUsage && !logLlmCalls && !logToolCalls) {
+  const logLlmFlows = ct.logLlmFlows !== false; // default true  — model.usage (per-turn aggregate) → flows/
+  const logLlmCalls = ct.logLlmCalls !== false; // default true  — model.call  (per-LLM-call) → calls/
+  const logToolCalls = ct.logToolCalls === true; // default false — tool.call   (per-tool) → calls/
+  if (!logLlmFlows && !logLlmCalls && !logToolCalls) {
     return undefined;
   }
 
@@ -80,21 +88,34 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
   purgeOldFiles(baseDir, retainDays);
 
   const unsub = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
-    if (evt.type === "model.usage" && !logLlmUsage) {
-      return;
-    }
-    if (evt.type === "model.call" && !logLlmCalls) {
-      return;
-    }
-    if (evt.type === "tool.call" && !logToolCalls) {
-      return;
-    }
-    if (evt.type !== "model.usage" && evt.type !== "model.call" && evt.type !== "tool.call") {
+    const stamp = dateStamp();
+
+    if (evt.type === "model.usage") {
+      if (!logLlmFlows) {
+        return;
+      }
+      const filePath = path.join(baseDir, "flows", `${stamp}.jsonl`);
+      appendJsonl(filePath, evt);
       return;
     }
 
-    const filePath = path.join(baseDir, `${dateStamp()}.jsonl`);
-    appendJsonl(filePath, evt);
+    if (evt.type === "model.call") {
+      if (!logLlmCalls) {
+        return;
+      }
+      const filePath = path.join(baseDir, "calls", `${stamp}.jsonl`);
+      appendJsonl(filePath, evt);
+      return;
+    }
+
+    if (evt.type === "tool.call") {
+      if (!logToolCalls) {
+        return;
+      }
+      const filePath = path.join(baseDir, "calls", `${stamp}.jsonl`);
+      appendJsonl(filePath, evt);
+      return;
+    }
   });
 
   return unsub;

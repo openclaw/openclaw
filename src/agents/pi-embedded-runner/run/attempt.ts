@@ -33,6 +33,7 @@ import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -1449,11 +1450,20 @@ export async function runEmbeddedAttempt(
                         };
                         status: "ok" | "error";
                         errorMessage?: string;
-                      }) =>
+                        costUsd?: number;
+                      }) => {
+                        const costConfig = resolveModelCostConfig({
+                          provider: params.provider,
+                          model: params.modelId,
+                          config: params.config,
+                        });
+                        const costUsd = estimateUsageCost({ usage: evt.usage, cost: costConfig });
                         emitDiagnosticEvent({
                           type: "model.call",
                           sessionKey: params.sessionKey,
                           sessionId: params.sessionId,
+                          flowId: params.flowId,
+                          agentId: sessionAgentId,
                           callIndex: evt.callIndex,
                           provider: params.provider,
                           model: params.modelId,
@@ -1461,7 +1471,9 @@ export async function runEmbeddedAttempt(
                           durationMs: evt.durationMs,
                           status: evt.status,
                           ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
-                        })
+                          ...(costUsd != null ? { costUsd } : {}),
+                        });
+                      }
                     : undefined,
                 onToolCallComplete:
                   params.config?.diagnostics?.callTrace?.logToolCalls === true
@@ -1471,16 +1483,20 @@ export async function runEmbeddedAttempt(
                         durationMs: number;
                         isError: boolean;
                         errorMessage?: string;
+                        toolInput?: Record<string, unknown>;
                       }) =>
                         emitDiagnosticEvent({
                           type: "tool.call",
                           sessionKey: params.sessionKey,
                           sessionId: params.sessionId,
+                          flowId: params.flowId,
+                          agentId: sessionAgentId,
                           toolName: evt.toolName,
                           toolCallId: evt.toolCallId,
                           durationMs: evt.durationMs,
                           isError: evt.isError,
                           ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
+                          ...(evt.toolInput ? { toolInput: evt.toolInput } : {}),
                         })
                     : undefined,
               }

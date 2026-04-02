@@ -121,6 +121,8 @@ export type RunEmbeddedPiAgentParams = {
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /** Flow id for this turn — groups all model.call and tool.call records under the same flow. */
+  flowId?: string;
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,
    * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
