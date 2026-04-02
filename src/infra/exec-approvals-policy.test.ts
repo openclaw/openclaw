@@ -316,6 +316,68 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
+  it("ignores malformed non-string host fields when attributing their source", () => {
+    const approvals = {
+      version: 1,
+      defaults: {
+        ask: "always",
+      },
+      agents: {
+        runner: {
+          ask: true,
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+    const summary = resolveExecPolicyScopeSummary({
+      approvals,
+      globalExecConfig: {
+        ask: "off",
+      },
+      configPath: "agents.list.runner.tools.exec",
+      scopeLabel: "agent:runner",
+      agentId: "runner",
+    });
+
+    expect(summary.ask).toMatchObject({
+      requested: "off",
+      host: "always",
+      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+      effective: "always",
+      note: "more aggressive ask wins",
+    });
+  });
+
+  it("does not credit mixed-case host fields that resolution ignores", () => {
+    const approvals = {
+      version: 1,
+      defaults: {
+        ask: "always",
+      },
+      agents: {
+        runner: {
+          ask: "Always",
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+    const summary = resolveExecPolicyScopeSummary({
+      approvals,
+      globalExecConfig: {
+        ask: "off",
+      },
+      configPath: "agents.list.runner.tools.exec",
+      scopeLabel: "agent:runner",
+      agentId: "runner",
+    });
+
+    expect(summary.ask).toMatchObject({
+      requested: "off",
+      host: "always",
+      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+      effective: "always",
+      note: "more aggressive ask wins",
+    });
+  });
+
   it("attributes host policy to wildcard agent entries before defaults", () => {
     const summary = resolveExecPolicyScopeSummary({
       approvals: {

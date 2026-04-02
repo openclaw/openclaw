@@ -2,8 +2,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
-  normalizeExecAsk,
-  normalizeExecSecurity,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   maxAsk,
@@ -63,39 +61,6 @@ function formatRequestedSource(params: {
 }
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
-type ExecPolicyFieldEntry = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-};
-
-function readExecPolicyField(params: {
-  field: ExecPolicyField;
-  entry?: ExecPolicyFieldEntry;
-}): ExecSecurity | ExecAsk | undefined {
-  switch (params.field) {
-    case "security":
-      return params.entry?.security;
-    case "ask":
-      return params.entry?.ask;
-    case "askFallback":
-      return params.entry?.askFallback;
-  }
-}
-
-function readNormalizedExecPolicyField(params: {
-  field: ExecPolicyField;
-  entry?: ExecPolicyFieldEntry;
-}): ExecSecurity | ExecAsk | null {
-  const value = readExecPolicyField({ field: params.field, entry: params.entry });
-  switch (params.field) {
-    case "security":
-    case "askFallback":
-      return normalizeExecSecurity(value);
-    case "ask":
-      return normalizeExecAsk(value);
-  }
-}
 
 function resolveRequestedField<TValue extends ExecSecurity | ExecAsk>(params: {
   field: ExecPolicyRequestedField;
@@ -123,42 +88,13 @@ function resolveRequestedField<TValue extends ExecSecurity | ExecAsk>(params: {
   };
 }
 
-function resolveHostFieldSource(params: {
+function formatHostFieldSource(params: {
   hostPath: string;
-  agentId?: string;
   field: ExecPolicyField;
-  approvals: ExecApprovalsFile;
+  sourceSuffix: string | null;
 }): string {
-  const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
-  const explicitAgentEntry = params.approvals.agents?.[agentKey];
-  const wildcardEntry = params.approvals.agents?.["*"];
-  const candidates = [
-    {
-      value: readNormalizedExecPolicyField({
-        field: params.field,
-        entry: explicitAgentEntry,
-      }),
-      source: `${params.hostPath} agents.${agentKey}.${params.field}`,
-    },
-    {
-      value: readNormalizedExecPolicyField({
-        field: params.field,
-        entry: wildcardEntry,
-      }),
-      source: `${params.hostPath} agents.*.${params.field}`,
-    },
-    {
-      value: readNormalizedExecPolicyField({
-        field: params.field,
-        entry: params.approvals.defaults,
-      }),
-      source: `${params.hostPath} defaults.${params.field}`,
-    },
-  ];
-  for (const candidate of candidates) {
-    if (candidate.value != null) {
-      return candidate.source;
-    }
+  if (params.sourceSuffix) {
+    return `${params.hostPath} ${params.sourceSuffix}`;
   }
   if (params.field === "askFallback") {
     return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
@@ -281,11 +217,10 @@ export function resolveExecPolicyScopeSnapshot(params: {
         defaultValue: DEFAULT_REQUESTED_SECURITY,
       }),
       host: resolved.agent.security,
-      hostSource: resolveHostFieldSource({
+      hostSource: formatHostFieldSource({
         hostPath,
-        agentId: params.agentId,
         field: "security",
-        approvals: resolved.file,
+        sourceSuffix: resolved.agentSources.security,
       }),
       effective: effectiveSecurity,
       note:
@@ -302,11 +237,10 @@ export function resolveExecPolicyScopeSnapshot(params: {
         defaultValue: DEFAULT_REQUESTED_ASK,
       }),
       host: resolved.agent.ask,
-      hostSource: resolveHostFieldSource({
+      hostSource: formatHostFieldSource({
         hostPath,
-        agentId: params.agentId,
         field: "ask",
-        approvals: resolved.file,
+        sourceSuffix: resolved.agentSources.ask,
       }),
       effective: effectiveAsk,
       note: resolveAskNote({
@@ -317,11 +251,10 @@ export function resolveExecPolicyScopeSnapshot(params: {
     },
     askFallback: {
       effective: resolved.agent.askFallback,
-      source: resolveHostFieldSource({
+      source: formatHostFieldSource({
         hostPath,
-        agentId: params.agentId,
         field: "askFallback",
-        approvals: resolved.file,
+        sourceSuffix: resolved.agentSources.askFallback,
       }),
     },
     allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: effectiveAsk }),
