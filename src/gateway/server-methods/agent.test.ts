@@ -68,6 +68,7 @@ vi.mock("../../infra/agent-events.js", () => ({
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   getSubagentRunByChildSessionKey: mocks.getSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey: mocks.getSubagentRunByChildSessionKey,
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
