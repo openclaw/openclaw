@@ -340,7 +340,14 @@ function extractShellWrappedCommandPayload(
   executable: string | undefined,
   args: string[],
 ): string | null {
-  if (!executable || !/^(?:bash|dash|fish|ksh|sh|zsh)$/i.test(executable)) {
+  if (!executable) {
+    return null;
+  }
+  const executableBase = executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+  const normalizedExecutable = executableBase.endsWith(".exe")
+    ? executableBase.slice(0, -4)
+    : executableBase;
+  if (!/^(?:bash|dash|fish|ksh|sh|zsh)$/i.test(normalizedExecutable)) {
     return null;
   }
   for (let i = 0; i < args.length; i += 1) {
@@ -355,6 +362,9 @@ function extractShellWrappedCommandPayload(
       if (arg.includes("c")) {
         return args[i + 1] ?? null;
       }
+      continue;
+    }
+    if (/^--[A-Za-z0-9][A-Za-z0-9-]*(?:=.*)?$/u.test(arg)) {
       continue;
     }
     return null;

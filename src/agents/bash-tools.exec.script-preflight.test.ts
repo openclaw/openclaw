@@ -184,6 +184,38 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("fails closed for shell-wrapped interpreter invocations via absolute shell paths", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-abs-path", {
+          command: '/bin/bash -c "python bad.py"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
+  it("fails closed for shell-wrapped interpreter invocations with leading long options", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-long-options", {
+          command: 'bash --noprofile --norc -c "python bad.py"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
   it("fails closed for shell-wrapped interpreter invocations with combined shell flags", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
