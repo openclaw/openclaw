@@ -879,6 +879,10 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/automation/clawflow",
+      "destination": "/automation/taskflow"
     }
   ],
   "navigation": {
@@ -1122,7 +1126,7 @@
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/tasks",
-                  "automation/clawflow",
+                  "automation/taskflow",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
