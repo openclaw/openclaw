@@ -299,12 +299,12 @@ describe("markAuthProfileFailure", () => {
 
       const stats = store.usageStats?.["anthropic:default"];
       // Error count should reset to 1 (not escalate to 4) because the
-      // previous cooldown expired. Cooldown should be ~1 min, not ~60 min.
+      // previous cooldown expired. Cooldown should be ~30s, not ~5 min.
       expect(stats?.errorCount).toBe(1);
       expect(stats?.failureCounts?.rate_limit).toBe(1);
       const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
-      // calculateAuthProfileCooldownMs(1) = 60_000 (1 minute)
-      expect(cooldownMs).toBeLessThan(120_000);
+      // calculateAuthProfileCooldownMs(1) = 30_000 (stepped: 30s → 1m → 5m)
+      expect(cooldownMs).toBeLessThan(60_000);
       expect(cooldownMs).toBeGreaterThan(0);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
@@ -336,11 +336,11 @@ describe("markAuthProfileFailure", () => {
 });
 
 describe("calculateAuthProfileCooldownMs", () => {
-  it("applies exponential backoff with a 1h cap", () => {
-    expect(calculateAuthProfileCooldownMs(1)).toBe(60_000);
-    expect(calculateAuthProfileCooldownMs(2)).toBe(5 * 60_000);
-    expect(calculateAuthProfileCooldownMs(3)).toBe(25 * 60_000);
-    expect(calculateAuthProfileCooldownMs(4)).toBe(60 * 60_000);
-    expect(calculateAuthProfileCooldownMs(5)).toBe(60 * 60_000);
+  it("applies stepped backoff with a 5-min cap", () => {
+    expect(calculateAuthProfileCooldownMs(1)).toBe(30_000); // 30 seconds
+    expect(calculateAuthProfileCooldownMs(2)).toBe(60_000); // 1 minute
+    expect(calculateAuthProfileCooldownMs(3)).toBe(5 * 60_000); // 5 minutes
+    expect(calculateAuthProfileCooldownMs(4)).toBe(5 * 60_000); // 5 minutes (cap)
+    expect(calculateAuthProfileCooldownMs(5)).toBe(5 * 60_000); // 5 minutes (cap)
   });
 });

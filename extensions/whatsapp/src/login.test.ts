@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { renderQrPngBase64 } from "./qr-image.js";
 
 vi.mock("./session.js", async () => {
@@ -65,7 +65,7 @@ describe("renderQrPngBase64", () => {
   });
 
   it("avoids dynamic require of qrcode-terminal vendor modules", async () => {
-    const sourcePath = resolve(process.cwd(), "extensions/whatsapp/src/qr-image.ts");
+    const sourcePath = resolve(process.cwd(), "src/media/qr-image.ts");
     const source = await readFile(sourcePath, "utf-8");
     expect(source).not.toContain("createRequire(");
     expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');

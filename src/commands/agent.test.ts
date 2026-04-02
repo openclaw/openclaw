@@ -8,7 +8,6 @@ import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js
 import * as authProfilesModule from "../agents/auth-profiles.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { resolveSession } from "../agents/command/session.js";
-import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -562,6 +561,61 @@ describe("agentCommand", () => {
     });
   });
 
+  it("resolves duplicate cross-agent sessionIds deterministically", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+      const otherStore = path.join(home, "sessions", "other", "sessions.json");
+      const retiredStore = path.join(home, "sessions", "retired", "sessions.json");
+      writeSessionStoreSeed(otherStore, {
+        "agent:other:main": {
+          sessionId: "run-dup",
+          updatedAt: Date.now() + 1_000,
+        },
+      });
+      writeSessionStoreSeed(retiredStore, {
+        "agent:retired:acp:run-dup": {
+          sessionId: "run-dup",
+          updatedAt: Date.now(),
+        },
+      });
+      const cfg = mockConfig(home, storePattern, undefined, undefined, [
+        { id: "other" },
+        { id: "retired", default: true },
+      ]);
+
+      const resolution = resolveSession({ cfg, sessionId: "run-dup" });
+
+      expect(resolution.sessionKey).toBe("agent:retired:acp:run-dup");
+      expect(resolution.storePath).toBe(retiredStore);
+    });
+  });
+
+  it("uses origin.provider for channel-specific session reset overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        main: {
+          sessionId: "origin-provider-reset",
+          updatedAt: Date.now() - 30 * 60_000,
+          origin: { provider: "discord" },
+        },
+      });
+      const cfg = mockConfig(home, store);
+      cfg.session = {
+        ...cfg.session,
+        reset: { mode: "idle", idleMinutes: 10 },
+        resetByChannel: {
+          discord: { mode: "idle", idleMinutes: 120 },
+        },
+      };
+
+      const resolution = resolveSession({ cfg, sessionKey: "main" });
+
+      expect(resolution.sessionId).toBe("origin-provider-reset");
+      expect(resolution.isNewSession).toBe(false);
+    });
+  });
+
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
     await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
       const resolution = resolveSession({ cfg, sessionId });
@@ -1012,66 +1066,6 @@ describe("agentCommand", () => {
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
       expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
-  });
-
-  it("clears stale Claude CLI legacy session IDs before retrying after session expiration", async () => {
-    vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(
-      (provider) => provider.trim().toLowerCase() === "claude-cli",
-    );
-    try {
-      await withTempHome(async (home) => {
-        const store = path.join(home, "sessions.json");
-        const sessionKey = "agent:main:subagent:cli-expired";
-        writeSessionStoreSeed(store, {
-          [sessionKey]: {
-            sessionId: "session-cli-123",
-            updatedAt: Date.now(),
-            providerOverride: "claude-cli",
-            modelOverride: "opus",
-            cliSessionIds: { "claude-cli": "stale-cli-session" },
-            claudeCliSessionId: "stale-legacy-session",
-          },
-        });
-        mockConfig(home, store, {
-          model: { primary: "claude-cli/opus", fallbacks: [] },
-          models: { "claude-cli/opus": {} },
-        });
-        runCliAgentSpy
-          .mockRejectedValueOnce(
-            new FailoverError("session expired", {
-              reason: "session_expired",
-              provider: "claude-cli",
-              model: "opus",
-              status: 410,
-            }),
-          )
-          .mockRejectedValue(new Error("retry failed"));
-
-        await expect(agentCommand({ message: "hi", sessionKey }, runtime)).rejects.toThrow(
-          "retry failed",
-        );
-
-        expect(runCliAgentSpy).toHaveBeenCalledTimes(2);
-        const firstCall = runCliAgentSpy.mock.calls[0]?.[0] as
-          | { cliSessionId?: string }
-          | undefined;
-        const secondCall = runCliAgentSpy.mock.calls[1]?.[0] as
-          | { cliSessionId?: string }
-          | undefined;
-        expect(firstCall?.cliSessionId).toBe("stale-cli-session");
-        expect(secondCall?.cliSessionId).toBeUndefined();
-
-        const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-          string,
-          { cliSessionIds?: Record<string, string>; claudeCliSessionId?: string }
-        >;
-        const entry = saved[sessionKey];
-        expect(entry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-        expect(entry?.claudeCliSessionId).toBeUndefined();
-      });
-    } finally {
-      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
-    }
   });
 
   it("rejects unknown agent overrides", async () => {

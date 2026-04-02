@@ -1,8 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
     case "anthropic":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "anthropic-vertex":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "amazon-bedrock":
       return {
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
@@ -32,6 +42,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
       };
     case "kimi":
       return {
+        openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       };
     default:
@@ -54,24 +65,22 @@ let shouldSanitizeGeminiThoughtSignaturesForModel: typeof import("./provider-cap
 let supportsOpenAiCompatTurnValidation: typeof import("./provider-capabilities.js").supportsOpenAiCompatTurnValidation;
 let usesMoonshotThinkingPayloadCompat: typeof import("./provider-capabilities.js").usesMoonshotThinkingPayloadCompat;
 
-async function loadFreshProviderCapabilitiesModuleForTest() {
-  vi.resetModules();
-  ({
-    isAnthropicProviderFamily,
-    isOpenAiProviderFamily,
-    requiresOpenAiCompatibleAnthropicToolPayload,
-    resolveProviderCapabilities,
-    resolveTranscriptToolCallIdMode,
-    shouldDropThinkingBlocksForModel,
-    shouldSanitizeGeminiThoughtSignaturesForModel,
-    supportsOpenAiCompatTurnValidation,
-    usesMoonshotThinkingPayloadCompat,
-  } = await import("./provider-capabilities.js"));
-}
-
 describe("resolveProviderCapabilities", () => {
-  beforeEach(async () => {
-    await loadFreshProviderCapabilitiesModuleForTest();
+  beforeAll(async () => {
+    ({
+      isAnthropicProviderFamily,
+      isOpenAiProviderFamily,
+      requiresOpenAiCompatibleAnthropicToolPayload,
+      resolveProviderCapabilities,
+      resolveTranscriptToolCallIdMode,
+      shouldDropThinkingBlocksForModel,
+      shouldSanitizeGeminiThoughtSignaturesForModel,
+      supportsOpenAiCompatTurnValidation,
+      usesMoonshotThinkingPayloadCompat,
+    } = await import("./provider-capabilities.js"));
+  });
+
+  beforeEach(() => {
     resolveProviderCapabilitiesWithPluginMock.mockClear();
   });
 
@@ -117,12 +126,32 @@ describe("resolveProviderCapabilities", () => {
     });
   });
 
+  it("preserves built-in fallback capability hints when plugin overrides are partial", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => ({
+      providerFamily: "anthropic",
+    }));
+
+    expect(resolveProviderCapabilities("anthropic")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+  });
+
   it("normalizes kimi aliases to the same capability set", () => {
     expect(resolveProviderCapabilities("kimi")).toEqual(resolveProviderCapabilities("kimi-code"));
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
-      openAiPayloadNormalizationMode: "default",
+      openAiPayloadNormalizationMode: "moonshot-thinking",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -143,7 +172,13 @@ describe("resolveProviderCapabilities", () => {
 
   it("routes moonshot payload compatibility through the capability registry", () => {
     expect(usesMoonshotThinkingPayloadCompat("moonshot")).toBe(true);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
     expect(usesMoonshotThinkingPayloadCompat("openai")).toBe(false);
+  });
+
+  it("keeps the normalized kimi fallback aligned when plugin capabilities are unavailable", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => undefined);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
   });
 
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {

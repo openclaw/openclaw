@@ -26,10 +26,13 @@ type MatrixHandlerTestHarnessOptions = {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: Set<string>;
-  mentionRegexes?: MatrixMonitorHandlerParams["mentionRegexes"];
+  mentionRegexes?: RegExp[];
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
+  dmThreadReplies?: "off" | "inbound" | "always";
+  streaming?: "partial" | "off";
+  blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   textLimit?: number;
@@ -39,6 +42,7 @@ type MatrixHandlerTestHarnessOptions = {
   dropPreStartupMessages?: boolean;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
+  historyLimit?: number;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
@@ -206,10 +210,12 @@ export function createMatrixHandlerTestHarness(
     roomsConfig: options.roomsConfig,
     accountAllowBots: options.accountAllowBots,
     configuredBotUserIds: options.configuredBotUserIds,
-    mentionRegexes: options.mentionRegexes ?? [],
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
     threadReplies: options.threadReplies ?? "inbound",
+    dmThreadReplies: options.dmThreadReplies,
+    streaming: options.streaming ?? "off",
+    blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy: options.dmPolicy ?? "open",
     textLimit: options.textLimit ?? 8_000,
@@ -224,6 +230,7 @@ export function createMatrixHandlerTestHarness(
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
+    historyLimit: options.historyLimit ?? 0,
   });
 
   return {
@@ -246,17 +253,31 @@ export function createMatrixTextMessageEvent(params: {
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
 }): MatrixRawEvent {
-  return {
-    type: EventType.RoomMessage,
-    sender: params.sender ?? "@user:example.org",
-    event_id: params.eventId,
-    origin_server_ts: params.originServerTs ?? Date.now(),
+  return createMatrixRoomMessageEvent({
+    eventId: params.eventId,
+    sender: params.sender,
+    originServerTs: params.originServerTs,
     content: {
       msgtype: "m.text",
       body: params.body,
       ...(params.relatesTo ? { "m.relates_to": params.relatesTo } : {}),
       ...(params.mentions ? { "m.mentions": params.mentions } : {}),
     },
+  });
+}
+
+export function createMatrixRoomMessageEvent(params: {
+  eventId: string;
+  sender?: string;
+  originServerTs?: number;
+  content: RoomMessageEventContent;
+}): MatrixRawEvent {
+  return {
+    type: EventType.RoomMessage,
+    sender: params.sender ?? "@user:example.org",
+    event_id: params.eventId,
+    origin_server_ts: params.originServerTs ?? Date.now(),
+    content: params.content,
   } as MatrixRawEvent;
 }
 

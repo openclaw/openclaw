@@ -50,6 +50,27 @@ export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
   config = next;
 }
 
+export function createSignalToolResultConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const base = config as { channels?: Record<string, unknown> };
+  const channels = base.channels ?? {};
+  const signal = (channels.signal ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    channels: {
+      ...channels,
+      signal: {
+        ...signal,
+        autoStart: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...overrides,
+      },
+    },
+  };
+}
+
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 export function createMockSignalDaemonHandle(
@@ -158,17 +179,17 @@ vi.mock("./daemon.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("openclaw/plugin-sdk/channel-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-runtime")>(
+    "openclaw/plugin-sdk/channel-runtime",
   );
   return {
     ...actual,
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
     enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
       enqueueSystemEventMock(...args);
       return actual.enqueueSystemEvent(...args);
     },
+    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });
 
@@ -176,7 +197,7 @@ export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/infra-runtime"),
+      import("openclaw/plugin-sdk/channel-runtime"),
     ]);
     resetInboundDedupe();
     config = {

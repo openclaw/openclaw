@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { setNostrRuntime } from "./runtime.js";
@@ -21,6 +21,16 @@ vi.mock("./nostr-bus.js", () => ({
   normalizePubkey: mocks.normalizePubkey,
   startNostrBus: mocks.startNostrBus,
 }));
+
+function createMockBus() {
+  return {
+    sendDm: vi.fn(async () => {}),
+    close: vi.fn(),
+    getMetrics: vi.fn(() => ({ counters: {} })),
+    publishProfile: vi.fn(),
+    getProfileState: vi.fn(async () => null),
+  };
+}
 
 function createRuntimeHarness() {
   const recordInboundSession = vi.fn(async () => {});
@@ -69,6 +79,25 @@ function createRuntimeHarness() {
   };
 }
 
+async function startGatewayHarness(params: {
+  account: ReturnType<typeof buildResolvedNostrAccount>;
+  cfg?: Parameters<typeof createStartAccountContext>[0]["cfg"];
+}) {
+  const harness = createRuntimeHarness();
+  const bus = createMockBus();
+  setNostrRuntime(harness.runtime);
+  mocks.startNostrBus.mockResolvedValueOnce(bus as never);
+
+  const cleanup = (await nostrPlugin.gateway!.startAccount!(
+    createStartAccountContext({
+      account: params.account,
+      cfg: params.cfg,
+    }),
+  )) as { stop: () => void };
+
+  return { harness, bus, cleanup };
+}
+
 describe("nostr inbound gateway path", () => {
   afterEach(() => {
     mocks.normalizePubkey.mockClear();
@@ -76,25 +105,11 @@ describe("nostr inbound gateway path", () => {
   });
 
   it("issues a pairing reply before decrypt for unknown senders", async () => {
-    const harness = createRuntimeHarness();
-    setNostrRuntime(harness.runtime);
-
-    const bus = {
-      sendDm: vi.fn(async () => {}),
-      close: vi.fn(),
-      getMetrics: vi.fn(() => ({ counters: {} })),
-      publishProfile: vi.fn(),
-      getProfileState: vi.fn(async () => null),
-    };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as never);
-
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: buildResolvedNostrAccount({
-          config: { dmPolicy: "pairing", allowFrom: [] },
-        }),
+    const { cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        config: { dmPolicy: "pairing", allowFrom: [] },
       }),
-    )) as { stop: () => void };
+    });
 
     const options = mocks.startNostrBus.mock.calls[0]?.[0] as {
       authorizeSender: (params: {
@@ -117,30 +132,16 @@ describe("nostr inbound gateway path", () => {
   });
 
   it("routes allowed DMs through the standard reply pipeline", async () => {
-    const harness = createRuntimeHarness();
-    setNostrRuntime(harness.runtime);
-
-    const bus = {
-      sendDm: vi.fn(async () => {}),
-      close: vi.fn(),
-      getMetrics: vi.fn(() => ({ counters: {} })),
-      publishProfile: vi.fn(),
-      getProfileState: vi.fn(async () => null),
-    };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as never);
-
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: buildResolvedNostrAccount({
-          publicKey: "bot-pubkey",
-          config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
-        }),
-        cfg: {
-          session: { store: { type: "jsonl" } },
-          commands: { useAccessGroups: true },
-        } as never,
+    const { harness, cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
       }),
-    )) as { stop: () => void };
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+    });
 
     const options = mocks.startNostrBus.mock.calls[0]?.[0] as {
       onMessage: (

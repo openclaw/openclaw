@@ -30,7 +30,6 @@ export function createGatewayCloseHandler(params: {
   chatRunState: { clear: () => void };
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
-  browserControl: { stop: () => Promise<void> } | null;
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
@@ -133,9 +132,6 @@ export function createGatewayCloseHandler(params: {
       }
       params.clients.clear();
       await params.configReloader.stop().catch(() => {});
-      if (params.browserControl) {
-        await params.browserControl.stop().catch(() => {});
-      }
       await new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const servers =
         params.httpServers && params.httpServers.length > 0

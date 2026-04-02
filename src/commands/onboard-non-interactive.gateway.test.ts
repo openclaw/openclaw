@@ -109,6 +109,58 @@ function getPseudoPort(base: number): number {
 
 const runtime = createThrowingRuntime();
 
+function createJsonCaptureRuntime() {
+  let capturedJson = "";
+  const runtimeWithCapture: RuntimeEnv = {
+    log: (...args: unknown[]) => {
+      const firstArg = args[0];
+      capturedJson =
+        typeof firstArg === "string"
+          ? firstArg
+          : firstArg instanceof Error
+            ? firstArg.message
+            : (JSON.stringify(firstArg) ?? "");
+    },
+    error: (...args: unknown[]) => {
+      const firstArg = args[0];
+      const capturedError =
+        typeof firstArg === "string"
+          ? firstArg
+          : firstArg instanceof Error
+            ? firstArg.message
+            : (JSON.stringify(firstArg) ?? "");
+      throw new Error(capturedError);
+    },
+    exit: (_code: number) => {
+      throw new Error("exit should not be reached after runtime.error");
+    },
+  };
+
+  return {
+    runtimeWithCapture,
+    readCapturedJson: () => capturedJson,
+  };
+}
+
+async function expectLocalJsonSetupFailure(stateDir: string, runtimeWithCapture: RuntimeEnv) {
+  await expect(
+    runNonInteractiveSetup(
+      {
+        nonInteractive: true,
+        mode: "local",
+        workspace: path.join(stateDir, "openclaw"),
+        authChoice: "skip",
+        skipSkills: true,
+        skipHealth: false,
+        installDaemon: true,
+        gatewayBind: "loopback",
+        json: true,
+      },
+      runtimeWithCapture,
+    ),
+  ).rejects.toThrow("exit should not be reached after runtime.error");
+}
+
 describe("onboard (non-interactive): gateway and remote auth", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string | undefined;
@@ -156,10 +208,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
     tempHome = await makeTempWorkspace("openclaw-onboard-");
     process.env.HOME = tempHome;
+
+    await loadGatewayOnboardModules();
   });
 
-  beforeEach(async () => {
-    await loadGatewayOnboardModules();
+  beforeEach(() => {
     gatewayClientCalls.length = 0;
   });
 
@@ -426,31 +479,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         skippedReason: "systemd-user-unavailable",
       });
 
-      let capturedJson = "";
-      const runtimeWithCapture: RuntimeEnv = {
-        log: (...args: unknown[]) => {
-          const firstArg = args[0];
-          capturedJson =
-            typeof firstArg === "string"
-              ? firstArg
-              : firstArg instanceof Error
-                ? firstArg.message
-                : (JSON.stringify(firstArg) ?? "");
-        },
-        error: (...args: unknown[]) => {
-          const firstArg = args[0];
-          const capturedError =
-            typeof firstArg === "string"
-              ? firstArg
-              : firstArg instanceof Error
-                ? firstArg.message
-                : (JSON.stringify(firstArg) ?? "");
-          throw new Error(capturedError);
-        },
-        exit: (_code: number) => {
-          throw new Error("exit should not be reached after runtime.error");
-        },
-      };
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
 
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", {
@@ -459,22 +488,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       });
 
       try {
-        await expect(
-          runNonInteractiveSetup(
-            {
-              nonInteractive: true,
-              mode: "local",
-              workspace: path.join(stateDir, "openclaw"),
-              authChoice: "skip",
-              skipSkills: true,
-              skipHealth: false,
-              installDaemon: true,
-              gatewayBind: "loopback",
-              json: true,
-            },
-            runtimeWithCapture,
-          ),
-        ).rejects.toThrow("exit should not be reached after runtime.error");
+        await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
       } finally {
         Object.defineProperty(process, "platform", {
           configurable: true,
@@ -482,7 +496,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         });
       }
 
-      const parsed = JSON.parse(capturedJson) as {
+      const parsed = JSON.parse(readCapturedJson()) as {
         ok: boolean;
         phase: string;
         daemonInstall?: {
@@ -512,50 +526,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
       }));
 
-      let capturedJson = "";
-      const runtimeWithCapture: RuntimeEnv = {
-        log: (...args: unknown[]) => {
-          const firstArg = args[0];
-          capturedJson =
-            typeof firstArg === "string"
-              ? firstArg
-              : firstArg instanceof Error
-                ? firstArg.message
-                : (JSON.stringify(firstArg) ?? "");
-        },
-        error: (...args: unknown[]) => {
-          const firstArg = args[0];
-          const capturedError =
-            typeof firstArg === "string"
-              ? firstArg
-              : firstArg instanceof Error
-                ? firstArg.message
-                : (JSON.stringify(firstArg) ?? "");
-          throw new Error(capturedError);
-        },
-        exit: (_code: number) => {
-          throw new Error("exit should not be reached after runtime.error");
-        },
-      };
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
 
-      await expect(
-        runNonInteractiveSetup(
-          {
-            nonInteractive: true,
-            mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
-            authChoice: "skip",
-            skipSkills: true,
-            skipHealth: false,
-            installDaemon: true,
-            gatewayBind: "loopback",
-            json: true,
-          },
-          runtimeWithCapture,
-        ),
-      ).rejects.toThrow("exit should not be reached after runtime.error");
-
-      const parsed = JSON.parse(capturedJson) as {
+      const parsed = JSON.parse(readCapturedJson()) as {
         ok: boolean;
         phase: string;
         installDaemon: boolean;

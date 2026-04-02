@@ -3,6 +3,7 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
@@ -16,6 +17,7 @@ export type IMessageSendOpts = {
   replyToId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -25,16 +27,19 @@ export type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
-    options?: { localRoots?: readonly string[] },
+    options?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
 export type IMessageSendResult = {
   messageId: string;
+  sentText: string;
 };
 
-const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
 const MAX_REPLY_TO_ID_LENGTH = 256;
 
 function stripUnsafeReplyTagChars(value: string): string {
@@ -64,21 +69,6 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   return sanitized;
 }
 
-function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
-  const resolvedReplyToId = sanitizeReplyToId(replyToId);
-  if (!resolvedReplyToId) {
-    return message;
-  }
-  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
-  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
-  if (existingLeadingTag) {
-    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
-    return remainder ? `${replyTag} ${remainder}` : replyTag;
-  }
-  const trimmedMessage = message.trimStart();
-  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
-}
-
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
   if (!result) {
     return null;
@@ -91,6 +81,17 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? String(raw).trim() : null;
+}
+
+function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {
+  if (text.trim()) {
+    return text;
+  }
+  const kind = kindFromMime(mediaContentType ?? undefined);
+  if (!kind) {
+    return text;
+  }
+  return kind === "image" ? "<media:image>" : `<media:${kind}>`;
 }
 
 export async function sendMessageIMessage(
@@ -126,14 +127,10 @@ export async function sendMessageIMessage(
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
+      readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
-    if (!message.trim()) {
-      const kind = kindFromMime(resolved.contentType ?? undefined);
-      if (kind) {
-        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      }
-    }
+    message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);
   }
 
   if (!message.trim() && !filePath) {
@@ -147,13 +144,19 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
-  message = prependReplyTagIfNeeded(message, opts.replyToId);
-
+  message = stripInlineDirectiveTagsForDelivery(message).text;
+  if (!message.trim() && !filePath) {
+    throw new Error("iMessage send requires text or media");
+  }
+  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const params: Record<string, unknown> = {
     text: message,
     service: service || "auto",
     region,
   };
+  if (resolvedReplyToId) {
+    params.reply_to = resolvedReplyToId;
+  }
   if (filePath) {
     params.file = filePath;
   }
@@ -181,6 +184,7 @@ export async function sendMessageIMessage(
     const resolvedId = resolveMessageId(result);
     return {
       messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
+      sentText: message,
     };
   } finally {
     if (shouldClose) {

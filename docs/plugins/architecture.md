@@ -27,14 +27,15 @@ This page covers the internal architecture of the OpenClaw plugin system.
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability          | Registration method                           | Example plugins           |
-| ------------------- | --------------------------------------------- | ------------------------- |
-| Text inference      | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| Speech              | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation    | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search          | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability            | Registration method                           | Example plugins           |
+| --------------------- | --------------------------------------------- | ------------------------- |
+| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
+| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
+| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
+| Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
+| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.
@@ -129,6 +130,14 @@ OpenClaw's plugin system has four layers:
    The rest of OpenClaw reads the registry to expose tools, channels, provider
    setup, hooks, HTTP routes, CLI commands, and services.
 
+For plugin CLI specifically, root command discovery is split in two phases:
+
+- parse-time metadata comes from `registerCli(..., { descriptors: [...] })`
+- the real plugin CLI module can stay lazy and register on first invocation
+
+That keeps plugin-owned CLI code inside the plugin while still letting OpenClaw
+reserve root command names before parsing.
+
 The important design boundary:
 
 - discovery + config validation should work from **manifest/schema metadata**
@@ -150,6 +159,8 @@ The current boundary is:
   bookkeeping, and execution dispatch
 - channel plugins own scoped action discovery, capability discovery, and any
   channel-specific schema fragments
+- channel plugins own provider-specific session conversation grammar, such as
+  how conversation ids encode thread ids or inherit from parent conversations
 - channel plugins execute the final action through their action adapter
 
 For channel plugins, the SDK surface is
@@ -279,13 +290,11 @@ contracts for models, speech, media understanding, and web search, a vendor can
 own all of its surfaces in one place:
 
 ```ts
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk";
+import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildOpenAISpeechProvider,
-  createPluginBackedWebSearchProvider,
   describeImageWithModel,
   transcribeOpenAiCompatibleAudio,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/media-understanding";
 
 const plugin: OpenClawPluginDefinition = {
   id: "exampleai",
@@ -296,12 +305,10 @@ const plugin: OpenClawPluginDefinition = {
       // auth/model catalog/runtime hooks
     });
 
-    api.registerSpeechProvider(
-      buildOpenAISpeechProvider({
-        id: "exampleai",
-        // vendor speech config
-      }),
-    );
+    api.registerSpeechProvider({
+      id: "exampleai",
+      // vendor speech config — implement the SpeechProviderPlugin interface directly
+    });
 
     api.registerMediaUnderstandingProvider({
       id: "exampleai",
@@ -469,8 +476,12 @@ At startup, OpenClaw does roughly this:
    `slots`, `load.paths`)
 5. decide enablement for each candidate
 6. load enabled native modules via jiti
-7. call native `register(api)` hooks and collect registrations into the plugin registry
+7. call native `register(api)` (or `activate(api)` — a legacy alias) hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
+
+<Note>
+`activate` is a legacy alias for `register` — the loader resolves whichever is present (`def.register ?? def.activate`) and calls it at the same point. All bundled plugins use `register`; prefer `register` for new plugins.
+</Note>
 
 The safety gates happen **before** runtime execution. Candidates are blocked
 when the entry escapes the plugin root, the path is world-writable, or path
@@ -579,7 +590,7 @@ Provider plugins now have two layers:
   runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
   labels and CLI flag metadata before runtime load
 - config-time hooks: `catalog` / legacy `discovery`
-- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, `buildReplayPolicy`, `sanitizeReplayHistory`, `validateReplayTurns`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific behavior without
@@ -622,6 +633,9 @@ The "When to use" column is the quick decision guide.
 | 19  | `prepareRuntimeAuth`          | Exchange a configured credential into the actual runtime token/key just before inference | Provider needs a token exchange or short-lived request credential                    |
 | 20  | `resolveUsageAuth`            | Resolve usage/billing credentials for `/usage` and related status surfaces               | Provider needs custom usage/quota token parsing or a different usage credential      |
 | 21  | `fetchUsageSnapshot`          | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved       | Provider needs a provider-specific usage endpoint or payload parser                  |
+| 22  | `buildReplayPolicy`           | Return a replay policy controlling transcript handling for the provider                  | Provider needs custom transcript policy (for example, thinking-block stripping)      |
+| 23  | `sanitizeReplayHistory`       | Rewrite replay history after generic transcript cleanup                                  | Provider needs provider-specific replay rewrites beyond shared compaction helpers    |
+| 24  | `validateReplayTurns`         | Final replay-turn validation or reshaping before the embedded runner                     | Provider transport needs stricter turn validation after generic sanitation           |
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
@@ -735,7 +749,6 @@ api.registerProvider({
   `huggingface`, `kimi-coding`, `modelstudio`, `nvidia`, `qianfan`,
   `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
   `catalog` only.
-- Qwen portal uses `catalog`, `auth`, and `refreshOAuth`.
 - MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
   behavior is plugin-owned even though inference still runs through the shared
   transports.
@@ -900,6 +913,22 @@ Notes:
 - Use web-search providers for vendor-specific search transports.
 - `api.runtime.webSearch.*` is the preferred shared surface for feature/channel plugins that need search behavior without depending on the agent tool wrapper.
 
+### `api.runtime.imageGeneration`
+
+```ts
+const result = await api.runtime.imageGeneration.generate({
+  config: api.config,
+  args: { prompt: "A friendly lobster mascot", size: "1024x1024" },
+});
+
+const providers = api.runtime.imageGeneration.listProviders({
+  config: api.config,
+});
+```
+
+- `generate(...)`: generate an image using the configured image-generation provider chain.
+- `listProviders(...)`: list available image-generation providers and their capabilities.
+
 ## Gateway HTTP routes
 
 Plugins can expose HTTP endpoints with `api.registerHttpRoute(...)`.
@@ -927,7 +956,7 @@ Route fields:
 
 Notes:
 
-- `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
+- `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
@@ -955,6 +984,7 @@ authoring plugins:
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
   `openclaw/plugin-sdk/infra-runtime`,
   `openclaw/plugin-sdk/agent-runtime`,
@@ -964,20 +994,25 @@ authoring plugins:
   `openclaw/plugin-sdk/status-helpers`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+- Approval-specific channel seams should prefer one `approvalCapability`
+  contract on the plugin. Core then reads approval auth, delivery, render, and
+  native-routing behavior through that one capability instead of mixing
+  approval behavior into unrelated plugin fields.
 - `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
   New code should import the narrower primitives instead.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
-  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
-  import `extensions/<id>/src/*` from core or from another extension.
+  public entry points under a plugin package root such as `index.js`, `api.js`,
+  `runtime-api.js`, `setup-entry.js`, and narrowly scoped files such as
+  `login-qr-api.js`. Never import a plugin package's `src/*` from core or from
+  another extension.
 - Repo entry point split:
-  `extensions/<id>/api.js` is the helper/types barrel,
-  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
-  `extensions/<id>/index.js` is the bundled plugin entry,
-  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
+  `<plugin-package-root>/api.js` is the helper/types barrel,
+  `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
+  `<plugin-package-root>/index.js` is the bundled plugin entry,
+  and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
 - No bundled channel-branded public subpaths remain. Channel-specific helper and
-  runtime seams live under `extensions/<id>/api.js` and `extensions/<id>/runtime-api.js`;
+  runtime seams live under `<plugin-package-root>/api.js` and `<plugin-package-root>/runtime-api.js`;
   the public SDK contract is the generic shared primitives instead.
 
 Compatibility note:
@@ -994,8 +1029,10 @@ Compatibility note:
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into
   `openclaw/plugin-sdk/<extension>`.
-- Channel-branded bundled bars stay private unless they are explicitly added
-  back to the public contract.
+- New shared helper seams should be generic, not channel-branded. Shared target
+  parsing belongs on `openclaw/plugin-sdk/channel-targets`; channel-specific
+  internals stay behind the owning plugin's local `api.js` or `runtime-api.js`
+  seam.
 - Capability-specific subpaths such as `image-generation`,
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a
@@ -1150,7 +1187,7 @@ directory after symlink resolution. Entries that escape the package directory ar
 rejected.
 
 Security note: `openclaw plugins install` installs plugin dependencies with
-`npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
+`npm install --omit=dev --ignore-scripts` (no lifecycle scripts, no dev dependencies at runtime). Keep plugin dependency
 trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
@@ -1215,7 +1252,7 @@ Example:
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",
-      "localPath": "extensions/nextcloud-talk",
+      "localPath": "<bundled-plugin-local-path>",
       "defaultChoice": "npm"
     }
   }
@@ -1231,7 +1268,7 @@ registry export). Drop a JSON file at one of:
 
 Or point `OPENCLAW_PLUGIN_CATALOG_PATHS` (or `OPENCLAW_MPM_CATALOG_PATHS`) at
 one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
-contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
+contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`. The parser also accepts `"packages"` or `"plugins"` as legacy aliases for the `"entries"` key.
 
 ## Context engine plugins
 

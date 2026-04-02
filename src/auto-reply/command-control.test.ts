@@ -13,6 +13,41 @@ import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registr
 installDiscordRegistryHooks();
 
 describe("resolveCommandAuthorization", () => {
+  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+    allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+
+  function createAllowFromPlugin(
+    id: string,
+    resolveAllowFrom: () => Array<string | number> | undefined,
+  ) {
+    return {
+      pluginId: id,
+      plugin: {
+        ...createOutboundTestPlugin({
+          id,
+          outbound: { deliveryMode: "direct" },
+        }),
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          resolveAllowFrom,
+          formatAllowFrom,
+        },
+      },
+      source: "test" as const,
+    };
+  }
+
+  function createThrowingAllowFromPlugin(id: string, error: string) {
+    return createAllowFromPlugin(id, () => {
+      throw new Error(error);
+    });
+  }
+
+  function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
+    setActivePluginRegistry(createTestRegistry(plugins));
+  }
+
   function resolveWhatsAppAuthorization(params: {
     from: string;
     senderId?: string;
@@ -159,6 +194,27 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.ownerList).toEqual(["123"]);
   });
 
+  it("suppresses inherited owner status when the context forbids it", () => {
+    const cfg = {
+      channels: { telegram: { allowFrom: ["owner-123"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "exec-event",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        From: "owner-123",
+        To: "owner-123",
+        ForceSenderIsOwnerFalse: true,
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
   it("does not infer a provider from channel allowlists for webchat command contexts", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+15551234567"] } },
@@ -181,29 +237,31 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("preserves external channel command auth in mixed webchat contexts", () => {
+    const cfg = {
+      commands: { allowFrom: { whatsapp: ["+15551234567"] } },
+      channels: { whatsapp: { allowFrom: ["+15551234567"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        From: "whatsapp:+19995551234",
+        SenderE164: "+19995551234",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("whatsapp");
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
   it("falls back to channel allowFrom when provider allowlist resolution throws", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "telegram",
-              outbound: { deliveryMode: "direct" },
-            }),
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-              resolveAllowFrom: () => {
-                throw new Error("channels.telegram.botToken: unresolved SecretRef");
-              },
-              formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-            },
-          },
-          source: "test",
-        },
-      ]),
+    registerAllowFromPlugins(
+      createThrowingAllowFromPlugin("telegram", "channels.telegram.botToken: unresolved SecretRef"),
     );
     const cfg = {
       channels: { telegram: { allowFrom: ["123"] } },
@@ -488,28 +546,11 @@ describe("resolveCommandAuthorization", () => {
       expect(deniedAuth.isAuthorizedSender).toBe(false);
     });
     it("fails closed when provider inference hits unresolved SecretRef allowlists", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "telegram",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => {
-                  throw new Error("channels.telegram.botToken: unresolved SecretRef");
-                },
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
+      registerAllowFromPlugins(
+        createThrowingAllowFromPlugin(
+          "telegram",
+          "channels.telegram.botToken: unresolved SecretRef",
+        ),
       );
 
       const cfg = {
@@ -538,28 +579,11 @@ describe("resolveCommandAuthorization", () => {
     });
 
     it("preserves provider resolution errors when inferred fallback allowFrom is empty", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "telegram",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => {
-                  throw new Error("channels.telegram.botToken: unresolved SecretRef");
-                },
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
+      registerAllowFromPlugins(
+        createThrowingAllowFromPlugin(
+          "telegram",
+          "channels.telegram.botToken: unresolved SecretRef",
+        ),
       );
 
       const auth = resolveCommandAuthorization({
@@ -584,28 +608,8 @@ describe("resolveCommandAuthorization", () => {
     });
 
     it("fails closed for global commands.allowFrom when inference errors drop every provider", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "slack",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "slack",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => {
-                  throw new Error("channels.slack.token: unresolved SecretRef");
-                },
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
+      registerAllowFromPlugins(
+        createThrowingAllowFromPlugin("slack", "channels.slack.token: unresolved SecretRef"),
       );
 
       const auth = resolveCommandAuthorization({
@@ -629,45 +633,9 @@ describe("resolveCommandAuthorization", () => {
       expect(auth.isAuthorizedSender).toBe(false);
     });
     it("does not let an unrelated provider resolution error poison inferred commands.allowFrom", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "telegram",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => ["123"],
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-          {
-            pluginId: "slack",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "slack",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => {
-                  throw new Error("channels.slack.token: unresolved SecretRef");
-                },
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
+      registerAllowFromPlugins(
+        createAllowFromPlugin("telegram", () => ["123"]),
+        createThrowingAllowFromPlugin("slack", "channels.slack.token: unresolved SecretRef"),
       );
 
       const auth = resolveCommandAuthorization({
@@ -694,28 +662,11 @@ describe("resolveCommandAuthorization", () => {
     });
 
     it("preserves default-account allowFrom on SecretRef fallback", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "telegram",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => {
-                  throw new Error("channels.telegram.botToken: unresolved SecretRef");
-                },
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
+      registerAllowFromPlugins(
+        createThrowingAllowFromPlugin(
+          "telegram",
+          "channels.telegram.botToken: unresolved SecretRef",
+        ),
       );
 
       const auth = resolveCommandAuthorization({
@@ -743,27 +694,7 @@ describe("resolveCommandAuthorization", () => {
     });
 
     it("treats undefined allowFrom as an open channel, not a resolution failure", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "discord",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => undefined,
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
-      );
+      registerAllowFromPlugins(createAllowFromPlugin("discord", () => undefined));
 
       const auth = resolveCommandAuthorization({
         ctx: {
@@ -783,29 +714,7 @@ describe("resolveCommandAuthorization", () => {
     });
 
     it("does not log raw resolution messages from thrown allowFrom errors", () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "telegram",
-                outbound: { deliveryMode: "direct" },
-              }),
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({}),
-                resolveAllowFrom: () => {
-                  throw new Error("SECRET-TOKEN-123");
-                },
-                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-              },
-            },
-            source: "test",
-          },
-        ]),
-      );
+      registerAllowFromPlugins(createThrowingAllowFromPlugin("telegram", "SECRET-TOKEN-123"));
 
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
@@ -967,5 +876,41 @@ describe("control command parsing", () => {
         botUsername: "openclaw",
       }),
     ).toBe(true);
+  });
+
+  it("detects commands wrapped in inbound metadata blocks", () => {
+    const metaWrapped = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-abc","chat_id":"chat-123"}',
+      "```",
+      "",
+      "/model spark",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
+  });
+
+  it("detects /new command after metadata prefix", () => {
+    const metaWrapped = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name":"Alice","id":"user-1"}',
+      "```",
+      "",
+      "/new spark",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
+  });
+
+  it("detects /status command after timestamp + metadata prefix", () => {
+    const metaWrapped = [
+      "[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"chat-123"}',
+      "```",
+      "",
+      "/status",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
   });
 });

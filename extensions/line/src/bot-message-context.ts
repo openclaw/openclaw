@@ -5,15 +5,22 @@ import {
   resolveInboundSessionEnvelopeContext,
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  ensureConfiguredBindingRouteReady,
+  getSessionBindingService,
   recordInboundSession,
   resolvePinnedMainDmOwnerFromAllowlist,
+  resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import {
+  deriveLastRoutePolicy,
+  resolveAgentIdFromSessionKey,
+  resolveAgentRoute,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
@@ -71,18 +78,18 @@ function buildPeerId(source: EventSource): string {
   return "unknown";
 }
 
-function resolveLineInboundRoute(params: {
+async function resolveLineInboundRoute(params: {
   source: EventSource;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
-}): {
+}): Promise<{
   userId?: string;
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
   peerId: string;
   route: ReturnType<typeof resolveAgentRoute>;
-} {
+}> {
   recordChannelActivity({
     channel: "line",
     accountId: params.account.accountId,
@@ -91,7 +98,7 @@ function resolveLineInboundRoute(params: {
 
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
-  const route = resolveAgentRoute({
+  let route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "line",
     accountId: params.account.accountId,
@@ -100,6 +107,57 @@ function resolveLineInboundRoute(params: {
       id: peerId,
     },
   });
+
+  const configuredRoute = resolveConfiguredBindingRoute({
+    cfg: params.cfg,
+    route,
+    conversation: {
+      channel: "line",
+      accountId: params.account.accountId,
+      conversationId: peerId,
+    },
+  });
+  let configuredBinding = configuredRoute.bindingResolution;
+  const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+  route = configuredRoute.route;
+
+  const boundConversation = getSessionBindingService().resolveByConversation({
+    channel: "line",
+    accountId: params.account.accountId,
+    conversationId: peerId,
+  });
+  const boundSessionKey = boundConversation?.targetSessionKey?.trim();
+  if (boundConversation && boundSessionKey) {
+    route = {
+      ...route,
+      sessionKey: boundSessionKey,
+      agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: boundSessionKey,
+        mainSessionKey: route.mainSessionKey,
+      }),
+      matchedBy: "binding.channel",
+    };
+    configuredBinding = null;
+    getSessionBindingService().touch(boundConversation.bindingId);
+    logVerbose(`line: routed via bound conversation ${peerId} -> ${boundSessionKey}`);
+  }
+
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredBindingRouteReady({
+      cfg: params.cfg,
+      bindingResolution: configuredBinding,
+    });
+    if (!ensured.ok) {
+      logVerbose(
+        `line: configured ACP binding unavailable for ${peerId} -> ${configuredBindingSessionKey}: ${ensured.error}`,
+      );
+      throw new Error(`Configured ACP binding unavailable: ${ensured.error}`);
+    }
+    logVerbose(
+      `line: using configured ACP binding for ${peerId} -> ${configuredBindingSessionKey}`,
+    );
+  }
 
   return { userId, groupId, roomId, isGroup, peerId, route };
 }
@@ -371,7 +429,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const { event, allMedia, cfg, account, commandAuthorized, groupHistories, historyLimit } = params;
 
   const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
     source,
     cfg,
     account,
@@ -460,7 +518,7 @@ export async function buildLinePostbackContext(params: {
   const { event, cfg, account, commandAuthorized } = params;
 
   const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
     source,
     cfg,
     account,

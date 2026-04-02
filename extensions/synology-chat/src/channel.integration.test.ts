@@ -14,9 +14,12 @@ type RegisteredRoute = {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
-const { createSynologyChatPlugin } = await import("./channel.js");
+let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
+const freshChannelModulePath: string = "./channel.js?channel-integration-test";
 describe("Synology channel wiring integration", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createSynologyChatPlugin } = await import(freshChannelModulePath));
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     finalizeInboundContextMock.mockClear();

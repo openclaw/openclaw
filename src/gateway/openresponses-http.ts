@@ -6,7 +6,7 @@
  * @see https://www.open-responses.com/
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
@@ -35,7 +35,15 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveGatewayRequestContext } from "./http-utils.js";
+import {
+  getBearerToken,
+  getHeader,
+  resolveAgentIdForRequest,
+  resolveGatewayRequestContext,
+  resolveOpenAiCompatModelOverride,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
+} from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -64,8 +72,8 @@ const DEFAULT_MAX_URL_PARTS = 8;
 const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_RESPONSE_SESSION_ENTRIES = 500;
 type ResponseSessionScope = {
+  authSubject: string;
   agentId: string;
-  user?: string;
   requestedSessionKey?: string;
 };
 
@@ -77,23 +85,40 @@ type ResponseSessionEntry = ResponseSessionScope & {
 const responseSessionMap = new Map<string, ResponseSessionEntry>();
 
 function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const user = scope.user?.trim();
+  const authSubject = scope.authSubject.trim();
   const requestedSessionKey = scope.requestedSessionKey?.trim();
   return {
+    authSubject,
     agentId: scope.agentId,
-    user: user || undefined,
     requestedSessionKey: requestedSessionKey || undefined,
   };
 }
 
+function resolveResponseSessionAuthSubject(params: {
+  req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
+}): string {
+  const bearer = getBearerToken(params.req);
+  if (bearer) {
+    return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
+  }
+  if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
+    const user = getHeader(params.req, params.auth.trustedProxy.userHeader)?.trim();
+    if (user) {
+      return `trusted-proxy:${user}`;
+    }
+  }
+  return `gateway-auth:${params.auth.mode}`;
+}
+
 function createResponseSessionScope(params: {
   req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
   agentId: string;
-  user?: string;
 }): ResponseSessionScope {
   return normalizeResponseSessionScope({
+    authSubject: resolveResponseSessionAuthSubject({ req: params.req, auth: params.auth }),
     agentId: params.agentId,
-    user: params.user,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
 }
@@ -103,8 +128,8 @@ function matchesResponseSessionScope(
   scope: ResponseSessionScope,
 ): boolean {
   return (
+    entry.authSubject === scope.authSubject &&
     entry.agentId === scope.agentId &&
-    entry.user === scope.user &&
     entry.requestedSessionKey === scope.requestedSessionKey
   );
 }
@@ -176,14 +201,14 @@ export const __testing = {
     responseId: string,
     sessionKey: string,
     now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
+    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
   ) {
     storeResponseSession(responseId, sessionKey, normalizeResponseSessionScope(scope), now);
   },
   lookupResponseSessionAt(
     responseId: string | undefined,
     now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
+    scope: ResponseSessionScope = { authSubject: "test", agentId: "main" },
   ) {
     return lookupResponseSession(responseId, normalizeResponseSessionScope(scope), now);
   },
@@ -232,7 +257,16 @@ function resolveResponsesLimits(
 }
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  return (body.tools ?? []) as ClientToolDefinition[];
+  // Normalize from Responses API flat format to the internal wrapped format.
+  return (body.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
 }
 
 function applyToolChoice(params: {
@@ -387,10 +421,12 @@ async function runResponsesAgentCommand(params: {
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
+  modelOverride?: string;
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -399,14 +435,14 @@ async function runResponsesAgentCommand(params: {
       images: params.images.length > 0 ? params.images : undefined,
       clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
       extraSystemPrompt: params.extraSystemPrompt || undefined,
+      model: params.modelOverride,
       streamParams: params.streamParams ?? undefined,
       sessionKey: params.sessionKey,
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      // HTTP API callers are authenticated operator clients for this gateway context.
-      senderIsOwner: true,
+      senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
     },
     defaultRuntime,
@@ -427,6 +463,10 @@ export async function handleOpenResponsesHttpRequest(
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
+    requiredOperatorMethod: "chat.send",
+    // Compat HTTP uses a different scope model from generic HTTP helpers:
+    // shared-secret bearer auth is treated as full operator access here.
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -439,6 +479,9 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  // On the compat surface, shared-secret bearer auth is also treated as an
+  // owner sender so owner-only tool policy matches the documented contract.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
@@ -455,6 +498,18 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
+  const agentId = resolveAgentIdForRequest({ req, model });
+  const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    req,
+    agentId,
+    model,
+  });
+  if (modelError) {
+    sendJson(res, 400, {
+      error: { message: modelError, type: "invalid_request_error" },
+    });
+    return true;
+  }
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
@@ -593,15 +648,15 @@ export async function handleOpenResponsesHttpRequest(
     user,
     sessionPrefix: "openresponses",
     defaultMessageChannel: "webchat",
-    useMessageChannelHeader: false,
+    useMessageChannelHeader: true,
   });
   const responseSessionScope = createResponseSessionScope({
     req,
+    auth: opts.auth,
     agentId: resolved.agentId,
-    user,
   });
   // Resolve session key: reuse previous_response_id only when it matches the
-  // same agent/user/requested-session scope as the current request.
+  // same auth-subject/agent/requested-session scope as the current request.
   const previousSessionKey = lookupResponseSession(
     payload.previous_response_id,
     responseSessionScope,
@@ -652,10 +707,12 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        modelOverride,
         streamParams,
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
       });
 
@@ -863,6 +920,11 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      const text = evt.data?.text;
+      const replace = evt.data?.replace === true;
+      if (replace && typeof text === "string") {
+        accumulatedText = text;
+      }
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
@@ -903,10 +965,12 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        modelOverride,
         streamParams,
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
       });
 

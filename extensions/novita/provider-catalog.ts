@@ -1,13 +1,13 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { getAllCachedNovitaModels } from "openclaw/plugin-sdk/provider-stream";
 import {
+  buildNovitaModelDefinition,
   NOVITA_BASE_URL,
   NOVITA_MODEL_CATALOG,
-  buildNovitaModelDefinition,
-} from "openclaw/plugin-sdk/provider-models";
-import { getAllCachedNovitaModels } from "openclaw/plugin-sdk/provider-stream";
+} from "./api.js";
 
 export { NOVITA_BASE_URL };
 
