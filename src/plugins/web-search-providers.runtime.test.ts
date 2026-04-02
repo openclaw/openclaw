@@ -422,6 +422,7 @@ describe("resolvePluginWebSearchProviders", () => {
     });
 
     expectRuntimeProviderResolution(providers, ["brave:brave"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it.each([
