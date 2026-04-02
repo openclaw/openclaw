@@ -63,6 +63,7 @@ describe("switchChatSession", () => {
     expect(state.chatMessage).toBe("");
     expect(state.chatMessages).toEqual([]);
     expect(state.chatStream).toBeNull();
+    expect((state as never as { chatStreamStartedAt: unknown }).chatStreamStartedAt).toBeNull();
     expect(state.chatQueue).toEqual([]);
     expect(state.chatRunId).toBeNull();
     expect(resetToolStream).toHaveBeenCalledTimes(1);
