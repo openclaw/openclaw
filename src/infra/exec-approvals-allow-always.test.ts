@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -266,6 +267,29 @@ describe("resolveAllowAlwaysPatterns", () => {
       strictInlineEval: true,
     });
     expect(persisted).toEqual([]);
+  });
+
+  it("persists benign awk interpreters without argv binding in strict inline-eval mode on Windows", () => {
+    const awk = "C:\\temp\\awk.exe";
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: [
+        {
+          raw: `${awk} -F , -f script.awk data.csv`,
+          argv: [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: awk,
+              resolvedPath: awk,
+              executableName: "awk",
+            }),
+          }),
+        },
+      ],
+      platform: "win32",
+      strictInlineEval: true,
+    });
+
+    expect(entries).toEqual([{ pattern: awk }]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
