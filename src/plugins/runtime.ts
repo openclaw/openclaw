@@ -198,12 +198,20 @@ function collectLoadedPluginIds(
     return;
   }
   for (const plugin of registry.plugins) {
-    if (plugin.status === "loaded") {
+    if (plugin.status === "loaded" && plugin.format !== "bundle") {
       ids.add(plugin.id);
     }
   }
 }
 
+/**
+ * Returns plugin ids that are currently represented by loaded runtime registries.
+ *
+ * This is a process-level runtime view, not a fresh import trace: cached registry
+ * reuse still counts because the plugin code was loaded earlier in this process.
+ * Bundle-format plugins are excluded because they can be "loaded" from metadata
+ * without importing any JS entrypoint.
+ */
 export function listImportedRuntimePluginIds(): string[] {
   const imported = new Set<string>();
   collectLoadedPluginIds(state.activeRegistry, imported);

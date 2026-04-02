@@ -239,7 +239,7 @@ export function registerPluginsCli(program: Command) {
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
     .action((opts: PluginsListOptions) => {
-      const report = buildPluginStatusReport();
+      const report = buildPluginStatusReport({ loadModules: false });
       const list = opts.enabled
         ? report.plugins.filter((p) => p.status === "loaded")
         : report.plugins;
@@ -341,7 +341,7 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
-      const report = buildPluginStatusReport({ config: cfg });
+      const report = buildPluginStatusReport({ config: cfg, loadModules: true });
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
@@ -793,7 +793,7 @@ export function registerPluginsCli(program: Command) {
     .command("doctor")
     .description("Report plugin load issues")
     .action(() => {
-      const report = buildPluginStatusReport();
+      const report = buildPluginStatusReport({ loadModules: false });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });

@@ -272,7 +272,10 @@ async function installPluginFromPluginsCommand(params: {
   return { ok: true, pluginId: result.pluginId };
 }
 
-async function loadPluginCommandState(workspaceDir: string): Promise<
+async function loadPluginCommandState(
+  workspaceDir: string,
+  options?: { loadModules?: boolean },
+): Promise<
   | {
       ok: true;
       path: string;
@@ -281,6 +284,7 @@ async function loadPluginCommandState(workspaceDir: string): Promise<
     }
   | { ok: false; path: string; error: string }
 > {
+  const loadModules = options?.loadModules ?? false;
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     return {
@@ -294,7 +298,7 @@ async function loadPluginCommandState(workspaceDir: string): Promise<
     ok: true,
     path: snapshot.path,
     config,
-    report: buildPluginStatusReport({ config, workspaceDir }),
+    report: buildPluginStatusReport({ config, workspaceDir, loadModules }),
   };
 }
 
@@ -331,7 +335,9 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const loaded = await loadPluginCommandState(params.workspaceDir);
+  const loaded = await loadPluginCommandState(params.workspaceDir, {
+    loadModules: pluginsCommand.action === "inspect",
+  });
   if (!loaded.ok) {
     return {
       shouldContinue: false,

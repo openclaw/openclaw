@@ -103,6 +103,7 @@ function expectPluginLoaderCall(params: {
   autoEnabledReasons?: Record<string, string[]>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  loadModules?: boolean;
 }) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -115,6 +116,7 @@ function expectPluginLoaderCall(params: {
         : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
+      ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
     }),
   );
 }
@@ -285,22 +287,25 @@ describe("buildPluginStatusReport", () => {
       config: {},
       workspaceDir: "/workspace",
       env,
+      loadModules: false,
     });
 
     expectPluginLoaderCall({
       config: {},
       workspaceDir: "/workspace",
       env,
+      loadModules: false,
     });
   });
 
   it("uses a non-activating snapshot load for status reports", () => {
-    buildPluginStatusReport({ config: {}, workspaceDir: "/workspace" });
+    buildPluginStatusReport({ config: {}, workspaceDir: "/workspace", loadModules: false });
 
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         activate: false,
         cache: false,
+        loadModules: false,
       }),
     );
   });
@@ -320,7 +325,7 @@ describe("buildPluginStatusReport", () => {
       },
     });
 
-    buildPluginStatusReport({ config: rawConfig });
+    buildPluginStatusReport({ config: rawConfig, loadModules: false });
 
     expectAutoEnabledStatusLoad({
       rawConfig,
@@ -329,6 +334,7 @@ describe("buildPluginStatusReport", () => {
         demo: ["demo configured"],
       },
     });
+    expectPluginLoaderCall({ loadModules: false });
   });
 
   it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
@@ -371,6 +377,7 @@ describe("buildPluginStatusReport", () => {
       allowedModels: ["openai/gpt-5.4"],
       hasAllowedModelsConfig: true,
     });
+    expectPluginLoaderCall({ loadModules: true });
   });
 
   it("preserves raw config activation context when compatibility notices build their own report", () => {
@@ -412,6 +419,7 @@ describe("buildPluginStatusReport", () => {
         demo: ["demo configured"],
       },
     });
+    expectPluginLoaderCall({ loadModules: true });
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -421,7 +429,7 @@ describe("buildPluginStatusReport", () => {
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
     withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
-    buildPluginStatusReport({ config });
+    buildPluginStatusReport({ config, loadModules: false });
 
     expectBundledCompatChainApplied({
       config,
@@ -458,19 +466,39 @@ describe("buildPluginStatusReport", () => {
       plugins: [
         createPluginRecord({ id: "runtime-loaded" }),
         createPluginRecord({ id: "facade-loaded" }),
+        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
         createPluginRecord({ id: "cold-plugin" }),
       ],
     });
-    listImportedRuntimePluginIdsMock.mockReturnValue(["runtime-loaded"]);
+    listImportedRuntimePluginIdsMock.mockReturnValue(["runtime-loaded", "bundle-loaded"]);
     listImportedBundledPluginFacadeIdsMock.mockReturnValue(["facade-loaded"]);
 
-    const report = buildPluginStatusReport({ config: {} });
+    const report = buildPluginStatusReport({ config: {}, loadModules: false });
 
     expect(report.plugins).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "runtime-loaded", imported: true }),
         expect.objectContaining({ id: "facade-loaded", imported: true }),
+        expect.objectContaining({ id: "bundle-loaded", imported: false }),
         expect.objectContaining({ id: "cold-plugin", imported: false }),
+      ]),
+    );
+  });
+
+  it("marks snapshot-loaded plugin modules as imported during full report loads", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({ id: "runtime-loaded" }),
+        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
+      ],
+    });
+
+    const report = buildPluginStatusReport({ config: {}, loadModules: true });
+
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "runtime-loaded", imported: true }),
+        expect.objectContaining({ id: "bundle-loaded", imported: false }),
       ]),
     );
   });

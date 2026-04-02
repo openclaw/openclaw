@@ -88,6 +88,7 @@ describe("noteWorkspaceStatus", () => {
       expect(mocks.buildPluginStatusReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
+        loadModules: false,
       });
       const compatibilityCalls = noteSpy.mock.calls.filter(
         ([, title]) => title === "Plugin compatibility",

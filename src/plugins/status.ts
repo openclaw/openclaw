@@ -154,6 +154,8 @@ export function buildPluginStatusReport(params?: {
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
+  /** Use false for cold snapshot surfaces like list/doctor that must avoid plugin code execution. */
+  loadModules?: boolean;
 }): PluginStatusReport {
   const rawConfig = params?.config ?? loadConfig();
   const autoEnabled = resolveStatusConfig(rawConfig, params?.env);
@@ -192,8 +194,14 @@ export function buildPluginStatusReport(params?: {
     logger: createPluginLoaderLogger(log),
     activate: false,
     cache: false,
+    loadModules: params?.loadModules ?? true,
   });
   const importedPluginIds = new Set([
+    ...(params?.loadModules !== false
+      ? registry.plugins
+          .filter((plugin) => plugin.status === "loaded" && plugin.format !== "bundle")
+          .map((plugin) => plugin.id)
+      : []),
     ...listImportedRuntimePluginIds(),
     ...listImportedBundledPluginFacadeIds(),
   ]);
@@ -203,7 +211,10 @@ export function buildPluginStatusReport(params?: {
     ...registry,
     plugins: registry.plugins.map((plugin) => ({
       ...plugin,
-      imported: importedPluginIds.has(plugin.id),
+      imported:
+        plugin.status === "loaded" &&
+        plugin.format !== "bundle" &&
+        importedPluginIds.has(plugin.id),
       version: resolveReportedPluginVersion(plugin, params?.env),
     })),
   };
@@ -268,6 +279,7 @@ export function buildPluginInspectReport(params: {
       config: rawConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      loadModules: true,
     });
   const plugin = report.plugins.find((entry) => entry.id === params.id || entry.name === params.id);
   if (!plugin) {
@@ -401,6 +413,7 @@ export function buildAllPluginInspectReports(params?: {
       config: rawConfig,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
+      loadModules: true,
     });
 
   return report.plugins

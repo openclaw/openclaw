@@ -387,6 +387,7 @@ export function listImportedBundledPluginFacadeIds(): string[] {
 export function resetFacadeRuntimeStateForTest(): void {
   loadedFacadeModules.clear();
   loadedFacadePluginIds.clear();
+  jitiLoaders.clear();
   cachedBoundaryRawConfig = undefined;
   cachedBoundaryResolvedConfig = undefined;
 }

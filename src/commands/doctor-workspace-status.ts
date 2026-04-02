@@ -72,6 +72,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const pluginRegistry = buildPluginStatusReport({
     config: cfg,
     workspaceDir,
+    loadModules: false,
   });
   if (pluginRegistry.plugins.length > 0) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");

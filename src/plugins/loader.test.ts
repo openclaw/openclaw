@@ -1251,6 +1251,44 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       },
     },
     {
+      label: "can build a manifest-only snapshot without importing plugin modules",
+      run: () => {
+        useNoBundledPlugins();
+        const importedMarker = path.join(makeTempDir(), "manifest-only-imported.txt");
+        const plugin = writePlugin({
+          id: "manifest-only-plugin",
+          filename: "manifest-only-plugin.cjs",
+          body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "manifest-only-plugin", register() { throw new Error("manifest-only snapshot should not register"); } };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["manifest-only-plugin"],
+              entries: {
+                "manifest-only-plugin": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(fs.existsSync(importedMarker)).toBe(false);
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "manifest-only-plugin",
+              status: "loaded",
+            }),
+          ]),
+        );
+      },
+    },
+    {
       label: "keeps scoped plugin loads in a separate cache entry",
       run: () => {
         useNoBundledPlugins();

@@ -5,6 +5,7 @@ import {
   getActivePluginHttpRouteRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
+  listImportedRuntimePluginIds,
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
@@ -179,6 +180,66 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(registry);
     setActivePluginRegistry(registry);
     expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+  });
+
+  it("does not treat bundle-only loaded entries as imported runtime plugins", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "bundle-only",
+      name: "Bundle Only",
+      source: "/tmp/bundle",
+      origin: "bundled",
+      enabled: true,
+      status: "loaded",
+      format: "bundle",
+      toolNames: [],
+      hookNames: [],
+      channelIds: [],
+      cliBackendIds: [],
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webFetchProviderIds: [],
+      webSearchProviderIds: [],
+      gatewayMethods: [],
+      cliCommands: [],
+      services: [],
+      commands: [],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: true,
+    });
+    registry.plugins.push({
+      id: "runtime-plugin",
+      name: "Runtime Plugin",
+      source: "/tmp/runtime",
+      origin: "workspace",
+      enabled: true,
+      status: "loaded",
+      format: "openclaw",
+      toolNames: [],
+      hookNames: [],
+      channelIds: [],
+      cliBackendIds: [],
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webFetchProviderIds: [],
+      webSearchProviderIds: [],
+      gatewayMethods: [],
+      cliCommands: [],
+      services: [],
+      commands: [],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: true,
+    });
+
+    setActivePluginRegistry(registry);
+
+    expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
   });
 });
 

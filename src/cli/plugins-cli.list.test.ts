@@ -28,6 +28,8 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
+    expect(buildPluginStatusReport).toHaveBeenCalledWith({ loadModules: false });
+
     expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
       workspaceDir: "/workspace",
       plugins: [
@@ -57,6 +59,8 @@ describe("plugins cli list", () => {
     });
 
     await runPluginsCommand(["plugins", "list", "--verbose"]);
+
+    expect(buildPluginStatusReport).toHaveBeenCalledWith({ loadModules: false });
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("activated: yes");
