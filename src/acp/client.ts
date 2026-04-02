@@ -260,7 +260,6 @@ export function resolveAcpClientSpawnInvocation(
     env: runtime.env,
     execPath: runtime.execPath,
     packageName: "openclaw",
-    allowShellFallback: true,
   });
   const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
   return {

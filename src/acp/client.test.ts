@@ -272,26 +272,21 @@ describe("resolveAcpClientSpawnInvocation", () => {
     expect(resolved.windowsHide).toBe(true);
   });
 
-  it("falls back to shell mode for unresolved wrappers on windows", async () => {
+  it("fails closed for unresolved wrappers on windows", async () => {
     const dir = await createTempDir();
     const shimPath = path.join(dir, "openclaw.cmd");
     await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
 
-    const resolved = resolveAcpClientSpawnInvocation(
-      { serverCommand: shimPath, serverArgs: ["acp"] },
-      {
-        platform: "win32",
-        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-        execPath: "C:\\node\\node.exe",
-      },
-    );
-
-    expect(resolved).toEqual({
-      command: shimPath,
-      args: ["acp"],
-      shell: true,
-      windowsHide: undefined,
-    });
+    expect(() =>
+      resolveAcpClientSpawnInvocation(
+        { serverCommand: shimPath, serverArgs: ["acp"] },
+        {
+          platform: "win32",
+          env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+          execPath: "C:\\node\\node.exe",
+        },
+      ),
+    ).toThrow(/without shell execution/);
   });
 });
 
