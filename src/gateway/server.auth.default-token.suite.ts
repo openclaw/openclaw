@@ -4,6 +4,7 @@ import {
   connectReq,
   ConnectErrorDetailCodes,
   createSignedDevice,
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   expectHelloOkServerVersion,
   getFreePort,
   getPreauthHandshakeTimeoutMsFromEnv,
@@ -96,10 +97,10 @@ export function registerDefaultAuthTokenSuite(): void {
     test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string", () => {
       const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
       const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
-      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "5000";
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(5000);
         process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
         expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
       } finally {
@@ -112,6 +113,119 @@ export function registerDefaultAuthTokenSuite(): void {
           delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
         } else {
           process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
+        }
+      }
+    });
+
+    test("falls back to gateway config when env vars are absent", () => {
+      const prev = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTest = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      try {
+        expect(
+          getPreauthHandshakeTimeoutMsFromEnv(process.env, { handshakeTimeoutMs: 25000 }),
+        ).toBe(25000);
+      } finally {
+        if (prev !== undefined) {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+        }
+        if (prevTest !== undefined) {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTest;
+        }
+      }
+    });
+
+    test("env var takes priority over gateway config", () => {
+      const prev = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "8000";
+      try {
+        expect(
+          getPreauthHandshakeTimeoutMsFromEnv(process.env, { handshakeTimeoutMs: 25000 }),
+        ).toBe(8000);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+        }
+      }
+    });
+
+    test("whitespace-only env var falls back to config", () => {
+      const prev = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTest = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "   ";
+      delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      try {
+        expect(
+          getPreauthHandshakeTimeoutMsFromEnv(process.env, { handshakeTimeoutMs: 30000 }),
+        ).toBe(30000);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+        }
+        if (prevTest !== undefined) {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTest;
+        }
+      }
+    });
+
+    test("out-of-range env var falls back to default", () => {
+      const prev = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTest = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "999999";
+      delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      try {
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+        }
+        if (prevTest !== undefined) {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTest;
+        }
+      }
+    });
+
+    test("under-min config value falls back to default", () => {
+      const prev = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTest = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      try {
+        expect(getPreauthHandshakeTimeoutMsFromEnv(process.env, { handshakeTimeoutMs: 500 })).toBe(
+          DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+        );
+      } finally {
+        if (prev !== undefined) {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+        }
+        if (prevTest !== undefined) {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTest;
+        }
+      }
+    });
+
+    test("over-max config value falls back to default", () => {
+      const prev = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTest = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      try {
+        expect(
+          getPreauthHandshakeTimeoutMsFromEnv(process.env, { handshakeTimeoutMs: 999999 }),
+        ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+      } finally {
+        if (prev !== undefined) {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+        }
+        if (prevTest !== undefined) {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTest;
         }
       }
     });

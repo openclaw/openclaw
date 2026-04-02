@@ -457,4 +457,12 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * WebSocket handshake timeout in milliseconds.
+   * Connections that do not complete the handshake within this window are
+   * closed by the gateway. Increase for hosts where CLI cold-start ESM
+   * compilation blocks the event loop for extended periods.
+   * Range: 1000–120000. Default: 15000.
+   */
+  handshakeTimeoutMs?: number;
 };

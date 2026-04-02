@@ -22,10 +22,10 @@ describe("gateway handshake timeouts", () => {
   test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on the test-only env", () => {
     expect(
       getPreauthHandshakeTimeoutMsFromEnv({
-        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "75",
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "1500",
         OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS: "20",
       }),
-    ).toBe(75);
+    ).toBe(1500);
     expect(
       getPreauthHandshakeTimeoutMsFromEnv({
         OPENCLAW_HANDSHAKE_TIMEOUT_MS: "",
@@ -33,5 +33,13 @@ describe("gateway handshake timeouts", () => {
         VITEST: "1",
       }),
     ).toBe(20);
+  });
+
+  test("rejects env var below minimum and falls back to default", () => {
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "75",
+      }),
+    ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
   });
 });

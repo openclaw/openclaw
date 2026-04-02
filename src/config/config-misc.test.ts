@@ -299,6 +299,71 @@ describe("gateway.channelHealthCheckMinutes", () => {
   });
 });
 
+describe("gateway.handshakeTimeoutMs", () => {
+  it("accepts valid handshake timeout in range", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 15000,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts minimum bound (1000)", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 1000,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts maximum bound (120000)", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 120000,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects values below minimum", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 999,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
+    }
+  });
+
+  it("rejects values above maximum", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 120001,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
+    }
+  });
+
+  it("rejects non-integer values", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 15000.5,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
