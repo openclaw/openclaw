@@ -401,6 +401,11 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+async function runNodeRuntimeHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteNodeRuntime } = await import("../commands/doctor-node-runtime.js");
+  await noteNodeRuntime();
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -614,6 +619,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:plugin-registry",
       label: "Plugin registry",
       run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node.js runtime",
+      hint: "Node version, path, version manager, EOL status",
+      run: runNodeRuntimeHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
