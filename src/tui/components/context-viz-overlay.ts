@@ -69,6 +69,12 @@ export class ContextVizOverlay implements Component {
         this.categories = getCategoryBreakdown(report);
         const totalChars = getTotalChars(report);
         pushSnapshot(this.history, totalChars);
+        if (this.view === "detail") {
+          const cat = this.categories[this.selectedIndex];
+          if (cat) {
+            this.detailItems = getCategoryDetail(report, cat.category);
+          }
+        }
       }
       this.tokenInfo = this.options.getTokenInfo();
     } catch {

@@ -267,9 +267,9 @@ export class GatewayChatClient {
 
   async getContextReport(sessionKey: string): Promise<SessionSystemPromptReport | null> {
     const res = await this.client.request<{
-      contextWeight?: SessionSystemPromptReport;
+      sessions?: Array<{ contextWeight?: SessionSystemPromptReport | null }>;
     }>("sessions.usage", { key: sessionKey, includeContextWeight: true });
-    return res?.contextWeight ?? null;
+    return res?.sessions?.[0]?.contextWeight ?? null;
   }
 
   async listModels(): Promise<GatewayModelChoice[]> {

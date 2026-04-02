@@ -96,7 +96,7 @@ export function renderSparkline(values: number[], width: number): string {
   } else {
     // Downsample
     for (let i = 0; i < width; i++) {
-      const idx = Math.round((i / (width - 1)) * (values.length - 1));
+      const idx = Math.round((i / (width - 1 || 1)) * (values.length - 1));
       sampled.push(values[idx]);
     }
   }

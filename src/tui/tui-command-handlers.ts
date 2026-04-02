@@ -510,7 +510,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await abortActive();
         break;
       case "context":
-        openContextViz();
+        if (!args) {
+          openContextViz();
+        } else {
+          await sendMessage(raw);
+        }
         break;
       case "settings":
         openSettings();
