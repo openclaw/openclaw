@@ -344,9 +344,10 @@ async function executeUsage(
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
     }
     if (session.model) {
-      const fullModel = session.modelProvider
-        ? `${session.modelProvider}/${session.model}`
-        : session.model;
+      const fullModel =
+        session.modelProvider && !session.model.startsWith(`${session.modelProvider}/`)
+          ? `${session.modelProvider}/${session.model}`
+          : session.model;
       lines.push(`Model: \`${fullModel}\``);
     }
     return { content: lines.join("\n") };

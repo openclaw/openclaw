@@ -125,6 +125,11 @@ export function resolvePreferredServerChatModel(
     }
 
     // Catalog missed or was ambiguous — use the authoritative server-supplied pair.
+    // Guard against double-prefix: if model already starts with the provider prefix
+    // (e.g. from a legacy/qualified server row), don't prepend provider again.
+    if (trimmedModel.startsWith(`${trimmedProvider}/`)) {
+      return { value: trimmedModel, source: "server", reason: catalogResolution.reason };
+    }
     return {
       value: buildQualifiedChatModelValue(trimmedModel, trimmedProvider),
       source: "server",

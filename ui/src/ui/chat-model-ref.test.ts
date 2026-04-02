@@ -124,4 +124,13 @@ describe("chat-model-ref helpers", () => {
       reason: "missing",
     });
   });
+
+  // P2 review: prevent double-prefix when model is already fully qualified.
+  it("does not double-prefix when model already contains provider prefix", () => {
+    expect(resolvePreferredServerChatModel("openai/gpt-5-mini", "openai", [])).toEqual({
+      value: "openai/gpt-5-mini",
+      source: "server",
+      reason: "missing",
+    });
+  });
 });
