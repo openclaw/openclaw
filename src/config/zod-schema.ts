@@ -735,6 +735,18 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        controlPlane: z
+          .object({
+            rateLimit: z
+              .object({
+                maxRequests: z.number().int().min(1).optional(),
+                windowMs: z.number().int().min(1).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),

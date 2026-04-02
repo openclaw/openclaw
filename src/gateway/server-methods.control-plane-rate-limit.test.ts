@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as controlPlaneRateLimitTesting,
+  configureControlPlaneRateLimit,
+  consumeControlPlaneWriteBudget,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -146,5 +148,135 @@ describe("gateway control-plane write rate limit", () => {
       clientIp: "10.0.0.10",
     });
     expect(key).toBe("unknown-device|10.0.0.10");
+  });
+
+  it("respects custom maxRequests from config", async () => {
+    configureControlPlaneRateLimit({ maxRequests: 10, windowMs: 60_000 });
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    // All 10 requests should succeed with the raised limit.
+    for (let i = 0; i < 10; i++) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
+    expect(handlerCalls).toHaveBeenCalledTimes(10);
+
+    // The 11th request should be rate-limited.
+    const blocked = await runRequest({ method: "config.patch", context, client, handler });
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+      }),
+    );
+    expect(handlerCalls).toHaveBeenCalledTimes(10);
+  });
+
+  it("respects custom windowMs from config", async () => {
+    configureControlPlaneRateLimit({ maxRequests: 3, windowMs: 5_000 });
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    // Exhaust the 3-request budget.
+    for (let i = 0; i < 3; i++) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
+
+    // 4th request should be blocked with a short retryAfterMs (≤5s, not 60s).
+    const blocked = await runRequest({ method: "config.patch", context, client, handler });
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryAfterMs: expect.any(Number),
+      }),
+    );
+    const errorShape = blocked.mock.calls[0][2];
+    expect(errorShape.retryAfterMs).toBeLessThanOrEqual(5_000);
+
+    // After 5s the window resets and requests should succeed again.
+    vi.advanceTimersByTime(5_001);
+    const allowed = await runRequest({ method: "config.patch", context, client, handler });
+    expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
+  });
+
+  it("rejects maxRequests < 1", () => {
+    expect(() => configureControlPlaneRateLimit({ maxRequests: 0 })).toThrow(
+      "controlPlane.rateLimit.maxRequests must be >= 1",
+    );
+    expect(() => configureControlPlaneRateLimit({ maxRequests: -5 })).toThrow(
+      "controlPlane.rateLimit.maxRequests must be >= 1",
+    );
+  });
+
+  it("rejects windowMs < 1", () => {
+    expect(() => configureControlPlaneRateLimit({ windowMs: 0 })).toThrow(
+      "controlPlane.rateLimit.windowMs must be >= 1",
+    );
+    expect(() => configureControlPlaneRateLimit({ windowMs: -100 })).toThrow(
+      "controlPlane.rateLimit.windowMs must be >= 1",
+    );
+  });
+
+  it("rejects non-finite values", () => {
+    expect(() => configureControlPlaneRateLimit({ maxRequests: Infinity })).toThrow(
+      "controlPlane.rateLimit.maxRequests must be >= 1",
+    );
+    expect(() => configureControlPlaneRateLimit({ windowMs: NaN })).toThrow(
+      "controlPlane.rateLimit.windowMs must be >= 1",
+    );
+  });
+
+  it("restores defaults when called with undefined config", () => {
+    configureControlPlaneRateLimit({ maxRequests: 100, windowMs: 1000 });
+    configureControlPlaneRateLimit(undefined);
+    // After resetting, the default 3 req/60s should apply.
+    const client = buildClient();
+    const nowMs = Date.now();
+    const results = [];
+    for (let i = 0; i < 4; i++) {
+      results.push(consumeControlPlaneWriteBudget({ client, nowMs }).allowed);
+    }
+    expect(results).toEqual([true, true, true, false]);
+  });
+
+  it("includes dynamic limit string in rate limit error details", async () => {
+    configureControlPlaneRateLimit({ maxRequests: 30, windowMs: 60_000 });
+    const handler: GatewayRequestHandler = (opts) => {
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    // Exhaust the 30-request budget.
+    for (let i = 0; i < 30; i++) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
+
+    // The error details should reflect the configured limit, not the default.
+    const blocked = await runRequest({ method: "config.patch", context, client, handler });
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: expect.objectContaining({
+          limit: "30 per 60s",
+        }),
+      }),
+    );
   });
 });

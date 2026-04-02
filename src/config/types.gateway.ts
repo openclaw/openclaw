@@ -176,6 +176,21 @@ export type GatewayAuthRateLimitConfig = {
   exemptLoopback?: boolean;
 };
 
+/**
+ * Control-plane write rate limiting — limits how often config.apply,
+ * config.patch, and update.run can be called per device+IP bucket.
+ *
+ * This protects against runaway automation pushing excessive config
+ * changes. The limit applies per device+IP, so different operators
+ * or automation systems have independent budgets.
+ */
+export type GatewayControlPlaneRateLimitConfig = {
+  /** Maximum write requests per window per device+IP bucket.  @default 3 */
+  maxRequests?: number;
+  /** Window duration in milliseconds.  @default 60000 (1 min) */
+  windowMs?: number;
+};
+
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 
 export type GatewayTailscaleConfig = {
@@ -439,6 +454,10 @@ export type GatewayConfig = {
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
+  /** Control-plane write rate limiting (config.apply, config.patch, update.run). */
+  controlPlane?: {
+    rateLimit?: GatewayControlPlaneRateLimitConfig;
+  };
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

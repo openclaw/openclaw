@@ -9878,6 +9878,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          controlPlane: {
+            type: "object",
+            properties: {
+              rateLimit: {
+                type: "object",
+                properties: {
+                  maxRequests: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 9007199254740991,
+                  },
+                  windowMs: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
           channelHealthCheckMinutes: {
             type: "integer",
             minimum: 0,

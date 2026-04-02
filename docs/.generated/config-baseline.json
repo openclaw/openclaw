@@ -1087,20 +1087,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.compaction.notifyUser",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Compaction Notify User",
-      "help": "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.compaction.postCompactionSections",
       "kind": "core",
       "type": "array",
@@ -1890,26 +1876,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.llm",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "agents.defaults.llm.idleTimeoutSeconds",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.maxConcurrent",
       "kind": "core",
       "type": "integer",
@@ -2243,74 +2209,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.memorySearch.qmd",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Memory Search QMD Collections",
-      "help": "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
-      "hasChildren": true
-    },
-    {
-      "path": "agents.defaults.memorySearch.qmd.extraCollections",
-      "kind": "core",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "QMD Extra Collections",
-      "help": "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
-      "hasChildren": true
-    },
-    {
-      "path": "agents.defaults.memorySearch.qmd.extraCollections.*",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.name",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.path",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.defaults.memorySearch.qmd.extraCollections.*.pattern",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.memorySearch.query",
       "kind": "core",
       "type": "object",
@@ -2556,8 +2454,7 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced",
-        "url-secret"
+        "advanced"
       ],
       "label": "Remote Embedding Base URL",
       "help": "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
@@ -3022,25 +2919,6 @@
       "path": "agents.defaults.models.*.streaming",
       "kind": "core",
       "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.defaults.params",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "agents.defaults.params.*",
-      "kind": "core",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -4106,16 +3984,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.subagents.requireAgentId",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.subagents.runTimeoutSeconds",
       "kind": "core",
       "type": "integer",
@@ -4855,66 +4723,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.list.*.memorySearch.qmd",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "agents.list.*.memorySearch.qmd.extraCollections",
-      "kind": "core",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "agents.list.*.memorySearch.qmd.extraCollections.*",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.name",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.path",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.list.*.memorySearch.qmd.extraCollections.*.pattern",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.list.*.memorySearch.query",
       "kind": "core",
       "type": "object",
@@ -5117,10 +4925,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -6546,16 +6351,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.list.*.subagents.requireAgentId",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.list.*.subagents.thinking",
       "kind": "core",
       "type": "string",
@@ -6920,7 +6715,6 @@
       "type": "string",
       "required": false,
       "enumValues": [
-        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -7886,56 +7680,6 @@
       ],
       "label": "Failover Window (hours)",
       "help": "Failure window (hours) for backoff counters (default: 24).",
-      "hasChildren": false
-    },
-    {
-      "path": "auth.cooldowns.overloadedBackoffMs",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access",
-        "auth",
-        "reliability",
-        "storage"
-      ],
-      "label": "Overloaded Backoff (ms)",
-      "help": "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
-      "hasChildren": false
-    },
-    {
-      "path": "auth.cooldowns.overloadedProfileRotations",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access",
-        "auth",
-        "storage"
-      ],
-      "label": "Overloaded Profile Rotations",
-      "help": "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
-      "hasChildren": false
-    },
-    {
-      "path": "auth.cooldowns.rateLimitedProfileRotations",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access",
-        "auth",
-        "performance",
-        "storage"
-      ],
-      "label": "Rate-Limited Profile Rotations",
-      "help": "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
       "hasChildren": false
     },
     {
@@ -41659,6 +41403,46 @@
       "hasChildren": false
     },
     {
+      "path": "gateway.controlPlane",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "gateway.controlPlane.rateLimit",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "gateway.controlPlane.rateLimit.maxRequests",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "gateway.controlPlane.rateLimit.windowMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "gateway.controlUi",
       "kind": "core",
       "type": "object",
@@ -42514,8 +42298,7 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "network",
-        "url-secret"
+        "network"
       ],
       "label": "Gateway APNs Relay Base URL",
       "help": "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
@@ -42997,31 +42780,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "gateway.webchat",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "gateway.webchat.chatHistoryMaxChars",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "network",
-        "performance"
-      ],
-      "label": "WebChat History Max Chars",
-      "help": "Max characters per text field in chat.history responses before truncation (default: 12000).",
       "hasChildren": false
     },
     {
@@ -44457,42 +44215,13 @@
       "hasChildren": false
     },
     {
-      "path": "mcp.servers.*.headers",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "mcp.servers.*.headers.*",
-      "kind": "core",
-      "type": [
-        "boolean",
-        "number",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "security"
-      ],
-      "hasChildren": false
-    },
-    {
       "path": "mcp.servers.*.url",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -44923,20 +44652,6 @@
       ],
       "label": "QMD Search Mode",
       "help": "Selects the QMD retrieval path: \"query\" uses standard query flow, \"search\" uses search-oriented retrieval, and \"vsearch\" emphasizes vector retrieval. Keep default unless tuning relevance quality.",
-      "hasChildren": false
-    },
-    {
-      "path": "memory.qmd.searchTool",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "storage"
-      ],
-      "label": "QMD Search Tool Override",
-      "help": "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
       "hasChildren": false
     },
     {
@@ -46250,8 +45965,7 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama",
-        "azure-openai-responses"
+        "ollama"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -46347,8 +46061,7 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "models",
-        "url-secret"
+        "models"
       ],
       "label": "Model Provider Base URL",
       "help": "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
@@ -46465,8 +46178,7 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama",
-        "azure-openai-responses"
+        "ollama"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -63434,7 +63146,6 @@
       "type": "string",
       "required": false,
       "enumValues": [
-        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -63444,8 +63155,8 @@
       "tags": [
         "tools"
       ],
-      "label": "Exec Target",
-      "help": "Selects execution target strategy for shell commands. Use \"auto\" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.",
+      "label": "Exec Host",
+      "help": "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
       "hasChildren": false
     },
     {
@@ -64154,11 +63865,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -64366,11 +64073,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -64845,11 +64548,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -65042,11 +64741,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -65496,11 +65191,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -65789,11 +65480,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -65986,11 +65673,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "media",
-        "tools",
-        "url-secret"
-      ],
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66901,6 +66584,8 @@
         "security",
         "tools"
       ],
+      "label": "Firecrawl API Key",
+      "help": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -66941,9 +66626,10 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "tools",
-        "url-secret"
+        "tools"
       ],
+      "label": "Firecrawl Base URL",
+      "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
       "hasChildren": false
     },
     {
@@ -66953,7 +66639,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable Firecrawl Fallback",
+      "help": "Enable Firecrawl fallback for web_fetch (if configured).",
       "hasChildren": false
     },
     {
@@ -66963,7 +66653,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Firecrawl Cache Max Age (ms)",
+      "help": "Firecrawl maxAge (ms) for cached results when supported by the API.",
       "hasChildren": false
     },
     {
@@ -66973,7 +66668,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools"
+      ],
+      "label": "Firecrawl Main Content Only",
+      "help": "When true, Firecrawl returns only the main content (default: true).",
       "hasChildren": false
     },
     {
@@ -66983,7 +66682,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Firecrawl Timeout (sec)",
+      "help": "Timeout in seconds for Firecrawl requests.",
       "hasChildren": false
     },
     {
@@ -67045,20 +66749,6 @@
       ],
       "label": "Web Fetch Max Download Size (bytes)",
       "help": "Max download size before truncation.",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.provider",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Web Fetch Provider",
-      "help": "Web fetch fallback provider id.",
       "hasChildren": false
     },
     {
@@ -67162,6 +66852,93 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.search.brave",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.brave.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.brave.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.mode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.cacheTtlMinutes",
       "kind": "core",
       "type": "number",
@@ -67188,7 +66965,325 @@
         "tools"
       ],
       "label": "Enable Web Search Tool",
-      "help": "Enable managed web_search and optional Codex-native search for eligible models.",
+      "help": "Enable the web_search tool (requires a provider API key).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.grok.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.grok.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.inlineCitations",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67207,7 +67302,7 @@
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.openaiCodex",
+      "path": "tools.web.search.perplexity",
       "kind": "core",
       "type": "object",
       "required": false,
@@ -67217,64 +67312,66 @@
       "hasChildren": true
     },
     {
-      "path": "tools.web.search.openaiCodex.allowedDomains",
+      "path": "tools.web.search.perplexity.apiKey",
       "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
-      "sensitive": false,
+      "sensitive": true,
       "tags": [
-        "access",
+        "auth",
+        "security",
         "tools"
       ],
-      "label": "Codex Allowed Domains",
-      "help": "Optional domain allowlist passed to the native Codex web_search tool.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.perplexity.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.openaiCodex.contextSize",
+      "path": "tools.web.search.perplexity.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.perplexity.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.perplexity.baseUrl",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Codex Search Context Size",
-      "help": "Native Codex search context size hint: \"low\", \"medium\", or \"high\".",
+      "tags": [],
       "hasChildren": false
     },
     {
-      "path": "tools.web.search.openaiCodex.enabled",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable Native Codex Web Search",
-      "help": "Enable native Codex web search for Codex-capable models.",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.openaiCodex.mode",
+      "path": "tools.web.search.perplexity.model",
       "kind": "core",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Codex Web Search Mode",
-      "help": "Native Codex web search mode: \"cached\" (default) or \"live\".",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.search.openaiCodex.userLocation",
-      "kind": "core",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -67321,13 +67418,68 @@
       "hasChildren": true
     },
     {
+      "path": "tools.web.x_search.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "label": "xAI API Key",
+      "help": "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.x_search.cacheTtlMinutes",
       "kind": "core",
       "type": "number",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance",
+        "storage",
+        "tools"
+      ],
+      "label": "X Search Cache TTL (min)",
+      "help": "Cache TTL in minutes for x_search results.",
       "hasChildren": false
     },
     {
@@ -67337,7 +67489,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable X Search Tool",
+      "help": "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
       "hasChildren": false
     },
     {
@@ -67347,7 +67503,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline citations from xAI in x_search responses when available (default: false).",
       "hasChildren": false
     },
     {
@@ -67357,7 +67517,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
       "hasChildren": false
     },
     {
@@ -67367,7 +67532,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "X Search Model",
+      "help": "Model to use for X search (default: \"grok-4-1-fast-non-reasoning\").",
       "hasChildren": false
     },
     {
@@ -67377,7 +67547,12 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Timeout (sec)",
+      "help": "Timeout in seconds for x_search requests.",
       "hasChildren": false
     },
     {
