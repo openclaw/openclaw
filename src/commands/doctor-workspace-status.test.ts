@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
   buildPluginStatusReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
-  listFlowRecords: vi.fn(() => []),
-  listTasksForFlowId: vi.fn(() => []),
+  listFlowRecords: vi.fn<() => unknown[]>(() => []),
+  listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -33,11 +33,11 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("../tasks/flow-runtime-internal.js", () => ({
-  listFlowRecords: (...args: unknown[]) => mocks.listFlowRecords(...args),
+  listFlowRecords: () => mocks.listFlowRecords(),
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => ({
-  listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowId(...args),
+  listTasksForFlowId: (flowId: string) => mocks.listTasksForFlowId(flowId),
 }));
 
 async function runNoteWorkspaceStatusForTest(
