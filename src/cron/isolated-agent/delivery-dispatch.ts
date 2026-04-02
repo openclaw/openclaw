@@ -1,3 +1,4 @@
+import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -24,6 +25,21 @@ import {
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
+
+/** Boundary-aware prefix check: requires end-of-string or whitespace/punctuation/symbol
+ *  after the prefix so short prefixes like "Hi" don't match "History".
+ *  When the prefix itself ends with whitespace (e.g. "[bot] "), startsWith alone
+ *  is sufficient — the trailing whitespace is the natural boundary. */
+function hasResponsePrefix(text: string, prefix: string): boolean {
+  if (!text.startsWith(prefix)) {
+    return false;
+  }
+  if (/\s$/.test(prefix)) {
+    return true;
+  }
+  const afterPrefix = text[prefix.length];
+  return afterPrefix === undefined || /[\s\p{P}\p{S}]/u.test(afterPrefix);
+}
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const channelLower = channel.trim().toLowerCase();
@@ -371,12 +387,29 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      // Apply responsePrefix to outbound payloads (same pattern as heartbeat runner).
+      // Prefix is display-only; awareness events (queueCronAwarenessSystemEvent)
+      // intentionally use un-prefixed outputText/synthesizedText.
+      const { responsePrefix } = resolveEffectiveMessagesConfig(
+        params.cfgWithAgentDefaults,
+        params.agentId,
+        { channel: delivery.channel, accountId: delivery.accountId },
+      );
+      const payloadsForDelivery = responsePrefix
+        ? rawPayloads.map((p) => {
+            if (!p.text || hasResponsePrefix(p.text, responsePrefix)) {
+              return p;
+            }
+            const sep = /\s$/.test(responsePrefix) ? "" : " ";
+            return { ...p, text: `${responsePrefix}${sep}${p.text}` };
+          })
+        : rawPayloads;
       if (payloadsForDelivery.length === 0) {
         return null;
       }
