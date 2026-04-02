@@ -618,6 +618,8 @@ importers:
         specifier: ^1.41.1
         version: 1.41.1
 
+  extensions/tinyfish: {}
+
   extensions/tlon:
     dependencies:
       '@aws-sdk/client-s3':
