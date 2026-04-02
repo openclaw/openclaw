@@ -45,10 +45,11 @@ export type PluginManifestRecord = {
   description?: string;
   version?: string;
   enabledByDefault?: boolean;
+  autoEnableWhenConfiguredProviders?: string[];
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
   cliBackends: string[];
@@ -73,7 +74,7 @@ export type PluginManifestRecord = {
     id: string;
     label?: string;
     blurb?: string;
-    preferOver?: string[];
+    preferOver?: readonly string[];
   };
 };
 
@@ -194,6 +195,10 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   if (normalizedHint === manifestId) {
     return true;
   }
+  // Generated idHint for multi-extension plugins takes the form "id/entryBase".
+  if (normalizedHint.startsWith(`${manifestId}/`)) {
+    return true;
+  }
   return (
     normalizedHint === `${manifestId}-provider` ||
     normalizedHint === `${manifestId}-plugin` ||
@@ -220,6 +225,7 @@ function buildRecord(params: {
       normalizeManifestLabel(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
+    autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,

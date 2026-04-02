@@ -1,10 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBlueBubblesMonitorTestRuntime,
-  EMPTY_DISPATCH_RESULT,
-  resetBlueBubblesMonitorTestState,
-  type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
@@ -27,6 +21,16 @@ import {
   type WebhookRequestParams,
 } from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import {
+  createBlueBubblesMonitorTestRuntime,
+  EMPTY_DISPATCH_RESULT,
+  resetBlueBubblesMonitorTestState,
+  type DispatchReplyParams,
+} from "./test-support/monitor-test-support.js";
+
+const { TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS } = vi.hoisted(() => ({
+  TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: 3,
+}));
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -46,17 +50,27 @@ vi.mock("./attachments.js", () => ({
   }),
 }));
 
-vi.mock("./reactions.js", async () => {
-  const actual = await vi.importActual<typeof import("./reactions.js")>("./reactions.js");
-  return {
-    ...actual,
-    sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
-  };
-});
+vi.mock("./reactions.js", () => ({
+  normalizeBlueBubblesReactionInput: vi.fn((emoji: string, remove?: boolean) =>
+    remove ? `-${emoji}` : emoji,
+  ),
+  sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
+
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+  return {
+    ...actual,
+    WEBHOOK_RATE_LIMIT_DEFAULTS: {
+      ...actual.WEBHOOK_RATE_LIMIT_DEFAULTS,
+      maxRequests: TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
+    },
+  };
+});
 
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
@@ -414,8 +428,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      // Default webhook fixed-window budget is 120 requests/minute, so loop past it.
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({
@@ -453,7 +466,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({
@@ -515,7 +528,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({

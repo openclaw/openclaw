@@ -287,6 +287,8 @@ async function maybeHandleProviderPluginSelection(params: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
     pluginResolution = pluginProviders.some(
       (provider) => normalizeProviderId(provider.id) === normalizeProviderId(params.selection),
@@ -315,6 +317,8 @@ async function maybeHandleProviderPluginSelection(params: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
   }
   const resolved = resolveProviderPluginChoice({

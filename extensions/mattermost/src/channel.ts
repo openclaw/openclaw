@@ -20,7 +20,8 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { MattermostConfigSchema } from "./config-schema.js";
+import { mattermostApprovalAuth } from "./approval-auth.js";
+import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -40,7 +41,7 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import {
-  buildChannelConfigSchema,
+  chunkTextForOutbound,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -306,7 +307,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.mattermost"] },
-    configSchema: buildChannelConfigSchema(MattermostConfigSchema),
+    configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
       isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
@@ -320,6 +321,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           },
         }),
     },
+    auth: mattermostApprovalAuth,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
@@ -438,7 +440,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       resolveTarget: ({ to }) => {

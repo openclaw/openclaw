@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentLogoUrl,
+  buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
   resolveEffectiveModelFallbacks,
@@ -129,5 +130,52 @@ describe("resolveAgentAvatarUrl", () => {
   it("returns null for initials or emoji avatar values without a URL", () => {
     expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
     expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+  });
+});
+
+describe("buildAgentContext", () => {
+  it("falls back to agent payload workspace/model when config form is unavailable", () => {
+    const context = buildAgentContext(
+      {
+        id: "main",
+        workspace: "/tmp/agent-workspace",
+        model: {
+          primary: "openai/gpt-5.4",
+          fallbacks: ["openai-codex/gpt-5.2-codex"],
+        },
+      },
+      null,
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.workspace).toBe("/tmp/agent-workspace");
+    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.isDefault).toBe(true);
+  });
+
+  it("uses configured defaults when agent-specific overrides are absent", () => {
+    const context = buildAgentContext(
+      { id: "main" },
+      {
+        agents: {
+          defaults: {
+            workspace: "/tmp/default-workspace",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["openai-codex/gpt-5.2-codex"],
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.workspace).toBe("/tmp/default-workspace");
+    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
   });
 });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
+import { gatherDaemonStatus } from "./status.gather.js";
 
 const callGatewayStatusProbe = vi.fn<
   (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
@@ -83,6 +84,7 @@ vi.mock("../../config/config.js", () => ({
       loadConfig: () => (isDaemon ? daemonLoadedConfig : cliLoadedConfig),
     };
   },
+  loadConfig: () => cliLoadedConfig,
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
@@ -134,8 +136,6 @@ vi.mock("./probe.js", () => ({
 vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
-
-const { gatherDaemonStatus } = await import("./status.gather.js");
 
 describe("gatherDaemonStatus", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;

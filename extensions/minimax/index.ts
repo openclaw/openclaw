@@ -6,16 +6,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
-  createProviderApiKeyAuthMethod,
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
-import {
-  isMiniMaxModernModelId,
-  MINIMAX_DEFAULT_MODEL_ID,
-} from "openclaw/plugin-sdk/provider-models";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
   buildMinimaxImageGenerationProvider,
   buildMinimaxPortalImageGenerationProvider,
@@ -169,7 +166,9 @@ export default definePluginEntry({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
+      aliases: ["minimax-cn"],
       envVars: ["MINIMAX_API_KEY"],
+      resolveReasoningOutputMode: () => "native",
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: API_PROVIDER_ID,
@@ -243,6 +242,7 @@ export default definePluginEntry({
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+      resolveReasoningOutputMode: () => "native",
       catalog: {
         run: async (ctx) => resolvePortalCatalog(ctx),
       },

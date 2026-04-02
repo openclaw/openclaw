@@ -1,7 +1,12 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
+  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
+} from "./bundled-capability-metadata.js";
 import type { PluginRecord } from "./registry.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
+import type { PluginKind } from "./types.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -28,52 +33,13 @@ export type NormalizedPluginsConfig = {
   >;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
-  "amazon-bedrock",
-  "anthropic",
-  "byteplus",
-  "cloudflare-ai-gateway",
-  "deepseek",
-  "device-pair",
-  "github-copilot",
-  "google",
-  "huggingface",
-  "kilocode",
-  "kimi",
-  "minimax",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "nvidia",
-  "ollama",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "phone-control",
-  "qianfan",
-  "sglang",
-  "synthetic",
-  "talk-voice",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "volcengine",
-  "xai",
-  "xiaomi",
-  "zai",
-]);
-
-const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
-  "openai-codex": "openai",
-  "kimi-coding": "kimi",
-  "minimax-portal-auth": "minimax",
-};
-
 export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
-  return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
+  return (
+    BUNDLED_LEGACY_PLUGIN_ID_ALIASES[trimmed] ??
+    BUNDLED_PROVIDER_PLUGIN_ID_ALIASES[trimmed] ??
+    trimmed
+  );
 }
 
 const normalizeList = (value: unknown): string[] => {
@@ -299,7 +265,7 @@ export function resolveEnableState(
   if (entry?.enabled === true) {
     return { enabled: true };
   }
-  if (origin === "bundled" && (enabledByDefault ?? BUNDLED_ENABLED_BY_DEFAULT.has(id))) {
+  if (origin === "bundled" && enabledByDefault === true) {
     return { enabled: true };
   }
   if (origin === "bundled") {
@@ -336,8 +302,9 @@ export function resolveEffectiveEnableState(params: {
 }): { enabled: boolean; reason?: string } {
   const base = resolveEnableState(params.id, params.origin, params.config, params.enabledByDefault);
   if (
+    params.origin === "bundled" &&
     !base.enabled &&
-    base.reason === "bundled (disabled by default)" &&
+    (base.reason === "bundled (disabled by default)" || base.reason === "not in allowlist") &&
     isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
   ) {
     return { enabled: true };
@@ -347,30 +314,31 @@ export function resolveEffectiveEnableState(params: {
 
 export function resolveMemorySlotDecision(params: {
   id: string;
-  kind?: string;
+  kind?: string | string[];
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (params.kind !== "memory") {
+  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
     return { enabled: true };
   }
+  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
+  // memory slot must stay enabled so its other slot role can still load.
+  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
   if (params.slot === null) {
-    return { enabled: false, reason: "memory slot disabled" };
+    return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
   }
   if (typeof params.slot === "string") {
     if (params.slot === params.id) {
       return { enabled: true, selected: true };
     }
-    return {
-      enabled: false,
-      reason: `memory slot set to "${params.slot}"`,
-    };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
   }
   if (params.selectedId && params.selectedId !== params.id) {
-    return {
-      enabled: false,
-      reason: `memory slot already filled by "${params.selectedId}"`,
-    };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
   }
   return { enabled: true, selected: true };
 }

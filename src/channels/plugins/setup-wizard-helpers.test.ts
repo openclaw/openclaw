@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
@@ -128,35 +128,79 @@ async function runPromptSingleToken(params: {
   });
 }
 
+function createSecretInputPrompter(params: {
+  selects: string[];
+  confirms?: boolean[];
+  texts?: string[];
+}) {
+  const selects = [...params.selects];
+  const confirms = [...(params.confirms ?? [])];
+  const texts = [...(params.texts ?? [])];
+  return {
+    select: vi.fn(async () => selects.shift() ?? "plaintext"),
+    confirm: vi.fn(async () => confirms.shift() ?? false),
+    text: vi.fn(async () => texts.shift() ?? ""),
+    note: vi.fn(async () => undefined),
+  };
+}
+
+async function runPromptSingleChannelSecretInput(params: {
+  prompter: ReturnType<typeof createSecretInputPrompter>;
+  providerHint: string;
+  credentialLabel: string;
+  accountConfigured: boolean;
+  canUseEnv: boolean;
+  hasConfigToken: boolean;
+  preferredEnvVar: string;
+}) {
+  return await promptSingleChannelSecretInput({
+    cfg: {},
+    // oxlint-disable-next-line typescript/no-explicit-any
+    prompter: params.prompter as any,
+    providerHint: params.providerHint,
+    credentialLabel: params.credentialLabel,
+    accountConfigured: params.accountConfigured,
+    canUseEnv: params.canUseEnv,
+    hasConfigToken: params.hasConfigToken,
+    envPrompt: "use env",
+    keepPrompt: "keep",
+    inputPrompt: "token",
+    preferredEnvVar: params.preferredEnvVar,
+  });
+}
+
 describe("buildSingleChannelSecretPromptState", () => {
-  it("enables env path only when env is present and no config token exists", () => {
-    expect(
-      buildSingleChannelSecretPromptState({
+  it.each([
+    {
+      name: "enables env path only when env is present and no config token exists",
+      input: {
         accountConfigured: false,
         hasConfigToken: false,
         allowEnv: true,
         envValue: "token-from-env",
-      }),
-    ).toEqual({
-      accountConfigured: false,
-      hasConfigToken: false,
-      canUseEnv: true,
-    });
-  });
-
-  it("disables env path when config token already exists", () => {
-    expect(
-      buildSingleChannelSecretPromptState({
+      },
+      expected: {
+        accountConfigured: false,
+        hasConfigToken: false,
+        canUseEnv: true,
+      },
+    },
+    {
+      name: "disables env path when config token already exists",
+      input: {
         accountConfigured: true,
         hasConfigToken: true,
         allowEnv: true,
         envValue: "token-from-env",
-      }),
-    ).toEqual({
-      accountConfigured: true,
-      hasConfigToken: true,
-      canUseEnv: false,
-    });
+      },
+      expected: {
+        accountConfigured: true,
+        hasConfigToken: true,
+        canUseEnv: false,
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(buildSingleChannelSecretPromptState(input)).toEqual(expected);
   });
 });
 
@@ -334,74 +378,80 @@ describe("promptLegacyChannelAllowFromForAccount", () => {
 });
 
 describe("promptSingleChannelToken", () => {
-  it("uses env tokens when confirmed", async () => {
-    const prompter = createTokenPrompter({ confirms: [true], texts: [] });
+  it.each([
+    {
+      name: "uses env tokens when confirmed",
+      confirms: [true],
+      texts: [],
+      state: {
+        accountConfigured: false,
+        canUseEnv: true,
+        hasConfigToken: false,
+      },
+      expected: { useEnv: true, token: null },
+      expectTextCalls: 0,
+    },
+    {
+      name: "prompts for token when env exists but user declines env",
+      confirms: [false],
+      texts: ["abc"],
+      state: {
+        accountConfigured: false,
+        canUseEnv: true,
+        hasConfigToken: false,
+      },
+      expected: { useEnv: false, token: "abc" },
+      expectTextCalls: 1,
+    },
+    {
+      name: "keeps existing configured token when confirmed",
+      confirms: [true],
+      texts: [],
+      state: {
+        accountConfigured: true,
+        canUseEnv: false,
+        hasConfigToken: true,
+      },
+      expected: { useEnv: false, token: null },
+      expectTextCalls: 0,
+    },
+    {
+      name: "prompts for token when no env/config token is used",
+      confirms: [false],
+      texts: ["xyz"],
+      state: {
+        accountConfigured: true,
+        canUseEnv: false,
+        hasConfigToken: false,
+      },
+      expected: { useEnv: false, token: "xyz" },
+      expectTextCalls: 1,
+    },
+  ])("$name", async ({ confirms, texts, state, expected, expectTextCalls }) => {
+    const prompter = createTokenPrompter({ confirms, texts });
     const result = await runPromptSingleToken({
       prompter,
-      accountConfigured: false,
-      canUseEnv: true,
-      hasConfigToken: false,
+      ...state,
     });
-    expect(result).toEqual({ useEnv: true, token: null });
-    expect(prompter.text).not.toHaveBeenCalled();
-  });
-
-  it("prompts for token when env exists but user declines env", async () => {
-    const prompter = createTokenPrompter({ confirms: [false], texts: ["abc"] });
-    const result = await runPromptSingleToken({
-      prompter,
-      accountConfigured: false,
-      canUseEnv: true,
-      hasConfigToken: false,
-    });
-    expect(result).toEqual({ useEnv: false, token: "abc" });
-  });
-
-  it("keeps existing configured token when confirmed", async () => {
-    const prompter = createTokenPrompter({ confirms: [true], texts: [] });
-    const result = await runPromptSingleToken({
-      prompter,
-      accountConfigured: true,
-      canUseEnv: false,
-      hasConfigToken: true,
-    });
-    expect(result).toEqual({ useEnv: false, token: null });
-    expect(prompter.text).not.toHaveBeenCalled();
-  });
-
-  it("prompts for token when no env/config token is used", async () => {
-    const prompter = createTokenPrompter({ confirms: [false], texts: ["xyz"] });
-    const result = await runPromptSingleToken({
-      prompter,
-      accountConfigured: true,
-      canUseEnv: false,
-      hasConfigToken: false,
-    });
-    expect(result).toEqual({ useEnv: false, token: "xyz" });
+    expect(result).toEqual(expected);
+    expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
   });
 });
 
 describe("promptSingleChannelSecretInput", () => {
   it("returns use-env action when plaintext mode selects env fallback", async () => {
-    const prompter = {
-      select: vi.fn(async () => "plaintext"),
-      confirm: vi.fn(async () => true),
-      text: vi.fn(async () => ""),
-      note: vi.fn(async () => undefined),
-    };
+    const prompter = createSecretInputPrompter({
+      selects: ["plaintext"],
+      confirms: [true],
+    });
 
-    const result = await promptSingleChannelSecretInput({
-      cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+    const result = await runPromptSingleChannelSecretInput({
+      prompter,
       providerHint: "telegram",
       credentialLabel: "Telegram bot token",
       accountConfigured: false,
       canUseEnv: true,
       hasConfigToken: false,
-      envPrompt: "use env",
-      keepPrompt: "keep",
-      inputPrompt: "token",
       preferredEnvVar: "TELEGRAM_BOT_TOKEN",
     });
 
@@ -410,25 +460,18 @@ describe("promptSingleChannelSecretInput", () => {
 
   it("returns ref + resolved value when external env ref is selected", async () => {
     process.env.OPENCLAW_TEST_TOKEN = "secret-token";
-    const prompter = {
-      select: vi.fn().mockResolvedValueOnce("ref").mockResolvedValueOnce("env"),
-      confirm: vi.fn(async () => false),
-      text: vi.fn(async () => "OPENCLAW_TEST_TOKEN"),
-      note: vi.fn(async () => undefined),
-    };
+    const prompter = createSecretInputPrompter({
+      selects: ["ref", "env"],
+      texts: ["OPENCLAW_TEST_TOKEN"],
+    });
 
-    const result = await promptSingleChannelSecretInput({
-      cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+    const result = await runPromptSingleChannelSecretInput({
+      prompter,
       providerHint: "discord",
       credentialLabel: "Discord bot token",
       accountConfigured: false,
       canUseEnv: false,
       hasConfigToken: false,
-      envPrompt: "use env",
-      keepPrompt: "keep",
-      inputPrompt: "token",
       preferredEnvVar: "OPENCLAW_TEST_TOKEN",
     });
 
@@ -444,25 +487,18 @@ describe("promptSingleChannelSecretInput", () => {
   });
 
   it("returns keep action when ref mode keeps an existing configured ref", async () => {
-    const prompter = {
-      select: vi.fn(async () => "ref"),
-      confirm: vi.fn(async () => true),
-      text: vi.fn(async () => ""),
-      note: vi.fn(async () => undefined),
-    };
+    const prompter = createSecretInputPrompter({
+      selects: ["ref"],
+      confirms: [true],
+    });
 
-    const result = await promptSingleChannelSecretInput({
-      cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+    const result = await runPromptSingleChannelSecretInput({
+      prompter,
       providerHint: "telegram",
       credentialLabel: "Telegram bot token",
       accountConfigured: true,
       canUseEnv: false,
       hasConfigToken: true,
-      envPrompt: "use env",
-      keepPrompt: "keep",
-      inputPrompt: "token",
       preferredEnvVar: "TELEGRAM_BOT_TOKEN",
     });
 

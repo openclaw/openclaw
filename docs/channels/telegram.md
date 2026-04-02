@@ -806,21 +806,23 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     Config path:
 
     - `channels.telegram.execApprovals.enabled`
-    - `channels.telegram.execApprovals.approvers`
+    - `channels.telegram.execApprovals.approvers` (optional; falls back to numeric owner IDs inferred from `allowFrom` and direct `defaultTo` when possible)
     - `channels.telegram.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`
 
-    Approvers must be numeric Telegram user IDs. When `enabled` is false or `approvers` is empty, Telegram does not act as an exec approval client. Approval requests fall back to other configured approval routes or the exec approval fallback policy.
+    Approvers must be numeric Telegram user IDs. Telegram becomes an exec approval client when `enabled` is true and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
+
+    Telegram also renders the shared approval buttons used by other chat channels. The native Telegram adapter mainly adds approver DM routing, channel/topic fanout, and typing hints before delivery.
 
     Delivery rules:
 
-    - `target: "dm"` sends approval prompts only to configured approver DMs
+    - `target: "dm"` sends approval prompts only to resolved approver DMs
     - `target: "channel"` sends the prompt back to the originating Telegram chat/topic
     - `target: "both"` sends to approver DMs and the originating chat/topic
 
-    Only configured approvers can approve or deny. Non-approvers cannot use `/approve` and cannot use Telegram approval buttons.
+    Only resolved approvers can approve or deny. Non-approvers cannot use `/approve` and cannot use Telegram approval buttons.
 
-    Channel delivery shows the command text in the chat, so only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for both the approval prompt and the post-approval follow-up.
+    Channel delivery shows the command text in the chat, so only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for both the approval prompt and the post-approval follow-up. Exec approvals expire after 30 minutes by default.
 
     Inline approval buttons also depend on `channels.telegram.capabilities.inlineButtons` allowing the target surface (`dm`, `group`, or `all`).
 
@@ -828,6 +830,33 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
   </Accordion>
 </AccordionGroup>
+
+## Error reply controls
+
+When the agent encounters a delivery or provider error, Telegram can either reply with the error text or suppress it. Two config keys control this behavior:
+
+| Key                                 | Values            | Default | Description                                                                                     |
+| ----------------------------------- | ----------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `channels.telegram.errorPolicy`     | `reply`, `silent` | `reply` | `reply` sends a friendly error message to the chat. `silent` suppresses error replies entirely. |
+| `channels.telegram.errorCooldownMs` | number (ms)       | `60000` | Minimum time between error replies to the same chat. Prevents error spam during outages.        |
+
+Per-account, per-group, and per-topic overrides are supported (same inheritance as other Telegram config keys).
+
+```json5
+{
+  channels: {
+    telegram: {
+      errorPolicy: "reply",
+      errorCooldownMs: 120000,
+      groups: {
+        "-1001234567890": {
+          errorPolicy: "silent", // suppress errors in this group
+        },
+      },
+    },
+  },
+}
+```
 
 ## Troubleshooting
 
@@ -932,7 +961,7 @@ Primary reference:
 - top-level `bindings[]` with `type: "acp"` and canonical topic id `chatId:topic:topicId` in `match.peer.id`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
 - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
 - `channels.telegram.execApprovals.enabled`: enable Telegram as a chat-based exec approval client for this account.
-- `channels.telegram.execApprovals.approvers`: Telegram user IDs allowed to approve or deny exec requests. Required when exec approvals are enabled.
+- `channels.telegram.execApprovals.approvers`: Telegram user IDs allowed to approve or deny exec requests. Optional when `channels.telegram.allowFrom` or a direct `channels.telegram.defaultTo` already identifies the owner.
 - `channels.telegram.execApprovals.target`: `dm | channel | both` (default: `dm`). `channel` and `both` preserve the originating Telegram topic when present.
 - `channels.telegram.execApprovals.agentFilter`: optional agent ID filter for forwarded approval prompts.
 - `channels.telegram.execApprovals.sessionFilter`: optional session key filter (substring or regex) for forwarded approval prompts.
@@ -961,6 +990,8 @@ Primary reference:
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
+- `channels.telegram.errorPolicy`: `reply | silent` — control error reply behavior (default: `reply`). Per-account/group/topic overrides supported.
+- `channels.telegram.errorCooldownMs`: minimum ms between error replies to the same chat (default: `60000`). Prevents error spam during outages.
 
 - [Configuration reference - Telegram](/gateway/configuration-reference#telegram)
 
@@ -977,11 +1008,14 @@ Telegram-specific high-signal fields:
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
+- errors: `errorPolicy`, `errorCooldownMs`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

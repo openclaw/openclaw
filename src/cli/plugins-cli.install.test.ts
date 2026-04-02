@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
@@ -20,6 +21,12 @@ import {
   runtimeLogs,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
+
+const CLI_STATE_ROOT = "/tmp/openclaw-state";
+
+function cliInstallPath(pluginId: string): string {
+  return installedPluginRoot(CLI_STATE_ROOT, pluginId);
+}
 
 function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
   return {
@@ -58,7 +65,7 @@ function createClawHubInstallResult(params: {
   return {
     ok: true,
     pluginId: params.pluginId,
-    targetDir: `/tmp/openclaw-state/extensions/${params.pluginId}`,
+    targetDir: cliInstallPath(params.pluginId),
     version: params.version,
     packageName: params.packageName,
     clawhub: {
@@ -154,7 +161,7 @@ describe("plugins cli install", () => {
         installs: {
           alpha: {
             source: "marketplace",
-            installPath: "/tmp/openclaw-state/extensions/alpha",
+            installPath: cliInstallPath("alpha"),
           },
         },
       },
@@ -164,7 +171,7 @@ describe("plugins cli install", () => {
     installPluginFromMarketplace.mockResolvedValue({
       ok: true,
       pluginId: "alpha",
-      targetDir: "/tmp/openclaw-state/extensions/alpha",
+      targetDir: cliInstallPath("alpha"),
       version: "1.2.3",
       marketplaceName: "Claude",
       marketplaceSource: "local/repo",
@@ -201,7 +208,7 @@ describe("plugins cli install", () => {
       install: {
         source: "clawhub",
         spec: "clawhub:demo@1.2.3",
-        installPath: "/tmp/openclaw-state/extensions/demo",
+        installPath: cliInstallPath("demo"),
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
@@ -260,7 +267,7 @@ describe("plugins cli install", () => {
       install: {
         source: "clawhub",
         spec: "clawhub:demo@1.2.3",
-        installPath: "/tmp/openclaw-state/extensions/demo",
+        installPath: cliInstallPath("demo"),
         clawhubPackage: "demo",
       },
     });
@@ -317,7 +324,7 @@ describe("plugins cli install", () => {
     installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
       pluginId: "demo",
-      targetDir: "/tmp/openclaw-state/extensions/demo",
+      targetDir: cliInstallPath("demo"),
       version: "1.2.3",
       npmResolution: {
         packageName: "demo",
@@ -342,6 +349,69 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "demo",
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to marketplace installs", async () => {
+    await expect(
+      runPluginsCommand([
+        "plugins",
+        "install",
+        "alpha",
+        "--marketplace",
+        "local/repo",
+        "--dangerously-force-unsafe-install",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromMarketplace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        marketplace: "local/repo",
+        plugin: "alpha",
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to npm installs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
+      code: "package_not_found",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: cliInstallPath("demo"),
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo", "--dangerously-force-unsafe-install"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+        dangerouslyForceUnsafeInstall: true,
       }),
     );
   });

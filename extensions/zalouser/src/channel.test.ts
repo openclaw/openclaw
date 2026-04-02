@@ -110,6 +110,17 @@ describe("zalouser outbound", () => {
   });
 });
 
+describe("zalouser outbound chunking", () => {
+  it("chunks outbound text without requiring Zalouser runtime initialization", () => {
+    const chunker = zalouserPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("zalouser outbound.chunker unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+});
+
 describe("zalouser channel policies", () => {
   beforeEach(() => {
     mockSendReaction.mockClear();

@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import { beforeEach, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
-import { buildGoogleGeminiCliBackend } from "../../extensions/google/cli-backend.js";
-import { buildOpenAICodexCliBackend } from "../../extensions/openai/cli-backend.js";
+import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
+import { buildGoogleGeminiCliBackend } from "../../extensions/google/test-api.js";
+import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -29,7 +31,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../process/supervisor/index.js", () => ({
+setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => ({
     spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
     cancel: vi.fn(),
@@ -37,20 +39,14 @@ vi.mock("../process/supervisor/index.js", () => ({
     reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
-}));
-
-vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-}));
-
-vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
+});
 
-vi.mock("./bootstrap-files.js", () => ({
+setCliRunnerPrepareTestDeps({
   makeBootstrapWarn: () => () => {},
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-}));
+});
 
 type MockRunExit = {
   reason:
@@ -145,28 +141,16 @@ export async function setupCliRunnerTestModule() {
     bootstrapFiles: [],
     contextFiles: [],
   });
-
-  vi.resetModules();
-  vi.doMock("../process/supervisor/index.js", () => ({
-    getProcessSupervisor: () => ({
-      spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
-      getRecord: vi.fn(),
-    }),
-  }));
-  vi.doMock("../infra/system-events.js", () => ({
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-  }));
-  vi.doMock("../infra/heartbeat-wake.js", () => ({
-    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-  }));
-  vi.doMock("./bootstrap-files.js", () => ({
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-  }));
   return (await import("./cli-runner.js")).runCliAgent;
+}
+
+export async function setupClaudeCliRunnerTestModule() {
+  const runCliAgent = await setupCliRunnerTestModule();
+  return (params: Parameters<typeof import("./claude-cli-runner.js").runClaudeCliAgent>[0]) =>
+    runCliAgent({
+      ...params,
+      provider: params.provider ?? "claude-cli",
+    });
 }
 
 export function stubBootstrapContext(params: {

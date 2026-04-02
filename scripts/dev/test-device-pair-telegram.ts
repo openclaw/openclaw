@@ -1,4 +1,4 @@
-import { sendMessageTelegram } from "../../extensions/telegram/src/send.js";
+import { sendMessageTelegram } from "../../extensions/telegram/runtime-api.js";
 import { loadConfig } from "../../src/config/config.js";
 import { matchPluginCommand, executePluginCommand } from "../../src/plugins/commands.js";
 import { loadOpenClawPlugins } from "../../src/plugins/loader.js";

@@ -43,6 +43,7 @@ function makeRegistry(
   plugins: Array<{
     id: string;
     channels: string[];
+    autoEnableWhenConfiguredProviders?: string[];
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
@@ -50,6 +51,7 @@ function makeRegistry(
     plugins: plugins.map((p) => ({
       id: p.id,
       channels: p.channels,
+      autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
       channelConfigs: p.channelConfigs,
       providers: [],
       cliBackends: [],
@@ -131,6 +133,87 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toBeUndefined();
+  });
+
+  it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        browser: {
+          defaultProfile: "openclaw",
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser configured, enabled automatically.");
+  });
+
+  it("auto-enables browser when tools.alsoAllow references browser", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          alsoAllow: ["browser"],
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser tool referenced, enabled automatically.");
+  });
+
+  it("keeps restrictive plugins.allow unchanged when browser is not referenced", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.entries?.browser).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "ok",
+          },
+        },
+        agents: {
+          list: [{ id: "pi" }],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config).toEqual({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "ok",
+        },
+      },
+      agents: {
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(result.changes).toEqual([]);
   });
 
   it("ignores channels.modelByChannel for plugin auto-enable", () => {
@@ -357,6 +440,69 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
 
+  it("auto-enables bundled provider plugins when plugin-owned web search config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-config-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai web search configured, enabled automatically.");
+  });
+
+  it("auto-enables xai when the plugin-owned x_search tool is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "x-search-runtime-key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai tool configured, enabled automatically.");
+  });
+
+  it("auto-enables xai when the plugin-owned codeExecution config is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                codeExecution: {
+                  enabled: true,
+                  model: "grok-4-1-fast",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai tool configured, enabled automatically.");
+  });
+
   it("auto-enables minimax when minimax-portal profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -374,6 +520,110 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
+  });
+
+  it("auto-enables minimax when minimax API key auth is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax:default": {
+              provider: "minimax",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+  });
+
+  it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.openai).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "acme-oauth:default": {
+              provider: "acme-oauth",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        {
+          id: "acme",
+          channels: [],
+          autoEnableWhenConfiguredProviders: ["acme-oauth"],
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+  });
+
+  it("auto-enables third-party provider plugins when manifest-owned web search config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            acme: {
+              config: {
+                webSearch: {
+                  apiKey: "acme-search-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "acme",
+            channels: [],
+            providers: ["acme-ai"],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "config" as const,
+            rootDir: "/fake/acme",
+            source: "/fake/acme/index.js",
+            manifestPath: "/fake/acme/openclaw.plugin.json",
+            contracts: {
+              webSearchProviders: ["acme-search"],
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+    expect(result.changes).toContain("acme web search configured, enabled automatically.");
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
