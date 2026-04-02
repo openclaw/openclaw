@@ -3,11 +3,16 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { isBlockedWorkspaceOpenClawEnvVar } from "../infra/workspace-env-policy.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import type { OpenClawConfig } from "./types.js";
 
 function isBlockedConfigEnvVar(key: string): boolean {
-  return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+  return (
+    isDangerousHostEnvVarName(key) ||
+    isDangerousHostEnvOverrideVarName(key) ||
+    isBlockedWorkspaceOpenClawEnvVar(key)
+  );
 }
 
 function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, string> {

@@ -7,6 +7,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
+import { isBlockedWorkspaceOpenClawEnvVar } from "./workspace-env-policy.js";
 
 const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "ALL_PROXY",
@@ -16,27 +17,18 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "HTTPS_PROXY",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
-  "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_BUNDLED_HOOKS_DIR",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_BUNDLED_SKILLS_DIR",
-  "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_PASSWORD",
   "OPENCLAW_GATEWAY_SECRET",
   "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_HOME",
   "OPENCLAW_LIVE_ANTHROPIC_KEY",
   "OPENCLAW_LIVE_ANTHROPIC_KEYS",
   "OPENCLAW_LIVE_GEMINI_KEY",
   "OPENCLAW_LIVE_OPENAI_KEY",
-  "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_PINNED_PYTHON",
   "OPENCLAW_PINNED_WRITE_PYTHON",
   "OPENCLAW_PROFILE",
-  "OPENCLAW_STATE_DIR",
   "OPENAI_API_KEY",
   "OPENAI_API_KEYS",
-  "PI_CODING_AGENT_DIR",
 ]);
 
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
@@ -59,6 +51,7 @@ function shouldBlockWorkspaceDotEnvKey(key: string): boolean {
   const upper = key.toUpperCase();
   return (
     shouldBlockWorkspaceRuntimeDotEnvKey(upper) ||
+    isBlockedWorkspaceOpenClawEnvVar(upper) ||
     BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix))

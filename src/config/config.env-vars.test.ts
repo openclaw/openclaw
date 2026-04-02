@@ -83,6 +83,37 @@ describe("config env vars", () => {
     );
   });
 
+  it("blocks OpenClaw trust-root env vars from config env", async () => {
+    await withEnvOverride(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+        OPENROUTER_API_KEY: undefined,
+      },
+      async () => {
+        const config = {
+          env: {
+            vars: {
+              OPENCLAW_BUNDLED_PLUGINS_DIR: "/tmp/attacker-plugins",
+              OPENCLAW_STATE_DIR: "/tmp/attacker-state",
+              OPENROUTER_API_KEY: "config-key",
+            },
+          },
+        };
+
+        const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
+        expect(entries.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(entries.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(entries.OPENROUTER_API_KEY).toBe("config-key");
+
+        applyConfigEnvVars(config as OpenClawConfig);
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
+      },
+    );
+  });
+
   it("drops non-portable env keys from config env", async () => {
     await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
       const config = {
