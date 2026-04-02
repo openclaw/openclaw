@@ -116,7 +116,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
-    { name: "context", description: "Show context breakdown" },
+    {
+      name: "context",
+      description: "Context breakdown (visualize|viz|list|detail|json)",
+      getArgumentCompletions: createLevelCompletion(["visualize", "viz", "list", "detail", "json"]),
+    },
     { name: "settings", description: "Open settings" },
     { name: "exit", description: "Exit the TUI" },
     { name: "quit", description: "Exit the TUI" },
@@ -159,7 +163,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/activation <mention|always>",
     "/new or /reset",
     "/abort",
-    "/context",
+    "/context <visualize|viz|list|detail|json>",
     "/settings",
     "/exit",
   ].join("\n");

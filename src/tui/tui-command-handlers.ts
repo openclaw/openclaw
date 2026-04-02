@@ -510,13 +510,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
-      case "context":
-        if (!args) {
+      case "context": {
+        const sub = args.split(/\s+/)[0]?.toLowerCase() ?? "";
+        if (sub === "visualize" || sub === "viz") {
           openContextViz();
         } else {
           await sendMessage(raw);
         }
         break;
+      }
       case "settings":
         openSettings();
         break;
