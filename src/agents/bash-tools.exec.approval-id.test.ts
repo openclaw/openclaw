@@ -542,6 +542,62 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
   });
 
+  it("reuses gateway allow-always approvals for repeated exact commands", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: {},
+    });
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-always" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+    });
+    const command = `${JSON.stringify(process.execPath)} --version`;
+
+    const first = await tool.execute("call-gateway-allow-always-initial", {
+      command,
+    });
+
+    expect(first.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
+    expect(calls).toContain("exec.approval.waitDecision");
+
+    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    await expect
+      .poll(async () => {
+        const raw = await fs.readFile(approvalsPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          agents?: { main?: { allowlist?: Array<{ source?: string }> } };
+        };
+        return parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always");
+      })
+      .toBe(true);
+
+    calls.length = 0;
+
+    const second = await tool.execute("call-gateway-allow-always-repeat", {
+      command,
+    });
+
+    expect(second.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(calls).not.toContain("exec.approval.waitDecision");
+  });
+
   it("keeps ask=always prompts for node-host runs even with durable trust", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
