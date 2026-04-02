@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveProviderRequestConfig } from "./provider-request-config.js";
+import {
+  resolveProviderRequestConfig,
+  resolveProviderRequestHeaders,
+} from "./provider-request-config.js";
 
 describe("provider request config", () => {
   it("merges discovered, provider, and model headers in precedence order", () => {
@@ -61,5 +64,49 @@ describe("provider request config", () => {
     expect(resolved.tls).toEqual({ configured: false });
     expect(resolved.policy.endpointClass).toBe("openrouter");
     expect(resolved.policy.attributionProvider).toBe("openrouter");
+  });
+
+  it("lets defaults override caller headers when requested", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        originator: "spoofed",
+        "User-Agent": "spoofed/0.0.0",
+        "X-Custom": "1",
+      },
+      precedence: "defaults-win",
+    });
+
+    expect(resolved).toMatchObject({
+      originator: "openclaw",
+      version: expect.any(String),
+      "User-Agent": expect.stringMatching(/^openclaw\//),
+      "X-Custom": "1",
+    });
+  });
+
+  it("lets caller headers override defaults when requested", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "openrouter",
+      api: "openai-completions",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "HTTP-Referer": "https://example.com",
+        "X-Custom": "1",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "HTTP-Referer": "https://example.com",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
+      "X-Custom": "1",
+    });
   });
 });
