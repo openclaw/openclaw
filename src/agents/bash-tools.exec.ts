@@ -1343,29 +1343,32 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const hasExplicitWorkdir = !!(params.workdir?.trim() || defaults?.cwd);
-      const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
-      let workdir: string | undefined = rawWorkdir;
+      const explicitWorkdir = params.workdir?.trim() || undefined;
+      const defaultWorkdir = defaults?.cwd?.trim() || undefined;
+      let workdir: string | undefined;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
+        const sandboxWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         const resolved = await resolveSandboxWorkdir({
-          workdir: rawWorkdir,
+          workdir: sandboxWorkdir,
           sandbox,
           warnings,
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
       } else if (host === "node") {
-        // For remote node execution, only forward an explicit cwd provided by the
-        // user or agent config.  When no explicit cwd was given, the gateway's own
+        // For remote node execution, only forward a cwd that was explicitly
+        // requested on the tool call. The gateway's workspace root is wired in as a
+        // local default, but it is not meaningful on the remote node and would
+        // recreate the cross-platform approval failure this path is fixing.
+        // When no explicit cwd was given, the gateway's own
         // process.cwd() is meaningless on the remote node (especially cross-platform,
         // e.g. Linux gateway + Windows node) and would cause
         // "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd".
         // Passing undefined lets the node use its own default working directory.
-        if (!hasExplicitWorkdir) {
-          workdir = undefined;
-        }
+        workdir = explicitWorkdir;
       } else {
+        const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       rejectExecApprovalShellCommand(params.command);
@@ -1469,15 +1472,14 @@ export function createExecTool(
         });
       }
 
-      // After the node early-return above, workdir is guaranteed to be a string
-      // (it was initialised from rawWorkdir and only set to undefined inside the
-      // node branch which already returned).
-      const resolvedWorkdir: string = workdir ?? rawWorkdir;
+      if (!workdir) {
+        throw new Error("exec internal error: local execution requires a resolved workdir");
+      }
 
       if (host === "gateway" && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
-          workdir: resolvedWorkdir,
+          workdir,
           env,
           requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
@@ -1523,12 +1525,12 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir: resolvedWorkdir });
+      await validateScriptFileForShellBleed({ command: params.command, workdir });
 
       const run = await runExecProcess({
         command: params.command,
         execCommand: execCommandOverride,
-        workdir: resolvedWorkdir,
+        workdir,
         env,
         sandbox,
         containerWorkdir,
@@ -1640,4 +1642,3 @@ export function createExecTool(
 }
 
 export const execTool = createExecTool();
-

@@ -121,7 +121,7 @@ export async function executeNodeHostCommand(
   }
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;
-  const runCwd = prepared.plan.cwd ?? params.workdir ?? undefined;
+  const runCwd = prepared.plan.cwd ?? params.workdir;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
 
@@ -453,4 +453,3 @@ export async function executeNodeHostCommand(
     } satisfies ExecToolDetails,
   };
 }
-
