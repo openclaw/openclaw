@@ -2556,7 +2556,7 @@ export type OpenClawPluginApi = {
    * gateway supports session reset. Returns a structured result instead of
    * rejecting for operational failures.
    */
-  resetSession?: (key: string, reason?: string) => Promise<PluginResetSessionResult>;
+  resetSession?: (key: string, reason?: "new" | "reset") => Promise<PluginResetSessionResult>;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

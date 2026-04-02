@@ -63,6 +63,12 @@ describe("api.resetSession presence", () => {
     expect(api.resetSession).toBeUndefined();
   });
 
+  it("is absent outside full mode (cli-metadata)", () => {
+    const reg = createRegistryWithSessionReset();
+    const api = registerAndCapture(reg, { registrationMode: "cli-metadata" });
+    expect(api.resetSession).toBeUndefined();
+  });
+
   it("is absent when sessions.reset capability is not present", () => {
     const reg = createRegistryWithoutSessionReset();
     const api = registerAndCapture(reg);
@@ -159,7 +165,7 @@ describe("api.resetSession key and reason handling", () => {
     );
   });
 
-  it("normalizes unrecognized reason to new", async () => {
+  it("normalizes unrecognized runtime reason to new", async () => {
     mockPerformGatewaySessionReset.mockResolvedValue({
       ok: true,
       key: "work",
@@ -167,7 +173,7 @@ describe("api.resetSession key and reason handling", () => {
     });
     const reg = createRegistryWithSessionReset();
     const api = registerAndCapture(reg);
-    await api.resetSession!("work", "something-else");
+    await api.resetSession!("work", "something-else" as unknown as "new" | "reset");
     expect(mockPerformGatewaySessionReset).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "new" }),
     );
