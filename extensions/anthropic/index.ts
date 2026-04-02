@@ -66,6 +66,12 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
  * Check whether any configured Anthropic auth profile uses OAuth or
  * setup-token mode. Both use sk-ant-oat-* tokens that require the
  * oauth-2025-04-20 beta header for Bearer auth to succeed.
+ *
+ * Limitation: checks all profiles, not the active one — ProviderWrapStreamFnContext
+ * doesn't expose profileId. In mixed-profile setups this over-detects OAuth,
+ * which is harmless for the beta headers (Anthropic ignores oauth-2025-04-20
+ * on API key requests) but may unnecessarily strip context-1m. Narrowing to
+ * the active profile requires adding profileId to the SDK context.
  */
 function hasOAuthAnthropicProfile(
   config:
