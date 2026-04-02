@@ -699,6 +699,10 @@
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
       "default": "./dist/plugin-sdk/models-provider-runtime.js"
     },
+    "./plugin-sdk/skill-commands-runtime": {
+      "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
+      "default": "./dist/plugin-sdk/skill-commands-runtime.js"
+    },
     "./plugin-sdk/native-command-registry": {
       "types": "./dist/plugin-sdk/native-command-registry.d.ts",
       "default": "./dist/plugin-sdk/native-command-registry.js"

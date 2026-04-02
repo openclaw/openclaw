@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveMatrixAccountStringValues } from "../auth-precedence.js";
@@ -8,7 +8,7 @@ import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig } from "../types.js";
 import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import type { MatrixResolvedConfig } from "./client/types.js";
-import { resolveMatrixConfigFieldPath } from "./config-update.js";
+import { resolveMatrixConfigFieldPath } from "./config-paths.js";
 
 type MatrixEnvConfig = {
   homeserver: string;

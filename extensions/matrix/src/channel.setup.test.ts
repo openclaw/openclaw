@@ -11,6 +11,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
 
 import { matrixPlugin } from "./channel.js";
 import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -133,6 +134,11 @@ describe("matrix setup post-write bootstrap", () => {
     error.mockClear();
     exit.mockClear();
     installMatrixTestRuntime();
+  });
+
+  it("registers the Matrix guided setup wizard on the channel plugin", () => {
+    expect(matrixPlugin.setupWizard).toBe(matrixSetupWizard);
+    expect(matrixPlugin.setupWizard?.channel).toBe("matrix");
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {

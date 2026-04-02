@@ -27,6 +27,29 @@ describe("plugin activation boundary", () => {
         normalizeModelRef: typeof import("./agents/model-selection.js").normalizeModelRef;
       }>
     | undefined;
+  let browserHelpersPromise:
+    | Promise<{
+        DEFAULT_AI_SNAPSHOT_MAX_CHARS: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_AI_SNAPSHOT_MAX_CHARS;
+        DEFAULT_BROWSER_EVALUATE_ENABLED: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_BROWSER_EVALUATE_ENABLED;
+        DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
+        DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+        DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_UPLOAD_DIR;
+        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-runtime.js").closeTrackedBrowserTabsForSessions;
+        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-runtime.js").parseBrowserMajorVersion;
+        redactCdpUrl: typeof import("./plugin-sdk/browser-runtime.js").redactCdpUrl;
+        readBrowserVersion: typeof import("./plugin-sdk/browser-runtime.js").readBrowserVersion;
+        resolveBrowserConfig: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserConfig;
+        resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserControlAuth;
+        resolveGoogleChromeExecutableForPlatform: typeof import("./plugin-sdk/browser-runtime.js").resolveGoogleChromeExecutableForPlatform;
+        resolveProfile: typeof import("./plugin-sdk/browser-runtime.js").resolveProfile;
+      }>
+    | undefined;
+  let browserAmbientImportsPromise: Promise<void> | undefined;
+  let discordMaintenancePromise:
+    | Promise<{
+        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-thread-bindings.js").unbindThreadBindingsBySessionKey;
+      }>
+    | undefined;
 
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
@@ -56,6 +79,46 @@ describe("plugin activation boundary", () => {
     return modelSelectionPromise;
   }
 
+  function importBrowserHelpers() {
+    browserHelpersPromise ??= import("./plugin-sdk/browser-runtime.js").then((module) => ({
+      DEFAULT_AI_SNAPSHOT_MAX_CHARS: module.DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      DEFAULT_BROWSER_EVALUATE_ENABLED: module.DEFAULT_BROWSER_EVALUATE_ENABLED,
+      DEFAULT_OPENCLAW_BROWSER_COLOR: module.DEFAULT_OPENCLAW_BROWSER_COLOR,
+      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: module.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+      DEFAULT_UPLOAD_DIR: module.DEFAULT_UPLOAD_DIR,
+      closeTrackedBrowserTabsForSessions: module.closeTrackedBrowserTabsForSessions,
+      parseBrowserMajorVersion: module.parseBrowserMajorVersion,
+      redactCdpUrl: module.redactCdpUrl,
+      readBrowserVersion: module.readBrowserVersion,
+      resolveBrowserConfig: module.resolveBrowserConfig,
+      resolveBrowserControlAuth: module.resolveBrowserControlAuth,
+      resolveGoogleChromeExecutableForPlatform: module.resolveGoogleChromeExecutableForPlatform,
+      resolveProfile: module.resolveProfile,
+    }));
+    return browserHelpersPromise;
+  }
+
+  function importBrowserAmbientModules() {
+    browserAmbientImportsPromise ??= Promise.all([
+      import("./agents/sandbox/browser.js"),
+      import("./agents/sandbox/context.js"),
+      import("./commands/doctor-browser.js"),
+      import("./node-host/runner.js"),
+      import("./security/audit.js"),
+      import("./security/audit-extra.sync.js"),
+    ]).then(() => undefined);
+    return browserAmbientImportsPromise;
+  }
+
+  function importDiscordMaintenance() {
+    discordMaintenancePromise ??= import("./plugin-sdk/discord-thread-bindings.js").then(
+      (module) => ({
+        unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
+      }),
+    );
+    return discordMaintenancePromise;
+  }
+
   it("does not load bundled provider plugins on ambient command imports", async () => {
     await importAmbientModules();
 
@@ -81,6 +144,61 @@ describe("plugin activation boundary", () => {
       provider: "xai",
       model: "grok-4-fast",
     });
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("does not load the browser plugin for static browser config helpers", async () => {
+    const browser = await importBrowserHelpers();
+
+    expect(browser.DEFAULT_AI_SNAPSHOT_MAX_CHARS).toBe(80_000);
+    expect(browser.DEFAULT_BROWSER_EVALUATE_ENABLED).toBe(true);
+    expect(browser.DEFAULT_OPENCLAW_BROWSER_COLOR).toBe("#FF4500");
+    expect(browser.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME).toBe("openclaw");
+    expect(browser.DEFAULT_UPLOAD_DIR).toContain("uploads");
+    expect(browser.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
+    expect(browser.resolveBrowserControlAuth({}, {} as NodeJS.ProcessEnv)).toEqual({
+      token: undefined,
+      password: undefined,
+    });
+    const resolved = browser.resolveBrowserConfig(undefined, {});
+    expect(browser.resolveProfile(resolved, "openclaw")).toEqual(
+      expect.objectContaining({
+        name: "openclaw",
+        cdpHost: "127.0.0.1",
+      }),
+    );
+    expect(
+      browser.redactCdpUrl("wss://user:secret@example.com/devtools/browser/123"),
+    ).not.toContain("secret");
+    expect(browser.readBrowserVersion("/path/that/does/not/exist")).toBeNull();
+    expect(browser.resolveGoogleChromeExecutableForPlatform("aix")).toBeNull();
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps browser cleanup helpers cold when browser is disabled", async () => {
+    const browser = await importBrowserHelpers();
+
+    await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps discord cleanup helpers cold when discord is disabled", async () => {
+    const discord = await importDiscordMaintenance();
+
+    expect(
+      discord.unbindThreadBindingsBySessionKey({
+        targetSessionKey: "agent:main:test",
+        targetKind: "acp",
+        reason: "session-reset",
+        sendFarewell: true,
+      }),
+    ).toEqual([]);
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps audited browser ambient imports cold", async () => {
+    await importBrowserAmbientModules();
+
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 });
