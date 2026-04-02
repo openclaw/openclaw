@@ -11,6 +11,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { resolveWorkspaceDir } from "../tools/common.js";
 import { AuditLog } from "./audit-log.js";
 import { BudgetLedger } from "./budget-ledger.js";
+import { registerGovernanceHooks } from "./hooks.js";
 import { RbacEngine, type RbacPolicy } from "./rbac.js";
 import { registerGovernanceRoutes } from "./routes.js";
 import { createGovernanceTools } from "./tools.js";
@@ -91,50 +92,9 @@ export function registerGovernance(api: OpenClawPluginApi, config: GovernanceMod
   // Register governance HTTP routes
   registerGovernanceRoutes(api, ledger, audit);
 
-  // Hook: track LLM output costs
-  api.on("llm_output", async (ctx: any) => {
-    try {
-      const model = ctx.model ?? "unknown";
-      const inputTokens = ctx.inputTokens ?? ctx.input_tokens ?? 0;
-      const outputTokens = ctx.outputTokens ?? ctx.output_tokens ?? 0;
-      const agentId = ctx.agentId ?? ctx.agent_id ?? "unknown";
-      const companyId = ctx.companyId ?? ctx.company_id ?? "default";
-      const costUsd = estimateTokenCost(model, inputTokens, outputTokens);
-
-      if (costUsd > 0) {
-        ledger.recordDirectCost({
-          companyId,
-          agentId,
-          eventType: "llm_output",
-          amountUsd: costUsd,
-          model,
-          inputTokens,
-          outputTokens,
-          sessionId: ctx.sessionId ?? null,
-        });
-      }
-    } catch (err) {
-      log.debug(`[governance] Failed to record LLM cost: ${err}`);
-    }
-  });
-
-  // Hook: audit tool calls
-  api.on("after_tool_call", async (ctx: any) => {
-    try {
-      audit.log({
-        companyId: ctx.companyId ?? ctx.company_id ?? "default",
-        actorType: ctx.actorType ?? "agent",
-        actorId: ctx.agentId ?? ctx.agent_id ?? "unknown",
-        action: `tool:${ctx.toolName ?? ctx.tool_name ?? "unknown"}`,
-        resourceType: "tool",
-        resourceId: ctx.toolName ?? ctx.tool_name ?? null,
-        detail: ctx.error ? `error: ${ctx.error}` : null,
-        outcome: ctx.error ? "error" : "success",
-      });
-    } catch (err) {
-      log.debug(`[governance] Failed to audit tool call: ${err}`);
-    }
-  });
+  // Register lifecycle hooks (RBAC, budget reservation, audit, LLM cost tracking).
+  // Delegated to hooks.ts to avoid duplicate handler registration.
+  registerGovernanceHooks(api, { ledger, audit, rbac, config: govConfig });
 
   log.info("[governance] Governance module initialized (budget + audit + RBAC + hooks)");
 }

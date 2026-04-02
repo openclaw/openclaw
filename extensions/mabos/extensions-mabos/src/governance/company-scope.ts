@@ -41,7 +41,8 @@ export function validateCompanyId(companyId: string): boolean {
 
 /**
  * Middleware-style company scope guard.
- * Throws if multiCompany is enabled and companyId is invalid/missing.
+ * Always validates company ID format. In multi-company mode, also rejects
+ * the 'default' fallback unless it was explicitly provided.
  */
 export function enforceCompanyScope(
   ctx: CompanyScopeContext,
@@ -49,12 +50,19 @@ export function enforceCompanyScope(
 ): string {
   const companyId = resolveCompanyId(ctx);
 
-  if (multiCompanyEnabled && companyId !== "default") {
-    if (!validateCompanyId(companyId)) {
-      throw new Error(
-        `Invalid company ID "${companyId}": must be 1-64 alphanumeric/hyphen/underscore characters`,
-      );
-    }
+  // Always validate format regardless of multi-company mode
+  if (!validateCompanyId(companyId)) {
+    throw new Error(
+      `Invalid company ID "${companyId}": must be 1-64 alphanumeric/hyphen/underscore characters`,
+    );
+  }
+
+  // In multi-company mode, 'default' is only acceptable if explicitly provided
+  if (multiCompanyEnabled && companyId === "default" && !ctx.companyId) {
+    throw new Error(
+      "Multi-company mode is enabled but no company ID was provided. " +
+        "Set X-Mabos-Company header or companyId in agent config.",
+    );
   }
 
   return companyId;

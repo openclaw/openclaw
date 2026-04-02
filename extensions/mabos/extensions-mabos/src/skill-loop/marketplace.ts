@@ -170,6 +170,14 @@ export class SkillMarketplace {
     skill: MarketplaceSkill,
     skillDir: string,
   ): Promise<{ path: string; manifest: SkillManifest }> {
+    // Validate URL to prevent SSRF — only allow https GitHub URLs
+    const url = new URL(skill.installUrl);
+    if (url.protocol !== "https:" || !url.hostname.endsWith("github.com")) {
+      throw new Error(
+        `Blocked: skill install URL must be an HTTPS GitHub URL, got: ${skill.installUrl}`,
+      );
+    }
+
     await new Promise<void>((resolve, reject) => {
       execFile(
         "git",

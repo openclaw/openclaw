@@ -43,9 +43,18 @@ export class SandboxManager {
   }
 
   async destroyAll(): Promise<void> {
+    const errors: Array<{ taskId: string; error: unknown }> = [];
     for (const [taskId, sandbox] of this.sandboxes) {
-      await sandbox.destroy();
+      try {
+        await sandbox.destroy();
+      } catch (err) {
+        errors.push({ taskId, error: err });
+      }
       this.sandboxes.delete(taskId);
+    }
+    if (errors.length > 0) {
+      const msg = errors.map((e) => `${e.taskId}: ${e.error}`).join("; ");
+      throw new Error(`Failed to destroy ${errors.length} sandbox(es): ${msg}`);
     }
   }
 
