@@ -35,7 +35,6 @@ const COMMAND_SECRET_TARGETS = {
     "skills.entries.",
     "messages.tts.",
     "tools.web.search",
-    "tools.web.x_search",
   ]).concat(WEB_PLUGIN_SECRET_TARGETS),
   status: idsByPrefix([
     "channels.",

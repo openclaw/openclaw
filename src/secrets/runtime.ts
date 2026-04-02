@@ -18,6 +18,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { migrateLegacyConfig } from "../config/legacy-migrate.js";
+import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -168,9 +169,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = structuredClone(migrateLegacyXSearchConfig(params.config).config);
   const resolvedConfig = structuredClone(
-    migrateLegacyConfig(params.config).config ?? params.config,
+    migrateLegacyXSearchConfig(migrateLegacyConfig(params.config).config ?? params.config).config,
   );
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??

@@ -14,6 +14,10 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
+  resolveEffectiveXSearchConfig,
+  resolveLegacyXSearchConfig,
+} from "./src/x-search-config.js";
+import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
   resolveXaiXSearchInlineCitations,
@@ -21,12 +25,6 @@ import {
   resolveXaiXSearchModel,
   type XaiXSearchOptions,
 } from "./src/x-search-shared.js";
-
-type XSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { x_search?: infer XSearch }
-    ? XSearch
-    : undefined
-  : undefined;
 
 class PluginToolInputError extends Error {
   constructor(message: string) {
@@ -79,39 +77,32 @@ function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
   return readPluginXaiWebSearchApiKey(cfg) ?? readLegacyGrokApiKey(cfg);
 }
 
-function resolveXSearchConfig(cfg?: OpenClawConfig): XSearchConfig {
-  const xSearch = cfg?.tools?.web?.x_search;
-  if (!xSearch || typeof xSearch !== "object") {
-    return undefined;
-  }
-  return xSearch as XSearchConfig;
+function readLegacyXSearchApiKey(cfg?: OpenClawConfig): string | undefined {
+  const legacyConfig = resolveLegacyXSearchConfig(cfg);
+  return readConfiguredSecretString(legacyConfig?.apiKey, "tools.web.x_search.apiKey");
+}
+
+function resolveXSearchConfig(cfg?: OpenClawConfig): Record<string, unknown> | undefined {
+  return resolveEffectiveXSearchConfig(cfg);
 }
 
 function resolveXSearchEnabled(params: {
   cfg?: OpenClawConfig;
-  config?: XSearchConfig;
+  config?: Record<string, unknown>;
   runtimeConfig?: OpenClawConfig;
 }): boolean {
   if (params.config?.enabled === false) {
     return false;
   }
-  const runtimeXSearchConfig =
-    params.runtimeConfig && params.runtimeConfig !== params.cfg
-      ? resolveXSearchConfig(params.runtimeConfig)
-      : undefined;
   if (
-    readConfiguredSecretString(runtimeXSearchConfig?.apiKey, "tools.web.x_search.apiKey") ||
-    resolveFallbackXaiApiKey(params.runtimeConfig)
+    resolveFallbackXaiApiKey(params.runtimeConfig) ||
+    readLegacyXSearchApiKey(params.runtimeConfig)
   ) {
     return true;
   }
-  const configuredApiKey = readConfiguredSecretString(
-    params.config?.apiKey,
-    "tools.web.x_search.apiKey",
-  );
   return Boolean(
-    configuredApiKey ||
     resolveFallbackXaiApiKey(params.cfg) ||
+    readLegacyXSearchApiKey(params.cfg) ||
     readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
@@ -126,10 +117,10 @@ function resolveXSearchApiKey(params: {
       ? resolveXSearchConfig(params.runtimeConfig)
       : undefined;
   return (
-    readConfiguredSecretString(runtimeXSearchConfig?.apiKey, "tools.web.x_search.apiKey") ??
-    readConfiguredSecretString(sourceXSearchConfig?.apiKey, "tools.web.x_search.apiKey") ??
     resolveFallbackXaiApiKey(params.runtimeConfig) ??
     resolveFallbackXaiApiKey(params.sourceConfig) ??
+    readLegacyXSearchApiKey(params.runtimeConfig) ??
+    readLegacyXSearchApiKey(params.sourceConfig) ??
     readProviderEnvValue(["XAI_API_KEY"])
   );
 }
@@ -234,7 +225,7 @@ export function createXSearchTool(options?: {
         return jsonResult({
           error: "missing_xai_api_key",
           message:
-            "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.x_search.apiKey or plugins.entries.xai.config.webSearch.apiKey.",
+            "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
