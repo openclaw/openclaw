@@ -339,7 +339,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   const loaded = await loadPluginCommandState(params.workspaceDir, {
-    loadModules: pluginsCommand.action === "inspect",
+    loadModules: pluginsCommand.action !== "list",
   });
   if (!loaded.ok) {
     return {

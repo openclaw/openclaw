@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginSnapshotReport: vi.fn(),
   buildPluginDiagnosticsReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
@@ -28,7 +27,6 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginSnapshotReport: (...args: unknown[]) => mocks.buildPluginSnapshotReport(...args),
   buildPluginDiagnosticsReport: (...args: unknown[]) => mocks.buildPluginDiagnosticsReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
@@ -54,10 +52,6 @@ async function runNoteWorkspaceStatusForTest(
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildWorkspaceSkillStatus.mockReturnValue({
     skills: [],
-  });
-  mocks.buildPluginSnapshotReport.mockReturnValue({
-    workspaceDir: "/workspace",
-    ...loadResult,
   });
   mocks.buildPluginDiagnosticsReport.mockReturnValue({
     workspaceDir: "/workspace",
@@ -91,10 +85,6 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginSnapshotReport).toHaveBeenCalledWith({
-        config: {},
-        workspaceDir: "/workspace",
-      });
       expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
