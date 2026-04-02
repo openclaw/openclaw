@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import * as os from "node:os";
+import fs from "node:fs";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 export function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -22,8 +23,12 @@ export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: 
   tmpDir: string;
   id: string;
 } {
+  const tmpDir = opts.tmpDir ?? resolvePreferredOpenClawTmpDir();
+  if (!opts.tmpDir) {
+    fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+  }
   return {
-    tmpDir: opts.tmpDir ?? os.tmpdir(),
+    tmpDir,
     id: opts.id ?? randomUUID(),
     ext: opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`,
   };

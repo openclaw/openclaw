@@ -7,12 +7,12 @@ import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
 
-describe("msteams conversation store (fs)", () => {
+describe("msteams conversation store (fs-only)", () => {
   beforeEach(() => {
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 
-  it("filters and prunes expired entries (but keeps legacy ones)", async () => {
+  it("filters and prunes expired entries while preserving legacy entries without lastSeenAt", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
 
     const env: NodeJS.ProcessEnv = {
@@ -35,7 +35,7 @@ describe("msteams conversation store (fs)", () => {
     const raw = await fs.promises.readFile(filePath, "utf-8");
     const json = JSON.parse(raw) as {
       version: number;
-      conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>;
+      conversations: Record<string, StoredConversationReference>;
     };
 
     json.conversations["19:old@thread.tacv2"] = {
@@ -44,7 +44,6 @@ describe("msteams conversation store (fs)", () => {
       lastSeenAt: new Date(Date.now() - 60_000).toISOString(),
     };
 
-    // Legacy entry without lastSeenAt should be preserved.
     json.conversations["19:legacy@thread.tacv2"] = {
       ...ref,
       conversation: { id: "19:legacy@thread.tacv2" },
@@ -53,7 +52,7 @@ describe("msteams conversation store (fs)", () => {
     await fs.promises.writeFile(filePath, `${JSON.stringify(json, null, 2)}\n`);
 
     const list = await store.list();
-    const ids = list.map((e) => e.conversationId).toSorted();
+    const ids = list.map((entry) => entry.conversationId).toSorted();
     expect(ids).toEqual(["19:active@thread.tacv2", "19:legacy@thread.tacv2"]);
 
     expect(await store.get("19:old@thread.tacv2")).toBeNull();

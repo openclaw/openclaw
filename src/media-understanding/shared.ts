@@ -1,0 +1,202 @@
+import type {
+  ProviderRequestCapability,
+  ProviderRequestTransport,
+} from "../agents/provider-attribution.js";
+import { resolveProviderRequestAttributionHeaders } from "../agents/provider-attribution.js";
+import {
+  resolveProviderRequestConfig,
+  type ResolvedProviderRequestConfig,
+} from "../agents/provider-request-config.js";
+import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+
+const MAX_ERROR_CHARS = 300;
+
+export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
+  const raw = baseUrl?.trim() || fallback;
+  return raw.replace(/\/+$/, "");
+}
+
+export function applyProviderRequestHeaders(params: {
+  headers?: HeadersInit;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+  capability?: ProviderRequestCapability;
+  transport?: ProviderRequestTransport;
+}): Headers {
+  const headers = new Headers(params.headers);
+  if (params.defaultHeaders) {
+    for (const [key, value] of Object.entries(params.defaultHeaders)) {
+      if (!headers.has(key)) {
+        headers.set(key, value);
+      }
+    }
+  }
+  const attributionHeaders = resolveProviderRequestAttributionHeaders({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: params.capability ?? "other",
+    transport: params.transport ?? "http",
+  });
+  if (!attributionHeaders) {
+    return headers;
+  }
+  for (const [key, value] of Object.entries(attributionHeaders)) {
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
+  }
+  return headers;
+}
+
+export function resolveProviderHttpRequestConfig(params: {
+  baseUrl?: string;
+  defaultBaseUrl: string;
+  allowPrivateNetwork?: boolean;
+  headers?: HeadersInit;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  api?: string;
+  capability?: ProviderRequestCapability;
+  transport?: ProviderRequestTransport;
+}): {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  requestConfig: ResolvedProviderRequestConfig;
+} {
+  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
+  const requestConfigParams: Parameters<typeof resolveProviderRequestConfig>[0] = {
+    provider: params.provider ?? "",
+    baseUrl,
+    capability: params.capability ?? "other",
+    transport: params.transport ?? "http",
+  };
+  if (params.api !== undefined) {
+    requestConfigParams.api = params.api;
+  }
+  if (params.defaultHeaders !== undefined) {
+    requestConfigParams.providerHeaders = params.defaultHeaders;
+  }
+  const requestConfig = resolveProviderRequestConfig(requestConfigParams);
+
+  return {
+    baseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
+    headers: applyProviderRequestHeaders({
+      headers: params.headers,
+      defaultHeaders: requestConfig.headers,
+      provider: params.provider,
+      api: params.api,
+      baseUrl,
+      capability: params.capability,
+      transport: params.transport,
+    }),
+    requestConfig,
+  };
+}
+
+export async function fetchWithTimeoutGuarded(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+  options?: {
+    ssrfPolicy?: SsrFPolicy;
+    lookupFn?: LookupFn;
+    pinDns?: boolean;
+  },
+): Promise<GuardedFetchResult> {
+  return await fetchWithSsrFGuard({
+    url,
+    fetchImpl: fetchFn,
+    init,
+    timeoutMs,
+    policy: options?.ssrfPolicy,
+    lookupFn: options?.lookupFn,
+    pinDns: options?.pinDns,
+  });
+}
+
+export async function postTranscriptionRequest(params: {
+  url: string;
+  headers: Headers;
+  body: BodyInit;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: params.body,
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+  );
+}
+
+export async function postJsonRequest(params: {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: JSON.stringify(params.body),
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+  );
+}
+
+export async function readErrorResponse(res: Response): Promise<string | undefined> {
+  try {
+    const text = await res.text();
+    const collapsed = text.replace(/\s+/g, " ").trim();
+    if (!collapsed) {
+      return undefined;
+    }
+    if (collapsed.length <= MAX_ERROR_CHARS) {
+      return collapsed;
+    }
+    return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
+  if (res.ok) {
+    return;
+  }
+  const detail = await readErrorResponse(res);
+  const suffix = detail ? `: ${detail}` : "";
+  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
+}
+
+export function requireTranscriptionText(
+  value: string | undefined,
+  missingMessage: string,
+): string {
+  const text = value?.trim();
+  if (!text) {
+    throw new Error(missingMessage);
+  }
+  return text;
+}

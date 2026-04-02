@@ -149,6 +149,7 @@ struct GeneralSettings: View {
             } else {
                 self.remoteDirectRow
             }
+            self.remoteTokenRow
 
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
@@ -260,17 +261,7 @@ struct GeneralSettings: View {
                 TextField("user@host[:22]", text: self.$state.remoteTarget)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
-                Button {
-                    Task { await self.testRemote() }
-                } label: {
-                    if self.remoteStatus == .checking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Test remote")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || !canTest)
+                self.remoteTestButton(disabled: !canTest)
             }
             if let validationMessage {
                 Text(validationMessage)
@@ -290,24 +281,53 @@ struct GeneralSettings: View {
                 TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
-                Button {
-                    Task { await self.testRemote() }
-                } label: {
-                    if self.remoteStatus == .checking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Test remote")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || self.state.remoteUrl
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                self.remoteTestButton(
+                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("Direct mode requires a ws:// or wss:// URL (Tailscale Serve uses wss://<magicdns>).")
+            Text(
+                "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
         }
+    }
+
+    private var remoteTokenRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Gateway token")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+            Text("Used when the remote gateway requires token auth.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, self.remoteLabelWidth + 10)
+            if self.state.remoteTokenUnsupported {
+                Text(
+                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            }
+        }
+    }
+
+    private func remoteTestButton(disabled: Bool) -> some View {
+        Button {
+            Task { await self.testRemote() }
+        } label: {
+            if self.remoteStatus == .checking {
+                ProgressView().controlSize(.small)
+            } else {
+                Text("Test remote")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(self.remoteStatus == .checking || disabled)
     }
 
     private var controlStatusLine: String {
@@ -328,10 +348,18 @@ struct GeneralSettings: View {
             Text("Testing…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        case .ok:
-            Label("Ready", systemImage: "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.green)
+        case let .ok(success):
+            VStack(alignment: .leading, spacing: 2) {
+                Label(success.title, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                if let detail = success.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case let .failed(message):
             Text(message)
                 .font(.caption)
@@ -498,7 +526,7 @@ struct GeneralSettings: View {
 private enum RemoteStatus: Equatable {
     case idle
     case checking
-    case ok
+    case ok(RemoteGatewayProbeSuccess)
     case failed(String)
 }
 
@@ -538,117 +566,14 @@ extension GeneralSettings {
     @MainActor
     func testRemote() async {
         self.remoteStatus = .checking
-        let settings = CommandResolver.connectionSettings()
-        if self.state.remoteTransport == .direct {
-            let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedUrl.isEmpty else {
-                self.remoteStatus = .failed("Set a gateway URL first")
-                return
-            }
-            guard Self.isValidWsUrl(trimmedUrl) else {
-                self.remoteStatus = .failed("Gateway URL must start with ws:// or wss://")
-                return
-            }
-        } else {
-            guard !settings.target.isEmpty else {
-                self.remoteStatus = .failed("Set an SSH target first")
-                return
-            }
-
-            // Step 1: basic SSH reachability check
-            guard let sshCommand = Self.sshCheckCommand(
-                target: settings.target,
-                identity: settings.identity)
-            else {
-                self.remoteStatus = .failed("SSH target is invalid")
-                return
-            }
-            let sshResult = await ShellExecutor.run(
-                command: sshCommand,
-                cwd: nil,
-                env: nil,
-                timeout: 8)
-
-            guard sshResult.ok else {
-                self.remoteStatus = .failed(self.formatSSHFailure(sshResult, target: settings.target))
-                return
-            }
+        switch await RemoteGatewayProbe.run() {
+        case let .ready(success):
+            self.remoteStatus = .ok(success)
+        case let .authIssue(issue):
+            self.remoteStatus = .failed(issue.statusMessage)
+        case let .failed(message):
+            self.remoteStatus = .failed(message)
         }
-
-        // Step 2: control channel health check
-        let originalMode = AppStateStore.shared.connectionMode
-        do {
-            try await ControlChannel.shared.configure(mode: .remote(
-                target: settings.target,
-                identity: settings.identity))
-            let data = try await ControlChannel.shared.health(timeout: 10)
-            if decodeHealthSnapshot(from: data) != nil {
-                self.remoteStatus = .ok
-            } else {
-                self.remoteStatus = .failed("Control channel returned invalid health JSON")
-            }
-        } catch {
-            self.remoteStatus = .failed(error.localizedDescription)
-        }
-
-        // Restore original mode if we temporarily switched
-        switch originalMode {
-        case .remote:
-            break
-        case .local:
-            try? await ControlChannel.shared.configure(mode: .local)
-        case .unconfigured:
-            await ControlChannel.shared.disconnect()
-        }
-    }
-
-    private static func isValidWsUrl(_ raw: String) -> Bool {
-        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
-        let scheme = url.scheme?.lowercased() ?? ""
-        guard scheme == "ws" || scheme == "wss" else { return false }
-        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !host.isEmpty
-    }
-
-    private static func sshCheckCommand(target: String, identity: String) -> [String]? {
-        guard let parsed = CommandResolver.parseSSHTarget(target) else { return nil }
-        let options = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=5",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
-        ]
-        let args = CommandResolver.sshArguments(
-            target: parsed,
-            identity: identity,
-            options: options,
-            remoteCommand: ["echo", "ok"])
-        return ["/usr/bin/ssh"] + args
-    }
-
-    private func formatSSHFailure(_ response: Response, target: String) -> String {
-        let payload = response.payload.flatMap { String(data: $0, encoding: .utf8) }
-        let trimmed = payload?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(whereSeparator: \.isNewline)
-            .joined(separator: " ")
-        if let trimmed,
-           trimmed.localizedCaseInsensitiveContains("host key verification failed")
-        {
-            let host = CommandResolver.parseSSHTarget(target)?.host ?? target
-            return "SSH check failed: Host key verification failed. Remove the old key with " +
-                "`ssh-keygen -R \(host)` and try again."
-        }
-        if let trimmed, !trimmed.isEmpty {
-            if let message = response.message, message.hasPrefix("exit ") {
-                return "SSH check failed: \(trimmed) (\(message))"
-            }
-            return "SSH check failed: \(trimmed)"
-        }
-        if let message = response.message {
-            return "SSH check failed (\(message))"
-        }
-        return "SSH check failed"
     }
 
     private func revealLogs() {
@@ -674,24 +599,7 @@ extension GeneralSettings {
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
-
-        let host = gateway.tailnetDns ?? gateway.lanHost
-        guard let host else { return }
-        let user = NSUserName()
-        if self.state.remoteTransport == .direct {
-            if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
-                self.state.remoteUrl = url
-            }
-        } else {
-            self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
-                user: user,
-                host: host,
-                port: gateway.sshPort)
-            self.state.remoteCliPath = gateway.cliPath ?? ""
-            OpenClawConfigFile.setRemoteGatewayUrl(
-                host: gateway.serviceHost ?? host,
-                port: gateway.servicePort ?? gateway.gatewayPort)
-        }
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
     }
 }
 
@@ -717,6 +625,7 @@ extension GeneralSettings {
         state.remoteTransport = .ssh
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
+        state.remoteToken = "example-token"
         state.remoteIdentity = "/tmp/id_ed25519"
         state.remoteProjectRoot = "/tmp/openclaw"
         state.remoteCliPath = "/tmp/openclaw"

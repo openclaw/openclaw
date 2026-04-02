@@ -42,7 +42,7 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
-function validateEnvVarValue(value: string): string | undefined {
+export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
   }
@@ -60,7 +60,7 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
 }
 
 export function sanitizeEnvVars(
-  envVars: Record<string, string>,
+  envVars: Record<string, string | undefined>,
   options: EnvSanitizationOptions = {},
 ): EnvVarSanitizationResult {
   const allowed: Record<string, string> = {};
@@ -72,7 +72,7 @@ export function sanitizeEnvVars(
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
-    if (!key) {
+    if (!key || value === undefined) {
       continue;
     }
 

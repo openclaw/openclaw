@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   formatUsageReportLines,
@@ -10,24 +11,9 @@ import {
   loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
-import { ignoredErrors } from "./provider-usage.shared.js";
+import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
 
 const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
-const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
-type ProviderAuth = NonNullable<
-  NonNullable<Parameters<typeof loadProviderUsageSummary>[0]>["auth"]
->[number];
-
-async function loadUsageWithAuth(
-  auth: ProviderAuth[],
-  mockFetch: ReturnType<typeof createProviderUsageFetch>,
-) {
-  return await loadProviderUsageSummary({
-    now: usageNow,
-    auth,
-    fetch: mockFetch as unknown as typeof fetch,
-  });
-}
 
 function expectSingleAnthropicProvider(summary: UsageSummary) {
   expect(summary.providers).toHaveLength(1);
@@ -47,17 +33,25 @@ function createMinimaxOnlyFetch(payload: unknown) {
 
 async function expectMinimaxUsage(
   payload: unknown,
-  expectedUsedPercent: number,
-  expectedPlan?: string,
+  expected: {
+    usedPercent: number;
+    plan?: string;
+    label?: string;
+  },
 ) {
   const mockFetch = createMinimaxOnlyFetch(payload);
 
-  const summary = await loadUsageWithAuth([{ provider: "minimax", token: "token-1b" }], mockFetch);
+  const summary = await loadUsageWithAuth(
+    loadProviderUsageSummary,
+    [{ provider: "minimax", token: "token-1b" }],
+    mockFetch,
+  );
 
   const minimax = summary.providers.find((p) => p.provider === "minimax");
-  expect(minimax?.windows[0]?.usedPercent).toBe(expectedUsedPercent);
-  if (expectedPlan !== undefined) {
-    expect(minimax?.plan).toBe(expectedPlan);
+  expect(minimax?.windows[0]?.usedPercent).toBe(expected.usedPercent);
+  expect(minimax?.windows[0]?.label).toBe(expected.label ?? "5h");
+  if (expected.plan !== undefined) {
+    expect(minimax?.plan).toBe(expected.plan);
   }
   expect(mockFetch).toHaveBeenCalled();
 }
@@ -162,6 +156,7 @@ describe("provider usage loading", () => {
     });
 
     const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
       [
         { provider: "anthropic", token: "token-1" },
         { provider: "minimax", token: "token-1b" },
@@ -180,9 +175,10 @@ describe("provider usage loading", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
-  it("handles nested MiniMax usage payloads", async () => {
-    await expectMinimaxUsage(
-      {
+  it.each([
+    {
+      name: "handles nested MiniMax usage payloads",
+      payload: {
         base_resp: { status_code: 0, status_msg: "ok" },
         data: {
           plan_name: "Coding Plan",
@@ -193,14 +189,11 @@ describe("provider usage loading", () => {
           },
         },
       },
-      75,
-      "Coding Plan",
-    );
-  });
-
-  it("prefers MiniMax count-based usage when percent looks inverted", async () => {
-    await expectMinimaxUsage(
-      {
+      expected: { usedPercent: 75, plan: "Coding Plan" },
+    },
+    {
+      name: "prefers MiniMax count-based usage when percent looks inverted",
+      payload: {
         base_resp: { status_code: 0, status_msg: "ok" },
         data: {
           prompt_limit: 200,
@@ -209,13 +202,11 @@ describe("provider usage loading", () => {
           next_reset_time: "2026-01-07T05:00:00Z",
         },
       },
-      25,
-    );
-  });
-
-  it("handles MiniMax model_remains usage payloads", async () => {
-    await expectMinimaxUsage(
-      {
+      expected: { usedPercent: 25 },
+    },
+    {
+      name: "handles MiniMax model_remains usage payloads",
+      payload: {
         base_resp: { status_code: 0, status_msg: "ok" },
         model_remains: [
           {
@@ -224,12 +215,29 @@ describe("provider usage loading", () => {
             remains_time: 600,
             current_interval_total_count: 120,
             current_interval_usage_count: 30,
-            model_name: "MiniMax-M2.1",
+            model_name: "MiniMax-M2.5",
           },
         ],
       },
-      25,
-    );
+      expected: { usedPercent: 25 },
+    },
+    {
+      name: "keeps payload-level MiniMax plan metadata when the usage candidate is nested",
+      payload: {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          plan_name: "Payload Plan",
+          nested: {
+            usage_ratio: "0.4",
+            window_hours: 2,
+            next_reset_time: "2026-01-07T05:00:00Z",
+          },
+        },
+      },
+      expected: { usedPercent: 40, plan: "Payload Plan", label: "2h" },
+    },
+  ])("$name", async ({ payload, expected }) => {
+    await expectMinimaxUsage(payload, expected);
   });
 
   it("discovers Claude usage from token auth profiles", async () => {
@@ -286,6 +294,7 @@ describe("provider usage loading", () => {
           providers: ["anthropic"],
           agentDir,
           fetch: mockFetch as unknown as typeof fetch,
+          config: { plugins: { enabled: false } },
         });
 
         const claude = expectSingleAnthropicProvider(summary);
@@ -302,9 +311,7 @@ describe("provider usage loading", () => {
   });
 
   it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
-    const cookieSnapshot = process.env.CLAUDE_AI_SESSION_KEY;
-    process.env.CLAUDE_AI_SESSION_KEY = "sk-ant-web-1";
-    try {
+    await withEnvAsync({ CLAUDE_AI_SESSION_KEY: "sk-ant-web-1" }, async () => {
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(403, {
@@ -329,6 +336,7 @@ describe("provider usage loading", () => {
       });
 
       const summary = await loadUsageWithAuth(
+        loadProviderUsageSummary,
         [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
         mockFetch,
       );
@@ -336,139 +344,6 @@ describe("provider usage loading", () => {
       const claude = expectSingleAnthropicProvider(summary);
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
-    } finally {
-      if (cookieSnapshot === undefined) {
-        delete process.env.CLAUDE_AI_SESSION_KEY;
-      } else {
-        process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
-      }
-    }
-  });
-
-  it("loads snapshots for copilot antigravity gemini codex and xiaomi", async () => {
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("api.github.com/copilot_internal/user")) {
-        return makeResponse(200, {
-          quota_snapshots: { chat: { percent_remaining: 80 } },
-          copilot_plan: "Copilot Pro",
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")) {
-        return makeResponse(200, {
-          availablePromptCredits: 80,
-          planInfo: { monthlyPromptCredits: 100 },
-          currentTier: { name: "Antigravity Pro" },
-          cloudaicompanionProject: "projects/demo",
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")) {
-        return makeResponse(200, {
-          models: {
-            "gemini-2.5-pro": {
-              quotaInfo: { remainingFraction: 0.4, resetTime: "2026-01-08T01:00:00Z" },
-            },
-          },
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
-        return makeResponse(200, {
-          buckets: [{ modelId: "gemini-2.5-pro", remainingFraction: 0.6 }],
-        });
-      }
-      if (url.includes("chatgpt.com/backend-api/wham/usage")) {
-        return makeResponse(200, {
-          rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 10800 } },
-          plan_type: "Plus",
-        });
-      }
-      return makeResponse(404, "not found");
     });
-
-    const summary = await loadUsageWithAuth(
-      [
-        { provider: "github-copilot", token: "copilot-token" },
-        { provider: "google-antigravity", token: "antigravity-token" },
-        { provider: "google-gemini-cli", token: "gemini-token" },
-        { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
-        { provider: "xiaomi", token: "xiaomi-token" },
-      ],
-      mockFetch,
-    );
-
-    expect(summary.providers.map((provider) => provider.provider)).toEqual([
-      "github-copilot",
-      "google-antigravity",
-      "google-gemini-cli",
-      "openai-codex",
-      "xiaomi",
-    ]);
-    expect(
-      summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
-    ).toEqual([{ label: "Chat", usedPercent: 20 }]);
-    expect(
-      summary.providers.find((provider) => provider.provider === "google-antigravity")?.windows
-        .length,
-    ).toBeGreaterThan(0);
-    expect(
-      summary.providers.find((provider) => provider.provider === "google-gemini-cli")?.windows[0]
-        ?.label,
-    ).toBe("Pro");
-    expect(
-      summary.providers.find((provider) => provider.provider === "openai-codex")?.windows[0]?.label,
-    ).toBe("3h");
-    expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
-      [],
-    );
-  });
-
-  it("returns empty provider list when auth resolves to none", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
-    const summary = await loadUsageWithAuth([], mockFetch);
-    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
-  });
-
-  it("returns unsupported provider snapshots for unknown provider ids", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
-    const summary = await loadUsageWithAuth(
-      [{ provider: "unsupported-provider", token: "token-u" }] as unknown as ProviderAuth[],
-      mockFetch,
-    );
-    expect(summary.providers).toHaveLength(1);
-    expect(summary.providers[0]?.error).toBe("Unsupported provider");
-  });
-
-  it("filters errors that are marked as ignored", async () => {
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("api.anthropic.com/api/oauth/usage")) {
-        return makeResponse(500, "boom");
-      }
-      return makeResponse(404, "not found");
-    });
-    ignoredErrors.add("HTTP 500");
-    try {
-      const summary = await loadUsageWithAuth(
-        [{ provider: "anthropic", token: "token-a" }],
-        mockFetch,
-      );
-      expect(summary.providers).toEqual([]);
-    } finally {
-      ignoredErrors.delete("HTTP 500");
-    }
-  });
-
-  it("throws when fetch is unavailable", async () => {
-    const previousFetch = globalThis.fetch;
-    vi.stubGlobal("fetch", undefined);
-    try {
-      await expect(
-        loadProviderUsageSummary({
-          now: usageNow,
-          auth: [{ provider: "xiaomi", token: "token-x" }],
-          fetch: undefined,
-        }),
-      ).rejects.toThrow("fetch is not available");
-    } finally {
-      vi.stubGlobal("fetch", previousFetch);
-    }
   });
 });

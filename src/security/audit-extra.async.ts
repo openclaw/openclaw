@@ -6,21 +6,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants.js";
+import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { resolveSkillSource } from "../agents/skills/source.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
-import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -43,6 +44,27 @@ export type SecurityAuditFinding = {
   detail: string;
   remediation?: string;
 };
+
+type ExecDockerRawFn = (
+  args: string[],
+  opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
+) => Promise<ExecDockerRawResult>;
+
+type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
+const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
+const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
+let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+
+function loadSkillsModule() {
+  skillsModulePromise ??= import("../agents/skills.js");
+  return skillsModulePromise;
+}
+
+function loadConfigModule() {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
+}
 
 // --------------------------------------------------------------------------
 // Helpers
@@ -238,9 +260,277 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
   }
 }
 
+function buildCodeSafetySummaryCacheKey(params: {
+  dirPath: string;
+  includeFiles?: string[];
+}): string {
+  const includeFiles = (params.includeFiles ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
+  return `${params.dirPath}\u0000${includeKey}`;
+}
+
+async function getCodeSafetySummary(params: {
+  dirPath: string;
+  includeFiles?: string[];
+  summaryCache?: CodeSafetySummaryCache;
+}): Promise<Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>> {
+  const cacheKey = buildCodeSafetySummaryCacheKey({
+    dirPath: params.dirPath,
+    includeFiles: params.includeFiles,
+  });
+  const cache = params.summaryCache;
+  if (cache) {
+    const hit = cache.get(cacheKey);
+    if (hit) {
+      return (await hit) as Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>;
+    }
+    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
+      includeFiles: params.includeFiles,
+    });
+    cache.set(cacheKey, pending);
+    return await pending;
+  }
+  return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
+    includeFiles: params.includeFiles,
+  });
+}
+
+async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<string[]> {
+  const skillsRoot = path.join(workspaceDir, "skills");
+  const rootStat = await safeStat(skillsRoot);
+  if (!rootStat.ok || !rootStat.isDir) {
+    return [];
+  }
+
+  const skillFiles: string[] = [];
+  const queue: string[] = [skillsRoot];
+  const visitedDirs = new Set<string>();
+
+  while (queue.length > 0 && skillFiles.length < MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE) {
+    const dir = queue.shift()!;
+    const dirRealPath = await fs.realpath(dir).catch(() => path.resolve(dir));
+    if (visitedDirs.has(dirRealPath)) {
+      continue;
+    }
+    visitedDirs.add(dirRealPath);
+
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
+        continue;
+      }
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        const stat = await fs.stat(fullPath).catch(() => null);
+        if (!stat) {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          queue.push(fullPath);
+          continue;
+        }
+        if (stat.isFile() && entry.name === "SKILL.md") {
+          skillFiles.push(fullPath);
+        }
+        continue;
+      }
+      if (entry.isFile() && entry.name === "SKILL.md") {
+        skillFiles.push(fullPath);
+      }
+    }
+  }
+
+  return skillFiles;
+}
+
 // --------------------------------------------------------------------------
 // Exported collectors
 // --------------------------------------------------------------------------
+
+function normalizeDockerLabelValue(raw: string | undefined): string | null {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed || trimmed === "<no value>") {
+    return null;
+  }
+  return trimmed;
+}
+
+async function listSandboxBrowserContainers(
+  execDockerRawFn: ExecDockerRawFn,
+): Promise<string[] | null> {
+  try {
+    const result = await execDockerRawFn(
+      ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
+      { allowFailure: true },
+    );
+    if (result.code !== 0) {
+      return null;
+    }
+    return result.stdout
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+async function readSandboxBrowserHashLabels(params: {
+  containerName: string;
+  execDockerRawFn: ExecDockerRawFn;
+}): Promise<{ configHash: string | null; epoch: string | null } | null> {
+  try {
+    const result = await params.execDockerRawFn(
+      [
+        "inspect",
+        "-f",
+        '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
+        params.containerName,
+      ],
+      { allowFailure: true },
+    );
+    if (result.code !== 0) {
+      return null;
+    }
+    const [hashRaw, epochRaw] = result.stdout.toString("utf8").split("\t");
+    return {
+      configHash: normalizeDockerLabelValue(hashRaw),
+      epoch: normalizeDockerLabelValue(epochRaw),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parsePublishedHostFromDockerPortLine(line: string): string | null {
+  const trimmed = line.trim();
+  const rhs = trimmed.includes("->") ? (trimmed.split("->").at(-1)?.trim() ?? "") : trimmed;
+  if (!rhs) {
+    return null;
+  }
+  const bracketHost = rhs.match(/^\[([^\]]+)\]:\d+$/);
+  if (bracketHost?.[1]) {
+    return bracketHost[1];
+  }
+  const hostPort = rhs.match(/^([^:]+):\d+$/);
+  if (hostPort?.[1]) {
+    return hostPort[1];
+  }
+  return null;
+}
+
+function isLoopbackPublishHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
+async function readSandboxBrowserPortMappings(params: {
+  containerName: string;
+  execDockerRawFn: ExecDockerRawFn;
+}): Promise<string[] | null> {
+  try {
+    const result = await params.execDockerRawFn(["port", params.containerName], {
+      allowFailure: true,
+    });
+    if (result.code !== 0) {
+      return null;
+    }
+    return result.stdout
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+export async function collectSandboxBrowserHashLabelFindings(params?: {
+  execDockerRawFn?: ExecDockerRawFn;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const execFn = params?.execDockerRawFn ?? execDockerRaw;
+  const containers = await listSandboxBrowserContainers(execFn);
+  if (!containers || containers.length === 0) {
+    return findings;
+  }
+
+  const missingHash: string[] = [];
+  const staleEpoch: string[] = [];
+  const nonLoopbackPublished: string[] = [];
+
+  for (const containerName of containers) {
+    const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
+    if (!labels) {
+      continue;
+    }
+    if (!labels.configHash) {
+      missingHash.push(containerName);
+    }
+    if (labels.epoch !== SANDBOX_BROWSER_SECURITY_HASH_EPOCH) {
+      staleEpoch.push(containerName);
+    }
+    const portMappings = await readSandboxBrowserPortMappings({
+      containerName,
+      execDockerRawFn: execFn,
+    });
+    if (!portMappings?.length) {
+      continue;
+    }
+    const exposedMappings = portMappings.filter((line) => {
+      const host = parsePublishedHostFromDockerPortLine(line);
+      return Boolean(host && !isLoopbackPublishHost(host));
+    });
+    if (exposedMappings.length > 0) {
+      nonLoopbackPublished.push(`${containerName} (${exposedMappings.join("; ")})`);
+    }
+  }
+
+  if (missingHash.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_container.hash_label_missing",
+      severity: "warn",
+      title: "Sandbox browser container missing config hash label",
+      detail:
+        `Containers: ${missingHash.join(", ")}. ` +
+        "These browser containers predate hash-based drift checks and may miss security remediations until recreated.",
+      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+    });
+  }
+
+  if (staleEpoch.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_container.hash_epoch_stale",
+      severity: "warn",
+      title: "Sandbox browser container hash epoch is stale",
+      detail:
+        `Containers: ${staleEpoch.join(", ")}. ` +
+        `Expected openclaw.browserConfigEpoch=${SANDBOX_BROWSER_SECURITY_HASH_EPOCH}.`,
+      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+    });
+  }
+
+  if (nonLoopbackPublished.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_container.non_loopback_publish",
+      severity: "critical",
+      title: "Sandbox browser container publishes ports on non-loopback interfaces",
+      detail:
+        `Containers: ${nonLoopbackPublished.join(", ")}. ` +
+        "Sandbox browser observer/control ports should stay loopback-only to avoid unintended remote access.",
+      remediation:
+        `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt), ` +
+        "then verify published ports are bound to 127.0.0.1.",
+    });
+  }
+
+  return findings;
+}
 
 export async function collectPluginsTrustFindings(params: {
   cfg: OpenClawConfig;
@@ -255,41 +545,50 @@ export async function collectPluginsTrustFindings(params: {
     const allowConfigured = Array.isArray(allow) && allow.length > 0;
     if (!allowConfigured) {
       const hasString = (value: unknown) => typeof value === "string" && value.trim().length > 0;
+      const hasSecretInput = (value: unknown) =>
+        hasConfiguredSecretInput(value, params.cfg.secrets?.defaults);
       const hasAccountStringKey = (account: unknown, key: string) =>
         Boolean(
           account &&
           typeof account === "object" &&
           hasString((account as Record<string, unknown>)[key]),
         );
+      const hasAccountSecretInputKey = (account: unknown, key: string) =>
+        Boolean(
+          account &&
+          typeof account === "object" &&
+          hasSecretInput((account as Record<string, unknown>)[key]),
+        );
 
       const discordConfigured =
-        hasString(params.cfg.channels?.discord?.token) ||
+        hasSecretInput(params.cfg.channels?.discord?.token) ||
         Boolean(
           params.cfg.channels?.discord?.accounts &&
           Object.values(params.cfg.channels.discord.accounts).some((a) =>
-            hasAccountStringKey(a, "token"),
+            hasAccountSecretInputKey(a, "token"),
           ),
         ) ||
         hasString(process.env.DISCORD_BOT_TOKEN);
 
       const telegramConfigured =
-        hasString(params.cfg.channels?.telegram?.botToken) ||
+        hasSecretInput(params.cfg.channels?.telegram?.botToken) ||
         hasString(params.cfg.channels?.telegram?.tokenFile) ||
         Boolean(
           params.cfg.channels?.telegram?.accounts &&
           Object.values(params.cfg.channels.telegram.accounts).some(
-            (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
+            (a) => hasAccountSecretInputKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
           ),
         ) ||
         hasString(process.env.TELEGRAM_BOT_TOKEN);
 
       const slackConfigured =
-        hasString(params.cfg.channels?.slack?.botToken) ||
-        hasString(params.cfg.channels?.slack?.appToken) ||
+        hasSecretInput(params.cfg.channels?.slack?.botToken) ||
+        hasSecretInput(params.cfg.channels?.slack?.appToken) ||
         Boolean(
           params.cfg.channels?.slack?.accounts &&
           Object.values(params.cfg.channels.slack.accounts).some(
-            (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "appToken"),
+            (a) =>
+              hasAccountSecretInputKey(a, "botToken") || hasAccountSecretInputKey(a, "appToken"),
           ),
         ) ||
         hasString(process.env.SLACK_BOT_TOKEN) ||
@@ -526,6 +825,78 @@ export async function collectPluginsTrustFindings(params: {
       });
     }
   }
+
+  return findings;
+}
+
+export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
+  cfg: OpenClawConfig;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  if (workspaceDirs.length === 0) {
+    return findings;
+  }
+
+  const escapedSkillFiles: Array<{
+    workspaceDir: string;
+    skillFilePath: string;
+    skillRealPath: string;
+  }> = [];
+  const seenSkillPaths = new Set<string>();
+
+  for (const workspaceDir of workspaceDirs) {
+    const workspacePath = path.resolve(workspaceDir);
+    const workspaceRealPath = await fs.realpath(workspacePath).catch(() => workspacePath);
+    const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
+
+    for (const skillFilePath of skillFilePaths) {
+      const canonicalSkillPath = path.resolve(skillFilePath);
+      if (seenSkillPaths.has(canonicalSkillPath)) {
+        continue;
+      }
+      seenSkillPaths.add(canonicalSkillPath);
+
+      const skillRealPath = await fs.realpath(canonicalSkillPath).catch(() => null);
+      if (!skillRealPath) {
+        continue;
+      }
+      if (isPathInside(workspaceRealPath, skillRealPath)) {
+        continue;
+      }
+      escapedSkillFiles.push({
+        workspaceDir: workspacePath,
+        skillFilePath: canonicalSkillPath,
+        skillRealPath,
+      });
+    }
+  }
+
+  if (escapedSkillFiles.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "skills.workspace.symlink_escape",
+    severity: "warn",
+    title: "Workspace skill files resolve outside the workspace root",
+    detail:
+      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes their workspace root:\n" +
+      escapedSkillFiles
+        .slice(0, MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS)
+        .map(
+          (entry) =>
+            `- workspace=${entry.workspaceDir}\n` +
+            `  skill=${entry.skillFilePath}\n` +
+            `  realpath=${entry.skillRealPath}`,
+        )
+        .join("\n") +
+      (escapedSkillFiles.length > MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS
+        ? `\n- +${escapedSkillFiles.length - MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS} more`
+        : ""),
+    remediation:
+      "Keep workspace skills inside the workspace root (replace symlinked escapes with real in-workspace files), or move trusted shared skills to managed/bundled skill locations.",
+  });
 
   return findings;
 }
@@ -768,6 +1139,7 @@ export async function readConfigSnapshotForAudit(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
 }): Promise<ConfigFileSnapshot> {
+  const { createConfigIO } = await loadConfigModule();
   return await createConfigIO({
     env: params.env,
     configPath: params.configPath,
@@ -776,6 +1148,7 @@ export async function readConfigSnapshotForAudit(params: {
 
 export async function collectPluginsCodeSafetyFindings(params: {
   stateDir: string;
+  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const { extensionsDir, pluginDirs } = await listInstalledPluginDirs({
@@ -827,21 +1200,21 @@ export async function collectPluginsCodeSafetyFindings(params: {
       });
     }
 
-    const summary = await skillScanner
-      .scanDirectoryWithSummary(pluginPath, {
-        includeFiles: forcedScanEntries,
-      })
-      .catch((err) => {
-        findings.push({
-          checkId: "plugins.code_safety.scan_failed",
-          severity: "warn",
-          title: `Plugin "${pluginName}" code scan failed`,
-          detail: `Static code scan could not complete: ${String(err)}`,
-          remediation:
-            "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
-        });
-        return null;
+    const summary = await getCodeSafetySummary({
+      dirPath: pluginPath,
+      includeFiles: forcedScanEntries,
+      summaryCache: params.summaryCache,
+    }).catch((err) => {
+      findings.push({
+        checkId: "plugins.code_safety.scan_failed",
+        severity: "warn",
+        title: `Plugin "${pluginName}" code scan failed`,
+        detail: `Static code scan could not complete: ${String(err)}`,
+        remediation:
+          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
       });
+      return null;
+    });
     if (!summary) {
       continue;
     }
@@ -878,16 +1251,18 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
     for (const entry of entries) {
-      if (entry.skill.source === "openclaw-bundled") {
+      if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;
       }
 
@@ -902,7 +1277,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await skillScanner.scanDirectoryWithSummary(skillDir).catch((err) => {
+      const summary = await getCodeSafetySummary({
+        dirPath: skillDir,
+        summaryCache: params.summaryCache,
+      }).catch((err) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",

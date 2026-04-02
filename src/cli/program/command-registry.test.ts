@@ -11,6 +11,13 @@ vi.mock("./register.agent.js", () => ({
   },
 }));
 
+vi.mock("./register.backup.js", () => ({
+  registerBackupCommand: (program: Command) => {
+    const backup = program.command("backup");
+    backup.command("create");
+  },
+}));
+
 vi.mock("./register.maintenance.js", () => ({
   registerMaintenanceCommands: (program: Command) => {
     program.command("doctor");
@@ -20,16 +27,22 @@ vi.mock("./register.maintenance.js", () => ({
   },
 }));
 
-const { getCoreCliCommandNames, registerCoreCliByName, registerCoreCliCommands } =
-  await import("./command-registry.js");
-
 vi.mock("./register.status-health-sessions.js", () => ({
   registerStatusHealthSessionsCommands: (program: Command) => {
     program.command("status");
     program.command("health");
     program.command("sessions");
+    const tasks = program.command("tasks");
+    tasks.command("show");
   },
 }));
+
+import {
+  getCoreCliCommandNames,
+  getCoreCliCommandsWithSubcommands,
+  registerCoreCliByName,
+  registerCoreCliCommands,
+} from "./command-registry.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -40,6 +53,7 @@ const testProgramContext: ProgramContext = {
 
 describe("command-registry", () => {
   const createProgram = () => new Command();
+  const namesOf = (program: Command) => program.commands.map((command) => command.name());
 
   const withProcessArgv = async (argv: string[], run: () => Promise<void>) => {
     const prevArgv = process.argv;
@@ -55,6 +69,18 @@ describe("command-registry", () => {
     const names = getCoreCliCommandNames();
     expect(names).toContain("agent");
     expect(names).toContain("agents");
+  });
+
+  it("returns only commands that support subcommands", () => {
+    const names = getCoreCliCommandsWithSubcommands();
+    expect(names).toContain("config");
+    expect(names).toContain("agents");
+    expect(names).toContain("backup");
+    expect(names).toContain("sessions");
+    expect(names).toContain("tasks");
+    expect(names).not.toContain("agent");
+    expect(names).not.toContain("status");
+    expect(names).not.toContain("doctor");
   });
 
   it("registerCoreCliByName resolves agents to the agent entry", async () => {
@@ -78,7 +104,17 @@ describe("command-registry", () => {
     const program = createProgram();
     registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
 
-    expect(program.commands.map((command) => command.name())).toEqual(["doctor"]);
+    expect(namesOf(program)).toEqual(["doctor"]);
+  });
+
+  it("does not narrow to the primary command when help is requested", () => {
+    const program = createProgram();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
+
+    const names = namesOf(program);
+    expect(names).toContain("doctor");
+    expect(names).toContain("status");
+    expect(names.length).toBeGreaterThan(1);
   });
 
   it("treats maintenance commands as top-level builtins", async () => {
@@ -102,9 +138,20 @@ describe("command-registry", () => {
       await program.parseAsync(["node", "openclaw", "status"]);
     });
 
-    const names = program.commands.map((command) => command.name());
+    const names = namesOf(program);
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
+    expect(names).toContain("tasks");
+  });
+
+  it("replaces placeholders when loading a grouped entry by secondary command name", async () => {
+    const program = createProgram();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
+    expect(namesOf(program)).toEqual(["doctor"]);
+
+    const found = await registerCoreCliByName(program, testProgramContext, "dashboard");
+    expect(found).toBe(true);
+    expect(namesOf(program)).toEqual(["doctor", "dashboard", "reset", "uninstall"]);
   });
 });

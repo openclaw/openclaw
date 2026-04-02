@@ -4,27 +4,34 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
-  SessionCostSummary,
-  SessionDailyLatency,
   SessionDailyModelUsage,
   SessionMessageCounts,
-  SessionLatencyStats,
   SessionModelUsage,
-  SessionToolUsage,
 } from "../../infra/session-cost-usage.js";
 import {
   loadCostUsageSummary,
   loadSessionCostSummary,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
+  resolveExistingUsageSessionFile,
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { buildUsageAggregateTail } from "../../shared/usage-aggregates.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import {
+  buildUsageAggregateTail,
+  mergeUsageDailyLatency,
+  mergeUsageLatency,
+} from "../../shared/usage-aggregates.js";
+import type {
+  SessionUsageEntry,
+  SessionsUsageAggregates,
+  SessionsUsageResult,
+} from "../../shared/usage-types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -39,8 +46,12 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
+type DateInterpretation =
+  | { mode: "utc" | "gateway" }
+  | { mode: "specific"; utcOffsetMinutes: number };
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -84,11 +95,9 @@ function resolveSessionUsageFileOrRespond(
   return { config, entry, agentId, sessionId, sessionFile };
 }
 
-/**
- * Parse a date string (YYYY-MM-DD) to start of day timestamp in UTC.
- * Returns undefined if invalid.
- */
-const parseDateToMs = (raw: unknown): number | undefined => {
+const parseDateParts = (
+  raw: unknown,
+): { year: number; monthIndex: number; day: number } | undefined => {
   if (typeof raw !== "string" || !raw.trim()) {
     return undefined;
   }
@@ -96,13 +105,98 @@ const parseDateToMs = (raw: unknown): number | undefined => {
   if (!match) {
     return undefined;
   }
-  const [, year, month, day] = match;
-  // Use UTC to ensure consistent behavior across timezones
-  const ms = Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day));
-  if (Number.isNaN(ms)) {
+  const [, yearStr, monthStr, dayStr] = match;
+  const year = Number(yearStr);
+  const monthIndex = Number(monthStr) - 1;
+  const day = Number(dayStr);
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
     return undefined;
   }
-  return ms;
+  return { year, monthIndex, day };
+};
+
+/**
+ * Parse a UTC offset string in the format UTC+H, UTC-H, UTC+HH, UTC-HH, UTC+H:MM, UTC-HH:MM.
+ * Returns the UTC offset in minutes (east-positive), or undefined if invalid.
+ */
+const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+  const match = /^UTC([+-])(\d{1,2})(?::([0-5]\d))?$/.exec(raw.trim());
+  if (!match) {
+    return undefined;
+  }
+  const sign = match[1] === "+" ? 1 : -1;
+  const hours = Number(match[2]);
+  const minutes = Number(match[3] ?? "0");
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+    return undefined;
+  }
+  if (hours > 14 || (hours === 14 && minutes !== 0)) {
+    return undefined;
+  }
+  const totalMinutes = sign * (hours * 60 + minutes);
+  if (totalMinutes < -12 * 60 || totalMinutes > 14 * 60) {
+    return undefined;
+  }
+  return totalMinutes;
+};
+
+const resolveDateInterpretation = (params: {
+  mode?: unknown;
+  utcOffset?: unknown;
+}): DateInterpretation => {
+  if (params.mode === "gateway") {
+    return { mode: "gateway" };
+  }
+  if (params.mode === "specific") {
+    const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
+    if (utcOffsetMinutes !== undefined) {
+      return { mode: "specific", utcOffsetMinutes };
+    }
+  }
+  // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
+  return { mode: "utc" };
+};
+
+/**
+ * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
+ * Returns undefined if invalid.
+ */
+const parseDateToMs = (
+  raw: unknown,
+  interpretation: DateInterpretation = { mode: "utc" },
+): number | undefined => {
+  const parts = parseDateParts(raw);
+  if (!parts) {
+    return undefined;
+  }
+  const { year, monthIndex, day } = parts;
+  if (interpretation.mode === "gateway") {
+    const ms = new Date(year, monthIndex, day).getTime();
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+  if (interpretation.mode === "specific") {
+    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+  const ms = Date.UTC(year, monthIndex, day);
+  return Number.isNaN(ms) ? undefined : ms;
+};
+
+const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
+  if (interpretation.mode === "gateway") {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  }
+  if (interpretation.mode === "specific") {
+    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+    return (
+      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
+      interpretation.utcOffsetMinutes * 60 * 1000
+    );
+  }
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 };
 
 const parseDays = (raw: unknown): number | undefined => {
@@ -126,29 +220,31 @@ const parseDateRange = (params: {
   startDate?: unknown;
   endDate?: unknown;
   days?: unknown;
+  mode?: unknown;
+  utcOffset?: unknown;
 }): DateRange => {
   const now = new Date();
-  // Use UTC for consistent date handling
-  const todayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const todayEndMs = todayStartMs + 24 * 60 * 60 * 1000 - 1;
+  const interpretation = resolveDateInterpretation(params);
+  const todayStartMs = getTodayStartMs(now, interpretation);
+  const todayEndMs = todayStartMs + DAY_MS - 1;
 
-  const startMs = parseDateToMs(params.startDate);
-  const endMs = parseDateToMs(params.endDate);
+  const startMs = parseDateToMs(params.startDate, interpretation);
+  const endMs = parseDateToMs(params.endDate, interpretation);
 
   if (startMs !== undefined && endMs !== undefined) {
     // endMs should be end of day
-    return { startMs, endMs: endMs + 24 * 60 * 60 * 1000 - 1 };
+    return { startMs, endMs: endMs + DAY_MS - 1 };
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    const start = todayStartMs - (clampedDays - 1) * 24 * 60 * 60 * 1000;
+    const start = todayStartMs - (clampedDays - 1) * DAY_MS;
     return { startMs: start, endMs: todayEndMs };
   }
 
   // Default to last 30 days
-  const defaultStartMs = todayStartMs - 29 * 24 * 60 * 60 * 1000;
+  const defaultStartMs = todayStartMs - 29 * DAY_MS;
   return { startMs: defaultStartMs, endMs: todayEndMs };
 };
 
@@ -157,10 +253,25 @@ type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
-  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
   for (const [key, entry] of Object.entries(store)) {
-    if (entry?.sessionId) {
-      storeBySessionId.set(entry.sessionId, { key, entry });
+    if (!entry?.sessionId) {
+      continue;
+    }
+    const matches = matchesBySessionId.get(entry.sessionId) ?? [];
+    matches.push([key, entry]);
+    matchesBySessionId.set(entry.sessionId, matches);
+  }
+
+  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  for (const [sessionId, matches] of matchesBySessionId) {
+    const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
+    if (!preferredKey) {
+      continue;
+    }
+    const preferredEntry = store[preferredKey];
+    if (preferredEntry) {
+      storeBySessionId.set(sessionId, { key: preferredKey, entry: preferredEntry });
     }
   }
   return storeBySessionId;
@@ -239,7 +350,11 @@ async function loadCostUsageSummaryCached(params: {
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const __test = {
+  parseDateParts,
+  parseUtcOffsetToMinutes,
+  resolveDateInterpretation,
   parseDateToMs,
+  getTodayStartMs,
   parseDays,
   parseDateRange,
   discoverAllSessionsForUsage,
@@ -247,60 +362,7 @@ export const __test = {
   costUsageCache,
 };
 
-export type SessionUsageEntry = {
-  key: string;
-  label?: string;
-  sessionId?: string;
-  updatedAt?: number;
-  agentId?: string;
-  channel?: string;
-  chatType?: string;
-  origin?: {
-    label?: string;
-    provider?: string;
-    surface?: string;
-    chatType?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  modelOverride?: string;
-  providerOverride?: string;
-  modelProvider?: string;
-  model?: string;
-  usage: SessionCostSummary | null;
-  contextWeight?: SessionSystemPromptReport | null;
-};
-
-export type SessionsUsageAggregates = {
-  messages: SessionMessageCounts;
-  tools: SessionToolUsage;
-  byModel: SessionModelUsage[];
-  byProvider: SessionModelUsage[];
-  byAgent: Array<{ agentId: string; totals: CostUsageSummary["totals"] }>;
-  byChannel: Array<{ channel: string; totals: CostUsageSummary["totals"] }>;
-  latency?: SessionLatencyStats;
-  dailyLatency?: SessionDailyLatency[];
-  modelDaily?: SessionDailyModelUsage[];
-  daily: Array<{
-    date: string;
-    tokens: number;
-    cost: number;
-    messages: number;
-    toolCalls: number;
-    errors: number;
-  }>;
-};
-
-export type SessionsUsageResult = {
-  updatedAt: number;
-  startDate: string;
-  endDate: string;
-  sessions: SessionUsageEntry[];
-  totals: CostUsageSummary["totals"];
-  aggregates: SessionsUsageAggregates;
-};
+export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond }) => {
@@ -313,6 +375,8 @@ export const usageHandlers: GatewayRequestHandlers = {
       startDate: params?.startDate,
       endDate: params?.endDate,
       days: params?.days,
+      mode: params?.mode,
+      utcOffset: params?.utcOffset,
     });
     const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
     respond(true, summary, undefined);
@@ -335,6 +399,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
+      mode: p.mode,
+      utcOffset: p.utcOffset,
     });
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
@@ -376,13 +442,18 @@ export const usageHandlers: GatewayRequestHandlers = {
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
       // Resolve the session file path
-      let sessionFile: string;
+      let sessionFile: string | undefined;
       try {
         const pathOpts = resolveSessionFilePathOptions({
           storePath: storePath !== "(multiple)" ? storePath : undefined,
           agentId: agentIdFromKey,
         });
-        sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
+        sessionFile = resolveExistingUsageSessionFile({
+          sessionId,
+          sessionEntry: storeEntry,
+          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
+          agentId: agentIdFromKey,
+        });
       } catch {
         respond(
           false,
@@ -392,20 +463,22 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      try {
-        const stats = fs.statSync(sessionFile);
-        if (stats.isFile()) {
-          mergedEntries.push({
-            key: resolvedStoreKey,
-            sessionId,
-            sessionFile,
-            label: storeEntry?.label,
-            updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-            storeEntry,
-          });
+      if (sessionFile) {
+        try {
+          const stats = fs.statSync(sessionFile);
+          if (stats.isFile()) {
+            mergedEntries.push({
+              key: resolvedStoreKey,
+              sessionId,
+              sessionFile,
+              label: storeEntry?.label,
+              updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
+              storeEntry,
+            });
+          }
+        } catch {
+          // File doesn't exist - no results for this key
         }
-      } catch {
-        // File doesn't exist - no results for this key
       }
     } else {
       // Full discovery for list view
@@ -607,35 +680,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           }
         }
 
-        if (usage.latency) {
-          const { count, avgMs, minMs, maxMs, p95Ms } = usage.latency;
-          if (count > 0) {
-            latencyTotals.count += count;
-            latencyTotals.sum += avgMs * count;
-            latencyTotals.min = Math.min(latencyTotals.min, minMs);
-            latencyTotals.max = Math.max(latencyTotals.max, maxMs);
-            latencyTotals.p95Max = Math.max(latencyTotals.p95Max, p95Ms);
-          }
-        }
-
-        if (usage.dailyLatency) {
-          for (const day of usage.dailyLatency) {
-            const existing = dailyLatencyMap.get(day.date) ?? {
-              date: day.date,
-              count: 0,
-              sum: 0,
-              min: Number.POSITIVE_INFINITY,
-              max: 0,
-              p95Max: 0,
-            };
-            existing.count += day.count;
-            existing.sum += day.avgMs * day.count;
-            existing.min = Math.min(existing.min, day.minMs);
-            existing.max = Math.max(existing.max, day.maxMs);
-            existing.p95Max = Math.max(existing.p95Max, day.p95Ms);
-            dailyLatencyMap.set(day.date, existing);
-          }
-        }
+        mergeUsageLatency(latencyTotals, usage.latency);
+        mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
 
         if (usage.dailyModelUsage) {
           for (const entry of usage.dailyModelUsage) {
@@ -747,22 +793,22 @@ export const usageHandlers: GatewayRequestHandlers = {
           .toSorted((a, b) => b.count - a.count),
       },
       byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byAgent: Array.from(byAgentMap.entries())
         .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+        .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
       ...tail,
     };
 

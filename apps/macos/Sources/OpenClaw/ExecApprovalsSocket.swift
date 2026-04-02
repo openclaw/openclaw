@@ -5,7 +5,7 @@ import Foundation
 import OpenClawKit
 import OSLog
 
-struct ExecApprovalPromptRequest: Codable, Sendable {
+struct ExecApprovalPromptRequest: Codable {
     var command: String
     var cwd: String?
     var host: String?
@@ -38,7 +38,7 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-private struct ExecHostRequest: Codable {
+struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
     var cwd: String?
@@ -59,7 +59,7 @@ private struct ExecHostRunResult: Codable {
     var error: String?
 }
 
-private struct ExecHostError: Codable {
+struct ExecHostError: Codable, Error {
     var code: String
     var message: String
     var reason: String?
@@ -71,6 +71,36 @@ private struct ExecHostResponse: Codable {
     var ok: Bool
     var payload: ExecHostRunResult?
     var error: ExecHostError?
+}
+
+private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> String? {
+    var buffer = Data()
+    while buffer.count < maxBytes {
+        let chunk = try handle.read(upToCount: 4096) ?? Data()
+        if chunk.isEmpty { break }
+        buffer.append(chunk)
+        if buffer.contains(0x0A) { break }
+    }
+    guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
+        guard !buffer.isEmpty else { return nil }
+        return String(data: buffer, encoding: .utf8)
+    }
+    let lineData = buffer.subdata(in: 0..<newlineIndex)
+    return String(data: lineData, encoding: .utf8)
+}
+
+func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {
+    let lhsBytes = Array(lhs.utf8)
+    let rhsBytes = Array(rhs.utf8)
+    guard lhsBytes.count == rhsBytes.count else {
+        return false
+    }
+
+    var diff: UInt8 = 0
+    for index in lhsBytes.indices {
+        diff |= lhsBytes[index] ^ rhsBytes[index]
+    }
+    return diff == 0
 }
 
 enum ExecApprovalsSocketClient {
@@ -159,27 +189,11 @@ enum ExecApprovalsSocketClient {
         payload.append(0x0A)
         try handle.write(contentsOf: payload)
 
-        guard let line = try self.readLine(from: handle, maxBytes: 256_000),
+        guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
               let lineData = line.data(using: .utf8)
         else { return nil }
         let response = try JSONDecoder().decode(ExecApprovalSocketDecision.self, from: lineData)
         return response.decision
-    }
-
-    private static func readLine(from handle: FileHandle, maxBytes: Int) throws -> String? {
-        var buffer = Data()
-        while buffer.count < maxBytes {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            if buffer.contains(0x0A) { break }
-        }
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-            guard !buffer.isEmpty else { return nil }
-            return String(data: buffer, encoding: .utf8)
-        }
-        let lineData = buffer.subdata(in: 0..<newlineIndex)
-        return String(data: lineData, encoding: .utf8)
     }
 }
 
@@ -257,7 +271,7 @@ enum ExecApprovalsPromptPresenter {
         commandText.drawsBackground = true
         commandText.backgroundColor = NSColor.textBackgroundColor
         commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        commandText.string = request.command
+        commandText.string = ExecApprovalCommandDisplaySanitizer.sanitize(request.command)
         commandText.textContainerInset = NSSize(width: 6, height: 6)
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
@@ -350,68 +364,31 @@ enum ExecApprovalsPromptPresenter {
 
 @MainActor
 private enum ExecHostExecutor {
-    private struct ExecApprovalContext {
-        let command: [String]
-        let displayCommand: String
-        let trimmedAgent: String?
-        let approvals: ExecApprovalsResolved
-        let security: ExecSecurity
-        let ask: ExecAsk
-        let autoAllowSkills: Bool
-        let env: [String: String]?
-        let resolution: ExecCommandResolution?
-        let allowlistMatch: ExecAllowlistEntry?
-        let skillAllow: Bool
-    }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
+    private typealias ExecApprovalContext = ExecApprovalEvaluation
 
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
-        let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard !command.isEmpty else {
-            return self.errorResponse(
-                code: "INVALID_REQUEST",
-                message: "command required",
-                reason: "invalid")
+        let validatedRequest: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case let .success(request):
+            validatedRequest = request
+        case let .failure(error):
+            return self.errorResponse(error)
         }
 
-        let context = await self.buildContext(request: request, command: command)
-        if context.security == .deny {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DISABLED: security=deny",
-                reason: "security=deny")
-        }
+        let context = await self.buildContext(
+            request: request,
+            command: validatedRequest.command,
+            rawCommand: validatedRequest.evaluationRawCommand)
 
-        let approvalDecision = request.approvalDecision
-        if approvalDecision == .deny {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: user denied",
-                reason: "user-denied")
-        }
-
-        var approvedByAsk = approvalDecision != nil
-        if ExecApprovalHelpers.requiresAsk(
-            ask: context.ask,
-            security: context.security,
-            allowlistMatch: context.allowlistMatch,
-            skillAllow: context.skillAllow),
-            approvalDecision == nil
+        switch ExecHostRequestEvaluator.evaluate(
+            context: context,
+            approvalDecision: request.approvalDecision)
         {
+        case let .deny(error):
+            return self.errorResponse(error)
+        case .allow:
+            break
+        case .requiresPrompt:
             let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
@@ -419,43 +396,54 @@ private enum ExecHostExecutor {
                     host: "node",
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
-                    agentId: context.trimmedAgent,
+                    agentId: context.agentId,
                     resolvedPath: context.resolution?.resolvedPath,
                     sessionKey: request.sessionKey))
 
+            let followupDecision: ExecApprovalDecision
             switch decision {
             case .deny:
-                return self.errorResponse(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: user denied",
-                    reason: "user-denied")
+                followupDecision = .deny
             case .allowAlways:
-                approvedByAsk = true
+                followupDecision = .allowAlways
                 self.persistAllowlistEntry(decision: decision, context: context)
             case .allowOnce:
-                approvedByAsk = true
+                followupDecision = .allowOnce
+            }
+
+            switch ExecHostRequestEvaluator.evaluate(
+                context: context,
+                approvalDecision: followupDecision)
+            {
+            case let .deny(error):
+                return self.errorResponse(error)
+            case .allow:
+                break
+            case .requiresPrompt:
+                return self.errorResponse(
+                    code: "INVALID_REQUEST",
+                    message: "unexpected approval state",
+                    reason: "invalid")
             }
         }
 
-        self.persistAllowlistEntry(decision: approvalDecision, context: context)
+        self.persistAllowlistEntry(decision: request.approvalDecision, context: context)
 
-        if context.security == .allowlist,
-           context.allowlistMatch == nil,
-           !context.skillAllow,
-           !approvedByAsk
-        {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: allowlist miss",
-                reason: "allowlist-miss")
-        }
-
-        if let match = context.allowlistMatch {
-            ExecApprovalsStore.recordAllowlistUse(
-                agentId: context.trimmedAgent,
-                pattern: match.pattern,
-                command: context.displayCommand,
-                resolvedPath: context.resolution?.resolvedPath)
+        if context.allowlistSatisfied {
+            var seenPatterns = Set<String>()
+            for (idx, match) in context.allowlistMatches.enumerated() {
+                if !seenPatterns.insert(match.pattern).inserted {
+                    continue
+                }
+                let resolvedPath = idx < context.allowlistResolutions.count
+                    ? context.allowlistResolutions[idx].resolvedPath
+                    : nil
+                ExecApprovalsStore.recordAllowlistUse(
+                    agentId: context.agentId,
+                    pattern: match.pattern,
+                    command: context.displayCommand,
+                    resolvedPath: resolvedPath)
+            }
         }
 
         if let errorResponse = await self.ensureScreenRecordingAccess(request.needsScreenRecording) {
@@ -463,50 +451,23 @@ private enum ExecHostExecutor {
         }
 
         return await self.runCommand(
-            command: command,
+            command: validatedRequest.command,
             cwd: request.cwd,
             env: context.env,
             timeoutMs: request.timeoutMs)
     }
 
-    private static func buildContext(request: ExecHostRequest, command: [String]) async -> ExecApprovalContext {
-        let displayCommand = ExecCommandFormatter.displayString(
-            for: command,
-            rawCommand: request.rawCommand)
-        let agentId = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAgent = (agentId?.isEmpty == false) ? agentId : nil
-        let approvals = ExecApprovalsStore.resolve(agentId: trimmedAgent)
-        let security = approvals.agent.security
-        let ask = approvals.agent.ask
-        let autoAllowSkills = approvals.agent.autoAllowSkills
-        let env = self.sanitizedEnv(request.env)
-        let resolution = ExecCommandResolution.resolve(
+    private static func buildContext(
+        request: ExecHostRequest,
+        command: [String],
+        rawCommand: String?) async -> ExecApprovalContext
+    {
+        await ExecApprovalEvaluator.evaluate(
             command: command,
-            rawCommand: request.rawCommand,
+            rawCommand: rawCommand,
             cwd: request.cwd,
-            env: env)
-        let allowlistMatch = security == .allowlist
-            ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
-            : nil
-        let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
-            let bins = await SkillBinsCache.shared.currentBins()
-            skillAllow = bins.contains(name)
-        } else {
-            skillAllow = false
-        }
-        return ExecApprovalContext(
-            command: command,
-            displayCommand: displayCommand,
-            trimmedAgent: trimmedAgent,
-            approvals: approvals,
-            security: security,
-            ask: ask,
-            autoAllowSkills: autoAllowSkills,
-            env: env,
-            resolution: resolution,
-            allowlistMatch: allowlistMatch,
-            skillAllow: skillAllow)
+            envOverrides: request.env,
+            agentId: request.agentId)
     }
 
     private static func persistAllowlistEntry(
@@ -514,13 +475,12 @@ private enum ExecHostExecutor {
         context: ExecApprovalContext)
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
-        guard let pattern = ExecApprovalHelpers.allowlistPattern(
-            command: context.command,
-            resolution: context.resolution)
-        else {
-            return
+        var seenPatterns = Set<String>()
+        for pattern in context.allowAlwaysPatterns {
+            if seenPatterns.insert(pattern).inserted {
+                ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
+            }
         }
-        ExecApprovalsStore.addAllowlistEntry(agentId: context.trimmedAgent, pattern: pattern)
     }
 
     private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {
@@ -559,6 +519,17 @@ private enum ExecHostExecutor {
     }
 
     private static func errorResponse(
+        _ error: ExecHostError) -> ExecHostResponse
+    {
+        ExecHostResponse(
+            type: "response",
+            id: UUID().uuidString,
+            ok: false,
+            payload: nil,
+            error: error)
+    }
+
+    private static func errorResponse(
         code: String,
         message: String,
         reason: String?) -> ExecHostResponse
@@ -579,19 +550,105 @@ private enum ExecHostExecutor {
             payload: payload,
             error: nil)
     }
+}
 
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
+enum ExecApprovalsSocketPathKind: Equatable {
+    case missing
+    case directory
+    case socket
+    case symlink
+    case other
+}
+
+enum ExecApprovalsSocketPathGuardError: LocalizedError {
+    case lstatFailed(path: String, code: Int32)
+    case parentPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case socketPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case unlinkFailed(path: String, code: Int32)
+    case createParentDirectoryFailed(path: String, message: String)
+    case setParentDirectoryPermissionsFailed(path: String, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .lstatFailed(path, code):
+            "lstat failed for \(path) (errno \(code))"
+        case let .parentPathInvalid(path, kind):
+            "socket parent path invalid (\(kind)) at \(path)"
+        case let .socketPathInvalid(path, kind):
+            "socket path invalid (\(kind)) at \(path)"
+        case let .unlinkFailed(path, code):
+            "unlink failed for \(path) (errno \(code))"
+        case let .createParentDirectoryFailed(path, message):
+            "socket parent directory create failed at \(path): \(message)"
+        case let .setParentDirectoryPermissionsFailed(path, message):
+            "socket parent directory chmod failed at \(path): \(message)"
         }
-        return merged
+    }
+}
+
+enum ExecApprovalsSocketPathGuard {
+    static let parentDirectoryPermissions = 0o700
+
+    static func pathKind(at path: String) throws -> ExecApprovalsSocketPathKind {
+        var status = stat()
+        let result = lstat(path, &status)
+        if result != 0 {
+            if errno == ENOENT {
+                return .missing
+            }
+            throw ExecApprovalsSocketPathGuardError.lstatFailed(path: path, code: errno)
+        }
+
+        let fileType = status.st_mode & mode_t(S_IFMT)
+        if fileType == mode_t(S_IFDIR) { return .directory }
+        if fileType == mode_t(S_IFSOCK) { return .socket }
+        if fileType == mode_t(S_IFLNK) { return .symlink }
+        return .other
+    }
+
+    static func hardenParentDirectory(for socketPath: String) throws {
+        let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
+        let parentPath = parentURL.path
+
+        switch try self.pathKind(at: parentPath) {
+        case .missing, .directory:
+            break
+        case let kind:
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(path: parentPath, kind: kind)
+        }
+
+        do {
+            try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                path: parentPath,
+                message: error.localizedDescription)
+        }
+
+        do {
+            try FileManager().setAttributes(
+                [.posixPermissions: self.parentDirectoryPermissions],
+                ofItemAtPath: parentPath)
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
+                path: parentPath,
+                message: error.localizedDescription)
+        }
+    }
+
+    static func removeExistingSocket(at socketPath: String) throws {
+        let kind = try self.pathKind(at: socketPath)
+        switch kind {
+        case .missing:
+            return
+        case .socket:
+            break
+        case .directory, .symlink, .other:
+            throw ExecApprovalsSocketPathGuardError.socketPathInvalid(path: socketPath, kind: kind)
+        }
+        if unlink(socketPath) != 0, errno != ENOENT {
+            throw ExecApprovalsSocketPathGuardError.unlinkFailed(path: socketPath, code: errno)
+        }
     }
 }
 
@@ -634,7 +691,12 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             self.socketFD = -1
         }
         if !self.socketPath.isEmpty {
-            unlink(self.socketPath)
+            do {
+                try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            } catch {
+                self.logger
+                    .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -669,7 +731,15 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             self.logger.error("exec approvals socket create failed")
             return -1
         }
-        unlink(self.socketPath)
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
+            try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+        } catch {
+            self.logger
+                .error("exec approvals socket path hardening failed: \(error.localizedDescription, privacy: .public)")
+            close(fd)
+            return -1
+        }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
@@ -696,12 +766,18 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             close(fd)
             return -1
         }
+        if chmod(self.socketPath, 0o600) != 0 {
+            self.logger.error("exec approvals socket chmod failed")
+            close(fd)
+            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            return -1
+        }
         if listen(fd, 16) != 0 {
             self.logger.error("exec approvals socket listen failed")
             close(fd)
+            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
             return -1
         }
-        chmod(self.socketPath, 0o600)
         self.logger.info("exec approvals socket listening at \(self.socketPath, privacy: .public)")
         return fd
     }
@@ -713,7 +789,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 try self.sendApprovalResponse(handle: handle, id: UUID().uuidString, decision: .deny)
                 return
             }
-            guard let line = try self.readLine(from: handle, maxBytes: 256_000),
+            guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
                   let data = line.data(using: .utf8)
             else {
                 return
@@ -745,22 +821,6 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
         } catch {
             self.logger.error("exec approvals socket handling failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    private func readLine(from handle: FileHandle, maxBytes: Int) throws -> String? {
-        var buffer = Data()
-        while buffer.count < maxBytes {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            if buffer.contains(0x0A) { break }
-        }
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-            guard !buffer.isEmpty else { return nil }
-            return String(data: buffer, encoding: .utf8)
-        }
-        let lineData = buffer.subdata(in: 0..<newlineIndex)
-        return String(data: lineData, encoding: .utf8)
     }
 
     private func sendApprovalResponse(
@@ -802,7 +862,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 error: ExecHostError(code: "INVALID_REQUEST", message: "expired request", reason: "ttl"))
         }
         let expected = self.hmacHex(nonce: request.nonce, ts: request.ts, requestJson: request.requestJson)
-        if expected != request.hmac {
+        if !timingSafeHexStringEquals(expected, request.hmac) {
             return ExecHostResponse(
                 type: "exec-res",
                 id: request.id,
