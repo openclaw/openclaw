@@ -68,7 +68,13 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(baseConfig);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        "demo-chat": ["demo-chat configured"],
+      },
+    });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "demo-chat", channels: ["demo-chat"] }],
       diagnostics: [],
@@ -91,6 +97,10 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: baseConfig,
+        autoEnabledReasons: {
+          "demo-chat": ["demo-chat configured"],
+        },
         onlyPluginIds: ["demo-chat"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
@@ -105,7 +115,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         { id: "demo-channel-a", channels: ["demo-channel-a"] },
@@ -150,7 +160,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [{ plugin: { id: "demo-channel-a" } }],
@@ -176,7 +186,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [],
@@ -207,7 +217,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         { id: "demo-channel-a", channels: ["demo-channel-a"] },

@@ -12,6 +12,7 @@ import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
@@ -197,6 +198,10 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   enabled: boolean;
+  explicitlyEnabled?: boolean;
+  activated?: boolean;
+  activationSource?: PluginActivationSource;
+  activationReason?: string;
   status: "loaded" | "disabled" | "error";
   error?: string;
   toolNames: string[];

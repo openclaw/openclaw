@@ -202,6 +202,7 @@ describe("resolvePluginProviders", () => {
       (params): PluginAutoEnableResult => ({
         config: params.config,
         changes: [],
+        autoEnabledReasons: {},
       }),
     );
     setManifestPlugins([
@@ -375,7 +376,13 @@ describe("resolvePluginProviders", () => {
 
   it("loads provider plugins from the auto-enabled config snapshot", () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledProviderConfig();
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        google: ["google auth configured"],
+      },
+    });
 
     resolvePluginProviders({ config: rawConfig });
 
