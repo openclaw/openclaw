@@ -67,19 +67,32 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   key: K;
   cfg?: OpenClawConfig;
 }): CapabilityProviderForKey<K>[] {
-  const activeRegistry = resolveRuntimePluginRegistry();
-  const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
+  // When a caller config is provided, always resolve via the compat-config path so
+  // bundled capability providers (e.g. groq for audio, deepgram) are injected even
+  // when the active gateway registry already contains *other* providers of the same
+  // capability type. The previous early-return on `activeProviders.length > 0` caused
+  // the compat loading to be skipped entirely in that case, so a user-configured
+  // provider (e.g. `tools.media.audio.models: [{provider: groq}]`) was silently
+  // missing from the registry and every transcription attempt failed with
+  // "Media provider not available: groq". See #59875.
   const loadOptions =
     params.cfg === undefined
       ? undefined
       : {
           config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
         };
-  const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
+  if (loadOptions) {
+    const registry = resolveRuntimePluginRegistry(loadOptions);
+    const providers = (registry?.[params.key] ?? []).map(
+      (entry) => entry.provider,
+    ) as CapabilityProviderForKey<K>[];
+    if (providers.length > 0) {
+      return providers;
+    }
+  }
+  // Fallback: no cfg provided or compat load yielded nothing — use the active registry.
+  const activeRegistry = resolveRuntimePluginRegistry();
+  return (activeRegistry?.[params.key] ?? []).map(
     (entry) => entry.provider,
   ) as CapabilityProviderForKey<K>[];
 }
