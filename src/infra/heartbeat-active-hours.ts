@@ -149,6 +149,12 @@ export function resolveScheduleIntervalMs(
  * Returns milliseconds until the next schedule window boundary (nearest future
  * `start` or `end` across all schedule entries), or `null` if no schedule is
  * configured. Used by the scheduler to wake at interval transitions.
+ *
+ * Note: uses fixed 24*60 minute arithmetic, which can be off by up to ~60 min
+ * during DST transitions (23h or 25h days). This is acceptable because the
+ * boundary timer is best-effort — the actual interval is always re-resolved
+ * via resolveScheduleIntervalMs (which uses Intl.DateTimeFormat and handles
+ * DST correctly) when the timer fires.
  */
 export function resolveNextWindowBoundaryMs(
   cfg: OpenClawConfig,
