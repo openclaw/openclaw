@@ -1,5 +1,3 @@
-import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   dispatchDiscordInteractiveHandler,
   dispatchSlackInteractiveHandler,
@@ -8,162 +6,33 @@ import {
   type SlackInteractiveDispatchContext,
   type TelegramInteractiveDispatchContext,
 } from "./interactive-dispatch-adapters.js";
+import { resolvePluginInteractiveNamespaceMatch } from "./interactive-registry.js";
+import {
+  getPluginInteractiveCallbackDedupeState,
+  type RegisteredInteractiveHandler,
+} from "./interactive-state.js";
 import type {
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveButtons,
   PluginInteractiveDiscordHandlerRegistration,
-  PluginInteractiveHandlerRegistration,
   PluginInteractiveSlackHandlerContext,
   PluginInteractiveSlackHandlerRegistration,
   PluginInteractiveTelegramHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
 
-type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
-type InteractiveRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
+export {
+  clearPluginInteractiveHandlers,
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
+export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
 type InteractiveDispatchResult =
   | { matched: false; handled: false; duplicate: false }
   | { matched: true; handled: boolean; duplicate: boolean };
 
-type InteractiveState = {
-  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
-  callbackDedupe: ReturnType<typeof createDedupeCache>;
-};
-
-const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
-
-const getState = () =>
-  resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-    callbackDedupe: resolveGlobalDedupeCache(
-      Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
-      {
-        ttlMs: 5 * 60_000,
-        maxSize: 4096,
-      },
-    ),
-  }));
-
-const getInteractiveHandlers = () => getState().interactiveHandlers;
-const getCallbackDedupe = () => getState().callbackDedupe;
-
-function toRegistryKey(channel: string, namespace: string): string {
-  return `${channel.trim().toLowerCase()}:${namespace.trim()}`;
-}
-
-function normalizeNamespace(namespace: string): string {
-  return namespace.trim();
-}
-
-function validateNamespace(namespace: string): string | null {
-  if (!namespace.trim()) {
-    return "Interactive handler namespace cannot be empty";
-  }
-  if (!/^[A-Za-z0-9._-]+$/.test(namespace.trim())) {
-    return "Interactive handler namespace must contain only letters, numbers, dots, underscores, and hyphens";
-  }
-  return null;
-}
-
-function resolveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  const interactiveHandlers = getInteractiveHandlers();
-  const trimmedData = data.trim();
-  if (!trimmedData) {
-    return null;
-  }
-
-  const separatorIndex = trimmedData.indexOf(":");
-  const namespace =
-    separatorIndex >= 0 ? trimmedData.slice(0, separatorIndex) : normalizeNamespace(trimmedData);
-  const registration = interactiveHandlers.get(toRegistryKey(channel, namespace));
-  if (!registration) {
-    return null;
-  }
-
-  return {
-    registration,
-    namespace,
-    payload: separatorIndex >= 0 ? trimmedData.slice(separatorIndex + 1) : "",
-  };
-}
-
-export function registerPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  const interactiveHandlers = getInteractiveHandlers();
-  const namespace = normalizeNamespace(registration.namespace);
-  const validationError = validateNamespace(namespace);
-  if (validationError) {
-    return { ok: false, error: validationError };
-  }
-  const key = toRegistryKey(registration.channel, namespace);
-  const existing = interactiveHandlers.get(key);
-  if (existing) {
-    return {
-      ok: false,
-      error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-  if (registration.channel === "telegram") {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "telegram",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  } else if (registration.channel === "slack") {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "slack",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  } else {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "discord",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  }
-  return { ok: true };
-}
-
-export function clearPluginInteractiveHandlers(): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  const callbackDedupe = getCallbackDedupe();
-  interactiveHandlers.clear();
-  callbackDedupe.clear();
-}
-
-export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  for (const [key, value] of interactiveHandlers.entries()) {
-    if (value.pluginId === pluginId) {
-      interactiveHandlers.delete(key);
-    }
-  }
-}
+const getCallbackDedupe = () => getPluginInteractiveCallbackDedupeState();
 
 export async function dispatchPluginInteractiveHandler(params: {
   channel: "telegram";
@@ -220,7 +89,7 @@ export async function dispatchPluginInteractiveHandler(params: {
   onMatched?: () => Promise<void> | void;
 }): Promise<InteractiveDispatchResult> {
   const callbackDedupe = getCallbackDedupe();
-  const match = resolveNamespaceMatch(params.channel, params.data);
+  const match = resolvePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
