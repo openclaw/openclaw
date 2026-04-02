@@ -1239,6 +1239,7 @@
                   "providers/volcengine",
                   "providers/xai",
                   "providers/xiaomi",
+                  "providers/yandex",
                   "providers/zai"
                 ]
               }

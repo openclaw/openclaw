@@ -951,6 +951,10 @@
       "types": "./dist/plugin-sdk/xai.d.ts",
       "default": "./dist/plugin-sdk/xai.js"
     },
+    "./plugin-sdk/yandex": {
+      "types": "./dist/plugin-sdk/yandex.d.ts",
+      "default": "./dist/plugin-sdk/yandex.js"
+    },
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"

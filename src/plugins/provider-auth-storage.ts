@@ -87,6 +87,7 @@ const {
   setQianfanApiKey,
   setModelStudioApiKey,
   setXaiApiKey,
+  setYandexApiKey,
   setMistralApiKey,
   setKilocodeApiKey,
 } = createProviderApiKeySetters({
@@ -112,6 +113,7 @@ const {
   setQianfanApiKey: { provider: "qianfan" },
   setModelStudioApiKey: { provider: "modelstudio" },
   setXaiApiKey: { provider: "xai" },
+  setYandexApiKey: { provider: "yandex" },
   setMistralApiKey: { provider: "mistral" },
   setKilocodeApiKey: { provider: "kilocode" },
 });
@@ -136,6 +138,7 @@ export {
   setQianfanApiKey,
   setModelStudioApiKey,
   setXaiApiKey,
+  setYandexApiKey,
   setMistralApiKey,
   setKilocodeApiKey,
 };

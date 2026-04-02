@@ -1169,6 +1169,18 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
+    subpath: "yandex",
+    source: pluginSource("yandex", "api.js"),
+    exports: [
+      "applyYandexConfig",
+      "buildYandexModelDefinition",
+      "buildYandexProvider",
+      "YANDEX_BASE_URL",
+      "YANDEX_DEFAULT_MODEL_REF",
+      "YANDEX_MODEL_CATALOG",
+    ],
+  },
+  {
     subpath: "xiaomi",
     source: pluginSource("xiaomi", "api.js"),
     exports: [

@@ -1,0 +1,28 @@
+{
+  "id": "yandex",
+  "enabledByDefault": true,
+  "providers": ["yandex"],
+  "providerAuthEnvVars": {
+    "yandex": ["YANDEX_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "yandex",
+      "method": "api-key",
+      "choiceId": "yandex-api-key",
+      "choiceLabel": "Yandex API key",
+      "groupId": "yandex",
+      "groupLabel": "Yandex",
+      "groupHint": "API key",
+      "optionKey": "yandexApiKey",
+      "cliFlag": "--yandex-api-key",
+      "cliOption": "--yandex-api-key <key>",
+      "cliDescription": "Yandex AI Studio API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
