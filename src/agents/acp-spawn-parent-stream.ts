@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -86,10 +88,12 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputPollMs?: number;
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
+  deliveryTarget?: AcpSpawnRelayDeliveryTarget;
 }): AcpSpawnParentRelayHandle {
   const runId = params.runId.trim();
   const parentSessionKey = params.parentSessionKey.trim();
-  if (!runId || !parentSessionKey) {
+  const deliveryTarget = normalizeDeliveryTarget(params.deliveryTarget);
+  if (!runId || (!parentSessionKey && !deliveryTarget)) {
     return {
       dispose: () => {},
       notifyStarted: () => {},
@@ -185,11 +189,36 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!shouldSurfaceUpdates) {
       return;
     }
+    if (deliveryTarget) {
+      return;
+    }
     requestHeartbeatNow(
       scopedHeartbeatWakeOptions(parentSessionKey, {
         reason: "acp:spawn:stream",
       }),
     );
+  };
+  const sendDirect = (text: string) => {
+    if (!deliveryTarget) {
+      return;
+    }
+    void Promise.resolve(
+      callGateway({
+        method: "send",
+        params: {
+          channel: deliveryTarget.channel,
+          to: deliveryTarget.to,
+          accountId: deliveryTarget.accountId,
+          threadId: deliveryTarget.threadId,
+          agentId: deliveryTarget.agentId,
+          sessionKey: params.childSessionKey,
+          message: text,
+          idempotencyKey: crypto.randomUUID(),
+        },
+      }),
+    ).catch(() => {
+      // Best-effort updates; never break relay flow.
+    });
   };
   const emit = (text: string, contextKey: string) => {
     const cleaned = text.trim();
@@ -198,6 +227,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
     logEvent("system_event", { contextKey, text: cleaned });
     if (!shouldSurfaceUpdates) {
+      return;
+    }
+    if (deliveryTarget) {
+      sendDirect(cleaned);
       return;
     }
     enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
@@ -212,7 +245,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       eventSummary: "Started.",
     });
     emit(
-      `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to parent session.`,
+      `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to ${deliveryTarget ? "bound thread" : "parent session"}.`,
       `${contextPrefix}:start`,
     );
   };
@@ -406,3 +439,34 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
+
+export type AcpSpawnRelayDeliveryTarget = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string;
+  agentId?: string;
+};
+
+function normalizeDeliveryTarget(
+  value: AcpSpawnRelayDeliveryTarget | undefined,
+): AcpSpawnRelayDeliveryTarget | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const channel = value.channel.trim();
+  const to = value.to.trim();
+  if (!channel || !to) {
+    return undefined;
+  }
+  const accountId = toTrimmedString(value.accountId);
+  const threadId = toTrimmedString(value.threadId);
+  const agentId = toTrimmedString(value.agentId);
+  return {
+    channel,
+    to,
+    ...(accountId ? { accountId } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(agentId ? { agentId } : {}),
+  };
+}

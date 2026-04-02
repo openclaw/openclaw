@@ -3,6 +3,7 @@ import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
+const callGatewayMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
@@ -19,6 +20,10 @@ vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
     }),
   );
 });
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+}));
 
 vi.mock("../acp/runtime/session-meta.js", async (importOriginal) => {
   return await mergeMockedModule(
@@ -69,6 +74,9 @@ async function loadFreshAcpSpawnParentStreamModulesForTest() {
       }),
     );
   });
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  }));
   vi.doMock("../config/sessions/paths.js", async () => {
     return await mergeMockedModule(
       await vi.importActual<typeof import("../config/sessions/paths.js")>(
@@ -100,6 +108,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
   beforeEach(async () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    callGatewayMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
@@ -305,6 +314,146 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("sends stream updates to a bound thread target through gateway send", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-thread-1",
+      parentSessionKey: "",
+      childSessionKey: "agent:codex:acp:child-thread-1",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      deliveryTarget: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "main",
+        threadId: "thread-456",
+      },
+    });
+
+    emitAgentEvent({
+      runId: "run-thread-1",
+      stream: "assistant",
+      data: {
+        delta: "hello from child",
+      },
+    });
+    vi.advanceTimersByTime(15);
+    emitAgentEvent({
+      runId: "run-thread-1",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 3_100,
+      },
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          channel: "discord",
+          to: "channel:123",
+          accountId: "main",
+          threadId: "thread-456",
+          sessionKey: "agent:codex:acp:child-thread-1",
+        }),
+      }),
+    );
+    const sendMessages = callGatewayMock.mock.calls.map((call) => String(call[0]?.params?.message));
+    expect(sendMessages.some((message) => message.includes("Started codex session"))).toBe(true);
+    expect(sendMessages.some((message) => message.includes("codex: hello from child"))).toBe(true);
+    expect(sendMessages.some((message) => message.includes("codex run completed in 2s"))).toBe(
+      true,
+    );
+    relay.dispose();
+  });
+
+  it("keeps no-output and resumed notices in bound-thread delivery mode", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-thread-2",
+      parentSessionKey: "",
+      childSessionKey: "agent:codex:acp:child-thread-2",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+      deliveryTarget: {
+        channel: "discord",
+        to: "channel:123",
+      },
+    });
+
+    vi.advanceTimersByTime(1_500);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(
+      callGatewayMock.mock.calls.some((call) =>
+        String(call[0]?.params?.message).includes("has produced no output for 1s"),
+      ),
+    ).toBe(true);
+
+    emitAgentEvent({
+      runId: "run-thread-2",
+      stream: "assistant",
+      data: {
+        delta: "resumed output",
+      },
+    });
+    vi.advanceTimersByTime(5);
+
+    const sendMessages = callGatewayMock.mock.calls.map((call) => String(call[0]?.params?.message));
+    expect(sendMessages.some((message) => message.includes("resumed output."))).toBe(true);
+    expect(sendMessages.some((message) => message.includes("codex: resumed output"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("treats bound-thread delivery failures as best-effort", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("send failed")).mockResolvedValue({});
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-thread-3",
+      parentSessionKey: "",
+      childSessionKey: "agent:codex:acp:child-thread-3",
+      agentId: "codex",
+      streamFlushMs: 1,
+      deliveryTarget: {
+        channel: "slack",
+        to: "channel:C-parent-1",
+        accountId: "default",
+        threadId: "1743525000.123456",
+      },
+    });
+
+    relay.notifyStarted();
+    await Promise.resolve();
+
+    emitAgentEvent({
+      runId: "run-thread-3",
+      stream: "assistant",
+      data: {
+        delta: "still going",
+      },
+    });
+    vi.advanceTimersByTime(5);
+    await Promise.resolve();
+
+    expect(callGatewayMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(callGatewayMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          channel: "slack",
+          to: "channel:C-parent-1",
+          threadId: "1743525000.123456",
+          sessionKey: "agent:codex:acp:child-thread-3",
+        }),
+      }),
+    );
     relay.dispose();
   });
 

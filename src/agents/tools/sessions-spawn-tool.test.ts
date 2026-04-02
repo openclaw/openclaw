@@ -16,7 +16,7 @@ vi.mock("../subagent-spawn.js", () => ({
 
 vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
-  ACP_SPAWN_STREAM_TARGETS: ["parent"],
+  ACP_SPAWN_STREAM_TARGETS: ["parent", "thread"],
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
@@ -30,7 +30,7 @@ async function loadFreshSessionsSpawnToolModuleForTest() {
   }));
   vi.doMock("../acp-spawn.js", () => ({
     ACP_SPAWN_MODES: ["run", "session"],
-    ACP_SPAWN_STREAM_TARGETS: ["parent"],
+    ACP_SPAWN_STREAM_TARGETS: ["parent", "thread"],
     spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
   }));
   ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
@@ -145,6 +145,39 @@ describe("sessions_spawn tool", () => {
         thread: true,
         mode: "session",
         streamTo: "parent",
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+      }),
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('routes to ACP runtime with streamTo "thread"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+    });
+
+    await tool.execute("call-2a", {
+      runtime: "acp",
+      task: "continue in bound thread",
+      agentId: "codex",
+      thread: true,
+      mode: "session",
+      streamTo: "thread",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "continue in bound thread",
+        agentId: "codex",
+        thread: true,
+        mode: "session",
+        streamTo: "thread",
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:main",
