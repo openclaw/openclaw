@@ -1467,14 +1467,41 @@ export function listSessionsFromStore(params: {
     filtered = filtered.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
-  // When there is no text search we can apply the limit before building rows,
-  // avoiding expensive per-row disk I/O for sessions that will be discarded.
   const limit =
     typeof opts.limit === "number" && Number.isFinite(opts.limit)
       ? Math.max(1, Math.floor(opts.limit))
       : undefined;
 
-  if (limit !== undefined && !search) {
+  // When search is active, pre-filter using entry fields (no disk I/O) so we
+  // can skip expensive buildGatewaySessionRow calls for non-matching entries.
+  // All five search target fields (key, sessionId, label, subject, displayName)
+  // are derivable from the store entry without reading transcript files.
+  if (search) {
+    filtered = filtered.filter(([key, entry]) => {
+      const e = entry as SessionEntry | undefined;
+      const parsed = parseGroupKey(key);
+      const channel = e?.channel ?? parsed?.channel;
+      const subject = e?.subject;
+      const displayName =
+        e?.displayName ??
+        (channel
+          ? buildGroupDisplayName({
+              provider: channel,
+              subject,
+              groupChannel: e?.groupChannel,
+              space: e?.space,
+              id: parsed?.id,
+              key,
+            })
+          : undefined) ??
+        e?.label ??
+        e?.origin?.label;
+      const fields = [displayName, e?.label, subject, e?.sessionId, key];
+      return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
+    });
+  }
+
+  if (limit !== undefined) {
     filtered = filtered.slice(0, limit);
   }
 
@@ -1482,7 +1509,7 @@ export function listSessionsFromStore(params: {
 
   const childIndex = buildChildSessionIndex(store);
 
-  let sessions = filtered.map(([key, entry]) =>
+  const sessions = filtered.map(([key, entry]) =>
     buildGatewaySessionRow({
       cfg,
       storePath,
@@ -1495,19 +1522,6 @@ export function listSessionsFromStore(params: {
       childIndex,
     }),
   );
-
-  // When search is active we could not apply the limit early, so filter and
-  // limit now.
-  if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
-      return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
-    });
-  }
-
-  if (limit !== undefined && search) {
-    sessions = sessions.slice(0, limit);
-  }
 
   return {
     ts: now,
