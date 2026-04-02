@@ -16,6 +16,7 @@ type RegistryState = {
   channel: RegistrySurfaceState;
   key: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
+  importedPluginIds: Set<string>;
 };
 
 const state: RegistryState = (() => {
@@ -38,10 +39,15 @@ const state: RegistryState = (() => {
       },
       key: null,
       runtimeSubagentMode: "default",
+      importedPluginIds: new Set<string>(),
     };
   }
   return globalState[REGISTRY_STATE];
 })();
+
+export function recordImportedPluginId(pluginId: string): void {
+  state.importedPluginIds.add(pluginId);
+}
 
 function installSurfaceRegistry(
   surface: RegistrySurfaceState,
@@ -205,15 +211,18 @@ function collectLoadedPluginIds(
 }
 
 /**
- * Returns plugin ids that are currently represented by loaded runtime registries.
+ * Returns plugin ids that were imported by plugin runtime or registry loading in
+ * the current process.
  *
- * This is a process-level runtime view, not a fresh import trace: cached registry
- * reuse still counts because the plugin code was loaded earlier in this process.
+ * This is a process-level view, not a fresh import trace: cached registry reuse
+ * still counts because the plugin code was loaded earlier in this process.
+ * Explicit loader import tracking covers plugins that were imported but later
+ * ended in an error state during registration.
  * Bundle-format plugins are excluded because they can be "loaded" from metadata
  * without importing any JS entrypoint.
  */
 export function listImportedRuntimePluginIds(): string[] {
-  const imported = new Set<string>();
+  const imported = new Set(state.importedPluginIds);
   collectLoadedPluginIds(state.activeRegistry, imported);
   collectLoadedPluginIds(state.channel.registry, imported);
   collectLoadedPluginIds(state.httpRoute.registry, imported);
@@ -227,4 +236,5 @@ export function resetPluginRuntimeStateForTest(): void {
   installSurfaceRegistry(state.channel, null, false);
   state.key = null;
   state.runtimeSubagentMode = "default";
+  state.importedPluginIds.clear();
 }

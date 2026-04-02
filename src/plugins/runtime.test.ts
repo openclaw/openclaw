@@ -7,6 +7,7 @@ import {
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
   pinActivePluginHttpRouteRegistry,
+  recordImportedPluginId,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
@@ -240,6 +241,12 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(registry);
 
     expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
+  });
+
+  it("includes plugin ids imported before registration failed", () => {
+    recordImportedPluginId("broken-plugin");
+
+    expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
   });
 });
 

@@ -214,10 +214,7 @@ function buildPluginReport(
     ...registry,
     plugins: registry.plugins.map((plugin) => ({
       ...plugin,
-      imported:
-        plugin.status === "loaded" &&
-        plugin.format !== "bundle" &&
-        importedPluginIds.has(plugin.id),
+      imported: plugin.format !== "bundle" && importedPluginIds.has(plugin.id),
       version: resolveReportedPluginVersion(plugin, params?.env),
     })),
   };

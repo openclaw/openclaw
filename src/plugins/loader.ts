@@ -44,6 +44,7 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
@@ -1379,6 +1380,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     let mod: OpenClawPluginModule | null = null;
     try {
       mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      recordImportedPluginId(record.id);
     } catch (err) {
       recordPluginError({
         logger,

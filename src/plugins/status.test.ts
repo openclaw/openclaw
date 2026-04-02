@@ -506,6 +506,21 @@ describe("buildPluginStatusReport", () => {
     );
   });
 
+  it("marks errored plugin modules as imported when full diagnostics already evaluated them", () => {
+    setPluginLoadResult({
+      plugins: [createPluginRecord({ id: "broken-plugin", status: "error" })],
+    });
+    listImportedRuntimePluginIdsMock.mockReturnValue(["broken-plugin"]);
+
+    const report = buildPluginDiagnosticsReport({ config: {} });
+
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "broken-plugin", status: "error", imported: true }),
+      ]),
+    );
+  });
+
   it("builds an inspect report with capability shape and policy", () => {
     loadConfigMock.mockReturnValue({
       plugins: {
