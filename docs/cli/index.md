@@ -46,6 +46,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
 - [`tasks`](/cli/index#tasks)
+- [`flows`](/cli/flows)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
@@ -171,6 +172,10 @@ openclaw [--dev] [--profile <name>] <command>
     list
     show
     notify
+    cancel
+  flows
+    list
+    show
     cancel
   gateway
     call

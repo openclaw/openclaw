@@ -54,15 +54,13 @@ The most effective setups combine multiple mechanisms:
 
 See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for a detailed comparison of the two scheduling mechanisms.
 
-## Older ClawFlow references
+## TaskFlow
 
-Older release notes and docs may mention `ClawFlow` or `openclaw flows`, but the current CLI surface in this repo is `openclaw tasks`.
-
-See [Background Tasks](/automation/tasks) for the supported task ledger commands, plus [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes.
+[TaskFlow](/automation/clawflow) is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, and exposes `openclaw flows list|show|cancel` for inspection and recovery. See [TaskFlow](/automation/clawflow) for details.
 
 ## Related
 
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — detailed comparison guide
-- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
+- [TaskFlow](/automation/clawflow) — flow orchestration above tasks
 - [Troubleshooting](/automation/troubleshooting) — debugging automation issues
 - [Configuration Reference](/gateway/configuration-reference) — all config keys
