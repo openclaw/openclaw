@@ -19,6 +19,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 
 const DEFAULT_AIMLAPI_BASE_URL = "https://api.aimlapi.com/v1";
 const DEFAULT_AIMLAPI_MODEL = "perplexity/sonar-pro";
@@ -77,6 +78,17 @@ function resolveAimlapiApiKey(aimlapi?: AimlapiConfig): string | undefined {
       "plugins.entries.aimlapi.config.webSearch.apiKey",
     ) ?? readProviderEnvValue(["AIMLAPI_API_KEY"])
   );
+}
+
+function resolveConfiguredAimlapiCredentialValue(config?: OpenClawConfig): unknown {
+  const pluginCredential = resolveProviderWebSearchPluginConfig(config, "aimlapi")?.apiKey;
+  if (pluginCredential !== undefined) {
+    return pluginCredential;
+  }
+  const legacyConfig = config?.tools?.web?.search?.aimlapi;
+  return legacyConfig && typeof legacyConfig === "object" && !Array.isArray(legacyConfig)
+    ? (legacyConfig as Record<string, unknown>).apiKey
+    : undefined;
 }
 
 function resolveAimlapiBaseUrl(aimlapi?: AimlapiConfig): string {
@@ -245,12 +257,19 @@ function createAimlapiToolDefinition(
     parameters: createAimlapiSchema(),
     execute: async (args) => {
       const aimlapiConfig = resolveAimlapiConfig(config, searchConfig);
-      const apiKey = resolveAimlapiApiKey(aimlapiConfig);
+      const configuredApiKey = resolveAimlapiApiKey(aimlapiConfig);
+      const auth = configuredApiKey
+        ? undefined
+        : await resolveApiKeyForProvider({
+            provider: "aimlapi",
+            cfg: config,
+          });
+      const apiKey = configuredApiKey ?? auth?.apiKey;
       if (!apiKey) {
         return {
           error: "missing_aimlapi_api_key",
           message:
-            "web_search (aimlapi) needs an AI/ML API key. Set AIMLAPI_API_KEY in the Gateway environment, or configure plugins.entries.aimlapi.config.webSearch.apiKey.",
+            "web_search (aimlapi) needs an AI/ML API key. Set AIMLAPI_API_KEY in the Gateway environment, configure plugins.entries.aimlapi.config.webSearch.apiKey, or sign in to AI/ML API as a model provider.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -344,6 +363,7 @@ export function createAimlapiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://aimlapi.com",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 15,
+    onboardingScopes: ["text-inference"],
     credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
     inactiveSecretPaths: [
       "plugins.entries.aimlapi.config.webSearch.apiKey",
@@ -358,8 +378,7 @@ export function createAimlapiWebSearchProvider(): WebSearchProviderPlugin {
     setCredentialValue: (searchConfigTarget, value) => {
       setScopedCredentialValue(searchConfigTarget, "aimlapi", value);
     },
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "aimlapi")?.apiKey,
+    getConfiguredCredentialValue: (config) => resolveConfiguredAimlapiCredentialValue(config),
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "aimlapi", "apiKey", value);
     },
@@ -371,6 +390,7 @@ export function createAimlapiWebSearchProvider(): WebSearchProviderPlugin {
 export const __testing = {
   resolveAimlapiConfig,
   resolveAimlapiApiKey,
+  resolveConfiguredAimlapiCredentialValue,
   resolveAimlapiBaseUrl,
   resolveAimlapiModel,
   extractAimlapiCitations,

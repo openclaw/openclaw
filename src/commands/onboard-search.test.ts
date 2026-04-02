@@ -13,6 +13,7 @@ const runtime: RuntimeEnv = {
 };
 
 const SEARCH_PROVIDER_ENV_VARS = [
+  "AIMLAPI_API_KEY",
   "BRAVE_API_KEY",
   "FIRECRAWL_API_KEY",
   "GEMINI_API_KEY",
@@ -195,8 +196,43 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("aimlapi");
-    expect(result.tools?.web?.search?.aimlapi?.apiKey).toBe("aiml-test-key");
+    expect(pluginWebSearchApiKey(result, "aimlapi")).toBe("aiml-test-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.plugins?.entries?.aimlapi?.enabled).toBe(true);
+  });
+
+  it("reuses configured AIMLAPI provider auth without prompting for a second web-search key", async () => {
+    const text = vi.fn(async () => "");
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "aimlapi") as unknown as WizardPrompter["select"],
+      multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
+      text,
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const result = await setupSearch(
+      {
+        auth: {
+          profiles: {
+            "aimlapi:default": {
+              provider: "aimlapi",
+              mode: "api_key",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime,
+      prompter,
+    );
+
+    expect(result.tools?.web?.search?.provider).toBe("aimlapi");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.plugins?.entries?.aimlapi?.enabled).toBe(true);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("sets provider and key for brave", async () => {
@@ -614,17 +650,16 @@ describe("setupSearch", () => {
 
   it("exports all providers in alphabetical order", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(10);
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(9);
     expect(values).toEqual([
       "aimlapi",
       "brave",
-      "duckduckgo",
-      "exa",
       "firecrawl",
       "gemini",
       "grok",
       "kimi",
       "perplexity",
+      "searxng",
       "tavily",
     ]);
   });

@@ -153,7 +153,26 @@ function providerIsReady(
   if (!providerNeedsCredential(entry)) {
     return true;
   }
-  return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
+  return (
+    hasExistingKey(config, entry.id) ||
+    hasKeyInEnv(entry) ||
+    hasImplicitProviderAuth(config, entry.id)
+  );
+}
+
+function hasImplicitProviderAuth(
+  config: OpenClawConfig,
+  provider: SearchProvider | string,
+): boolean {
+  if (provider !== "aimlapi") {
+    return false;
+  }
+  return Object.entries(config.auth?.profiles ?? {}).some(
+    ([profileId, profile]) =>
+      profileId === "aimlapi:default" ||
+      profileId.startsWith("aimlapi:") ||
+      (typeof profile === "object" && profile !== null && profile.provider === "aimlapi"),
+  );
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
@@ -432,9 +451,10 @@ export async function runSearchSetupFlow(
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
+  const implicitAuthAvailable = hasImplicitProviderAuth(config, choice);
   const needsCredential = providerNeedsCredential(entry);
 
-  if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
+  if (opts?.quickstartDefaults && (keyConfigured || envAvailable || implicitAuthAvailable)) {
     const result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applySearchProviderSelection(config, choice);
@@ -452,6 +472,25 @@ export async function runSearchSetupFlow(
     await prompter.note(
       [
         `${entry.label} works without an API key.`,
+        "OpenClaw will enable the plugin and use it as your web_search provider.",
+        `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+      ].join("\n"),
+      "Web search",
+    );
+    return await finalizeSearchProviderSetup({
+      originalConfig: config,
+      nextConfig: applySearchProviderSelection(config, choice),
+      entry,
+      runtime,
+      prompter,
+      opts,
+    });
+  }
+
+  if (implicitAuthAvailable && !keyConfigured && !envAvailable) {
+    await prompter.note(
+      [
+        `${entry.label} will reuse your existing AI/ML API provider auth.`,
         "OpenClaw will enable the plugin and use it as your web_search provider.",
         `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
       ].join("\n"),

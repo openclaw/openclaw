@@ -328,6 +328,28 @@ describe("AIMLAPI provider plugin", () => {
     });
   });
 
+  it("reads legacy AIMLAPI web-search credential config as a fallback", () => {
+    const secretRef = {
+      source: "env",
+      provider: "default",
+      id: "AIMLAPI_WEB_SEARCH_REF",
+    };
+
+    expect(
+      aimlapiWebSearchTesting.resolveConfiguredAimlapiCredentialValue({
+        tools: {
+          web: {
+            search: {
+              aimlapi: {
+                apiKey: secretRef,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual(secretRef);
+  });
+
   it("merges plugin web-search config with legacy AIMLAPI fallback fields", () => {
     const config = {
       plugins: {
