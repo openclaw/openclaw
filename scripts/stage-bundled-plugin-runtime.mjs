@@ -35,7 +35,16 @@ function ensureSymlink(targetValue, targetPath, type) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  try {
+    ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  } catch (error) {
+    // Windows can reject file symlinks on some local setups even when junctions work for dirs.
+    if (process.platform === "win32" && error?.code === "EPERM") {
+      fs.copyFileSync(sourcePath, targetPath);
+      return;
+    }
+    throw error;
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
