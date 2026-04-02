@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -35,6 +35,10 @@ describe("runAuthProbes runtime flags", () => {
       meta: { durationMs: 5, agentMeta: { sessionId: "s", provider: "openai", model: "gpt-5.4" } },
     });
     process.env.OPENAI_API_KEY = "test-openai-key";
+  });
+
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY;
   });
 
   it("passes gateway subagent binding through auth probe runs", async () => {
