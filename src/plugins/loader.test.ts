@@ -2448,15 +2448,59 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(disabled?.status).toBe("disabled");
   });
 
-  it("skips disabled channel imports unless setup-only loading is explicitly enabled", () => {
+  it("does not treat manifest channel ids as scoped plugin id matches", () => {
+    useNoBundledPlugins();
+    const target = writePlugin({
+      id: "target-plugin",
+      filename: "target-plugin.cjs",
+      body: `module.exports = { id: "target-plugin", register() {} };`,
+    });
+    const unrelated = writePlugin({
+      id: "unrelated-plugin",
+      filename: "unrelated-plugin.cjs",
+      body: `module.exports = { id: "unrelated-plugin", register() { throw new Error("unrelated plugin should not load"); } };`,
+    });
+    fs.writeFileSync(
+      path.join(unrelated.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "unrelated-plugin",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["target-plugin"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [target.file, unrelated.file] },
+          allow: ["target-plugin", "unrelated-plugin"],
+          entries: {
+            "target-plugin": { enabled: true },
+            "unrelated-plugin": { enabled: true },
+          },
+        },
+      },
+      onlyPluginIds: ["target-plugin"],
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["target-plugin"]);
+  });
+
+  it("only setup-loads a disabled channel plugin when the caller scopes to the selected plugin", () => {
     useNoBundledPlugins();
     const marker = path.join(makeTempDir(), "lazy-channel-imported.txt");
     const plugin = writePlugin({
-      id: "lazy-channel",
+      id: "lazy-channel-plugin",
       filename: "lazy-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 module.exports = {
-  id: "lazy-channel",
+  id: "lazy-channel-plugin",
   register(api) {
     api.registerChannel({
       plugin: {
@@ -2483,7 +2527,7 @@ module.exports = {
       path.join(plugin.dir, "openclaw.plugin.json"),
       JSON.stringify(
         {
-          id: "lazy-channel",
+          id: "lazy-channel-plugin",
           configSchema: EMPTY_PLUGIN_SCHEMA,
           channels: ["lazy-channel"],
         },
@@ -2495,9 +2539,9 @@ module.exports = {
     const config = {
       plugins: {
         load: { paths: [plugin.file] },
-        allow: ["lazy-channel"],
+        allow: ["lazy-channel-plugin"],
         entries: {
-          "lazy-channel": { enabled: false },
+          "lazy-channel-plugin": { enabled: false },
         },
       },
     };
@@ -2509,25 +2553,41 @@ module.exports = {
 
     expect(fs.existsSync(marker)).toBe(false);
     expect(registry.channelSetups).toHaveLength(0);
-    expect(registry.plugins.find((entry) => entry.id === "lazy-channel")?.status).toBe("disabled");
+    expect(registry.plugins.find((entry) => entry.id === "lazy-channel-plugin")?.status).toBe(
+      "disabled",
+    );
 
-    const setupRegistry = loadOpenClawPlugins({
+    const broadSetupRegistry = loadOpenClawPlugins({
       cache: false,
       config,
       includeSetupOnlyChannelPlugins: true,
     });
 
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(broadSetupRegistry.channelSetups).toHaveLength(0);
+    expect(broadSetupRegistry.channels).toHaveLength(0);
+    expect(
+      broadSetupRegistry.plugins.find((entry) => entry.id === "lazy-channel-plugin")?.status,
+    ).toBe("disabled");
+
+    const scopedSetupRegistry = loadOpenClawPlugins({
+      cache: false,
+      config,
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["lazy-channel-plugin"],
+    });
+
     expect(fs.existsSync(marker)).toBe(true);
-    expect(setupRegistry.channelSetups).toHaveLength(1);
-    expect(setupRegistry.channels).toHaveLength(0);
-    expect(setupRegistry.plugins.find((entry) => entry.id === "lazy-channel")?.status).toBe(
-      "disabled",
-    );
+    expect(scopedSetupRegistry.channelSetups).toHaveLength(1);
+    expect(scopedSetupRegistry.channels).toHaveLength(0);
+    expect(
+      scopedSetupRegistry.plugins.find((entry) => entry.id === "lazy-channel-plugin")?.status,
+    ).toBe("disabled");
   });
 
   it.each([
     {
-      name: "uses package setupEntry for setup-only channel loads",
+      name: "uses package setupEntry for selected setup-only channel loads",
       fixture: {
         id: "setup-entry-test",
         label: "Setup Entry Test",
@@ -2549,6 +2609,7 @@ module.exports = {
             },
           },
           includeSetupOnlyChannelPlugins: true,
+          onlyPluginIds: ["setup-entry-test"],
         }),
       expectFullLoaded: false,
       expectSetupLoaded: true,
