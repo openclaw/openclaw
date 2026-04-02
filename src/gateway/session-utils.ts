@@ -283,10 +283,10 @@ function buildChildSessionIndex(store: Record<string, SessionEntry>): Map<string
     }
     const spawnedBy = entry.spawnedBy?.trim();
     const parentSessionKey = entry.parentSessionKey?.trim();
-    if (spawnedBy) {
+    if (spawnedBy && spawnedBy !== key) {
       addChild(spawnedBy, key);
     }
-    if (parentSessionKey && parentSessionKey !== spawnedBy) {
+    if (parentSessionKey && parentSessionKey !== spawnedBy && parentSessionKey !== key) {
       addChild(parentSessionKey, key);
     }
   }
