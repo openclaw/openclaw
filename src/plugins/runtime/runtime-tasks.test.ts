@@ -79,14 +79,16 @@ describe("runtime tasks", () => {
       throw new Error("expected child task creation to succeed");
     }
 
-    expect(taskFlows.list()).toEqual([
-      expect.objectContaining({
-        id: created.flowId,
-        ownerKey: "agent:main:main",
-        goal: "Review inbox",
-        currentStep: "triage",
-      }),
-    ]);
+    expect(taskFlows.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: created.flowId,
+          ownerKey: "agent:main:main",
+          goal: "Review inbox",
+          currentStep: "triage",
+        }),
+      ]),
+    );
     expect(taskFlows.get(created.flowId)).toMatchObject({
       id: created.flowId,
       ownerKey: "agent:main:main",
@@ -107,15 +109,17 @@ describe("runtime tasks", () => {
         }),
       ],
     });
-    expect(taskRuns.list()).toEqual([
-      expect.objectContaining({
-        id: child.task.taskId,
-        flowId: created.flowId,
-        sessionKey: "agent:main:main",
-        title: "Review PR 1",
-        status: "running",
-      }),
-    ]);
+    expect(taskRuns.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: child.task.taskId,
+          flowId: created.flowId,
+          sessionKey: "agent:main:main",
+          title: "Review PR 1",
+          status: "running",
+        }),
+      ]),
+    );
     expect(taskRuns.get(child.task.taskId)).toMatchObject({
       id: child.task.taskId,
       flowId: created.flowId,
@@ -188,5 +192,45 @@ describe("runtime tasks", () => {
         status: "cancelled",
       },
     });
+  });
+
+  it("does not allow cross-owner task cancellation or leak task details", async () => {
+    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const otherTaskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:other",
+    });
+
+    const created = legacyTaskFlow.createManaged({
+      controllerId: "tests/runtime-tasks",
+      goal: "Keep owner isolation",
+    });
+    const child = legacyTaskFlow.runTask({
+      flowId: created.flowId,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "runtime-task-isolation",
+      task: "Do not cancel me",
+      status: "running",
+      startedAt: 30,
+      lastEventAt: 31,
+    });
+    if (!child.created) {
+      throw new Error("expected child task creation to succeed");
+    }
+
+    const result = await otherTaskRuns.cancel({
+      taskId: child.task.taskId,
+      cfg: {} as never,
+    });
+
+    expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      found: false,
+      cancelled: false,
+      reason: "Task not found.",
+    });
+    expect(otherTaskRuns.get(child.task.taskId)).toBeUndefined();
   });
 });

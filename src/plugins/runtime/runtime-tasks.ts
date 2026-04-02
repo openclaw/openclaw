@@ -135,13 +135,25 @@ function createBoundTaskRunsRuntime(params: {
       });
       return task ? mapTaskRunDetail(task) : undefined;
     },
-    cancel: async ({ taskId, cfg }) =>
-      mapCancelledTaskResult(
+    cancel: async ({ taskId, cfg }) => {
+      const task = getTaskByIdForOwner({
+        taskId,
+        callerOwnerKey: ownerKey,
+      });
+      if (!task) {
+        return {
+          found: false,
+          cancelled: false,
+          reason: "Task not found.",
+        };
+      }
+      return mapCancelledTaskResult(
         await cancelTaskById({
           cfg,
-          taskId,
+          taskId: task.taskId,
         }),
-      ),
+      );
+    },
   };
 }
 
