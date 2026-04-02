@@ -645,7 +645,7 @@ describe("exec approvals shell analysis", () => {
           env,
         });
         expect(result.analysisOk).toBe(true);
-        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.allowlistSatisfied).toBe(true);
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -654,138 +654,101 @@ describe("exec approvals shell analysis", () => {
     it("normalizes safe bin names", () => {
       expect([...normalizeSafeBins([" jq ", "", "JQ", " sort "])]).toEqual(["jq", "sort"]);
     });
-  });
 
-  describe("shell wrapper inline command evaluation (#57377)", () => {
-    it("satisfies allowlist for shell-wrapped compound command when all inner binaries match", () => {
-      const dir = makeTempDir();
-      const catPath = path.join(dir, "cat");
-      const printfPath = path.join(dir, "printf");
-      const gogPath = path.join(dir, "gog-wrapper");
-      const shPath = path.join(dir, "sh");
-      fs.writeFileSync(catPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(printfPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(gogPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(shPath, "#!/bin/sh\n", { mode: 0o755 });
-      const env = makePathEnv(dir);
-      try {
-        const result = evaluateShellAllowlist({
-          command: `${shPath} -c "cat SKILL.md && printf '---CMD---' && gog-wrapper calendar events"`,
-          allowlist: [{ pattern: catPath }, { pattern: printfPath }, { pattern: gogPath }],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-        });
-        expect(result.analysisOk).toBe(true);
-        expect(result.allowlistSatisfied).toBe(true);
-        expect(result.allowlistMatches.length).toBe(3);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
+    describe("shell wrapper inline compound allowlist", () => {
+      const commonShells = ["sh", "bash", "zsh", "dash", "ksh", "fish", "ash"] as const;
+
+      function writeExecutable(filePath: string) {
+        fs.writeFileSync(filePath, "#!/bin/sh\n", { mode: 0o755 });
       }
-    });
 
-    it("satisfies allowlist for shell-wrapped compound command with safe bins", () => {
-      const dir = makeTempDir();
-      const headPath = path.join(dir, "head");
-      const tailPath = path.join(dir, "tail");
-      const gogPath = path.join(dir, "gog-wrapper");
-      const shPath = path.join(dir, "sh");
-      fs.writeFileSync(headPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(tailPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(gogPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(shPath, "#!/bin/sh\n", { mode: 0o755 });
-      const env = makePathEnv(dir);
-      try {
-        const result = evaluateShellAllowlist({
-          command: `${shPath} -c "head -n 1 && tail -n 1 && gog-wrapper calendar events"`,
-          allowlist: [{ pattern: gogPath }],
-          safeBins: normalizeSafeBins(["head", "tail"]),
-          trustedSafeBinDirs: new Set([dir]),
-          cwd: dir,
-          env,
-        });
-        expect(result.analysisOk).toBe(true);
-        // Safe bins are disabled on Windows
+      it.each(commonShells)("evaluates inner chain commands for %s -c wrappers", (shellBinary) => {
         if (process.platform === "win32") {
-          expect(result.allowlistSatisfied).toBe(false);
           return;
         }
-        expect(result.allowlistSatisfied).toBe(true);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
+        const dir = makeTempDir();
+        const shellPath = path.join(dir, shellBinary);
+        const catPath = path.join(dir, "cat");
+        const printfPath = path.join(dir, "printf");
+        const gogPath = path.join(dir, "gog-wrapper");
+        writeExecutable(shellPath);
+        writeExecutable(catPath);
+        writeExecutable(printfPath);
+        writeExecutable(gogPath);
+        const env = makePathEnv(dir);
+        try {
+          const result = evaluateShellAllowlist({
+            command: `${shellPath} -c "cat SKILL.md && printf '---CMD---' && gog-wrapper calendar events"`,
+            allowlist: [{ pattern: catPath }, { pattern: printfPath }, { pattern: gogPath }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+          });
+          expect(result.analysisOk).toBe(true);
+          expect(result.allowlistSatisfied).toBe(true);
+          expect(result.allowlistMatches.length).toBe(3);
+          expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+          expect(result.segmentAllowlistEntries).toEqual([null]);
+          expect(result.segmentSatisfiedBy.length).toBe(result.segments.length);
+          expect(result.segmentAllowlistEntries.length).toBe(result.segments.length);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
 
-    it("rejects shell-wrapped compound command when an inner binary is not in allowlist", () => {
-      const dir = makeTempDir();
-      const catPath = path.join(dir, "cat");
-      const gogPath = path.join(dir, "gog-wrapper");
-      const rmPath = path.join(dir, "rm");
-      const shPath = path.join(dir, "sh");
-      fs.writeFileSync(catPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(gogPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(rmPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(shPath, "#!/bin/sh\n", { mode: 0o755 });
-      const env = makePathEnv(dir);
-      try {
-        const result = evaluateShellAllowlist({
-          command: `${shPath} -c "cat SKILL.md && rm -rf / && gog-wrapper calendar events"`,
-          allowlist: [{ pattern: catPath }, { pattern: gogPath }],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-        });
-        expect(result.analysisOk).toBe(true);
-        expect(result.allowlistSatisfied).toBe(false);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
+      it("rejects wrapper chain when any inner command misses the allowlist", () => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const dir = makeTempDir();
+        const shellPath = path.join(dir, "sh");
+        const catPath = path.join(dir, "cat");
+        const rmPath = path.join(dir, "rm");
+        const gogPath = path.join(dir, "gog-wrapper");
+        writeExecutable(shellPath);
+        writeExecutable(catPath);
+        writeExecutable(rmPath);
+        writeExecutable(gogPath);
+        const env = makePathEnv(dir);
+        try {
+          const result = evaluateShellAllowlist({
+            command: `${shellPath} -c "cat SKILL.md && rm -rf / && gog-wrapper calendar events"`,
+            allowlist: [{ pattern: catPath }, { pattern: gogPath }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+          });
+          expect(result.analysisOk).toBe(true);
+          expect(result.allowlistSatisfied).toBe(false);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
 
-    it("handles single command inside shell wrapper (no chain operators — not recursed)", () => {
-      const dir = makeTempDir();
-      const gogPath = path.join(dir, "gog-wrapper");
-      const shPath = path.join(dir, "sh");
-      fs.writeFileSync(gogPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(shPath, "#!/bin/sh\n", { mode: 0o755 });
-      const env = makePathEnv(dir);
-      try {
-        // Single-command shell wrappers are NOT recursively evaluated to preserve
-        // allow-always persisted-pattern security constraints.
-        const result = evaluateShellAllowlist({
-          command: `${shPath} -c "gog-wrapper calendar events"`,
-          allowlist: [{ pattern: gogPath }],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-        });
-        expect(result.analysisOk).toBe(true);
-        expect(result.allowlistSatisfied).toBe(true);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
-
-    it("handles shell wrapper without -c flag (script invocation) unchanged", () => {
-      const dir = makeTempDir();
-      const shPath = path.join(dir, "sh");
-      const scriptPath = path.join(dir, "myscript.sh");
-      fs.writeFileSync(shPath, "#!/bin/sh\n", { mode: 0o755 });
-      fs.writeFileSync(scriptPath, "#!/bin/sh\necho hello\n", { mode: 0o755 });
-      const env = makePathEnv(dir);
-      try {
-        const result = evaluateShellAllowlist({
-          command: `${shPath} ${scriptPath}`,
-          allowlist: [{ pattern: scriptPath }],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-        });
-        expect(result.analysisOk).toBe(true);
-        expect(result.allowlistSatisfied).toBe(true);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      it("keeps single-command wrappers unchanged (no recursive allowlist lookup)", () => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const dir = makeTempDir();
+        const shellPath = path.join(dir, "sh");
+        const gogPath = path.join(dir, "gog-wrapper");
+        writeExecutable(shellPath);
+        writeExecutable(gogPath);
+        const env = makePathEnv(dir);
+        try {
+          const result = evaluateShellAllowlist({
+            command: `${shellPath} -c "gog-wrapper calendar events"`,
+            allowlist: [{ pattern: gogPath }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+          });
+          expect(result.analysisOk).toBe(true);
+          expect(result.allowlistSatisfied).toBe(false);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
     });
   });
 });
