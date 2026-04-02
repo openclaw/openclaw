@@ -146,31 +146,38 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(false);
   }
 
-  function expectPositionalArgvCarrierRejected(command: string) {
+  function expectPositionalArgvCarrierResult(params: {
+    command: string;
+    expectPersisted: boolean;
+  }) {
     const dir = makeTempDir();
     const touch = makeExecutable(dir, "touch");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
     const safeBins = resolveSafeBins(undefined);
     const marker = path.join(dir, "marker");
-    const expandedCommand = command.replaceAll("{marker}", marker);
+    const command = params.command.replaceAll("{marker}", marker);
 
     const { persisted } = resolvePersistedPatterns({
-      command: expandedCommand,
+      command,
       dir,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    if (params.expectPersisted) {
+      expect(persisted).toEqual([touch]);
+    } else {
+      expect(persisted).toEqual([]);
+    }
 
     const second = evaluateShellAllowlist({
-      command: expandedCommand,
+      command,
       allowlist: [{ pattern: touch }],
       safeBins,
       cwd: dir,
       env,
       platform: process.platform,
     });
-    expect(second.allowlistSatisfied).toBe(false);
+    expect(second.allowlistSatisfied).toBe(params.expectPersisted);
   }
 
   it("returns direct executable paths for non-shell segments", () => {
@@ -387,29 +394,41 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc '$0 "$1"' touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc '$0 "$1"' touch {marker}`,
+      expectPersisted: true,
+    });
   });
 
   it("rejects exec positional argv carriers", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc 'exec -- "$0" "$1"' touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc 'exec -- "$0" "$1"' touch {marker}`,
+      expectPersisted: true,
+    });
   });
 
   it("rejects positional argv carriers when $0 is single-quoted", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc "'$0' "$1"" touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc "'$0' "$1"" touch {marker}`,
+      expectPersisted: false,
+    });
   });
 
   it("rejects positional argv carriers when exec is separated from $0 by a newline", () => {
     if (process.platform === "win32") {
       return;
     }
-    expectPositionalArgvCarrierRejected(`sh -lc "exec
-$0 \\"$1\\"" touch {marker}`);
+    expectPositionalArgvCarrierResult({
+      command: `sh -lc "exec
+$0 \\"$1\\"" touch {marker}`,
+      expectPersisted: false,
+    });
   });
 
   it("rejects positional argv carriers when inline command contains extra shell operations", () => {
@@ -915,7 +934,7 @@ $0 \\"$1\\"" touch {marker}`);
     expect(second.allowlistSatisfied).toBe(false);
   });
 
-  it("rejects positional carrier when carried executable is an unknown dispatch carrier", () => {
+  it("allows positional carriers for unknown carried executables when explicitly allowlisted", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -940,6 +959,6 @@ $0 \\"$1\\"" touch {marker}`);
       env,
       platform: process.platform,
     });
-    expect(second.allowlistSatisfied).toBe(false);
+    expect(second.allowlistSatisfied).toBe(true);
   });
 });
