@@ -1,50 +1,51 @@
 ---
-summary: "Compatibility note for older ClawFlow references in release notes and docs"
+summary: "TaskFlow flow orchestration layer above background tasks"
 read_when:
-  - You encounter ClawFlow or openclaw flows in older release notes or docs
-  - You want to understand what ClawFlow terminology maps to in the current CLI
-  - You want to translate older flow references into the supported task commands
-title: "ClawFlow"
+  - You want to understand how TaskFlow relates to background tasks
+  - You encounter ClawFlow or openclaw flows in release notes or docs
+  - You want to inspect or manage durable flow state
+title: "TaskFlow"
 ---
 
-# ClawFlow
+# TaskFlow
 
-`ClawFlow` appears in some older OpenClaw release notes and documentation as if it were a user-facing runtime with its own `openclaw flows` command surface.
+TaskFlow is the flow orchestration substrate that sits above [background tasks](/automation/tasks). It manages durable multi-step flows with their own state, revision tracking, and sync semantics while individual tasks remain the unit of detached work.
 
-That is not the current operator-facing surface in this repository.
+## Sync modes
 
-Today, the supported CLI surface for inspecting and managing detached work is [`openclaw tasks`](/automation/tasks).
+TaskFlow supports two sync modes:
 
-## What to use today
+- **Managed** — TaskFlow owns the lifecycle end-to-end, creating and driving tasks as flow steps progress.
+- **Mirrored** — TaskFlow observes externally created tasks and keeps flow state in sync without taking ownership of task creation.
 
-- `openclaw tasks list` shows tracked detached runs
-- `openclaw tasks show <lookup>` shows one task by task id, run id, or session key
-- `openclaw tasks cancel <lookup>` cancels a running task
-- `openclaw tasks audit` surfaces stale or broken task runs
+## Durable state and revision tracking
+
+Each flow persists its own state and tracks revisions so progress survives gateway restarts. Revision tracking enables conflict detection when multiple sources attempt to advance the same flow.
+
+## CLI commands
 
 ```bash
-openclaw tasks list
-openclaw tasks show <lookup>
-openclaw tasks cancel <lookup>
+# List active and recent flows
+openclaw flows list
+
+# Show details for a specific flow
+openclaw flows show <lookup>
+
+# Cancel a running flow
+openclaw flows cancel <lookup>
 ```
 
-## What this means for older references
+- `openclaw flows list` — shows tracked flows with status and sync mode
+- `openclaw flows show <lookup>` — inspect one flow by flow id or lookup key
+- `openclaw flows cancel <lookup>` — cancel a running flow and its active tasks
 
-If you see `ClawFlow` or `openclaw flows` in:
+## How flows relate to tasks
 
-- old release notes
-- issue threads
-- stale search results
-- outdated local notes
-
-translate those instructions to the current task CLI:
-
-- `openclaw flows list` -> `openclaw tasks list`
-- `openclaw flows show <lookup>` -> `openclaw tasks show <lookup>`
-- `openclaw flows cancel <lookup>` -> `openclaw tasks cancel <lookup>`
+Flows coordinate tasks, not replace them. A single flow may drive multiple background tasks over its lifetime. Use `openclaw tasks` to inspect individual task records and `openclaw flows` to inspect the orchestrating flow.
 
 ## Related
 
-- [Background Tasks](/automation/tasks) — detached work ledger
-- [CLI: flows](/cli/flows) — compatibility note for the mistaken command name
-- [Cron Jobs](/automation/cron-jobs) — scheduled jobs that may create tasks
+- [Background Tasks](/automation/tasks) — the detached work ledger that flows coordinate
+- [CLI: flows](/cli/flows) — CLI command reference for `openclaw flows`
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron Jobs](/automation/cron-jobs) — scheduled jobs that may feed into flows
