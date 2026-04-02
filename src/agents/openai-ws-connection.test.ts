@@ -273,6 +273,19 @@ describe("OpenAIWebSocketManager", () => {
       await connectPromise;
     });
 
+    it("rejects insecure websocket TLS overrides", async () => {
+      const manager = buildManager({
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      });
+
+      await expect(manager.connect("sk-test-key")).rejects.toThrow(/insecureskipverify/i);
+      expect(MockWebSocket.lastInstance).toBeNull();
+    });
+
     it("resolves when the connection opens", async () => {
       const manager = buildManager();
       const connectPromise = manager.connect("sk-test");

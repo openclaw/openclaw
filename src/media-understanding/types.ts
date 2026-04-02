@@ -1,3 +1,5 @@
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
+
 export type MediaUnderstandingKind =
   | "audio.transcription"
   | "video.description"
@@ -55,6 +57,7 @@ export type AudioTranscriptionRequest = {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   language?: string;
   prompt?: string;
@@ -75,6 +78,7 @@ export type VideoDescriptionRequest = {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
   timeoutMs: number;

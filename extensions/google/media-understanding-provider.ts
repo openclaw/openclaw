@@ -11,6 +11,7 @@ import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
+  type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -32,6 +33,7 @@ async function generateGeminiInlineDataText(params: {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
   timeoutMs: number;
@@ -51,17 +53,19 @@ async function generateGeminiInlineDataText(params: {
     }
     return normalizeGoogleModelId(trimmed);
   })();
-  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
-    baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? params.defaultBaseUrl),
-    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
-    headers: params.headers,
-    defaultHeaders: parseGeminiAuth(params.apiKey).headers,
-    provider: "google",
-    api: "google-generative-ai",
-    capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
-    transport: "media-understanding",
-  });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? params.defaultBaseUrl),
+      defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+      allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+      headers: params.headers,
+      request: params.request,
+      defaultHeaders: parseGeminiAuth(params.apiKey).headers,
+      provider: "google",
+      api: "google-generative-ai",
+      capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
+      transport: "media-understanding",
+    });
   const url = `${baseUrl}/models/${model}:generateContent`;
 
   const prompt = (() => {
@@ -93,6 +97,7 @@ async function generateGeminiInlineDataText(params: {
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
+    dispatcherPolicy,
   });
 
   try {
