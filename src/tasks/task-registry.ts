@@ -1932,3 +1932,7 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
     getTaskRegistryStore().close?.();
   }
 }
+
+export function resetTaskRegistryDeliveryRuntimeForTests() {
+  deliveryRuntimePromise = null;
+}
