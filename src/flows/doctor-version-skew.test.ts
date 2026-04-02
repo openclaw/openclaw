@@ -7,10 +7,10 @@ import { note } from "../terminal/note.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { runVersionSkewHealth } from "./doctor-version-skew.js";
 
-function makeCtx(lastTouchedVersion: string | undefined): DoctorHealthFlowContext {
+function makeCtx(lastTouchedVersion: unknown): DoctorHealthFlowContext {
   return {
     cfg: {
-      meta: lastTouchedVersion ? { lastTouchedVersion } : undefined,
+      meta: lastTouchedVersion !== undefined ? { lastTouchedVersion } : undefined,
     },
   } as unknown as DoctorHealthFlowContext;
 }
@@ -38,6 +38,11 @@ describe("runVersionSkewHealth", () => {
 
   it("emits no warning when lastTouchedVersion is missing", async () => {
     await runVersionSkewHealth(makeCtx(undefined));
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("emits no warning when lastTouchedVersion is a non-string value", async () => {
+    await runVersionSkewHealth(makeCtx(12345));
     expect(note).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,7 @@ import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 export async function runVersionSkewHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const touched = ctx.cfg.meta?.lastTouchedVersion;
-  if (!touched) return;
+  if (!touched || typeof touched !== "string") return;
 
   if (shouldWarnOnTouchedVersion(VERSION, touched)) {
     note(
