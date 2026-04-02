@@ -2,6 +2,10 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  drainFileLockStateForTest,
+  resetFileLockStateForTest,
+} from "openclaw/plugin-sdk/infra-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import { LogService } from "./logger.js";
@@ -108,6 +112,7 @@ describe("Matrix IndexedDB persistence", () => {
   afterEach(async () => {
     warnSpy.mockRestore();
     await clearAllIndexedDbState();
+    resetFileLockStateForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -170,5 +175,60 @@ describe("Matrix IndexedDB persistence", () => {
 
     const dbs = await indexedDB.databases();
     expect(dbs).toEqual([]);
+  });
+
+  it("serializes concurrent persist operations via file lock", async () => {
+    const snapshotPath = path.join(tmpDir, "concurrent-persist.json");
+    await seedDatabase({
+      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+
+    const results = await Promise.allSettled([
+      persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
+      persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
+    ]);
+
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    expect(fs.existsSync(snapshotPath)).toBe(true);
+
+    const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBe(1);
+  });
+
+  it("releases lock after persist completes", async () => {
+    const snapshotPath = path.join(tmpDir, "lock-release.json");
+    await seedDatabase({
+      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await drainFileLockStateForTest();
+
+    const lockPath = `${snapshotPath}.lock`;
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("releases lock after restore completes", async () => {
+    const snapshotPath = path.join(tmpDir, "lock-release-restore.json");
+    await seedDatabase({
+      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await clearAllIndexedDbState();
+    await drainFileLockStateForTest();
+
+    await restoreIdbFromDisk(snapshotPath);
+    await drainFileLockStateForTest();
+
+    const lockPath = `${snapshotPath}.lock`;
+    expect(fs.existsSync(lockPath)).toBe(false);
   });
 });
