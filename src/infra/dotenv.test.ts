@@ -236,6 +236,23 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks OPENCLAW_TEST_TAILSCALE_BINARY from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "OPENCLAW_TEST_TAILSCALE_BINARY=/tmp/attacker-tailscale\n",
+        );
+
+        delete process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_TEST_TAILSCALE_BINARY).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks pinned helper interpreter vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
