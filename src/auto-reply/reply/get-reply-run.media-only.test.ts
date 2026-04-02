@@ -208,6 +208,66 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("allows image-only messages via opts.images without sessionCtx media", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "webchat",
+          // No MediaPath or MediaPaths — images arrive via opts.images only (WebChat path)
+        },
+        opts: {
+          images: [
+            {
+              type: "image" as const,
+              data: "iVBORw0KGgoAAAANSUhEUg==",
+              mimeType: "image/png",
+            },
+          ],
+        },
+      }),
+    );
+
+    // Should NOT return the empty-body rejection; should proceed to the agent runner.
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalled();
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it("still rejects empty messages when opts.images is an empty array", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "webchat",
+        },
+        opts: {
+          images: [],
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
   it("omits auth key labels from /new and /reset confirmation messages", async () => {
     await runPreparedReply(
       baseParams({
