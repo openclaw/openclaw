@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import type { CronJob, CronJobState } from "./types.js";
@@ -29,6 +30,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   });
 
   beforeEach(() => {
+    resetCommandQueueStateForTest();
     useFrozenTime(options?.baseTimeIso ?? "2026-02-06T10:05:00.000Z");
   });
 
@@ -36,6 +38,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     vi.clearAllTimers();
     vi.restoreAllMocks();
     useRealTime();
+    resetCommandQueueStateForTest();
     clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
     clearAllBootstrapSnapshots();
