@@ -130,7 +130,7 @@ function resolveStatusConfig(
   return applyPluginAutoEnable({
     config,
     env: env ?? process.env,
-  }).config;
+  });
 }
 
 function resolveReportedPluginVersion(
@@ -154,7 +154,8 @@ export function buildPluginStatusReport(params?: {
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
   const rawConfig = params?.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params?.env);
+  const autoEnabled = resolveStatusConfig(rawConfig, params?.env);
+  const config = autoEnabled.config;
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
@@ -182,6 +183,8 @@ export function buildPluginStatusReport(params?: {
 
   const registry = loadOpenClawPlugins({
     config: runtimeCompatConfig,
+    activationSourceConfig: rawConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
@@ -248,11 +251,12 @@ export function buildPluginInspectReport(params: {
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
   const rawConfig = params.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params.env);
+  const resolvedConfig = resolveStatusConfig(rawConfig, params.env);
+  const config = resolvedConfig.config;
   const report =
     params.report ??
     buildPluginStatusReport({
-      config,
+      config: rawConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
@@ -382,11 +386,10 @@ export function buildAllPluginInspectReports(params?: {
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
   const rawConfig = params?.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params?.env);
   const report =
     params?.report ??
     buildPluginStatusReport({
-      config,
+      config: rawConfig,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
     });
@@ -395,7 +398,7 @@ export function buildAllPluginInspectReports(params?: {
     .map((plugin) =>
       buildPluginInspectReport({
         id: plugin.id,
-        config,
+        config: rawConfig,
         report,
       }),
     )

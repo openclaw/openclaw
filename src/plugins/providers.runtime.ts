@@ -28,13 +28,14 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const autoEnabledConfig =
+  const autoEnabled =
     params.config !== undefined
       ? applyPluginAutoEnable({
           config: params.config,
           env,
-        }).config
+        })
       : undefined;
+  const autoEnabledConfig = autoEnabled?.config;
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
       ? resolveBundledProviderCompatPluginIds({
@@ -71,6 +72,8 @@ export function resolvePluginProviders(params: {
   });
   const registry = loadOpenClawPlugins({
     config,
+    activationSourceConfig: params.config,
+    autoEnabledReasons: autoEnabled?.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,

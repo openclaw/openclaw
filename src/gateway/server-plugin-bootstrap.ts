@@ -58,13 +58,16 @@ function logGatewayPluginDiagnostics(params: {
 }
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  const resolvedConfig = applyPluginAutoEnable({
+  const autoEnabled = applyPluginAutoEnable({
     config: params.cfg,
     env: process.env,
-  }).config;
+  });
+  const resolvedConfig = autoEnabled.config;
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
+    activationSourceConfig: params.cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,

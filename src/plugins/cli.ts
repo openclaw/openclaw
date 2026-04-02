@@ -59,7 +59,8 @@ function mergeCliRegistrars(params: {
 
 function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
-  const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
+  const autoEnabled = applyPluginAutoEnable({ config, env: env ?? process.env });
+  const resolvedConfig = autoEnabled.config;
   const workspaceDir = resolveAgentWorkspaceDir(
     resolvedConfig,
     resolveDefaultAgentId(resolvedConfig),
@@ -71,7 +72,9 @@ function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessE
     debug: (msg: string) => log.debug(msg),
   };
   return {
+    rawConfig: config,
     config: resolvedConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     logger,
   };
@@ -87,6 +90,8 @@ async function loadPluginCliMetadataRegistry(
     ...context,
     registry: await loadOpenClawPluginCliRegistry({
       config: context.config,
+      activationSourceConfig: context.rawConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
       workspaceDir: context.workspaceDir,
       env,
       logger: context.logger,
@@ -103,6 +108,8 @@ async function loadPluginCliCommandRegistry(
   const context = resolvePluginCliLoadContext(cfg, env);
   const runtimeRegistry = loadOpenClawPlugins({
     config: context.config,
+    activationSourceConfig: context.rawConfig,
+    autoEnabledReasons: context.autoEnabledReasons,
     workspaceDir: context.workspaceDir,
     env,
     logger: context.logger,
@@ -119,6 +126,8 @@ async function loadPluginCliCommandRegistry(
   try {
     const metadataRegistry = await loadOpenClawPluginCliRegistry({
       config: context.config,
+      activationSourceConfig: context.rawConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
       workspaceDir: context.workspaceDir,
       env,
       logger: context.logger,

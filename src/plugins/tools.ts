@@ -81,7 +81,8 @@ export function resolvePluginTools(params: {
   // This matters a lot for unit tests and for tool construction hot paths.
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
-  const effectiveConfig = applyPluginAutoEnable({ config: baseConfig, env }).config;
+  const autoEnabled = applyPluginAutoEnable({ config: baseConfig, env });
+  const effectiveConfig = autoEnabled.config;
   const normalized = normalizePluginsConfig(effectiveConfig.plugins);
   if (!normalized.enabled) {
     return [];
@@ -92,6 +93,8 @@ export function resolvePluginTools(params: {
     : undefined;
   const loadOptions = {
     config: effectiveConfig,
+    activationSourceConfig: baseConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.context.workspaceDir,
     runtimeOptions,
     env,

@@ -7,7 +7,10 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../plugins/config-state.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
@@ -37,8 +40,11 @@ const loadedFacadeModules = new Map<string, unknown>();
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
 let cachedBoundaryResolvedConfig:
   | {
+      rawConfig: OpenClawConfig;
       config: OpenClawConfig;
       normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+      sourceNormalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+      autoEnabledReasons: Record<string, string[]>;
     }
   | undefined;
 
@@ -140,13 +146,17 @@ function getFacadeBoundaryResolvedConfig() {
     return cachedBoundaryResolvedConfig;
   }
 
-  const config = applyPluginAutoEnable({
+  const autoEnabled = applyPluginAutoEnable({
     config: rawConfig,
     env: process.env,
-  }).config;
+  });
+  const config = autoEnabled.config;
   const resolved = {
+    rawConfig,
     config,
     normalizedPluginsConfig: normalizePluginsConfig(config.plugins),
+    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig.plugins),
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
   cachedBoundaryResolvedConfig = resolved;
@@ -186,15 +196,24 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
       reason: `no bundled plugin manifest found for ${params.dirName}`,
     };
   }
-  const { config, normalizedPluginsConfig } = getFacadeBoundaryResolvedConfig();
-  const enableState = resolveEffectiveEnableState({
+  const {
+    rawConfig,
+    config,
+    normalizedPluginsConfig,
+    sourceNormalizedPluginsConfig,
+    autoEnabledReasons,
+  } = getFacadeBoundaryResolvedConfig();
+  const activationState = resolveEffectivePluginActivationState({
     id: manifestRecord.id,
     origin: manifestRecord.origin,
     config: normalizedPluginsConfig,
     rootConfig: config,
     enabledByDefault: manifestRecord.enabledByDefault,
+    sourceConfig: sourceNormalizedPluginsConfig,
+    sourceRootConfig: rawConfig,
+    autoEnabledReason: autoEnabledReasons[manifestRecord.id]?.[0],
   });
-  if (enableState.enabled) {
+  if (activationState.enabled) {
     return {
       allowed: true,
       pluginId: manifestRecord.id,
@@ -204,7 +223,7 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
   return {
     allowed: false,
     pluginId: manifestRecord.id,
-    reason: enableState.reason ?? "plugin runtime is not activated",
+    reason: activationState.reason ?? "plugin runtime is not activated",
   };
 }
 

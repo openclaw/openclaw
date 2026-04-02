@@ -43,10 +43,13 @@ function createMemoryRuntimeFixture() {
   };
 }
 
-function expectMemoryRuntimeLoaded(autoEnabledConfig: unknown) {
-  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
-    config: autoEnabledConfig,
-  });
+function expectMemoryRuntimeLoaded(rawConfig: unknown, autoEnabledConfig: unknown) {
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: autoEnabledConfig,
+      activationSourceConfig: rawConfig,
+    }),
+  );
 }
 
 function expectMemoryAutoEnableApplied(rawConfig: unknown, autoEnabledConfig: unknown) {
@@ -54,13 +57,17 @@ function expectMemoryAutoEnableApplied(rawConfig: unknown, autoEnabledConfig: un
     config: rawConfig,
     env: process.env,
   });
-  expectMemoryRuntimeLoaded(autoEnabledConfig);
+  expectMemoryRuntimeLoaded(rawConfig, autoEnabledConfig);
 }
 
 function setAutoEnabledMemoryRuntime() {
   const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
   const runtime = createMemoryRuntimeFixture();
-  applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+  applyPluginAutoEnableMock.mockReturnValue({
+    config: autoEnabledConfig,
+    changes: [],
+    autoEnabledReasons: {},
+  });
   getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
   return { rawConfig, autoEnabledConfig, runtime };
 }
@@ -112,6 +119,7 @@ describe("memory runtime auto-enable loading", () => {
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
       changes: [],
+      autoEnabledReasons: {},
     }));
   });
 
