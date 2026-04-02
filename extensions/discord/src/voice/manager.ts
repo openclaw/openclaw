@@ -698,10 +698,43 @@ export class DiscordVoiceManager {
               if (msg) logger.warn(`discord voice: ffmpeg stderr: ${msg.slice(0, 200)}`);
             });
 
-            // Pipe raw 24kHz mono PCM into FFmpeg
-            pcmStream.pipe(ffmpeg.stdin);
+            // Pre-buffer: collect PCM chunks until we have >= 1s of audio (24kHz mono s16le = 48KB/s)
+            // before piping to FFmpeg. This prevents stuttery playback while Kyutai generates.
+            const PRE_BUFFER_BYTES = 48000; // ~1 second at 24kHz mono s16le
+            const buffered: Buffer[] = [];
+            let bufferedBytes = 0;
+            let preBufferDone = false;
+
+            const startPipeline = () => {
+              preBufferDone = true;
+              // Write all buffered chunks to FFmpeg
+              for (const chunk of buffered) {
+                ffmpeg.stdin.write(chunk);
+              }
+              buffered.length = 0;
+              // Now pipe the rest directly
+              pcmStream.pipe(ffmpeg.stdin);
+            };
+
+            pcmStream.on("data", (chunk: Buffer) => {
+              if (preBufferDone) return; // already piping
+              buffered.push(chunk);
+              bufferedBytes += chunk.length;
+              if (bufferedBytes >= PRE_BUFFER_BYTES) {
+                startPipeline();
+              }
+            });
+
+            pcmStream.on("end", () => {
+              if (!preBufferDone) {
+                // Stream ended before buffer threshold — flush what we have
+                startPipeline();
+              }
+            });
+
             pcmStream.on("error", (err: Error) => {
               logger.warn(`discord voice: pcmStream error: ${err.message}`);
+              if (!preBufferDone) startPipeline();
               ffmpeg.stdin.end();
             });
 
