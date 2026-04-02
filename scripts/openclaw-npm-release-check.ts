@@ -54,7 +54,17 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const REQUIRED_PACKED_PATHS = [
+  "dist/control-ui/index.html",
+  "docs/reference/templates/AGENTS.md",
+  "docs/reference/templates/BOOT.md",
+  "docs/reference/templates/SOUL.md",
+  "docs/reference/templates/TOOLS.md",
+  "docs/reference/templates/IDENTITY.md",
+  "docs/reference/templates/USER.md",
+  "docs/reference/templates/HEARTBEAT.md",
+  "docs/reference/templates/BOOTSTRAP.md",
+];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
@@ -391,7 +401,7 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
   for (const requiredPath of REQUIRED_PACKED_PATHS) {
     if (!packedPaths.has(requiredPath)) {
       errors.push(
-        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+        `npm package is missing required path "${requiredPath}". Ensure all required files (UI assets and workspace templates) are included before publish.`,
       );
     }
   }
