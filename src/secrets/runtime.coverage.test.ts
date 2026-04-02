@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
@@ -13,6 +13,12 @@ const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvid
     resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
   }));
 
+const { resolveBundledPluginWebFetchProvidersMock, resolvePluginWebFetchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
+    resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
+  }));
+
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
@@ -22,6 +28,14 @@ vi.mock("../plugins/web-search-providers.js", () => ({
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-fetch-providers.js", () => ({
+  resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
+}));
+
+vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
+  resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
 }));
 
 function createTestProvider(params: {
@@ -87,6 +101,53 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
     createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
   ];
+}
+
+function createTestFetchProvider(params: {
+  id: "firecrawl";
+  pluginId: string;
+  order: number;
+}): PluginWebFetchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webFetch.apiKey`;
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} test fetch provider`,
+    envVars: [], // Empty to allow any env var in tests
+    placeholder: `${params.id}-...`,
+    signupUrl: `https://example.com/${params.id}`,
+    autoDetectOrder: params.order,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    requiresCredential: true,
+    getCredentialValue: (fetchConfig?: Record<string, unknown>): unknown => {
+      const providerConfig =
+        fetchConfig?.[params.id] && typeof fetchConfig[params.id] === "object"
+          ? (fetchConfig[params.id] as { apiKey?: unknown })
+          : undefined;
+      return providerConfig?.apiKey ?? fetchConfig?.apiKey;
+    },
+    setCredentialValue: (fetchConfigTarget, value) => {
+      const providerConfig = fetchConfigTarget;
+      (providerConfig as { apiKey?: unknown }).apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) =>
+      (config?.plugins?.entries?.[params.pluginId]?.config as { webFetch?: { apiKey?: unknown } })
+        ?.webFetch?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
+      const entries = (plugins.entries ??= {});
+      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
+      const config = (entry.config ??= {});
+      const webFetch = (config.webFetch ??= {}) as { apiKey?: unknown };
+      webFetch.apiKey = value;
+    },
+  };
+}
+
+function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
+  return [createTestFetchProvider({ id: "firecrawl", pluginId: "firecrawl", order: 10 })];
 }
 
 function toConcretePathSegments(pathPattern: string): string[] {
@@ -188,6 +249,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.firecrawl.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "firecrawl");
   }
+  if (entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "fetch", "provider"], "firecrawl");
+  }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
   }
@@ -237,6 +301,8 @@ describe("secrets runtime target coverage", () => {
     clearSecretsRuntimeSnapshot();
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
+    resolveBundledPluginWebFetchProvidersMock.mockReset();
+    resolvePluginWebFetchProvidersMock.mockReset();
   });
 
   beforeEach(async () => {
@@ -246,7 +312,11 @@ describe("secrets runtime target coverage", () => {
 
   it("handles every openclaw.json registry target when configured as active", async () => {
     const entries = listSecretTargetRegistryEntries().filter(
-      (entry) => entry.configFile === "openclaw.json",
+      (entry) =>
+        entry.configFile === "openclaw.json" &&
+        // Skip webFetch entries - they have restrictEnvRefsToEnvVars=true which requires
+        // specific env var names (e.g., FIRECRAWL_API_KEY) and can't use generic test env vars
+        !entry.id.includes(".webFetch."),
     );
     for (const [index, entry] of entries.entries()) {
       const envId = `OPENCLAW_SECRET_TARGET_${index}`;
