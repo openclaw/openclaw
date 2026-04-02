@@ -1410,16 +1410,24 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="How do I enable web search (and web fetch)?">
-    `web_fetch` works without an API key. `web_search` requires a key for your
-    selected provider (Brave, Gemini, Grok, Kimi, or Perplexity).
+    `web_fetch` works without an API key. `web_search` depends on your selected
+    provider:
+
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily require their normal API key setup.
+    - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
+    - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
+
     **Recommended:** run `openclaw configure --section web` and choose a provider.
     Environment alternatives:
 
     - Brave: `BRAVE_API_KEY`
+    - Exa: `EXA_API_KEY`
+    - Firecrawl: `FIRECRAWL_API_KEY`
     - Gemini: `GEMINI_API_KEY`
     - Grok: `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+    - Tavily: `TAVILY_API_KEY`
 
     ```json5
     {
@@ -2080,13 +2088,13 @@ for usage/billing and raise limits as needed.
 
     1. Install Ollama from `https://ollama.com/download`
     2. Pull a local model such as `ollama pull glm-4.7-flash`
-    3. If you want Ollama Cloud too, run `ollama signin`
+    3. If you want hosted models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
 
     Notes:
 
-    - `Cloud + Local` gives you Ollama Cloud models plus your local Ollama models
+    - `Cloud + Local` gives you hosted models plus your local Ollama models
     - cloud models such as `kimi-k2.5:cloud` do not need a local pull
     - for manual switching, use `openclaw models list` and `openclaw models set ollama/<model>`
 
