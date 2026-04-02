@@ -59,6 +59,19 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### Google Workspace (All-in-One)
+
+All-in-one Google Workspace integration with shared OAuth. One plugin, one
+auth flow — supports Gmail, Calendar, Drive, Contacts, Tasks, and Sheets
+as toggleable services with 24 tools.
+
+- **npm:** `@tensorfold/openclaw-google-workspace`
+- **repo:** [github.com/tensorfold/openclaw-google-workspace](https://github.com/tensorfold/openclaw-google-workspace)
+
+````bash
+openclaw plugins install @tensorfold/openclaw-google-workspace
+```bash
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
@@ -69,7 +82,7 @@ cost, tokens, errors, and more.
 
 ```bash
 openclaw plugins install @opik/opik-openclaw
-```
+````
 
 ### QQbot
 
