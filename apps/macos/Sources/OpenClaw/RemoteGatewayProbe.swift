@@ -217,11 +217,20 @@ enum RemoteGatewayProbe {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isNewline)
             .joined(separator: " ")
-        if let trimmed,
-           trimmed.localizedCaseInsensitiveContains("host key verification failed")
-        {
-            let host = CommandResolver.parseSSHTarget(target)?.host ?? target
-            return "SSH check failed: Host key verification failed. Remove the old key with ssh-keygen -R \(host) and try again."
+        let host = CommandResolver.parseSSHTarget(target)?.host ?? target
+        if let trimmed {
+            if self.isUnknownSSHHostFailure(trimmed) {
+                return """
+                SSH check failed: This SSH host is not trusted yet.
+                Verify the host key with `ssh \(host)` in Terminal, then try again.
+                """
+            }
+            if trimmed.localizedCaseInsensitiveContains("host key verification failed") {
+                return """
+                SSH check failed: Host key verification failed.
+                Remove the old key with `ssh-keygen -R \(host)` and try again.
+                """
+            }
         }
         if let trimmed, !trimmed.isEmpty {
             if let message = response.message, message.hasPrefix("exit ") {
@@ -233,5 +242,17 @@ enum RemoteGatewayProbe {
             return "SSH check failed (\(message))"
         }
         return "SSH check failed"
+    }
+
+    private static func isUnknownSSHHostFailure(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("host key is known for") ||
+            normalized.contains("host key is not known") ||
+            normalized.contains("the authenticity of host") ||
+            normalized.contains("not in the list of known hosts")
+    }
+
+    static func _testFormatSSHFailure(_ response: Response, target: String) -> String {
+        self.formatSSHFailure(response, target: target)
     }
 }
