@@ -76,7 +76,11 @@ starts, enable `notifyUser`:
 ```
 
 When enabled, the user sees a short message (for example, "Compacting
-context...") at the start of each compaction run.
+context...") at the start of each compaction run. This is useful for
+transparency in long-running sessions where the user might otherwise wonder
+why there is a brief pause.
+
+Default: `false` (silent).
 
 ## Compaction vs pruning
 
