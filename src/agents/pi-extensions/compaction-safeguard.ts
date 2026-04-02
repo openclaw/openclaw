@@ -161,10 +161,13 @@ async function resolveCompactionRequestAuth(params: {
 
   if (typeof registry.getApiKeyForProvider === "function") {
     const apiKey = await registry.getApiKeyForProvider(params.model.provider);
-    if (apiKey || params.modelHeaders) {
+    if (apiKey) {
       return { apiKey, headers: params.modelHeaders };
     }
-    return null;
+  }
+
+  if (!registry.getApiKey && params.modelHeaders) {
+    return { headers: params.modelHeaders };
   }
 
   if (typeof registry.getApiKey === "function") {

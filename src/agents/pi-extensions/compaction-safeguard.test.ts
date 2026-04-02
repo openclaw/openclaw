@@ -1986,6 +1986,31 @@ describe("resolveCompactionRequestAuth", () => {
     });
   });
 
+  it("falls through to legacy getApiKey when provider lookup misses", async () => {
+    const getApiKeyForProvider = vi.fn(async () => undefined);
+    const getApiKey = vi.fn(async () => "sk-legacy");
+
+    await expect(
+      resolveCompactionRequestAuth({
+        model: createAnthropicModelFixture({
+          provider: "codex-lb",
+          id: "gpt-5.4",
+          headers: { "chatgpt-account-id": "proxy_codex-lb" },
+        }),
+        modelRegistry: {
+          getApiKeyForProvider,
+          getApiKey,
+        } as unknown as ExtensionContext["modelRegistry"],
+        modelHeaders: { "chatgpt-account-id": "proxy_codex-lb" },
+      }),
+    ).resolves.toEqual({
+      apiKey: "sk-legacy",
+      headers: { "chatgpt-account-id": "proxy_codex-lb" },
+    });
+    expect(getApiKeyForProvider).toHaveBeenCalledWith("codex-lb");
+    expect(getApiKey).toHaveBeenCalled();
+  });
+
   it("throws a readable error when no supported auth method exists", async () => {
     await expect(
       resolveCompactionRequestAuth({
