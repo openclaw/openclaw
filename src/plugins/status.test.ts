@@ -294,6 +294,17 @@ describe("buildPluginStatusReport", () => {
     });
   });
 
+  it("uses a non-activating snapshot load for status reports", () => {
+    buildPluginStatusReport({ config: {}, workspaceDir: "/workspace" });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        cache: false,
+      }),
+    );
+  });
+
   it("loads plugin status from the auto-enabled config snapshot", () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
       {
