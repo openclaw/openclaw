@@ -998,6 +998,12 @@ export async function preflightDiscordMessage(
     if (!botMentioned) {
       logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
       logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: params.guildHistories,
+        historyKey: messageChannelId,
+        limit: params.historyLimit,
+        entry: historyEntry ?? null,
+      });
       return null;
     }
   }

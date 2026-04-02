@@ -18,6 +18,7 @@ import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   createDiscordMessage,
   createDiscordPreflightArgs,
@@ -572,6 +573,49 @@ describe("preflightDiscordMessage", () => {
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
     expect(result).toBeNull();
+  });
+
+  it("records history when dropping bot message without mention (allowBots=mentions)", async () => {
+    const channelId = "channel-bot-hist";
+    const guildId = "guild-bot-hist";
+    const message = createDiscordMessage({
+      id: "m-bot-hist",
+      channelId,
+      content: "relay chatter",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const guildHistories = new Map<string, HistoryEntry[]>();
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { allowBots: "mentions" } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 50,
+    });
+
+    expect(result).toBeNull();
+    const channelHistory = guildHistories.get(channelId);
+    expect(channelHistory).toBeDefined();
+    expect(channelHistory).toHaveLength(1);
+    expect(channelHistory?.[0]).toEqual(
+      expect.objectContaining({
+        messageId: "m-bot-hist",
+        body: "relay chatter",
+      }),
+    );
   });
 
   it("allows bot messages with explicit mention when allowBots=mentions", async () => {
