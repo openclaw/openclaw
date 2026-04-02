@@ -2,7 +2,10 @@ package ai.openclaw.app.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 
 class ChatSheetContentTest {
   @Test
@@ -29,5 +32,41 @@ class ChatSheetContentTest {
         pendingRunCount = 0,
       ),
     )
+  }
+
+  @Test
+  fun keepsPendingAssistantAutoSendWhenDispatchRejected() = runBlocking {
+    var dispatchedPrompt: String? = null
+
+    val consumed =
+      dispatchPendingAssistantAutoSend(
+        pendingPrompt = "summarize mail",
+        healthOk = true,
+        pendingRunCount = 0,
+      ) { prompt ->
+        dispatchedPrompt = prompt
+        false
+      }
+
+    assertFalse(consumed)
+    assertEquals("summarize mail", dispatchedPrompt)
+  }
+
+  @Test
+  fun clearsPendingAssistantAutoSendOnlyAfterAcceptedDispatch() = runBlocking {
+    var dispatchedPrompt: String? = null
+
+    val consumed =
+      dispatchPendingAssistantAutoSend(
+        pendingPrompt = "summarize mail",
+        healthOk = true,
+        pendingRunCount = 0,
+      ) { prompt ->
+        dispatchedPrompt = prompt
+        true
+      }
+
+    assertTrue(consumed)
+    assertEquals("summarize mail", dispatchedPrompt)
   }
 }

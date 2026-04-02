@@ -366,4 +366,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
   }
+
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return ensureRuntime().sendChatAwaitAcceptance(
+      message = message,
+      thinking = thinking,
+      attachments = attachments,
+    )
+  }
 }

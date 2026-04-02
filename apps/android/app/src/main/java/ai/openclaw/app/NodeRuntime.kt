@@ -1016,6 +1016,14 @@ class NodeRuntime(
     chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
   }
 
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
+  }
+
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
