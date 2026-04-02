@@ -913,10 +913,19 @@ describe("runHeartbeatOnce", () => {
         expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
       },
       {
-        name: "reasoning + HEARTBEAT_OK",
+        name: "reasoning + HEARTBEAT_OK suppresses all payloads",
         caseDir: "hb-reasoning-heartbeat-ok",
         replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
-        expectedTexts: ["Reasoning:\n_Because it helps_"],
+        expectedTexts: [],
+      },
+      {
+        name: "reasoning containing HEARTBEAT_OK + final HEARTBEAT_OK suppresses all",
+        caseDir: "hb-reasoning-contains-heartbeat-ok",
+        replies: [
+          { text: "Reasoning:\nI should reply HEARTBEAT_OK since nothing changed" },
+          { text: "HEARTBEAT_OK" },
+        ],
+        expectedTexts: [],
       },
     ]),
   )(
