@@ -45,6 +45,24 @@ describe("pruneStaleEntries", () => {
     expect(store.old).toBeUndefined();
     expect(store.fresh).toBeDefined();
   });
+
+  it("excludeKeys protects stale entries from pruning", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["active-subagent", makeEntry(now - 31 * DAY_MS)],
+      ["old-idle", makeEntry(now - 31 * DAY_MS)],
+      ["fresh", makeEntry(now - 1 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleEntries(store, 30 * DAY_MS, {
+      excludeKeys: new Set(["active-subagent"]),
+    });
+
+    expect(pruned).toBe(1);
+    expect(store["active-subagent"]).toBeDefined();
+    expect(store["old-idle"]).toBeUndefined();
+    expect(store.fresh).toBeDefined();
+  });
 });
 
 describe("capEntryCount", () => {
@@ -67,6 +85,29 @@ describe("capEntryCount", () => {
     expect(store.mid).toBeDefined();
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+
+  it("excludeKeys protects entries from capping even when over limit", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["oldest-protected", makeEntry(now - 4 * DAY_MS)],
+      ["old", makeEntry(now - 3 * DAY_MS)],
+      ["mid", makeEntry(now - 2 * DAY_MS)],
+      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["newest", makeEntry(now)],
+    ]);
+
+    const evicted = capEntryCount(store, 3, {
+      excludeKeys: new Set(["oldest-protected"]),
+    });
+
+    // Only "old" is removed; "oldest-protected" survives despite being beyond the cap.
+    expect(evicted).toBe(1);
+    expect(store["oldest-protected"]).toBeDefined();
+    expect(store.old).toBeUndefined();
+    expect(store.mid).toBeDefined();
+    expect(store.recent).toBeDefined();
+    expect(store.newest).toBeDefined();
   });
 });
 

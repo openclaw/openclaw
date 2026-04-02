@@ -665,6 +665,20 @@ export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   return Boolean(latest && typeof latest.endedAt !== "number");
 }
 
+/**
+ * Return the set of child session keys that have at least one active (non-ended) subagent run.
+ * Used by session maintenance to protect these sessions from pruning.
+ */
+export function getActiveSubagentSessionKeys(): Set<string> {
+  const keys = new Set<string>();
+  for (const entry of subagentRuns.values()) {
+    if (typeof entry.endedAt !== "number" && entry.childSessionKey) {
+      keys.add(entry.childSessionKey);
+    }
+  }
+  return keys;
+}
+
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
     subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),

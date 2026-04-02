@@ -472,14 +472,29 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
+      // Collect session keys that back active subagent runs so they survive pruning.
+      let protectedKeys: Set<string> | undefined;
+      try {
+        const { getActiveSubagentSessionKeys } = await import("../../agents/subagent-registry.js");
+        protectedKeys = getActiveSubagentSessionKeys();
+      } catch {
+        // Subagent registry may not be initialized (e.g. during migrations or CLI commands).
+      }
+      if (opts?.activeSessionKey) {
+        protectedKeys ??= new Set();
+        protectedKeys.add(opts.activeSessionKey.trim());
+      }
+
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        excludeKeys: protectedKeys,
         onPruned: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
       });
       const capped = capEntryCount(store, maintenance.maxEntries, {
+        excludeKeys: protectedKeys,
         onCapped: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
@@ -525,6 +540,7 @@ async function saveSessionStoreUnlocked(
         store,
         storePath,
         activeSessionKey: opts?.activeSessionKey,
+        excludeKeys: protectedKeys,
         maintenance,
         warnOnly: false,
         log,
