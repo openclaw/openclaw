@@ -6,6 +6,7 @@ import {
   resolveProviderAttributionPolicy,
   resolveProviderEndpoint,
   resolveProviderRequestAttributionHeaders,
+  resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
 } from "./provider-attribution.js";
 
@@ -315,6 +316,30 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native Moonshot and ModelStudio endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://api.moonshot.ai/v1")).toMatchObject({
+      endpointClass: "moonshot-native",
+      hostname: "api.moonshot.ai",
+    });
+
+    expect(resolveProviderEndpoint("https://api.moonshot.cn/v1")).toMatchObject({
+      endpointClass: "moonshot-native",
+      hostname: "api.moonshot.cn",
+    });
+
+    expect(
+      resolveProviderEndpoint("https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+    ).toMatchObject({
+      endpointClass: "modelstudio-native",
+      hostname: "dashscope-intl.aliyuncs.com",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/v1")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
+    });
+  });
+
   it("does not classify malformed or embedded Google host strings as native endpoints", () => {
     expect(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com")).toMatchObject({
       endpointClass: "custom",
@@ -359,6 +384,12 @@ describe("provider attribution", () => {
     });
   });
 
+  it("ignores non-http schemes when normalizing native comparable base URLs", () => {
+    expect(resolveProviderEndpoint("javascript:alert(1)")).toMatchObject({
+      endpointClass: "invalid",
+    });
+  });
+
   it("requires the dedicated OpenAI audio transcription API for audio attribution", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -397,6 +428,92 @@ describe("provider attribution", () => {
     ).toMatchObject({
       attributionProvider: undefined,
       allowsHiddenAttribution: false,
+    });
+  });
+
+  it("resolves centralized request capabilities for native and proxied routes", () => {
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      allowsOpenAIServiceTier: true,
+      allowsResponsesStore: true,
+      supportsResponsesStoreField: true,
+      shouldStripResponsesPromptCache: false,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "anthropic",
+        api: "anthropic-messages",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "default",
+      allowsAnthropicServiceTier: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      allowsOpenAIServiceTier: false,
+      allowsResponsesStore: false,
+      supportsResponsesStoreField: true,
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
+  it("resolves shared compat families and native streaming-usage gates", () => {
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "moonshot",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "moonshot-native",
+      supportsNativeStreamingUsageCompat: true,
+      compatibilityFamily: "moonshot",
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "modelstudio",
+        api: "openai-completions",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "modelstudio-native",
+      supportsNativeStreamingUsageCompat: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "ollama",
+        modelId: "kimi-k2.5:cloud",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      compatibilityFamily: "moonshot",
     });
   });
 });

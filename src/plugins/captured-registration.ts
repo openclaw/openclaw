@@ -11,6 +11,7 @@ import type {
   OpenClawPluginCliRegistrar,
   ProviderPlugin,
   SpeechProviderPlugin,
+  WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
@@ -28,6 +29,7 @@ export type CapturedPluginRegistration = {
   speechProviders: SpeechProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
+  webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   tools: AnyAgentTool[];
 };
@@ -42,6 +44,7 @@ export function createCapturedPluginRegistration(params?: {
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
+  const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
@@ -58,6 +61,7 @@ export function createCapturedPluginRegistration(params?: {
     speechProviders,
     mediaUnderstandingProviders,
     imageGenerationProviders,
+    webFetchProviders,
     webSearchProviders,
     tools,
     api: buildPluginApi({
@@ -107,6 +111,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
           imageGenerationProviders.push(provider);
+        },
+        registerWebFetchProvider(provider: WebFetchProviderPlugin) {
+          webFetchProviders.push(provider);
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);

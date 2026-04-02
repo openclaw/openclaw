@@ -25,6 +25,7 @@ import {
   getTaskById,
   findLatestTaskForFlowId,
   findTaskByRunId,
+  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
 
@@ -57,11 +58,13 @@ vi.mock("../agents/subagent-control.js", () => ({
 async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetFlowRegistryForTests();
     try {
       await run(root);
     } finally {
+      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
     }
@@ -75,6 +78,7 @@ describe("task-executor", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetFlowRegistryForTests();
     hoisted.sendMessageMock.mockReset();
