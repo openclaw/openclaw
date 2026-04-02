@@ -92,6 +92,10 @@ export function actionHasTarget(
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
+  const target = typeof params.target === "string" ? params.target.trim() : "";
+  if (target) {
+    return true;
+  }
   const to = typeof params.to === "string" ? params.to.trim() : "";
   if (to) {
     return true;

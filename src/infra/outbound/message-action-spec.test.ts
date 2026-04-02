@@ -14,6 +14,7 @@ describe("actionRequiresTarget", () => {
 
 describe("actionHasTarget", () => {
   it.each([
+    { action: "react", params: { target: "  channel:C1  " }, expected: true },
     { action: "send", params: { to: "  channel:C1  " }, expected: true },
     { action: "channel-info", params: { channelId: "  C123  " }, expected: true },
     { action: "send", params: { to: "   ", channelId: "" }, expected: false },
