@@ -23,6 +23,12 @@ export type {
   ProviderRequestPolicyResolution,
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
+export type {
+  ProviderRequestAuthOverride,
+  ProviderRequestProxyOverride,
+  ProviderRequestTlsOverride,
+  ProviderRequestTransportOverrides,
+} from "../agents/provider-request-config.js";
 export {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,
