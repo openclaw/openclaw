@@ -167,6 +167,21 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
   - `sms.search`
   - `motion.activity`, `motion.pedometer`
 
+## Assistant entrypoints
+
+Android supports launching OpenClaw from the system assistant trigger (Google
+Assistant). When configured, holding the home button or saying "Hey Google, ask
+OpenClaw..." opens the app and hands the prompt into the chat composer.
+
+This uses Android **App Actions** metadata declared in the app manifest. No
+extra configuration is needed on the gateway side -- the assistant intent is
+handled entirely by the Android app and forwarded as a normal chat message.
+
+<Note>
+App Actions availability depends on the device, Google Play Services version,
+and whether the user has set OpenClaw as the default assistant app.
+</Note>
+
 ## Notification forwarding
 
 Android can forward device notifications to the gateway as events. Several controls let you scope which notifications are forwarded and when.
