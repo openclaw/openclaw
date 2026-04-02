@@ -656,6 +656,37 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("includes Windows-compatible env keys in approval env bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        commandArgv: ["cmd.exe", "/c", "echo", "ok"],
+        command: "cmd.exe /c echo ok",
+        env: {
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const envBinding = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    expect(request["envKeys"]).toEqual(envBinding.envKeys);
+    expect(request["systemRunBinding"]).toEqual(
+      buildSystemRunApprovalBinding({
+        argv: ["cmd.exe", "/c", "echo", "ok"],
+        cwd: "/tmp",
+        env: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+      }).binding,
+    );
+  });
+
   it("stores sorted env keys for gateway approvals without node-only binding", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
