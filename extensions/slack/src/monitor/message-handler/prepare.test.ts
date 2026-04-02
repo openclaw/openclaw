@@ -607,6 +607,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareThreadMessage(slackCtx, {
       text: "current message",
       ts: "501.000",
+      thread_ts: "500.000",
     });
 
     expect(prepared).toBeTruthy();
@@ -652,6 +653,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareThreadMessage(slackCtx, {
       text: "current message",
       ts: "551.000",
+      thread_ts: "550.000",
     });
 
     expect(prepared).toBeTruthy();
@@ -692,6 +694,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareThreadMessage(slackCtx, {
       text: "current message",
       ts: "601.000",
+      thread_ts: "600.000",
     });
 
     expect(prepared).toBeTruthy();
