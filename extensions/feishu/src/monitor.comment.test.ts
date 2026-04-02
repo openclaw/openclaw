@@ -97,11 +97,15 @@ function makeDriveCommentEvent(
 function makeOpenApiClient(params: {
   documentTitle?: string;
   documentUrl?: string;
+  isWholeComment?: boolean;
+  batchCommentId?: string;
   quoteText?: string;
   rootReplyText?: string;
   targetReplyText?: string;
   includeTargetReplyInBatch?: boolean;
+  repliesSequence?: Array<Array<{ reply_id: string; text: string }>>;
 }) {
+  const remainingReplyBatches = [...(params.repliesSequence ?? [])];
   return {
     request: vi.fn(async (request: { method: "GET" | "POST"; url: string; data: unknown }) => {
       if (request.url === "/open-apis/drive/v1/metas/batch_query") {
@@ -124,7 +128,8 @@ function makeOpenApiClient(params: {
           data: {
             items: [
               {
-                comment_id: "7623358762119646411",
+                comment_id: params.batchCommentId ?? "7623358762119646411",
+                is_whole: params.isWholeComment,
                 quote: params.quoteText ?? "im.message.receive_v1 message trigger implementation",
                 reply_list: {
                   replies: [
@@ -169,40 +174,54 @@ function makeOpenApiClient(params: {
         };
       }
       if (request.url.includes("/replies")) {
+        const replyBatch = remainingReplyBatches.shift();
+        const items = replyBatch?.map((reply) => ({
+          reply_id: reply.reply_id,
+          content: {
+            elements: [
+              {
+                type: "text_run",
+                text_run: {
+                  content: reply.text,
+                },
+              },
+            ],
+          },
+        })) ?? [
+          {
+            reply_id: "7623358762136374451",
+            content: {
+              elements: [
+                {
+                  type: "text_run",
+                  text_run: {
+                    content:
+                      params.rootReplyText ??
+                      "Also send it to the agent after receiving the comment event",
+                  },
+                },
+              ],
+            },
+          },
+          {
+            reply_id: "7623359125036043462",
+            content: {
+              elements: [
+                {
+                  type: "text_run",
+                  text_run: {
+                    content: params.targetReplyText ?? "Please follow up on this comment",
+                  },
+                },
+              ],
+            },
+          },
+        ];
         return {
           code: 0,
           data: {
             has_more: false,
-            items: [
-              {
-                reply_id: "7623358762136374451",
-                content: {
-                  elements: [
-                    {
-                      type: "text_run",
-                      text_run: {
-                        content:
-                          params.rootReplyText ??
-                          "Also send it to the agent after receiving the comment event",
-                      },
-                    },
-                  ],
-                },
-              },
-              {
-                reply_id: "7623359125036043462",
-                content: {
-                  elements: [
-                    {
-                      type: "text_run",
-                      text_run: {
-                        content: params.targetReplyText ?? "Please follow up on this comment",
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
+            items,
           },
         };
       }
@@ -257,9 +276,51 @@ describe("resolveDriveCommentEventTurn", () => {
     expect(turn?.prompt).toContain(
       "This is a Feishu document comment-thread event, not a Feishu IM conversation.",
     );
+    expect(turn?.prompt).toContain("Prefer plain text suitable for a comment thread.");
+    expect(turn?.prompt).toContain("Do not include internal reasoning");
+    expect(turn?.prompt).toContain("Do not narrate your plan or execution process");
+    expect(turn?.prompt).toContain("reply only with the user-facing result itself");
     expect(turn?.prompt).toContain("comment_id: 7623358762119646411");
     expect(turn?.prompt).toContain("reply_id: 7623358762136374451");
     expect(turn?.prompt).toContain("The system will automatically reply with your final answer");
+  });
+
+  it("preserves whole-document comment metadata for downstream delivery mode selection", async () => {
+    const client = makeOpenApiClient({
+      includeTargetReplyInBatch: true,
+      isWholeComment: true,
+    });
+
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent(),
+      botOpenId: "ou_bot",
+      createClient: () => client as never,
+    });
+
+    expect(turn?.isWholeComment).toBe(true);
+    expect(turn?.prompt).toContain("This is a whole-document comment.");
+    expect(turn?.prompt).toContain("Whole-document comments do not support direct replies.");
+  });
+
+  it("does not trust whole-comment metadata from a mismatched batch_query item", async () => {
+    const client = makeOpenApiClient({
+      includeTargetReplyInBatch: true,
+      isWholeComment: true,
+      batchCommentId: "different_comment_id",
+    });
+
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent(),
+      botOpenId: "ou_bot",
+      createClient: () => client as never,
+    });
+
+    expect(turn?.isWholeComment).toBeUndefined();
+    expect(turn?.prompt).not.toContain("This is a whole-document comment.");
   });
 
   it("preserves sender user_id for downstream allowlist checks", async () => {
@@ -313,6 +374,71 @@ describe("resolveDriveCommentEventTurn", () => {
     );
     expect(turn?.prompt).toContain(`file_token: ${TEST_DOC_TOKEN}`);
     expect(turn?.prompt).toContain("Event type: add_reply");
+    expect(client.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "GET",
+        url: expect.stringContaining(
+          `/comments/7623358762119646411/replies?file_type=docx&page_size=100&user_id_type=open_id`,
+        ),
+      }),
+    );
+  });
+
+  it("retries comment reply lookup when the requested reply is not immediately visible", async () => {
+    const waitMs = vi.fn(async () => {});
+    const client = makeOpenApiClient({
+      includeTargetReplyInBatch: false,
+      repliesSequence: [
+        [
+          {
+            reply_id: "7623358762136374451",
+            text: "Also send it to the agent after receiving the comment event",
+          },
+          { reply_id: "7623358762999999999", text: "Earlier assistant summary" },
+        ],
+        [
+          {
+            reply_id: "7623358762136374451",
+            text: "Also send it to the agent after receiving the comment event",
+          },
+          { reply_id: "7623358762999999999", text: "Earlier assistant summary" },
+        ],
+        [
+          {
+            reply_id: "7623358762136374451",
+            text: "Also send it to the agent after receiving the comment event",
+          },
+          { reply_id: "7623359125999999999", text: "Insert a sentence below this paragraph" },
+        ],
+      ],
+    });
+
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          notice_type: "add_reply",
+        },
+        reply_id: "7623359125999999999",
+      }),
+      botOpenId: "ou_bot",
+      createClient: () => client as never,
+      waitMs,
+    });
+
+    expect(turn?.targetReplyText).toBe("Insert a sentence below this paragraph");
+    expect(turn?.prompt).toContain("Insert a sentence below this paragraph");
+    expect(waitMs).toHaveBeenCalledTimes(2);
+    expect(waitMs).toHaveBeenNthCalledWith(1, 1000);
+    expect(waitMs).toHaveBeenNthCalledWith(2, 1000);
+    expect(
+      client.request.mock.calls.filter(
+        ([request]: [{ method: string; url: string }]) =>
+          request.method === "GET" && request.url.includes("/replies"),
+      ),
+    ).toHaveLength(3);
   });
 
   it("ignores self-authored comment notices", async () => {
