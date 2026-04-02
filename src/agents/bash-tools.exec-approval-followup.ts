@@ -1,6 +1,9 @@
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { isExecDeniedResultText, parseExecApprovalResultText } from "./exec-approval-result.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -31,7 +34,7 @@ function buildExecDeniedFollowupPrompt(resultText: string): string {
 
 export function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
-  if (trimmed.startsWith("Exec denied (")) {
+  if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
   return [
@@ -49,12 +52,55 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
+function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
+  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
+}
+
+function formatDirectExecApprovalFollowupText(resultText: string): string | null {
+  const parsed = parseExecApprovalResultText(resultText);
+  if (parsed.kind === "other" && !parsed.raw) {
+    return null;
+  }
+  if (parsed.kind === "denied") {
+    return null;
+  }
+
+  if (parsed.kind === "finished") {
+    const metadata = parsed.metadata.toLowerCase();
+    const body = sanitizeUserFacingText(parsed.body, {
+      errorContext: !metadata.includes("code 0"),
+    }).trim();
+
+    let prefix = "";
+    if (!body) {
+      prefix = metadata.includes("code 0")
+        ? "Background command finished."
+        : metadata.includes("signal")
+          ? "Background command stopped unexpectedly."
+          : "Background command finished with an error.";
+    }
+
+    return body ? `${prefix ? `${prefix}\n\n` : ""}${body}` : prefix || null;
+  }
+
+  if (parsed.kind === "completed") {
+    const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
+    return body || "Background command finished.";
+  }
+
+  return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
+}
+
 export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const resultText = params.resultText.trim();
   if (!resultText) {
+    return false;
+  }
+  const isDenied = isExecDeniedResultText(resultText);
+  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
     return false;
   }
 
@@ -102,17 +148,22 @@ export async function sendExecApprovalFollowup(
     return true;
   }
 
-  if (deliveryTarget.deliver) {
+  const directText = formatDirectExecApprovalFollowupText(resultText);
+  if (deliveryTarget.deliver && directText) {
     await sendMessage({
       channel: deliveryTarget.channel,
       to: deliveryTarget.to ?? "",
       accountId: deliveryTarget.accountId,
       threadId: deliveryTarget.threadId,
-      content: resultText,
+      content: directText,
       agentId: undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     });
     return true;
+  }
+
+  if (isDenied) {
+    return false;
   }
 
   throw new Error("Session key or deliverable origin route is required");
