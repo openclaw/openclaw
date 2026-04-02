@@ -331,14 +331,14 @@ export function resolveProviderRequestPolicy(
   const usesOpenAICodexAttributionHost = endpointClass === "openai-codex";
   const usesVerifiedOpenAIAttributionHost =
     usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
-  const usesExplicitProxyLikeEndpoint =
-    usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint && endpointClass !== "openrouter";
+  const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
   if (
     provider === "openai" &&
-    ((api === "openai-completions" || api === "openai-responses") ||
-      input.capability === "audio") &&
+    (api === "openai-completions" ||
+      api === "openai-responses" ||
+      (input.capability === "audio" && api === "openai-audio-transcriptions")) &&
     usesOpenAIPublicAttributionHost
   ) {
     attributionProvider = "openai";
@@ -349,9 +349,11 @@ export function resolveProviderRequestPolicy(
   ) {
     attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented and intentionally remains provider-key-gated
-    // for this pass. The endpoint class is still surfaced so future host-gating can
-    // reuse the same classifier without changing callers again.
+    // OpenRouter attribution is documented and intentionally remains
+    // provider-key-gated for this pass, including custom base URLs configured
+    // under the openrouter provider. The endpoint class is still surfaced so a
+    // later host-gating decision can reuse the same classifier without changing
+    // callers again.
     attributionProvider = "openrouter";
   }
 

@@ -204,6 +204,22 @@ describe("provider attribution", () => {
     });
   });
 
+  it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openrouter",
+        api: "openai-responses",
+        baseUrl: "https://openrouter.ai/api/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toMatchObject({
+      endpointClass: "openrouter",
+      usesExplicitProxyLikeEndpoint: true,
+      attributionProvider: "openrouter",
+    });
+  });
+
   it("keeps documented OpenRouter attribution centralized while leaving host-gating deferred", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -255,6 +271,47 @@ describe("provider attribution", () => {
       }),
     ).toMatchObject({
       knownProviderFamily: "github-copilot",
+      attributionProvider: undefined,
+      allowsHiddenAttribution: false,
+    });
+  });
+
+  it("requires the dedicated OpenAI audio transcription API for audio attribution", () => {
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        api: "openai-audio-transcriptions",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "media-understanding",
+        capability: "audio",
+      }),
+    ).toMatchObject({
+      attributionProvider: "openai",
+      allowsHiddenAttribution: true,
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "media-understanding",
+        capability: "audio",
+      }),
+    ).toMatchObject({
+      attributionProvider: "openai",
+      allowsHiddenAttribution: true,
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        api: "not-openai-audio",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "media-understanding",
+        capability: "audio",
+      }),
+    ).toMatchObject({
       attributionProvider: undefined,
       allowsHiddenAttribution: false,
     });
