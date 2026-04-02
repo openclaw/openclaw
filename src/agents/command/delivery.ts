@@ -96,63 +96,10 @@ function classifyTerminalPayloadState(payloads: ReplyPayload[]): "waiting" | "bl
   return "complete";
 }
 
-function buildTerminalStatusAscii(params: {
-  result: AgentDeliveryResult;
-  payloads: ReplyPayload[];
-}): { tag: StatusTagName; reason: string } {
-  const stopReason =
-    typeof params.result.meta?.stopReason === "string" ? params.result.meta.stopReason : undefined;
-  const durationMs =
-    typeof params.result.meta?.durationMs === "number" ? params.result.meta.durationMs : undefined;
-  const hasErrorPayload = params.payloads.some((payload) => payload.isError === true);
-  if (stopReason === "tool_calls" || stopReason === "toolUse") {
-    return {
-      tag: "WORKING",
-      reason: "waiting for tool or continuation to finish",
-    };
-  }
-  if (stopReason === "length" || stopReason === "max_tokens") {
-    return {
-      tag: "STOP",
-      reason: "stopped after hitting the token limit",
-    };
-  }
-  if (hasErrorPayload || params.result.meta?.error || params.result.meta?.aborted) {
-    return {
-      tag: "STOP",
-      reason: stopReason ? `run stopped with status ${stopReason}` : "run stopped because of an error",
-    };
-  }
-  const payloadState = classifyTerminalPayloadState(params.payloads);
-  if (payloadState === "waiting") {
-    return {
-      tag: "WAITING",
-      reason: "waiting for required input before work can continue",
-    };
-  }
-  if (payloadState === "blocked") {
-    return {
-      tag: "BLOCKED",
-      reason: "work is blocked pending a dependency or manual intervention",
-    };
-  }
-  if (typeof durationMs === "number" && durationMs >= 60_000) {
-    return {
-      tag: "COMPLETE",
-      reason: `completed after ${Math.max(1, Math.round(durationMs / 1_000))}s of processing`,
-    };
-  }
-  return {
-    tag: "COMPLETE",
-    reason: "finished the current task",
-  };
-}
-
 function buildTerminalStatus(params: {
   result: AgentDeliveryResult;
   payloads: ReplyPayload[];
 }): { tag: StatusTagName; reason: string } {
-  return buildTerminalStatusAscii(params);
   const stopReason =
     typeof params.result.meta?.stopReason === "string" ? params.result.meta.stopReason : undefined;
   const durationMs =
@@ -161,7 +108,7 @@ function buildTerminalStatus(params: {
   if (stopReason === "tool_calls" || stopReason === "toolUse") {
     return {
       tag: "WORKING",
-      reason: "đang chờ tool hoặc continuation hoàn tất",
+      reason: "đang xử lý, dự kiến cần hơn 60 giây vì model/tool vẫn đang chạy",
     };
   }
   if (stopReason === "length" || stopReason === "max_tokens") {
@@ -173,83 +120,53 @@ function buildTerminalStatus(params: {
   if (hasErrorPayload || params.result.meta?.error || params.result.meta?.aborted) {
     return {
       tag: "STOP",
-      reason: stopReason ? `run dừng với trạng thái ${stopReason}` : "run dừng do lỗi",
+      reason: stopReason ? `đã dừng với trạng thái ${stopReason}` : "đã dừng do lỗi trong lúc xử lý",
+    };
+  }
+  const payloadState = classifyTerminalPayloadState(params.payloads);
+  if (payloadState === "waiting") {
+    return {
+      tag: "WAITING",
+      reason: "đang chờ thêm thông tin hoặc xác nhận để tiếp tục",
+    };
+  }
+  if (payloadState === "blocked") {
+    return {
+      tag: "BLOCKED",
+      reason: "đang bị chặn bởi phụ thuộc hoặc cần can thiệp thủ công",
     };
   }
   if (typeof durationMs === "number" && durationMs >= 60_000) {
     return {
-      tag: "STOP",
-      reason: `đã hoàn tất sau ${Math.max(1, Math.round(durationMs / 1_000))}s xử lý`,
+      tag: "COMPLETE",
+      reason: `đã hoàn tất sau ${Math.max(1, Math.round(durationMs / 1_000))} giây xử lý`,
     };
   }
   return {
-    tag: "STOP",
-    reason: "đã xử lý xong task hiện tại",
-  };
-}
-
-function buildNoReplyFallbackPayloadAscii(result: AgentDeliveryResult): ReplyPayload {
-  const stopReason =
-    typeof result.meta?.stopReason === "string" ? result.meta.stopReason : undefined;
-  const durationMs =
-    typeof result.meta?.durationMs === "number" ? result.meta.durationMs : undefined;
-  if (stopReason === "tool_calls" || stopReason === "toolUse") {
-    return {
-      text: [
-        "Still waiting for a tool or continuation to finish. No final reply is available yet.",
-        formatStatusTagLine("WORKING", "waiting for tool or continuation to finish"),
-      ].join("\n\n"),
-    };
-  }
-  if (result.meta?.error || result.meta?.aborted) {
-    return {
-      text: [
-        "The run ended with an error before it produced a final reply.",
-        formatStatusTagLine("STOP", "run stopped because of an error before a final reply"),
-      ].join("\n\n"),
-      isError: true,
-    };
-  }
-  if (typeof durationMs === "number" && durationMs >= 60_000) {
-    return {
-      text: [
-        `The run finished after ${Math.max(1, Math.round(durationMs / 1_000))}s but did not produce a final reply.`,
-        formatStatusTagLine(
-          "STOP",
-          `no final reply after ${Math.max(1, Math.round(durationMs / 1_000))}s of processing`,
-        ),
-      ].join("\n\n"),
-      isError: true,
-    };
-  }
-  return {
-    text: [
-      "The run finished but did not produce a final reply.",
-      formatStatusTagLine("STOP", "no final reply was produced"),
-    ].join("\n\n"),
-    isError: true,
+    tag: "COMPLETE",
+    reason: "đã hoàn tất tác vụ hiện tại",
   };
 }
 
 function buildNoReplyFallbackPayload(result: AgentDeliveryResult): ReplyPayload {
-  return buildNoReplyFallbackPayloadAscii(result);
   const stopReason =
     typeof result.meta?.stopReason === "string" ? result.meta.stopReason : undefined;
   const durationMs =
     typeof result.meta?.durationMs === "number" ? result.meta.durationMs : undefined;
   if (stopReason === "tool_calls" || stopReason === "toolUse") {
+    const reason = "đang xử lý, dự kiến cần hơn 60 giây vì model/tool vẫn đang chạy";
     return {
       text: [
-        "Đang chờ tool hoặc continuation hoàn tất, chưa có phản hồi cuối cùng.",
-        formatStatusTagLine("WORKING", "đang chờ tool hoặc continuation hoàn tất"),
+        "Đang xử lý. Chief sẽ gửi cập nhật an toàn ngay khi có trạng thái phù hợp để báo ra ngoài.",
+        formatStatusTagLine("WORKING", reason),
       ].join("\n\n"),
     };
   }
   if (result.meta?.error || result.meta?.aborted) {
     return {
       text: [
-        "Run kết thúc với lỗi trước khi tạo phản hồi cuối cùng.",
-        formatStatusTagLine("STOP", "run dừng do lỗi trước khi tạo phản hồi cuối cùng"),
+        "Lần chạy vừa kết thúc nhưng chưa có cập nhật cuối cùng sẵn sàng để gửi. Chief sẽ tổng hợp lại trạng thái an toàn hoặc yêu cầu chạy tiếp nếu cần.",
+        formatStatusTagLine("STOP", "chưa có cập nhật cuối cùng sẵn sàng để gửi do lần chạy gặp lỗi"),
       ].join("\n\n"),
       isError: true,
     };
@@ -257,19 +174,16 @@ function buildNoReplyFallbackPayload(result: AgentDeliveryResult): ReplyPayload 
   if (typeof durationMs === "number" && durationMs >= 60_000) {
     return {
       text: [
-        `Run đã kết thúc sau ${Math.max(1, Math.round(durationMs / 1_000))}s nhưng không tạo phản hồi cuối cùng.`,
-        formatStatusTagLine(
-          "STOP",
-          `không tạo phản hồi cuối cùng sau ${Math.max(1, Math.round(durationMs / 1_000))}s xử lý`,
-        ),
+        "Lần chạy đã kết thúc nhưng chưa tạo được cập nhật cuối cùng sẵn sàng để gửi. Chief sẽ tổng hợp lại trạng thái an toàn hoặc yêu cầu chạy tiếp nếu cần.",
+        formatStatusTagLine("STOP", "chưa có cập nhật cuối cùng sẵn sàng để gửi"),
       ].join("\n\n"),
       isError: true,
     };
   }
   return {
     text: [
-      "Run đã kết thúc nhưng không tạo phản hồi cuối cùng.",
-      formatStatusTagLine("STOP", "không tạo phản hồi cuối cùng"),
+      "Lần chạy đã kết thúc nhưng chưa có cập nhật cuối cùng sẵn sàng để gửi. Chief sẽ tổng hợp lại trạng thái an toàn hoặc yêu cầu chạy tiếp nếu cần.",
+      formatStatusTagLine("STOP", "chưa có cập nhật cuối cùng sẵn sàng để gửi"),
     ].join("\n\n"),
     isError: true,
   };

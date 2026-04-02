@@ -216,6 +216,18 @@ function deriveCanonicalTelegramMessageId(taskId: string): string | undefined {
   return trimmed.slice(index + 1).trim() || undefined;
 }
 
+function isDuplicatePaperclipIssueReceiptId(receiptId: string | undefined, issueId: string | undefined): boolean {
+  const normalizedReceiptId = receiptId?.trim() ?? "";
+  const normalizedIssueId = issueId?.trim() ?? "";
+  if (!normalizedReceiptId || !normalizedIssueId) {
+    return false;
+  }
+  if (normalizedReceiptId === `paperclip|${normalizedIssueId}|${normalizedIssueId}`) {
+    return true;
+  }
+  return normalizedReceiptId === `paperclip|${normalizedIssueId}|agent:chief:paperclip:issue:${normalizedIssueId}`;
+}
+
 function parsePaperclipTrackedIssueDescription(description: string | undefined): {
   intentSummary?: string;
   originalRequest?: string;
@@ -689,10 +701,9 @@ async function main() {
     }
     const issueStatus = mapPaperclipIssueToReceiptStatus(issue?.status);
     if (issueStatus && receipt.status !== "awaiting_input") {
-      if (
-        receipt.sourceType === "paperclip" &&
-        receipt.receiptId === `paperclip|${issueId}|${issueId}`
-      ) {
+      const duplicatePaperclipIssueReceipt =
+        receipt.sourceType === "paperclip" && isDuplicatePaperclipIssueReceiptId(receipt.receiptId, issueId);
+      if (duplicatePaperclipIssueReceipt) {
         if (receipt.status !== "ignored") {
           receipt.status = "ignored";
           receipt.ignoreReason = DUPLICATE_PAPERCLIP_REASON;
@@ -716,6 +727,12 @@ async function main() {
         const completedAt = parseTimestampMs(issue?.completedAt) ?? parseTimestampMs(issue?.updatedAt) ?? receipt.lastProgressAt;
         if (receipt.completedAt !== completedAt) {
           receipt.completedAt = completedAt;
+          changed = true;
+        }
+      } else if (duplicatePaperclipIssueReceipt) {
+        const ignoredAt = parseTimestampMs(issue?.updatedAt) ?? receipt.lastProgressAt;
+        if (receipt.completedAt !== ignoredAt) {
+          receipt.completedAt = ignoredAt;
           changed = true;
         }
       }

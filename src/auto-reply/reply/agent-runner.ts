@@ -361,6 +361,7 @@ export async function runReplyAgent(params: {
   let disposeChiefEventProgressListener: (() => void) | undefined;
   const runtimeOpts: GetReplyOptions = { ...(opts ?? {}) };
   const shouldTrackChiefTask = (runtimeOpts.chiefTaskTrackingMode ?? "tracked") !== "skip";
+  const deferChiefTaskResultTracking = runtimeOpts.deferChiefTaskResultTracking === true;
   const mergeChiefProgressSnapshot = (
     args: Partial<{
       phase: string;
@@ -451,6 +452,9 @@ export async function runReplyAgent(params: {
     args: Parameters<typeof recordChiefTaskResult>[0],
   ): Promise<void> => {
     if (!shouldTrackChiefTask) {
+      return;
+    }
+    if (deferChiefTaskResultTracking) {
       return;
     }
     await recordChiefTaskResult(args);

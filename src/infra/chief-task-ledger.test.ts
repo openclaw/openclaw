@@ -409,6 +409,122 @@ describe("chief-task-ledger", () => {
     expect(inboundLedger.receipts[receipt?.receiptId ?? ""]?.status).toBe("done");
   });
 
+  it("cascades a terminal chief result to sibling tasks that share the same receipt or paperclip issue", async () => {
+    const { cfg } = await makeConfig();
+    const sessionKey = "agent:chief:telegram:direct:523353610";
+    const receipt = await recordInboundReceiptReceived({
+      cfg,
+      agentId: "chief",
+      sourceType: "telegram",
+      channel: "telegram",
+      accountId: "default",
+      originatingTo: "telegram:523353610",
+      messageId: "2002",
+      sessionKey,
+      threadKey: sessionKey,
+      bodyPreview: "Hoàn tất task Telegram này.",
+      bodyText: "Hoàn tất task Telegram này.",
+      sourceMessageId: "2002",
+    });
+
+    const rootTask = await recordChiefTaskStart({
+      cfg,
+      agentId: "chief",
+      sessionKey,
+      sessionId: "session-2002",
+      prompt: "Hoàn tất task Telegram này.",
+      sourceChannel: "telegram",
+      receiptId: receipt?.receiptId,
+      sourceMessageId: "2002",
+      paperclipIssueId: "OPE-SHARED-2002",
+      nowMs: 5_000,
+    });
+
+    const ledgerPath = resolveChiefTaskLedgerPath(cfg);
+    const seededLedger = await loadChiefTaskLedgerForTest(ledgerPath);
+    seededLedger.tasks["chief:sibling-2002"] = {
+      ...seededLedger.tasks[rootTask?.taskId ?? ""],
+      taskId: "chief:sibling-2002",
+      parentTaskId: rootTask?.taskId,
+      status: "in_progress",
+      phase: "executing",
+      createdAt: 6_000,
+      updatedAt: 6_000,
+      lastProgressAt: 6_000,
+      latestMilestone: "Implementation pass completed; quality_guard review started.",
+      verificationEvidence: [],
+    };
+    seededLedger.activeBySessionKey[sessionKey] = "chief:sibling-2002";
+    await fs.promises.writeFile(ledgerPath, `${JSON.stringify(seededLedger, null, 2)}\n`, "utf-8");
+
+    const settled = await recordChiefTaskResult({
+      cfg,
+      agentId: "chief",
+      taskId: rootTask?.taskId,
+      receiptId: receipt?.receiptId,
+      sessionKey,
+      payloads: [{ text: "Đã hoàn tất.\n\n`[COMPLETE]: đã hoàn thành tác vụ hiện tại`" }],
+      deliveryConfirmed: true,
+      nowMs: 8_000,
+    });
+
+    expect(settled?.status).toBe("done");
+
+    const reconciledLedger = await loadChiefTaskLedgerForTest(ledgerPath);
+    expect(reconciledLedger.tasks["chief:sibling-2002"]?.status).toBe("done");
+    expect(reconciledLedger.tasks["chief:sibling-2002"]?.lastResponsePreview).toContain(
+      "[COMPLETE]:",
+    );
+    expect(reconciledLedger.tasks["chief:sibling-2002"]?.verificationEvidence).toContain(
+      "related_task_terminalized",
+    );
+    expect(reconciledLedger.activeBySessionKey[sessionKey]).toBeUndefined();
+  });
+
+  it("treats non-complete STOP payloads as blocked instead of done", async () => {
+    const { cfg } = await makeConfig();
+    const sessionKey = "agent:chief:telegram:direct:523353610";
+    const receipt = await recordInboundReceiptReceived({
+      cfg,
+      agentId: "chief",
+      sourceType: "telegram",
+      channel: "telegram",
+      accountId: "default",
+      originatingTo: "telegram:523353610",
+      messageId: "2003",
+      sessionKey,
+      threadKey: sessionKey,
+      bodyPreview: "Kiểm tra task lỗi.",
+      bodyText: "Kiểm tra task lỗi.",
+      sourceMessageId: "2003",
+    });
+
+    const started = await recordChiefTaskStart({
+      cfg,
+      agentId: "chief",
+      sessionKey,
+      sessionId: "session-2003",
+      prompt: "Kiểm tra task lỗi.",
+      sourceChannel: "telegram",
+      receiptId: receipt?.receiptId,
+      sourceMessageId: "2003",
+      nowMs: 5_000,
+    });
+
+    const stopped = await recordChiefTaskResult({
+      cfg,
+      agentId: "chief",
+      taskId: started?.taskId,
+      receiptId: receipt?.receiptId,
+      sessionKey,
+      payloads: [{ text: "⚠️ Agent finished without generating a deliverable reply.\n\n`[STOP]: đã dừng do lỗi trong lúc xử lý`" }],
+      deliveryConfirmed: true,
+      nowMs: 8_000,
+    });
+
+    expect(stopped?.status).toBe("blocked");
+  });
+
   it("reuses the matched task id instead of creating a new task when continuity attaches", async () => {
     const { cfg } = await makeConfig();
     const sessionKey = "agent:chief:telegram:direct:9001";

@@ -597,6 +597,8 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage: expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      fallbackText: findings,
+      completionStatus: outcome.status,
       signal: params.signal,
     });
     didAnnounce = delivery.delivered;

@@ -22,6 +22,7 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { recordChiefTaskResult } from "../../infra/chief-task-ledger.js";
 import { recordInboundReceiptIgnored } from "../../infra/inbound-receipt-ledger.js";
 import {
   logMessageProcessed,
@@ -82,6 +83,7 @@ function loadTtsRuntime() {
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
+const CHIEF_PROGRESS_STATUS_LINE_RE = /^`?\[(WORKING|STATUS|DONE|NEXT|RISK)\]:/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
@@ -112,6 +114,17 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
     return true;
   }
   return AUDIO_HEADER_RE.test(trimmed);
+};
+
+const isPureChiefProgressStatusMessage = (text: string): boolean => {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) =>
+      line.startsWith("`") && line.endsWith("`") && line.length > 2 ? line.slice(1, -1).trim() : line,
+    );
+  return lines.length > 0 && lines.every((line) => CHIEF_PROGRESS_STATUS_LINE_RE.test(line));
 };
 
 const resolveSessionStoreLookup = (
@@ -208,6 +221,32 @@ export async function dispatchReplyFromConfig(params: {
       state: "idle",
       reason,
     });
+  };
+  const chiefTaskAgentId = resolveSessionAgentId({
+    sessionKey: ctx.SessionKey,
+    config: cfg,
+  });
+  const maybeRecordChiefTaskDelivery = async (params: {
+    payloads: ReplyPayload[];
+    deliveryConfirmed: boolean;
+    verificationEvidence?: string[];
+  }) => {
+    if (!ctx.SessionKey) {
+      return;
+    }
+    try {
+      await recordChiefTaskResult({
+        cfg,
+        agentId: chiefTaskAgentId,
+        receiptId: ctx.InboundReceiptId,
+        sessionKey: ctx.SessionKey,
+        payloads: params.payloads,
+        deliveryConfirmed: params.deliveryConfirmed,
+        verificationEvidence: params.verificationEvidence,
+      });
+    } catch (error) {
+      logVerbose(`dispatch-from-config: chief task result sync failed: ${String(error)}`);
+    }
   };
 
   if (shouldSkipDuplicateInbound(ctx)) {
@@ -631,6 +670,7 @@ export async function dispatchReplyFromConfig(params: {
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
+    let blockDeliveryConfirmed = false;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -676,6 +716,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        deferChiefTaskResultTracking: true,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
@@ -711,7 +752,11 @@ export async function dispatchReplyFromConfig(params: {
             // Accumulate block text for TTS generation after streaming.
             // Exclude compaction status notices — they are informational UI
             // signals and must not be synthesised into the spoken reply.
-            if (payload.text && !payload.isCompactionNotice) {
+            if (
+              payload.text &&
+              !payload.isCompactionNotice &&
+              !isPureChiefProgressStatusMessage(payload.text)
+            ) {
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
@@ -728,8 +773,9 @@ export async function dispatchReplyFromConfig(params: {
             });
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              blockDeliveryConfirmed = true;
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              blockDeliveryConfirmed = dispatcher.sendBlockReply(ttsPayload) || blockDeliveryConfirmed;
             }
           };
           return run();
@@ -838,6 +884,26 @@ export async function dispatchReplyFromConfig(params: {
         );
       }
     }
+
+    const finalReplyDeliveryConfirmed = queuedFinal || routedFinalCount > 0;
+    const chiefTaskPayloads =
+      replies.length > 0
+        ? replies
+        : accumulatedBlockText.trim()
+          ? [{ text: accumulatedBlockText.trim() }]
+          : [];
+    const chiefTaskDeliveryConfirmed =
+      replies.length > 0
+        ? finalReplyDeliveryConfirmed
+        : blockDeliveryConfirmed || finalReplyDeliveryConfirmed;
+    await maybeRecordChiefTaskDelivery({
+      payloads: chiefTaskPayloads,
+      deliveryConfirmed: chiefTaskDeliveryConfirmed,
+      verificationEvidence: [
+        replies.length > 0 ? "dispatcher_final_delivery" : "dispatcher_block_delivery",
+        chiefTaskDeliveryConfirmed ? "delivery_confirmed_by_dispatch" : "delivery_pending_by_dispatch",
+      ],
+    });
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;

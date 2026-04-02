@@ -107,6 +107,8 @@ export type GetReplyOptions = {
   lastUserProgressReportAt?: number;
   /** Current release gate state for this tracked task. */
   releaseGateStatus?: "not_required" | "required" | "reviewing" | "passed" | "blocked";
+  /** When true, defer chief task terminalization until the dispatcher confirms outbound delivery. */
+  deferChiefTaskResultTracking?: boolean;
   /** Structured continuity decision for the current inbound turn. */
   continuityDecision?: "direct_answer" | "attach_existing_task" | "new_task_candidate";
   /** True when the tracked work was created only after explicit user approval. */

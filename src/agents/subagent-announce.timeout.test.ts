@@ -256,12 +256,15 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
   });
 
-  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
+  it("retries gateway timeout for externally delivered completion announces before falling back to direct send", async () => {
     vi.useFakeTimers();
     try {
       callGatewayImpl = async (request) => {
         if (request.method === "chat.history") {
           return { messages: [] };
+        }
+        if (request.method === "send") {
+          return { messageId: "fallback-message" };
         }
         throw new Error("gateway timeout after 90000ms");
       };
@@ -274,12 +277,16 @@ describe("subagent announce timeout config", () => {
         expectsCompletionMessage: true,
       });
       await vi.runAllTimersAsync();
-      await expect(announcePromise).resolves.toBe(false);
+      await expect(announcePromise).resolves.toBe(true);
 
       const directAgentCalls = gatewayCalls.filter(
         (call) => call.method === "agent" && call.expectFinal === true,
       );
       expect(directAgentCalls).toHaveLength(4);
+      const sendCalls = gatewayCalls.filter((call) => call.method === "send");
+      expect(sendCalls).toHaveLength(1);
+      expect(String(sendCalls[0]?.params?.message ?? "")).toContain("done");
+      expect(String(sendCalls[0]?.params?.message ?? "")).toContain("`[COMPLETE]:");
     } finally {
       vi.useRealTimers();
     }

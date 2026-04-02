@@ -78,6 +78,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
 }));
+const chiefTaskLedgerMocks = vi.hoisted(() => ({
+  recordChiefTaskResult: vi.fn(async () => null),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -165,6 +168,13 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
   return {
     ...actual,
     resolveStorePath: sessionStoreMocks.resolveStorePath,
+  };
+});
+vi.mock("../../infra/chief-task-ledger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/chief-task-ledger.js")>();
+  return {
+    ...actual,
+    recordChiefTaskResult: (params: unknown) => chiefTaskLedgerMocks.recordChiefTaskResult(params),
   };
 });
 
@@ -359,6 +369,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    chiefTaskLedgerMocks.recordChiefTaskResult.mockClear();
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -388,6 +399,98 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("records chief task delivery only after the final reply is queued", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:chief:telegram:999",
+      InboundReceiptId: "telegram|default|telegram:999|main|1431|chief",
+      MessageSid: "msg-chief-final",
+    });
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions) =>
+        ({
+          text: "Đã xử lý xong.\n\n`[COMPLETE]: đã hoàn thành tác vụ hiện tại`",
+        }) satisfies ReplyPayload,
+    );
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        deferChiefTaskResultTracking: true,
+      }),
+      undefined,
+    );
+    expect(chiefTaskLedgerMocks.recordChiefTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:chief:telegram:999",
+        receiptId: "telegram|default|telegram:999|main|1431|chief",
+        deliveryConfirmed: true,
+        payloads: [
+          expect.objectContaining({
+            text: expect.stringContaining("[COMPLETE]:"),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("uses non-progress block content to close chief tasks when block streaming finishes without a final payload", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:chief:telegram:999",
+      InboundReceiptId: "telegram|default|telegram:999|main|1483|chief",
+      MessageSid: "msg-chief-block",
+    });
+
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({
+        text: [
+          "`[WORKING]: đang xử lý, dự kiến cần hơn 60s vì model/tool vẫn đang chạy`",
+          "`[STATUS]: phase=executing; owner=chief; active=chief`",
+        ].join("\n"),
+      });
+      await opts?.onBlockReply?.({
+        text: "Đã hoàn tất phần còn lại.\n\n`[COMPLETE]: đã hoàn thành tác vụ hiện tại`",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(chiefTaskLedgerMocks.recordChiefTaskResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:chief:telegram:999",
+        receiptId: "telegram|default|telegram:999|main|1483|chief",
+        deliveryConfirmed: true,
+        payloads: [
+          expect.objectContaining({
+            text: expect.stringContaining("[COMPLETE]:"),
+          }),
+        ],
+      }),
+    );
+    const chiefResult =
+      chiefTaskLedgerMocks.recordChiefTaskResult.mock.calls.at(-1)?.[0] as
+        | { payloads?: Array<{ text?: string }> }
+        | undefined;
+    expect(chiefResult?.payloads?.[0]?.text).not.toContain("[WORKING]:");
   });
 
   it("routes when OriginatingChannel differs from Provider", async () => {

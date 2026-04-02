@@ -36,6 +36,12 @@ import type { SpawnSubagentMode } from "./subagent-spawn.js";
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+const SUBAGENT_COMPLETION_SEND_FALLBACK_TIMEOUT_MS = 15_000;
+
+type TerminalStatusTagName = "STOP" | "COMPLETE";
+
+const TERMINAL_STATUS_TAG_RE =
+  /^\[(STOP|WORKING|WAITING|CHECKING|LEARNING|FIXING|COMPLETE|BLOCKED)\]:\s*(.+)$/i;
 
 const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
   ? ([8, 16, 32] as const)
@@ -70,6 +76,59 @@ function summarizeDeliveryError(error: unknown): string {
   } catch {
     return "error";
   }
+}
+
+function extractLastNonEmptyLine(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.at(-1) ?? "";
+}
+
+function hasTerminalStatusTag(text: string | undefined): boolean {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const lastLine = extractLastNonEmptyLine(text);
+  if (!lastLine) {
+    return false;
+  }
+  const normalized =
+    lastLine.startsWith("`") && lastLine.endsWith("`") && lastLine.length > 2
+      ? lastLine.slice(1, -1).trim()
+      : lastLine;
+  return TERMINAL_STATUS_TAG_RE.test(normalized);
+}
+
+function formatTerminalStatusTag(tag: TerminalStatusTagName, reason: string): string {
+  return `\`[${tag}]: ${reason.trim()}\``;
+}
+
+function buildCompletionSendFallbackMessage(params: {
+  text?: string;
+  completionStatus?: "ok" | "timeout" | "error" | "unknown";
+}): string | undefined {
+  const normalized =
+    typeof params.text === "string" ? params.text.replace(/\r\n?/g, "\n").trim() : "";
+  const isComplete = params.completionStatus === "ok";
+  const statusLine = formatTerminalStatusTag(
+    isComplete ? "COMPLETE" : "STOP",
+    isComplete
+      ? "đã hoàn thành và được gửi qua đường dự phòng khi announce nội bộ không chốt được reply cuối"
+      : params.completionStatus === "timeout"
+        ? "announce nội bộ đã hết thời gian; đang gửi kết quả an toàn gần nhất"
+        : params.completionStatus === "error"
+          ? "announce nội bộ gặp lỗi; đang gửi kết quả an toàn gần nhất"
+          : "đang gửi kết quả an toàn gần nhất từ đường dự phòng",
+  );
+  if (!normalized) {
+    return statusLine;
+  }
+  if (hasTerminalStatusTag(normalized)) {
+    return normalized;
+  }
+  return [normalized, statusLine].join("\n\n");
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -524,6 +583,86 @@ async function sendSubagentAnnounceDirectly(params: {
   }
 }
 
+async function sendSubagentCompletionFallbackDirectly(params: {
+  targetRequesterSessionKey: string;
+  fallbackText?: string;
+  completionStatus?: "ok" | "timeout" | "error" | "unknown";
+  completionDirectOrigin?: DeliveryContext;
+  directOrigin?: DeliveryContext;
+  requesterIsSubagent: boolean;
+  directIdempotencyKey: string;
+  signal?: AbortSignal;
+}): Promise<SubagentAnnounceDeliveryResult> {
+  if (params.signal?.aborted || params.requesterIsSubagent) {
+    return {
+      delivered: false,
+      path: "none",
+    };
+  }
+  const cfg = loadConfig();
+  const canonicalRequesterSessionKey = resolveRequesterStoreKey(
+    cfg,
+    params.targetRequesterSessionKey,
+  );
+  const origin =
+    normalizeDeliveryContext(params.completionDirectOrigin) ??
+    normalizeDeliveryContext(params.directOrigin);
+  const channel = typeof origin?.channel === "string" ? origin.channel.trim() : "";
+  const to = typeof origin?.to === "string" ? origin.to.trim() : "";
+  if (!channel || !to || isInternalMessageChannel(channel)) {
+    return {
+      delivered: false,
+      path: "none",
+    };
+  }
+  const message = buildCompletionSendFallbackMessage({
+    text: params.fallbackText,
+    completionStatus: params.completionStatus,
+  });
+  if (!message) {
+    return {
+      delivered: false,
+      path: "none",
+    };
+  }
+  const threadId =
+    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  const timeoutMs = Math.min(
+    resolveSubagentAnnounceTimeoutMs(cfg),
+    SUBAGENT_COMPLETION_SEND_FALLBACK_TIMEOUT_MS,
+  );
+  try {
+    await runAnnounceDeliveryWithRetry({
+      operation: "completion direct send fallback",
+      signal: params.signal,
+      run: async () =>
+        await callGateway({
+          method: "send",
+          params: {
+            sessionKey: canonicalRequesterSessionKey,
+            channel,
+            accountId: origin?.accountId,
+            to,
+            threadId,
+            message,
+            idempotencyKey: `${params.directIdempotencyKey}:send-fallback`,
+          },
+          timeoutMs,
+        }),
+    });
+    return {
+      delivered: true,
+      path: "direct",
+    };
+  } catch (err) {
+    return {
+      delivered: false,
+      path: "direct",
+      error: summarizeDeliveryError(err),
+    };
+  }
+}
+
 export async function deliverSubagentAnnouncement(params: {
   requesterSessionKey: string;
   announceId?: string;
@@ -542,9 +681,11 @@ export async function deliverSubagentAnnouncement(params: {
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  fallbackText?: string;
+  completionStatus?: "ok" | "timeout" | "error" | "unknown";
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
-  return await runSubagentAnnounceDispatch({
+  const delivery = await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
     queue: async () =>
@@ -578,4 +719,32 @@ export async function deliverSubagentAnnouncement(params: {
         bestEffortDeliver: params.bestEffortDeliver,
       }),
   });
+  if (
+    delivery.delivered ||
+    !params.expectsCompletionMessage ||
+    params.requesterIsSubagent ||
+    params.signal?.aborted
+  ) {
+    return delivery;
+  }
+  const fallback = await sendSubagentCompletionFallbackDirectly({
+    targetRequesterSessionKey: params.targetRequesterSessionKey,
+    fallbackText: params.fallbackText,
+    completionStatus: params.completionStatus,
+    completionDirectOrigin: params.completionDirectOrigin,
+    directOrigin: params.directOrigin,
+    requesterIsSubagent: params.requesterIsSubagent,
+    directIdempotencyKey: params.directIdempotencyKey,
+    signal: params.signal,
+  });
+  if (fallback.delivered) {
+    defaultRuntime.log(
+      `[warn] Subagent completion announce fell back to direct send for requester ${params.targetRequesterSessionKey}`,
+    );
+    return {
+      ...fallback,
+      phases: delivery.phases,
+    };
+  }
+  return delivery;
 }

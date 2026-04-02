@@ -834,6 +834,27 @@ function requiresConfirmedOutboundDelivery(task: Pick<ChiefTaskRecord, "source" 
   return task.source === "telegram" && typeof task.receiptId === "string" && task.receiptId.trim().length > 0;
 }
 
+function shouldCascadeChiefTaskResult(anchor: ChiefTaskRecord, candidate: ChiefTaskRecord): boolean {
+  if (anchor.taskId === candidate.taskId || !isResumeCandidate(candidate.status)) {
+    return false;
+  }
+  if (
+    anchor.receiptId?.trim() &&
+    candidate.receiptId?.trim() &&
+    anchor.receiptId.trim() === candidate.receiptId.trim()
+  ) {
+    return true;
+  }
+  if (
+    anchor.paperclipIssueId?.trim() &&
+    candidate.paperclipIssueId?.trim() &&
+    anchor.paperclipIssueId.trim() === candidate.paperclipIssueId.trim()
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function isChiefContinuationPrompt(prompt: string): boolean {
   return prompt.trimStart().startsWith(CHIEF_CONTINUATION_PROMPT_PREFIX);
 }
@@ -862,6 +883,9 @@ function inferChiefTaskStatusFromPayloads(payloads: ReplyLike[]): ChiefTaskStatu
   }
   if (/\[\[?stop\]?\]\s*:?\s*completed\b/i.test(preview)) {
     return "done";
+  }
+  if (/\[\[?stop\]?\]\s*:/i.test(preview)) {
+    return "blocked";
   }
   if (
     /\b(awaiting input|need more info|need more information|need clarification|please provide|can you clarify|could you clarify|cần thêm thông tin|cần làm rõ|hãy cung cấp|xin thêm)\b/i.test(
@@ -1530,6 +1554,35 @@ export async function recordChiefTaskResult(params: {
     } else {
       ledger.activeBySessionKey[sessionKey] = taskId;
     }
+    const relatedTasks = !isResumeCandidate(status)
+      ? Object.values(ledger.tasks)
+          .filter((candidate): candidate is ChiefTaskRecord => Boolean(candidate))
+          .filter((candidate) => shouldCascadeChiefTaskResult(next, candidate))
+      : [];
+    for (const relatedTask of relatedTasks) {
+      const cascaded: ChiefTaskRecord = {
+        ...relatedTask,
+        status: next.status,
+        phase: next.phase,
+        updatedAt: nowMs,
+        lastProgressAt: nowMs,
+        activeAgents: next.status === "done" ? ["chief"] : relatedTask.activeAgents,
+        currentOwner: "chief",
+        lastResponsePreview: next.lastResponsePreview ?? relatedTask.lastResponsePreview,
+        verificationEvidence: normalizeVerificationEvidence([
+          ...(relatedTask.verificationEvidence ?? []),
+          ...(next.verificationEvidence ?? []),
+          "related_task_terminalized",
+        ]),
+        latestMilestone: next.latestMilestone,
+        releaseGateStatus: next.releaseGateStatus,
+        lastUserProgressReportAt: next.lastUserProgressReportAt ?? relatedTask.lastUserProgressReportAt,
+        nextStep: next.nextStep,
+        ...(next.status === "done" ? { completedAt: nowMs, lastError: undefined } : {}),
+      };
+      ledger.tasks[relatedTask.taskId] = cascaded;
+      clearSessionActiveMapping(ledger, relatedTask.sessionKey, relatedTask.taskId);
+    }
     await writeLedger(filePath, ledger);
     await syncInboundReceiptFromChiefTask({
       cfg: params.cfg,
@@ -1555,6 +1608,36 @@ export async function recordChiefTaskResult(params: {
       },
     });
     await syncPaperclipIssueForTask(next);
+    for (const relatedTask of relatedTasks) {
+      const cascaded = ledger.tasks[relatedTask.taskId];
+      if (!cascaded) {
+        continue;
+      }
+      await syncInboundReceiptFromChiefTask({
+        cfg: params.cfg,
+        task: {
+          taskId: cascaded.taskId,
+          agentId: cascaded.agentId,
+          sessionKey: cascaded.sessionKey,
+          source: cascaded.source,
+          promptPreview: cascaded.promptPreview,
+          sourceMessageId: cascaded.sourceMessageId,
+          paperclipIssueId: cascaded.paperclipIssueId,
+          receiptId: cascaded.receiptId,
+          status: cascaded.status,
+          phase: cascaded.phase,
+          lastProgressAt: cascaded.lastProgressAt,
+          lastError: cascaded.lastError,
+          runAttempts: cascaded.runAttempts,
+          recoveryCount: cascaded.recoveryCount,
+          threadKey: cascaded.threadKey,
+          continuityDecision: cascaded.continuityDecision,
+          openIntentKey: cascaded.openIntentKey,
+          createdByApproval: cascaded.createdByApproval,
+        },
+      });
+      await syncPaperclipIssueForTask(cascaded);
+    }
     return next;
   });
 }

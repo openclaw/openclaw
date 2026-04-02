@@ -741,6 +741,37 @@ function inferReceiptStatusFromChiefTask(task: ReceiptTaskSync): InboundReceiptS
   return "executing";
 }
 
+function isTerminalReceiptStatus(status: InboundReceiptStatus | undefined): boolean {
+  return Boolean(status && (isCompleteTerminalStatus(status) || isVisibleTerminalStatus(status)));
+}
+
+function shouldPreserveReceiptBinding(
+  existing: InboundReceiptRecord,
+  task: ReceiptTaskSync,
+  nextStatus: InboundReceiptStatus,
+): boolean {
+  const existingTaskId = existing.taskId?.trim();
+  const incomingTaskId = task.taskId.trim();
+  if (!existingTaskId || existingTaskId === incomingTaskId) {
+    return false;
+  }
+  if (isTerminalReceiptStatus(nextStatus)) {
+    return false;
+  }
+  if (isTerminalReceiptStatus(existing.status)) {
+    return true;
+  }
+  if (existing.sourceType !== "telegram") {
+    return false;
+  }
+  const receiptMessageId = existing.sourceMessageId?.trim() || existing.messageId?.trim();
+  const incomingSourceMessageId = task.sourceMessageId?.trim();
+  if (!receiptMessageId) {
+    return false;
+  }
+  return !incomingSourceMessageId || incomingSourceMessageId !== receiptMessageId;
+}
+
 export async function syncInboundReceiptFromChiefTask(params: {
   cfg: OpenClawConfig;
   task: ReceiptTaskSync;
@@ -792,6 +823,7 @@ export async function syncInboundReceiptFromChiefTask(params: {
       status === "task_created"
         ? chooseProgressStatus(base.status, "task_created")
         : status;
+    const preserveBinding = shouldPreserveReceiptBinding(base, params.task, nextStatus);
     const terminal = nextStatus === "done" || nextStatus === "ignored";
     const visibleTerminal = nextStatus === "blocked" || nextStatus === "awaiting_input";
     const continuityDecision = chooseStrongestContinuityDecision(
@@ -811,26 +843,32 @@ export async function syncInboundReceiptFromChiefTask(params: {
       channel: base.channel || (params.task.source === "paperclip" ? "paperclip" : "telegram"),
       messageId: base.messageId || params.task.sourceMessageId?.trim() || issueId || params.task.taskId,
       sessionKey: params.task.sessionKey || base.sessionKey,
-      taskId: params.task.taskId,
-      status: nextStatus,
-      lastProgressAt: params.task.lastProgressAt ?? nowMs,
+      taskId: preserveBinding ? base.taskId : params.task.taskId,
+      status: preserveBinding ? base.status : nextStatus,
+      lastProgressAt:
+        preserveBinding && isTerminalReceiptStatus(base.status)
+          ? base.lastProgressAt
+          : params.task.lastProgressAt ?? nowMs,
       lastError: normalizePreview(params.task.lastError, 400) ?? base.lastError,
       recoveryCount: Math.max(base.recoveryCount, recoveryCount),
       replayedAt:
         recoveryCount > 0 ? Math.max(base.replayedAt ?? 0, params.task.lastProgressAt ?? nowMs) : base.replayedAt,
       completedAt:
-        terminal || visibleTerminal
+        preserveBinding && isTerminalReceiptStatus(base.status)
+          ? base.completedAt
+          : terminal || visibleTerminal
           ? Math.max(base.completedAt ?? 0, params.task.lastProgressAt ?? nowMs)
           : base.completedAt,
       bodyPreview: normalizePreview(params.task.promptPreview) ?? base.bodyPreview,
       sourceMessageId: params.task.sourceMessageId?.trim() || base.sourceMessageId,
-      paperclipIssueId: issueId || base.paperclipIssueId,
+      paperclipIssueId: preserveBinding ? base.paperclipIssueId : issueId || base.paperclipIssueId,
       bodyText: normalizeBodyText(params.task.bodyText) ?? base.bodyText,
       threadKey: normalizeThreadKey(params.task.threadKey) ?? base.threadKey,
       continuityDecision,
       proposalStatus,
-      matchedTaskId: base.matchedTaskId ?? params.task.taskId,
-      matchedPaperclipIssueId: issueId || base.matchedPaperclipIssueId,
+      matchedTaskId: preserveBinding ? base.matchedTaskId : base.matchedTaskId ?? params.task.taskId,
+      matchedPaperclipIssueId:
+        preserveBinding ? base.matchedPaperclipIssueId : issueId || base.matchedPaperclipIssueId,
       openIntentKey: normalizePreview(params.task.openIntentKey, 160) ?? base.openIntentKey,
     };
   });

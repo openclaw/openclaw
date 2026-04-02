@@ -330,4 +330,70 @@ describe("inbound-receipt-ledger", () => {
     expect(receipt?.matchedPaperclipIssueId).toBe("OPE-NEW-1");
     expect(receipt?.paperclipIssueId).toBe("OPE-NEW-1");
   });
+
+  it("does not let a child chief task downgrade a terminal telegram receipt", async () => {
+    const { cfg } = await makeConfig();
+    const sessionKey = "agent:chief:telegram:direct:523353610";
+    const received = await recordInboundReceiptReceived({
+      cfg,
+      agentId: "chief",
+      sourceType: "telegram",
+      channel: "telegram",
+      accountId: "default",
+      originatingTo: "telegram:523353610",
+      messageId: "1503",
+      sessionKey,
+      threadKey: sessionKey,
+      bodyPreview: "Finish the tracked Telegram task.",
+      bodyText: "Finish the tracked Telegram task.",
+      sourceMessageId: "1503",
+    });
+
+    const task = await recordChiefTaskStart({
+      cfg,
+      agentId: "chief",
+      sessionKey,
+      prompt: "Finish the tracked Telegram task.",
+      sourceChannel: "telegram",
+      sourceMessageId: "1503",
+      receiptId: received?.receiptId,
+      nowMs: 1_000,
+    });
+
+    await recordChiefTaskResult({
+      cfg,
+      agentId: "chief",
+      taskId: task?.taskId,
+      receiptId: received?.receiptId,
+      sessionKey,
+      payloads: [{ text: "[COMPLETE]: done" }],
+      deliveryConfirmed: true,
+      nowMs: 3_000,
+    });
+
+    await syncInboundReceiptFromChiefTask({
+      cfg,
+      task: {
+        taskId: "chief:child-followup",
+        agentId: "chief",
+        sessionKey,
+        source: "telegram",
+        promptPreview: "Internal follow-up child task.",
+        receiptId: received?.receiptId,
+        paperclipIssueId: "OPE-CHILD-1",
+        status: "in_progress",
+        phase: "executing",
+        lastProgressAt: 4_000,
+      },
+      stage: "executing",
+    });
+
+    const ledger = await loadInboundReceiptLedgerForTest(resolveInboundReceiptLedgerPath(cfg));
+    const receipt = ledger.receipts[received?.receiptId ?? ""];
+    expect(receipt?.status).toBe("done");
+    expect(receipt?.taskId).toBe(task?.taskId);
+    expect(receipt?.paperclipIssueId).toBe("OPE-TEST-1");
+    expect(receipt?.sourceMessageId).toBe("1503");
+    expect(receipt?.completedAt).toBe(3_000);
+  });
 });

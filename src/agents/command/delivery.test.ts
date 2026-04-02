@@ -210,11 +210,11 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
     expect(delivered.payloads[0]?.text ?? "").toContain("Ready.");
     expect(delivered.payloads[0]?.text ?? "").toContain(
-      "`[COMPLETE]: completed after 65s of processing`",
+      "`[COMPLETE]: đã hoàn tất sau 65 giây xử lý`",
     );
   });
 
-  it("synthesizes a tagged fallback when a run ends without payloads", async () => {
+  it("synthesizes a user-safe tagged fallback when a run ends without payloads", async () => {
     const runtime = {
       log: vi.fn(),
     };
@@ -239,8 +239,40 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(delivered.deliveryConfirmed).toBe(true);
-    expect(delivered.payloads[0]?.text ?? "").toContain("did not produce a final reply");
+    expect(delivered.payloads[0]?.text ?? "").toContain("chưa tạo được cập nhật cuối cùng sẵn sàng để gửi");
+    expect(delivered.payloads[0]?.text ?? "").not.toContain("did not produce a final reply");
+    expect(delivered.payloads[0]?.text ?? "").not.toContain("no final reply was produced");
     expect(delivered.payloads[0]?.text ?? "").toContain("`[STOP]:");
+  });
+
+  it("emits WORKING status with Vietnamese diacritics for tool-call continuations", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        channel: "slack",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Đang xử lý." }],
+      result: createResult({
+        meta: {
+          durationMs: 61_000,
+          stopReason: "tool_calls",
+        },
+      }),
+    });
+
+    expect(delivered.payloads[0]?.text ?? "").toContain(
+      "`[WORKING]: đang xử lý, dự kiến cần hơn 60 giây vì model/tool vẫn đang chạy`",
+    );
+    expect(delivered.payloads[0]?.text ?? "").not.toContain("dang xu ly");
   });
 
   it("treats empty payloads as delivered when a messaging tool already sent the reply", async () => {

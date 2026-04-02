@@ -1739,7 +1739,7 @@ describe("subagent announce formatting", () => {
     });
   });
 
-  it("returns failure for completion-mode when direct delivery fails and queue fallback is unavailable", async () => {
+  it("falls back to direct send when completion-mode announce cannot get a final reply and queue fallback is unavailable", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1749,7 +1749,7 @@ describe("subagent announce formatting", () => {
         lastTo: "+1555",
       },
     };
-    agentSpy.mockRejectedValueOnce(new Error("direct delivery unavailable"));
+    agentSpy.mockRejectedValueOnce(new Error("No reply from agent."));
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
@@ -1760,9 +1760,19 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(false);
-    expect(sendSpy).not.toHaveBeenCalled();
+    expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "send",
+      params: {
+        sessionKey: "agent:main:main",
+        channel: "whatsapp",
+        to: "+1555",
+      },
+    });
+    expect(String(sendSpy.mock.calls[0]?.[0]?.params?.message ?? "")).toContain("raw subagent reply");
+    expect(String(sendSpy.mock.calls[0]?.[0]?.params?.message ?? "")).toContain("`[COMPLETE]:");
   });
 
   it("uses assistant output for completion-mode when latest assistant text exists", async () => {
