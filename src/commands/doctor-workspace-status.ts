@@ -2,7 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildPluginCompatibilityWarnings, buildPluginStatusReport } from "../plugins/status.js";
+import { buildPluginCompatibilityWarnings, buildPluginSnapshotReport } from "../plugins/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { note } from "../terminal/note.js";
@@ -69,10 +69,9 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     "Skills status",
   );
 
-  const pluginRegistry = buildPluginStatusReport({
+  const pluginRegistry = buildPluginSnapshotReport({
     config: cfg,
     workspaceDir,
-    loadModules: false,
   });
   if (pluginRegistry.plugins.length > 0) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");

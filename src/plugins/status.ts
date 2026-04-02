@@ -149,14 +149,17 @@ function resolveReportedPluginVersion(
   );
 }
 
-export function buildPluginStatusReport(params?: {
+type PluginReportParams = {
   config?: ReturnType<typeof loadConfig>;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
-  /** Use false for cold snapshot surfaces like list/doctor that must avoid plugin code execution. */
-  loadModules?: boolean;
-}): PluginStatusReport {
+};
+
+function buildPluginReport(
+  params: PluginReportParams | undefined,
+  loadModules: boolean,
+): PluginStatusReport {
   const rawConfig = params?.config ?? loadConfig();
   const autoEnabled = resolveStatusConfig(rawConfig, params?.env);
   const config = autoEnabled.config;
@@ -194,10 +197,10 @@ export function buildPluginStatusReport(params?: {
     logger: createPluginLoaderLogger(log),
     activate: false,
     cache: false,
-    loadModules: params?.loadModules ?? true,
+    loadModules,
   });
   const importedPluginIds = new Set([
-    ...(params?.loadModules !== false
+    ...(loadModules
       ? registry.plugins
           .filter((plugin) => plugin.status === "loaded" && plugin.format !== "bundle")
           .map((plugin) => plugin.id)
@@ -218,6 +221,20 @@ export function buildPluginStatusReport(params?: {
       version: resolveReportedPluginVersion(plugin, params?.env),
     })),
   };
+}
+
+export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginReport(params, false);
+}
+
+export function buildPluginDiagnosticsReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginReport(params, true);
+}
+
+// Compatibility alias for existing hot/reporting callers while the repo finishes
+// migrating to explicit snapshot vs diagnostics builders.
+export function buildPluginStatusReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginDiagnosticsReport(params);
 }
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
@@ -275,11 +292,10 @@ export function buildPluginInspectReport(params: {
   const config = resolvedConfig.config;
   const report =
     params.report ??
-    buildPluginStatusReport({
+    buildPluginDiagnosticsReport({
       config: rawConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      loadModules: true,
     });
   const plugin = report.plugins.find((entry) => entry.id === params.id || entry.name === params.id);
   if (!plugin) {
@@ -409,11 +425,10 @@ export function buildAllPluginInspectReports(params?: {
   const rawConfig = params?.config ?? loadConfig();
   const report =
     params?.report ??
-    buildPluginStatusReport({
+    buildPluginDiagnosticsReport({
       config: rawConfig,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
-      loadModules: true,
     });
 
   return report.plugins

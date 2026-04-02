@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
-  buildPluginStatusReport,
+  buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeLogs,
@@ -13,7 +14,7 @@ describe("plugins cli list", () => {
   });
 
   it("includes imported state in JSON output", async () => {
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
       plugins: [
         createPluginRecord({
@@ -28,7 +29,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginStatusReport).toHaveBeenCalledWith({ loadModules: false });
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith();
 
     expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
       workspaceDir: "/workspace",
@@ -45,7 +46,7 @@ describe("plugins cli list", () => {
   });
 
   it("shows imported state in verbose output", async () => {
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [
         createPluginRecord({
           id: "demo",
@@ -60,7 +61,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--verbose"]);
 
-    expect(buildPluginStatusReport).toHaveBeenCalledWith({ loadModules: false });
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith();
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("activated: yes");
@@ -69,14 +70,14 @@ describe("plugins cli list", () => {
   });
 
   it("keeps doctor on a module-loading snapshot", async () => {
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(buildPluginStatusReport).toHaveBeenCalledWith({ loadModules: true });
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith();
     expect(runtimeLogs).toContain("No plugin issues detected.");
   });
 });

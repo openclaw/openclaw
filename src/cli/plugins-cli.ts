@@ -12,9 +12,10 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import {
   buildAllPluginInspectReports,
+  buildPluginDiagnosticsReport,
   buildPluginCompatibilityNotices,
   buildPluginInspectReport,
-  buildPluginStatusReport,
+  buildPluginSnapshotReport,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import {
@@ -239,7 +240,7 @@ export function registerPluginsCli(program: Command) {
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
     .action((opts: PluginsListOptions) => {
-      const report = buildPluginStatusReport({ loadModules: false });
+      const report = buildPluginSnapshotReport();
       const list = opts.enabled
         ? report.plugins.filter((p) => p.status === "loaded")
         : report.plugins;
@@ -341,7 +342,7 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
-      const report = buildPluginStatusReport({ config: cfg, loadModules: true });
+      const report = buildPluginDiagnosticsReport({ config: cfg });
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
@@ -606,7 +607,7 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string, opts: PluginUninstallOptions) => {
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const report = buildPluginStatusReport({ config: cfg });
+      const report = buildPluginDiagnosticsReport({ config: cfg });
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
 
@@ -793,7 +794,7 @@ export function registerPluginsCli(program: Command) {
     .command("doctor")
     .description("Report plugin load issues")
     .action(() => {
-      const report = buildPluginStatusReport({ loadModules: true });
+      const report = buildPluginDiagnosticsReport();
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });

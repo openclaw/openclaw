@@ -22,8 +22,9 @@ import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registr
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
+  buildPluginDiagnosticsReport,
   buildPluginInspectReport,
-  buildPluginStatusReport,
+  buildPluginSnapshotReport,
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
@@ -284,7 +285,6 @@ async function loadPluginCommandState(
     }
   | { ok: false; path: string; error: string }
 > {
-  const loadModules = options?.loadModules ?? false;
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     return {
@@ -298,7 +298,10 @@ async function loadPluginCommandState(
     ok: true,
     path: snapshot.path,
     config,
-    report: buildPluginStatusReport({ config, workspaceDir, loadModules }),
+    report:
+      options?.loadModules === true
+        ? buildPluginDiagnosticsReport({ config, workspaceDir })
+        : buildPluginSnapshotReport({ config, workspaceDir }),
   };
 }
 

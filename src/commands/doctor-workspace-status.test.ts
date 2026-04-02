@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginStatusReport: vi.fn(),
+  buildPluginSnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
@@ -27,7 +27,7 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginStatusReport: (...args: unknown[]) => mocks.buildPluginStatusReport(...args),
+  buildPluginSnapshotReport: (...args: unknown[]) => mocks.buildPluginSnapshotReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
@@ -53,7 +53,7 @@ async function runNoteWorkspaceStatusForTest(
   mocks.buildWorkspaceSkillStatus.mockReturnValue({
     skills: [],
   });
-  mocks.buildPluginStatusReport.mockReturnValue({
+  mocks.buildPluginSnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
@@ -85,10 +85,9 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginStatusReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginSnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
-        loadModules: false,
       });
       const compatibilityCalls = noteSpy.mock.calls.filter(
         ([, title]) => title === "Plugin compatibility",

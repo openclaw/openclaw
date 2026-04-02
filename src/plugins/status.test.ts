@@ -18,6 +18,8 @@ const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
+let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
+let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
@@ -245,8 +247,10 @@ describe("buildPluginStatusReport", () => {
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
+      buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
+      buildPluginSnapshotReport,
       buildPluginStatusReport,
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
@@ -283,11 +287,10 @@ describe("buildPluginStatusReport", () => {
   it("forwards an explicit env to plugin loading", () => {
     const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
 
-    buildPluginStatusReport({
+    buildPluginSnapshotReport({
       config: {},
       workspaceDir: "/workspace",
       env,
-      loadModules: false,
     });
 
     expectPluginLoaderCall({
@@ -298,8 +301,8 @@ describe("buildPluginStatusReport", () => {
     });
   });
 
-  it("uses a non-activating snapshot load for status reports", () => {
-    buildPluginStatusReport({ config: {}, workspaceDir: "/workspace", loadModules: false });
+  it("uses a non-activating snapshot load for snapshot reports", () => {
+    buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
 
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -325,7 +328,7 @@ describe("buildPluginStatusReport", () => {
       },
     });
 
-    buildPluginStatusReport({ config: rawConfig, loadModules: false });
+    buildPluginSnapshotReport({ config: rawConfig });
 
     expectAutoEnabledStatusLoad({
       rawConfig,
@@ -429,7 +432,7 @@ describe("buildPluginStatusReport", () => {
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
     withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
-    buildPluginStatusReport({ config, loadModules: false });
+    buildPluginSnapshotReport({ config });
 
     expectBundledCompatChainApplied({
       config,
@@ -473,7 +476,7 @@ describe("buildPluginStatusReport", () => {
     listImportedRuntimePluginIdsMock.mockReturnValue(["runtime-loaded", "bundle-loaded"]);
     listImportedBundledPluginFacadeIdsMock.mockReturnValue(["facade-loaded"]);
 
-    const report = buildPluginStatusReport({ config: {}, loadModules: false });
+    const report = buildPluginSnapshotReport({ config: {} });
 
     expect(report.plugins).toEqual(
       expect.arrayContaining([
@@ -493,7 +496,7 @@ describe("buildPluginStatusReport", () => {
       ],
     });
 
-    const report = buildPluginStatusReport({ config: {}, loadModules: true });
+    const report = buildPluginDiagnosticsReport({ config: {} });
 
     expect(report.plugins).toEqual(
       expect.arrayContaining([
