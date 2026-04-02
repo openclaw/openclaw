@@ -652,6 +652,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed for piped node -c syntax-check commands with script-like upstream text", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "ok.js"), "console.log('ok')", "utf-8");
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-piped-node-check", {
+        command: "echo bad.py | node -c ok.js",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("does not fail closed for piped node -e commands when inline code contains script-like text", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });

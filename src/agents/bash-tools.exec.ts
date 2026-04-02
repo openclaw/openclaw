@@ -671,7 +671,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
     }
 
     if (executable === "node") {
-      const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "--check"]);
+      const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
       if (args.some((arg) => nodeInfoOnlyFlags.has(arg))) {
         return false;
       }
