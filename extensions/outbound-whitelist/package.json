@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/outbound-whitelist-plugin",
+  "version": "2026.4.2",
+  "private": true,
+  "description": "Blocks outbound messages to recipients not on a configured allowlist",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

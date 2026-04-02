@@ -1,0 +1,15 @@
+{
+  "id": "outbound-whitelist",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowedRecipients": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of allowed recipient IDs (E.164 phone numbers, group JIDs, Discord channel IDs). Messages to recipients not on this list are silently blocked. An empty list or omitting this field disables filtering (all messages are allowed)."
+      }
+    }
+  }
+}
