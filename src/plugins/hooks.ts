@@ -1070,6 +1070,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
               ? next.toolCalls.filter((t) => acc.toolCalls!.some((a) => a.id === t.id))
               : (next.toolCalls ?? acc?.toolCalls),
         }),
+      },
+    );
+  }
+
   // Skill Install Hooks
   // =========================================================================
 

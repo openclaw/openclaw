@@ -1950,10 +1950,9 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop"
-| "before_llm_call"
+    | "gateway_stop"
+  | "before_llm_call"
   | "after_llm_call"
-  | "before_dispatch";
   | "before_dispatch"
   | "before_install";
 
