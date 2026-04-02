@@ -3,6 +3,7 @@ import ipaddr from "ipaddr.js";
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
+type BlockedIpv6Range = Ipv6Range | "discard";
 
 const BLOCKED_IPV4_SPECIAL_USE_RANGES = new Set<Ipv4Range>([
   "unspecified",
@@ -22,11 +23,16 @@ const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<Ipv4Range>([
   "carrierGradeNat",
 ]);
 
-const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<Ipv6Range>([
+const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
   "unspecified",
   "loopback",
   "linkLocal",
   "uniqueLocal",
+  "multicast",
+  "reserved",
+  "benchmarking",
+  "discard",
+  "orchid2",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
 export type Ipv4SpecialUseBlockOptions = {
@@ -127,12 +133,16 @@ function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
   return address.toIPv4Address();
 }
 
-export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
+function normalizeIpParseInput(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const normalized = stripIpv6Brackets(trimmed);
+  return stripIpv6Brackets(trimmed);
+}
+
+export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
+  const normalized = normalizeIpParseInput(raw);
   if (!normalized) {
     return undefined;
   }
@@ -149,11 +159,7 @@ export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddres
 }
 
 export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = stripIpv6Brackets(trimmed);
+  const normalized = normalizeIpParseInput(raw);
   if (!normalized) {
     return undefined;
   }
@@ -227,11 +233,18 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   if (isIpv4Address(normalized)) {
     return PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(normalized.range());
   }
-  if (PRIVATE_OR_LOOPBACK_IPV6_RANGES.has(normalized.range())) {
+  return isBlockedSpecialUseIpv6Address(normalized);
+}
+
+export function isBlockedSpecialUseIpv6Address(address: ipaddr.IPv6): boolean {
+  // ipaddr.js returns "discard" at runtime for 100::/64, but its published
+  // TypeScript IPv6Range union omits that literal.
+  const range = address.range() as BlockedIpv6Range;
+  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;
   }
   // ipaddr.js does not classify deprecated site-local fec0::/10 as private.
-  return (normalized.parts[0] & 0xffc0) === 0xfec0;
+  return (address.parts[0] & 0xffc0) === 0xfec0;
 }
 
 export function isRfc1918Ipv4Address(raw: string | undefined): boolean {

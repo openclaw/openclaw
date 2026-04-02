@@ -3,6 +3,8 @@ import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+  parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,
 } from "./artifacts.js";
 
@@ -23,6 +25,32 @@ describe("session artifact helpers", () => {
       false,
     );
     expect(isPrimarySessionTranscriptFileName("sessions.json")).toBe(false);
+  });
+
+  it("classifies usage-counted transcript files", () => {
+    expect(isUsageCountedSessionTranscriptFileName("abc.jsonl")).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z"),
+    ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
+    ).toBe(true);
+    expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
+      false,
+    );
+  });
+
+  it("parses usage-counted session ids from file names", () => {
+    expect(parseUsageCountedSessionIdFromFileName("abc.jsonl")).toBe("abc");
+    expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(
+      "abc",
+    );
+    expect(
+      parseUsageCountedSessionIdFromFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
+    ).toBe("abc");
+    expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
+      null,
+    );
   });
 
   it("formats and parses archive timestamps", () => {

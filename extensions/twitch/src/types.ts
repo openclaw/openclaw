@@ -6,25 +6,23 @@
  */
 
 import type {
-  ChannelGatewayContext,
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelResolveKind,
-  ChannelResolveResult,
-  ChannelStatusAdapter,
-} from "../../../src/channels/plugins/types.adapters.js";
-import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
+  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMeta,
-} from "../../../src/channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { OutboundDeliveryResult } from "../../../src/infra/outbound/deliver.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelPlugin,
+  ChannelResolveKind,
+  ChannelResolveResult,
+  ChannelStatusAdapter,
+  OpenClawConfig,
+  OutboundDeliveryResult,
+  RuntimeEnv,
+} from "../runtime-api.js";
 
 // ============================================================================
 // Twitch-Specific Types
@@ -134,7 +132,7 @@ export type {
   OutboundDeliveryResult,
 };
 
-import type { z } from "zod";
+import type { z } from "openclaw/plugin-sdk/zod";
 // Import and re-export the schema type
 import type { TwitchConfigSchema } from "./config-schema.js";
 export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;

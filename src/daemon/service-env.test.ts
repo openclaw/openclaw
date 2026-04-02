@@ -8,6 +8,8 @@ import {
   buildServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
+  isNodeVersionManagerRuntime,
+  resolveLinuxSystemCaBundle,
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
@@ -257,6 +259,18 @@ describe("buildMinimalServicePath", () => {
     const unique = [...new Set(parts)];
     expect(parts.length).toBe(unique.length);
   });
+
+  it("prepends explicit runtime bin directories before guessed user paths", () => {
+    const result = buildMinimalServicePath({
+      platform: "linux",
+      extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
+      env: { HOME: "/home/alice" },
+    });
+    const parts = splitPath(result, "linux");
+
+    expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v22.22.0/bin");
+    expect(parts).toContain("/home/alice/.nvm/current/bin");
+  });
 });
 
 describe("buildServiceEnvironment", () => {
@@ -264,20 +278,20 @@ describe("buildServiceEnvironment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
-      token: "secret",
     });
     expect(env.HOME).toBe("/home/user");
     if (process.platform === "win32") {
-      expect(env.PATH).toBe("");
+      expect(env).not.toHaveProperty("PATH");
     } else {
       expect(env.PATH).toContain("/usr/bin");
     }
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("secret");
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
     }
@@ -305,9 +319,57 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway (work)");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
+  });
+
+  it("forwards proxy environment variables for launchd/systemd runtime", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        HTTP_PROXY: " http://proxy.local:7890 ",
+        HTTPS_PROXY: "https://proxy.local:7890",
+        NO_PROXY: "localhost,127.0.0.1",
+        http_proxy: "http://proxy.local:7890",
+        all_proxy: "socks5://proxy.local:1080",
+      },
+      port: 18789,
+    });
+
+    expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
+    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
+    expect(env.http_proxy).toBe("http://proxy.local:7890");
+    expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+  });
+
+  it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "C:\\Users\\alice",
+        PATH: "C:\\Windows\\System32;C:\\Tools\\rg",
+      },
+      port: 18789,
+      platform: "win32",
+    });
+
+    expect(env).not.toHaveProperty("PATH");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+  });
+
+  it("prepends extra runtime directories to the gateway service PATH", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
+    });
+
+    expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
+    );
   });
 });
 
@@ -317,6 +379,36 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+  });
+
+  it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: " node-token " },
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
+  });
+
+  it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_GATEWAY_TOKEN: "   ",
+      },
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+  });
+
+  it("forwards proxy environment variables for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        HTTPS_PROXY: " https://proxy.local:7890 ",
+        no_proxy: "localhost,127.0.0.1",
+      },
+    });
+
+    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
+    expect(env.no_proxy).toBe("localhost,127.0.0.1");
   });
 
   it("forwards TMPDIR for node services", () => {
@@ -331,6 +423,63 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
+  it("prepends extra runtime directories to the node service PATH", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
+    });
+
+    expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
+    );
+  });
+});
+
+describe("shared Node TLS env defaults", () => {
+  const builders = [
+    {
+      name: "gateway service env",
+      build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
+        buildServiceEnvironment({ env, port: 18789, platform }),
+    },
+    {
+      name: "node service env",
+      build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
+        buildNodeServiceEnvironment({ env, platform }),
+    },
+  ] as const;
+
+  it.each(builders)("$name defaults NODE_EXTRA_CA_CERTS on macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "darwin");
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+  });
+
+  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on non-macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "linux");
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+  });
+
+  it.each(builders)("$name respects user-provided NODE_EXTRA_CA_CERTS", ({ build }) => {
+    const env = build({ HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
+  });
+
+  it.each(builders)("$name defaults NODE_USE_SYSTEM_CA=1 on macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "darwin");
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it.each(builders)("$name does not default NODE_USE_SYSTEM_CA on non-macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "linux");
+    expect(env.NODE_USE_SYSTEM_CA).toBeUndefined();
+  });
+
+  it.each(builders)("$name respects user-provided NODE_USE_SYSTEM_CA", ({ build }) => {
+    const env = build({ HOME: "/home/user", NODE_USE_SYSTEM_CA: "0" }, "darwin");
+    expect(env.NODE_USE_SYSTEM_CA).toBe("0");
   });
 });
 
@@ -363,5 +512,95 @@ describe("resolveGatewayStateDir", () => {
   it("preserves Windows absolute paths without HOME", () => {
     const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
     expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
+  });
+});
+
+describe("isNodeVersionManagerRuntime", () => {
+  it("returns true when NVM_DIR env var is set", () => {
+    expect(isNodeVersionManagerRuntime({ NVM_DIR: "/home/user/.nvm" })).toBe(true);
+  });
+
+  it("returns true when execPath contains /.nvm/", () => {
+    expect(isNodeVersionManagerRuntime({}, "/home/user/.nvm/versions/node/v22.22.0/bin/node")).toBe(
+      true,
+    );
+  });
+
+  it("returns false when neither NVM_DIR nor nvm execPath", () => {
+    expect(isNodeVersionManagerRuntime({}, "/usr/bin/node")).toBe(false);
+  });
+});
+
+describe("resolveLinuxSystemCaBundle", () => {
+  it("returns a known CA bundle path when one exists", () => {
+    const result = resolveLinuxSystemCaBundle();
+    if (process.platform === "linux") {
+      expect(result).toMatch(/\.(crt|pem)$/);
+    }
+  });
+});
+
+describe("shared Node TLS env defaults", () => {
+  it("sets macOS TLS defaults for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/test" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it("sets macOS TLS defaults for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/test" },
+      platform: "darwin",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it("defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set", () => {
+    const expected = resolveLinuxSystemCaBundle();
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
+      port: 18789,
+      platform: "linux",
+      execPath: "/usr/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe(expected);
+  });
+
+  it("defaults NODE_EXTRA_CA_CERTS on Linux when execPath is under nvm", () => {
+    const expected = resolveLinuxSystemCaBundle();
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe(expected);
+  });
+
+  it("does not default NODE_EXTRA_CA_CERTS on Linux without nvm", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+      execPath: "/usr/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+  });
+
+  it("respects user-provided NODE_EXTRA_CA_CERTS on Linux with nvm", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NVM_DIR: "/home/user/.nvm",
+        NODE_EXTRA_CA_CERTS: "/custom/ca-bundle.crt",
+      },
+      platform: "linux",
+      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca-bundle.crt");
   });
 });

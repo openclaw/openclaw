@@ -1,13 +1,26 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { BYTEPLUS_CODING_BASE_URL, BYTEPLUS_DEFAULT_COST } from "./byteplus-models.js";
+import {
+  createSingleUserPromptMessage,
+  extractNonEmptyAssistantText,
+  isLiveTestEnabled,
+} from "./live-test-helpers.js";
 
 const BYTEPLUS_KEY = process.env.BYTEPLUS_API_KEY ?? "";
 const BYTEPLUS_CODING_MODEL = process.env.BYTEPLUS_CODING_MODEL?.trim() || "ark-code-latest";
-const LIVE = isTruthyEnvValue(process.env.BYTEPLUS_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE = isLiveTestEnabled(["BYTEPLUS_LIVE_TEST"]);
 
 const describeLive = LIVE && BYTEPLUS_KEY ? describe : describe.skip;
+
+function isBytePlusSubscriptionError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("coding plan subscription") ||
+    lower.includes("subscription has expired") ||
+    (lower.includes("subscription") && lower.includes("renewal"))
+  );
+}
 
 describeLive("byteplus coding plan live", () => {
   it("returns assistant text", async () => {
@@ -27,21 +40,21 @@ describeLive("byteplus coding plan live", () => {
     const res = await completeSimple(
       model,
       {
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage(),
       },
       { apiKey: BYTEPLUS_KEY, maxTokens: 64 },
     );
 
-    const text = res.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ");
+    if (res.stopReason === "error") {
+      const message = res.errorMessage ?? "";
+      if (isBytePlusSubscriptionError(message)) {
+        expect(message.toLowerCase()).toContain("subscription");
+        return;
+      }
+      throw new Error(message || "byteplus returned error with no message");
+    }
+
+    const text = extractNonEmptyAssistantText(res.content);
     expect(text.length).toBeGreaterThan(0);
   }, 30000);
 });

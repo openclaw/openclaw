@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -15,6 +16,8 @@ import {
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
+
+const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 
 describe("hooks", () => {
   beforeEach(() => {
@@ -142,6 +145,26 @@ describe("hooks", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await expect(triggerInternalHook(event)).resolves.not.toThrow();
     });
+
+    it("stores handlers in the global singleton registry", async () => {
+      const globalHooks = resolveGlobalSingleton<Map<string, Array<(event: unknown) => unknown>>>(
+        INTERNAL_HOOK_HANDLERS_KEY,
+        () => new Map<string, Array<(event: unknown) => unknown>>(),
+      );
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(globalHooks.has("command:new")).toBe(true);
+
+      const injectedHandler = vi.fn();
+      globalHooks.set("command:new", [injectedHandler]);
+      await triggerInternalHook(event);
+      expect(injectedHandler).toHaveBeenCalledWith(event);
+    });
   });
 
   describe("createInternalHookEvent", () => {
@@ -165,11 +188,7 @@ describe("hooks", () => {
   });
 
   describe("isAgentBootstrapEvent", () => {
-    const cases: Array<{
-      name: string;
-      event: ReturnType<typeof createInternalHookEvent>;
-      expected: boolean;
-    }> = [
+    it.each([
       {
         name: "returns true for agent:bootstrap events with expected context",
         event: createInternalHookEvent("agent", "bootstrap", "test-session", {
@@ -183,21 +202,17 @@ describe("hooks", () => {
         event: createInternalHookEvent("command", "new", "test-session"),
         expected: false,
       },
-    ];
-
-    for (const testCase of cases) {
-      it(testCase.name, () => {
-        expect(isAgentBootstrapEvent(testCase.event)).toBe(testCase.expected);
-      });
-    }
-  });
-
-  describe("isGatewayStartupEvent", () => {
-    const cases: Array<{
+    ] satisfies Array<{
       name: string;
       event: ReturnType<typeof createInternalHookEvent>;
       expected: boolean;
-    }> = [
+    }>)("$name", ({ event, expected }) => {
+      expect(isAgentBootstrapEvent(event)).toBe(expected);
+    });
+  });
+
+  describe("isGatewayStartupEvent", () => {
+    it.each([
       {
         name: "returns true for gateway:startup events with expected context",
         event: createInternalHookEvent("gateway", "startup", "gateway:startup", {
@@ -210,21 +225,17 @@ describe("hooks", () => {
         event: createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {}),
         expected: false,
       },
-    ];
-
-    for (const testCase of cases) {
-      it(testCase.name, () => {
-        expect(isGatewayStartupEvent(testCase.event)).toBe(testCase.expected);
-      });
-    }
-  });
-
-  describe("isMessageReceivedEvent", () => {
-    const cases: Array<{
+    ] satisfies Array<{
       name: string;
       event: ReturnType<typeof createInternalHookEvent>;
       expected: boolean;
-    }> = [
+    }>)("$name", ({ event, expected }) => {
+      expect(isGatewayStartupEvent(event)).toBe(expected);
+    });
+  });
+
+  describe("isMessageReceivedEvent", () => {
+    it.each([
       {
         name: "returns true for message:received events with expected context",
         event: createInternalHookEvent("message", "received", "test-session", {
@@ -246,21 +257,17 @@ describe("hooks", () => {
         } satisfies MessageSentHookContext),
         expected: false,
       },
-    ];
-
-    for (const testCase of cases) {
-      it(testCase.name, () => {
-        expect(isMessageReceivedEvent(testCase.event)).toBe(testCase.expected);
-      });
-    }
-  });
-
-  describe("isMessageSentEvent", () => {
-    const cases: Array<{
+    ] satisfies Array<{
       name: string;
       event: ReturnType<typeof createInternalHookEvent>;
       expected: boolean;
-    }> = [
+    }>)("$name", ({ event, expected }) => {
+      expect(isMessageReceivedEvent(event)).toBe(expected);
+    });
+  });
+
+  describe("isMessageSentEvent", () => {
+    it.each([
       {
         name: "returns true for message:sent events with expected context",
         event: createInternalHookEvent("message", "sent", "test-session", {
@@ -293,27 +300,25 @@ describe("hooks", () => {
         } satisfies MessageReceivedHookContext),
         expected: false,
       },
-    ];
-
-    for (const testCase of cases) {
-      it(testCase.name, () => {
-        expect(isMessageSentEvent(testCase.event)).toBe(testCase.expected);
-      });
-    }
+    ] satisfies Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }>)("$name", ({ event, expected }) => {
+      expect(isMessageSentEvent(event)).toBe(expected);
+    });
   });
 
   describe("message type-guard shared negatives", () => {
     it("returns false for non-message and missing-context shapes", () => {
-      const cases: Array<{
-        match: (event: ReturnType<typeof createInternalHookEvent>) => boolean;
-      }> = [
+      const cases = [
         {
           match: isMessageReceivedEvent,
         },
         {
           match: isMessageSentEvent,
         },
-      ];
+      ] as const;
       const nonMessageEvent = createInternalHookEvent("command", "new", "test-session");
       const missingReceivedContext = createInternalHookEvent(
         "message",
@@ -330,8 +335,8 @@ describe("hooks", () => {
         // missing success
       });
 
-      for (const testCase of cases) {
-        expect(testCase.match(nonMessageEvent)).toBe(false);
+      for (const { match } of cases) {
+        expect(match(nonMessageEvent)).toBe(false);
       }
       expect(isMessageReceivedEvent(missingReceivedContext)).toBe(false);
       expect(isMessageSentEvent(missingSentContext)).toBe(false);

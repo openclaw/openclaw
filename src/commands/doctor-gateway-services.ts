@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
+import { writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
@@ -14,6 +15,7 @@ import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtim
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
+  readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -22,7 +24,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,18 +55,13 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
   return programArguments[gatewayIndex - 1] ?? null;
 }
 
-function normalizeExecutablePath(value: string): string {
-  return path.resolve(value);
-}
-
-function resolveGatewayAuthToken(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string | undefined {
-  const configToken = cfg.gateway?.auth?.token?.trim();
-  if (configToken) {
-    return configToken;
+async function normalizeExecutablePath(value: string): Promise<string> {
+  const resolvedPath = path.resolve(value);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
   }
-  const envToken = env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN;
-  const trimmedEnvToken = envToken?.trim();
-  return trimmedEnvToken || undefined;
 }
 
 function extractDetailPath(detail: string, prefix: string): string | null {
@@ -219,12 +218,35 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
-  const expectedGatewayToken = resolveGatewayAuthToken(cfg, process.env);
+  const tokenRefConfigured = Boolean(
+    resolveSecretInputRef({
+      value: cfg.gateway?.auth?.token,
+      defaults: cfg.secrets?.defaults,
+    }).ref,
+  );
+  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env);
+  if (gatewayTokenResolution.unavailableReason) {
+    note(
+      `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`,
+      "Gateway service config",
+    );
+  }
+  const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
     expectedGatewayToken,
   });
+  const serviceToken = readEmbeddedGatewayToken(command);
+  if (tokenRefConfigured && serviceToken) {
+    audit.issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
+      message:
+        "Gateway service OPENCLAW_GATEWAY_TOKEN should be unset when gateway.auth.token is SecretRef-managed",
+      detail: "service token is stale",
+      level: "recommended",
+    });
+  }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
@@ -236,17 +258,16 @@ export async function maybeRepairGatewayServiceConfig(
       note(warning, "Gateway runtime");
     }
     note(
-      "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+      "System Node 22 LTS (22.14+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
       "Gateway runtime",
     );
   }
 
   const port = resolveGatewayPort(cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(command.programArguments);
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+  const { programArguments } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: expectedGatewayToken,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),
@@ -254,10 +275,16 @@ export async function maybeRepairGatewayServiceConfig(
   });
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
+  const normalizedExpectedEntrypoint = expectedEntrypoint
+    ? await normalizeExecutablePath(expectedEntrypoint)
+    : null;
+  const normalizedCurrentEntrypoint = currentEntrypoint
+    ? await normalizeExecutablePath(currentEntrypoint)
+    : null;
   if (
-    expectedEntrypoint &&
-    currentEntrypoint &&
-    normalizeExecutablePath(expectedEntrypoint) !== normalizeExecutablePath(currentEntrypoint)
+    normalizedExpectedEntrypoint &&
+    normalizedCurrentEntrypoint &&
+    normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -291,24 +318,73 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const repair = needsAggressive
-    ? await prompter.confirmAggressive({
+    ? await prompter.confirmAggressiveAutoFix({
         message: "Overwrite gateway service config with current defaults now?",
         initialValue: Boolean(prompter.shouldForce),
       })
-    : await prompter.confirmRepair({
+    : await prompter.confirmAutoFix({
         message: "Update gateway service config to the recommended defaults now?",
         initialValue: true,
       });
   if (!repair) {
     return;
   }
+  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+  const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
+  const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
+  const configuredGatewayToken =
+    typeof cfg.gateway?.auth?.token === "string"
+      ? cfg.gateway.auth.token.trim() || undefined
+      : undefined;
+  let cfgForServiceInstall = cfg;
+  if (
+    !updateRepairMode &&
+    !tokenRefConfigured &&
+    !configuredGatewayToken &&
+    gatewayTokenForRepair
+  ) {
+    const nextCfg: OpenClawConfig = {
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        auth: {
+          ...cfg.gateway?.auth,
+          mode: cfg.gateway?.auth?.mode ?? "token",
+          token: gatewayTokenForRepair,
+        },
+      },
+    };
+    try {
+      await writeConfigFile(nextCfg);
+      cfgForServiceInstall = nextCfg;
+      note(
+        expectedGatewayToken
+          ? "Persisted gateway.auth.token from environment before reinstalling service."
+          : "Persisted gateway.auth.token from existing service definition before reinstalling service.",
+        "Gateway",
+      );
+    } catch (err) {
+      runtime.error(`Failed to persist gateway.auth.token before service repair: ${String(err)}`);
+      return;
+    }
+  }
+
+  const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
+  const updatedPlan = await buildGatewayInstallPlan({
+    env: process.env,
+    port: updatedPort,
+    runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
+    nodePath: systemNodePath ?? undefined,
+    warn: (message, title) => note(message, title),
+    config: cfgForServiceInstall,
+  });
   try {
-    await service.install({
+    await (updateRepairMode ? service.stage : service.install)({
       env: process.env,
       stdout: process.stdout,
-      programArguments,
-      workingDirectory,
-      environment,
+      programArguments: updatedPlan.programArguments,
+      workingDirectory: updatedPlan.workingDirectory,
+      environment: updatedPlan.environment,
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);
@@ -334,8 +410,8 @@ export async function maybeScanExtraGatewayServices(
 
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
-    const shouldRemove = await prompter.confirmSkipInNonInteractive({
-      message: "Remove legacy gateway services (clawdbot/moltbot) now?",
+    const shouldRemove = await prompter.confirmRuntimeRepair({
+      message: "Remove legacy gateway services now?",
       initialValue: true,
     });
     if (shouldRemove) {

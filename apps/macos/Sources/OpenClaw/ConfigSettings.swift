@@ -72,8 +72,8 @@ extension ConfigSettings {
     }
 
     private var sidebar: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
+        SettingsSidebarScroll {
+            LazyVStack(alignment: .leading, spacing: 4) {
                 if self.sections.isEmpty {
                     Text("No config sections available.")
                         .font(.caption)
@@ -82,18 +82,11 @@ extension ConfigSettings {
                         .padding(.vertical, 4)
                 } else {
                     ForEach(self.sections) { section in
-                        self.sidebarRow(section)
+                        self.sidebarSection(section)
                     }
                 }
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 10)
         }
-        .frame(minWidth: 220, idealWidth: 240, maxWidth: 280, maxHeight: .infinity, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor)))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var detail: some View {
@@ -135,7 +128,6 @@ extension ConfigSettings {
                 }
                 self.actionRow
                 self.sectionHeader(section)
-                self.subsectionNav(section)
                 self.sectionForm(section)
                 if self.store.configDirty, !self.isNixMode {
                     Text("Unsaved changes")
@@ -189,76 +181,74 @@ extension ConfigSettings {
         .buttonStyle(.bordered)
     }
 
-    private func sidebarRow(_ section: ConfigSection) -> some View {
-        let isSelected = self.activeSectionKey == section.key
-        return Button {
-            self.selectSection(section)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(section.label)
-                if let help = section.help {
-                    Text(help)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+    private func sidebarSection(_ section: ConfigSection) -> some View {
+        let isExpanded = self.activeSectionKey == section.key
+        let subsections = isExpanded ? self.resolveSubsections(for: section) : []
+
+        return VStack(alignment: .leading, spacing: 2) {
+            Button {
+                self.selectSection(section)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Text(section.label)
+                        .lineLimit(1)
                 }
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isExpanded && subsections.isEmpty
+                    ? Color.accentColor.opacity(0.18)
+                    : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .background(Color.clear)
+            .buttonStyle(.plain)
             .contentShape(Rectangle())
+
+            if isExpanded, !subsections.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    self.sidebarSubRow(title: "All", key: nil, sectionKey: section.key)
+                    ForEach(subsections) { sub in
+                        self.sidebarSubRow(title: sub.label, key: sub.key, sectionKey: section.key)
+                    }
+                }
+                .padding(.leading, 20)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeInOut(duration: 0.18), value: isExpanded)
+    }
+
+    private func sidebarSubRow(title: String, key: String?, sectionKey: String) -> some View {
+        let isSelected: Bool = {
+            guard self.activeSectionKey == sectionKey else { return false }
+            if let key { return self.activeSubsection == .key(key) }
+            return self.activeSubsection == .all
+        }()
+
+        return Button {
+            if let key {
+                self.activeSubsection = .key(key)
+            } else {
+                self.activeSubsection = .all
+            }
+        } label: {
+            Text(title)
+                .font(.callout)
+                .lineLimit(1)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(Rectangle())
+        }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-    }
-
-    @ViewBuilder
-    private func subsectionNav(_ section: ConfigSection) -> some View {
-        let subsections = self.resolveSubsections(for: section)
-        if subsections.isEmpty {
-            EmptyView()
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    self.subsectionButton(
-                        title: "All",
-                        isSelected: self.activeSubsection == .all)
-                    {
-                        self.activeSubsection = .all
-                    }
-                    ForEach(subsections) { subsection in
-                        self.subsectionButton(
-                            title: subsection.label,
-                            isSelected: self.activeSubsection == .key(subsection.key))
-                        {
-                            self.activeSubsection = .key(subsection.key)
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-        }
-    }
-
-    private func subsectionButton(
-        title: String,
-        isSelected: Bool,
-        action: @escaping () -> Void) -> some View
-    {
-        Button(action: action) {
-            Text(title)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(isSelected ? Color.accentColor : .primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor))
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     private func sectionForm(_ section: ConfigSection) -> some View {

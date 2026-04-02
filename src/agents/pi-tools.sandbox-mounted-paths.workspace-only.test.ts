@@ -18,6 +18,30 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 type ToolWithExecute = {
   execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
 };
+type CodingToolsInput = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+
+const APPLY_PATCH_PAYLOAD = `*** Begin Patch
+*** Add File: /agent/pwned.txt
++owned-by-apply-patch
+*** End Patch`;
+
+function resolveApplyPatchTool(
+  params: Pick<CodingToolsInput, "sandbox" | "workspaceDir"> & { config: OpenClawConfig },
+): ToolWithExecute {
+  const tools = createOpenClawCodingTools({
+    sandbox: params.sandbox,
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    modelProvider: "openai",
+    modelId: "gpt-5.2",
+  });
+  const applyPatchTool = tools.find((t) => t.name === "apply_patch") as ToolWithExecute | undefined;
+  if (!applyPatchTool) {
+    throw new Error("apply_patch tool missing");
+  }
+  return applyPatchTool;
+}
+
 describe("tools.fs.workspaceOnly", () => {
   it("defaults to allowing sandbox mounts outside the workspace root", async () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
@@ -62,32 +86,18 @@ describe("tools.fs.workspaceOnly", () => {
 
   it("enforces apply_patch workspace-only in sandbox mounts by default", async () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
-      const cfg: OpenClawConfig = {
-        tools: {
-          allow: ["read", "exec"],
-          exec: { applyPatch: { enabled: true } },
-        },
-      };
-      const tools = createOpenClawCodingTools({
+      const applyPatchTool = resolveApplyPatchTool({
         sandbox,
         workspaceDir: sandboxRoot,
-        config: cfg,
-        modelProvider: "openai",
-        modelId: "gpt-5.2",
+        config: {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: {} },
+          },
+        } as OpenClawConfig,
       });
-      const applyPatchTool = tools.find((t) => t.name === "apply_patch") as
-        | ToolWithExecute
-        | undefined;
-      if (!applyPatchTool) {
-        throw new Error("apply_patch tool missing");
-      }
 
-      const patch = `*** Begin Patch
-*** Add File: /agent/pwned.txt
-+owned-by-apply-patch
-*** End Patch`;
-
-      await expect(applyPatchTool.execute("t1", { input: patch })).rejects.toThrow(
+      await expect(applyPatchTool.execute("t1", { input: APPLY_PATCH_PAYLOAD })).rejects.toThrow(
         /Path escapes sandbox root/i,
       );
       await expect(fs.stat(path.join(agentRoot, "pwned.txt"))).rejects.toMatchObject({
@@ -98,32 +108,18 @@ describe("tools.fs.workspaceOnly", () => {
 
   it("allows apply_patch outside workspace root when explicitly disabled", async () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
-      const cfg: OpenClawConfig = {
-        tools: {
-          allow: ["read", "exec"],
-          exec: { applyPatch: { enabled: true, workspaceOnly: false } },
-        },
-      };
-      const tools = createOpenClawCodingTools({
+      const applyPatchTool = resolveApplyPatchTool({
         sandbox,
         workspaceDir: sandboxRoot,
-        config: cfg,
-        modelProvider: "openai",
-        modelId: "gpt-5.2",
+        config: {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: { workspaceOnly: false } },
+          },
+        } as OpenClawConfig,
       });
-      const applyPatchTool = tools.find((t) => t.name === "apply_patch") as
-        | ToolWithExecute
-        | undefined;
-      if (!applyPatchTool) {
-        throw new Error("apply_patch tool missing");
-      }
 
-      const patch = `*** Begin Patch
-*** Add File: /agent/pwned.txt
-+owned-by-apply-patch
-*** End Patch`;
-
-      await applyPatchTool.execute("t2", { input: patch });
+      await applyPatchTool.execute("t2", { input: APPLY_PATCH_PAYLOAD });
       expect(await fs.readFile(path.join(agentRoot, "pwned.txt"), "utf8")).toBe(
         "owned-by-apply-patch\n",
       );

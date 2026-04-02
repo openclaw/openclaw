@@ -27,6 +27,8 @@ const SUSPICIOUS_PATTERNS = [
   /delete\s+all\s+(emails?|files?|data)/i,
   /<\/?system>/i,
   /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+  /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/i,
+  /^\s*System:\s+/im,
 ];
 
 /**
@@ -89,6 +91,10 @@ export type ExternalContentSource =
   | "web_fetch"
   | "unknown";
 
+// Hook-origin async runs need immutable ingress provenance because routed
+// session keys can be normalized outside the hook:* namespace.
+export type HookExternalContentSource = "gmail" | "webhook";
+
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
@@ -99,6 +105,25 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   web_fetch: "Web Fetch",
   unknown: "External",
 };
+
+export function resolveHookExternalContentSource(
+  sessionKey: string,
+): HookExternalContentSource | undefined {
+  const normalized = sessionKey.trim().toLowerCase();
+  if (normalized.startsWith("hook:gmail:")) {
+    return "gmail";
+  }
+  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
+    return "webhook";
+  }
+  return undefined;
+}
+
+export function mapHookExternalContentSource(
+  source: HookExternalContentSource,
+): Extract<ExternalContentSource, "email" | "webhook"> {
+  return source === "gmail" ? "email" : "webhook";
+}
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
@@ -116,6 +141,22 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x27e9: ">", // mathematical right angle bracket
   0xfe64: "<", // small less-than sign
   0xfe65: ">", // small greater-than sign
+  0x00ab: "<", // left-pointing double angle quotation mark
+  0x00bb: ">", // right-pointing double angle quotation mark
+  0x300a: "<", // left double angle bracket
+  0x300b: ">", // right double angle bracket
+  0x27ea: "<", // mathematical left double angle bracket
+  0x27eb: ">", // mathematical right double angle bracket
+  0x27ec: "<", // mathematical left white tortoise shell bracket
+  0x27ed: ">", // mathematical right white tortoise shell bracket
+  0x27ee: "<", // mathematical left flattened parenthesis
+  0x27ef: ">", // mathematical right flattened parenthesis
+  0x276c: "<", // medium left-pointing angle bracket ornament
+  0x276d: ">", // medium right-pointing angle bracket ornament
+  0x276e: "<", // heavy left-pointing angle quotation mark ornament
+  0x276f: ">", // heavy right-pointing angle quotation mark ornament
+  0x02c2: "<", // modifier letter left arrowhead
+  0x02c3: ">", // modifier letter right arrowhead
 };
 
 function foldMarkerChar(char: string): string {
@@ -133,27 +174,37 @@ function foldMarkerChar(char: string): string {
   return char;
 }
 
+const MARKER_IGNORABLE_CHAR_RE = /\u200B|\u200C|\u200D|\u2060|\uFEFF|\u00AD/g;
+
 function foldMarkerText(input: string): string {
-  return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65]/g,
-    (char) => foldMarkerChar(char),
+  return (
+    input
+      // Strip invisible format characters that can split marker tokens without changing
+      // how downstream models interpret the apparent boundary text.
+      .replace(MARKER_IGNORABLE_CHAR_RE, "")
+      .replace(
+        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
+        (char) => foldMarkerChar(char),
+      )
   );
 }
 
 function replaceMarkers(content: string): string {
   const folded = foldMarkerText(content);
-  if (!/external_untrusted_content/i.test(folded)) {
+  // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
+  // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
+  if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
   // Match markers with or without id attribute (handles both legacy and spoofed markers)
   const patterns: Array<{ regex: RegExp; value: string }> = [
     {
-      regex: /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
       value: "[[MARKER_SANITIZED]]",
     },
     {
-      regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
       value: "[[END_MARKER_SANITIZED]]",
     },
   ];
@@ -222,12 +273,13 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const sanitized = replaceMarkers(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
   const metadataLines: string[] = [`Source: ${sourceLabel}`];
+  const sanitizeMetadataValue = (value: string) => replaceMarkers(value).replace(/[\r\n]+/g, " ");
 
   if (sender) {
-    metadataLines.push(`From: ${sender}`);
+    metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
   }
   if (subject) {
-    metadataLines.push(`Subject: ${subject}`);
+    metadataLines.push(`Subject: ${sanitizeMetadataValue(subject)}`);
   }
 
   const metadata = metadataLines.join("\n");
@@ -286,29 +338,15 @@ export function buildSafeExternalPrompt(params: {
  * Checks if a session key indicates an external hook source.
  */
 export function isExternalHookSession(sessionKey: string): boolean {
-  const normalized = sessionKey.trim().toLowerCase();
-  return (
-    normalized.startsWith("hook:gmail:") ||
-    normalized.startsWith("hook:webhook:") ||
-    normalized.startsWith("hook:") // Generic hook prefix
-  );
+  return resolveHookExternalContentSource(sessionKey) !== undefined;
 }
 
 /**
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  const normalized = sessionKey.trim().toLowerCase();
-  if (normalized.startsWith("hook:gmail:")) {
-    return "email";
-  }
-  if (normalized.startsWith("hook:webhook:")) {
-    return "webhook";
-  }
-  if (normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return "unknown";
+  const source = resolveHookExternalContentSource(sessionKey);
+  return source ? mapHookExternalContentSource(source) : "unknown";
 }
 
 /**

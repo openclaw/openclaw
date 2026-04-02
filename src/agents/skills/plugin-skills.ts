@@ -8,6 +8,8 @@ import {
   resolveMemorySlotDecision,
 } from "../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { hasKind } from "../../plugins/slots.js";
+import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
 const log = createSubsystemLogger("skills");
 
@@ -27,6 +29,7 @@ export function resolvePluginSkillDirs(params: {
     return [];
   }
   const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
+  const acpEnabled = params.config?.acp?.enabled !== false;
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -45,6 +48,10 @@ export function resolvePluginSkillDirs(params: {
     if (!enableState.enabled) {
       continue;
     }
+    // ACP router skills should not be attached when ACP is explicitly disabled.
+    if (!acpEnabled && record.id === "acpx") {
+      continue;
+    }
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
@@ -54,7 +61,7 @@ export function resolvePluginSkillDirs(params: {
     if (!memoryDecision.enabled) {
       continue;
     }
-    if (memoryDecision.selected && record.kind === "memory") {
+    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
     }
     for (const raw of record.skills) {
@@ -65,6 +72,10 @@ export function resolvePluginSkillDirs(params: {
       const candidate = path.resolve(record.rootDir, trimmed);
       if (!fs.existsSync(candidate)) {
         log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
+        continue;
+      }
+      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
+        log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
       if (seen.has(candidate)) {
