@@ -220,7 +220,7 @@ export function createSessionsSendTool(opts?: {
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
-        restrictToSpawned,
+        restrictToSpawned: restrictToSpawned && !isCrossAgent,
       });
       if (!resolvedSession.ok) {
         return jsonResult({
