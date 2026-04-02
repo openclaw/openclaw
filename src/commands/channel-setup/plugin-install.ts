@@ -239,6 +239,7 @@ function loadChannelSetupPluginRegistry(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   onlyPluginIds?: string[];
+  allowChannelIdScopeMatch?: boolean;
   activate?: boolean;
 }): PluginRegistry {
   clearPluginDiscoveryCache();
@@ -253,6 +254,7 @@ function loadChannelSetupPluginRegistry(params: {
     cache: false,
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
+    allowChannelIdScopeMatch: params.allowChannelIdScopeMatch === true,
     includeSetupOnlyChannelPlugins: true,
     activate: params.activate,
   });
@@ -274,6 +276,7 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds,
+    allowChannelIdScopeMatch: !params.pluginId,
   });
 }
 
@@ -287,6 +290,7 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   return loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds: [params.pluginId ?? params.channel],
+    allowChannelIdScopeMatch: !params.pluginId,
     activate: false,
   });
 }

@@ -422,6 +422,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["telegram"],
+        allowChannelIdScopeMatch: true,
         includeSetupOnlyChannelPlugins: true,
       }),
     );
@@ -486,6 +487,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["telegram"],
+        allowChannelIdScopeMatch: true,
       }),
     );
   });
@@ -507,6 +509,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["telegram"],
+        allowChannelIdScopeMatch: true,
         includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),
@@ -531,6 +534,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/msteams-plugin"],
+        allowChannelIdScopeMatch: false,
         includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),

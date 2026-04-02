@@ -11,13 +11,19 @@ vi.mock("../plugin-sdk/facade-runtime.js", async (importOriginal) => {
 });
 
 describe("tts runtime facade", () => {
+  let ttsModulePromise: Promise<typeof import("./tts.js")> | undefined;
+
   beforeEach(() => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
-    vi.resetModules();
   });
 
+  function importTtsModule() {
+    ttsModulePromise ??= import("./tts.js");
+    return ttsModulePromise;
+  }
+
   it("does not load speech-core on module import", async () => {
-    await import("./tts.js");
+    await importTtsModule();
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
@@ -28,7 +34,7 @@ describe("tts runtime facade", () => {
       buildTtsSystemPromptHint,
     });
 
-    const tts = await import("./tts.js");
+    const tts = await importTtsModule();
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(tts.buildTtsSystemPromptHint({} as never)).toBe("hint");

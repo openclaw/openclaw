@@ -2448,6 +2448,50 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(disabled?.status).toBe("disabled");
   });
 
+  it("does not treat scoped plugin ids as channel ids unless channel matching is explicit", () => {
+    useNoBundledPlugins();
+    const target = writePlugin({
+      id: "target-plugin",
+      filename: "target-plugin.cjs",
+      body: `module.exports = { id: "target-plugin", register() {} };`,
+    });
+    const unrelated = writePlugin({
+      id: "unrelated-plugin",
+      filename: "unrelated-plugin.cjs",
+      body: `module.exports = { id: "unrelated-plugin", register() { throw new Error("unrelated plugin should not load"); } };`,
+    });
+    fs.writeFileSync(
+      path.join(unrelated.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "unrelated-plugin",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["target-plugin"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [target.file, unrelated.file] },
+          allow: ["target-plugin", "unrelated-plugin"],
+          entries: {
+            "target-plugin": { enabled: true },
+            "unrelated-plugin": { enabled: true },
+          },
+        },
+      },
+      onlyPluginIds: ["target-plugin"],
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["target-plugin"]);
+  });
+
   it("only setup-loads a disabled channel plugin when the caller scopes to the selected channel", () => {
     useNoBundledPlugins();
     const marker = path.join(makeTempDir(), "lazy-channel-imported.txt");
@@ -2531,6 +2575,7 @@ module.exports = {
       config,
       includeSetupOnlyChannelPlugins: true,
       onlyPluginIds: ["lazy-channel"],
+      allowChannelIdScopeMatch: true,
     });
 
     expect(fs.existsSync(marker)).toBe(true);

@@ -13,21 +13,57 @@ vi.mock("./plugin-sdk/facade-runtime.js", async (importOriginal) => {
 describe("plugin activation boundary", () => {
   beforeEach(() => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
-    vi.resetModules();
   });
 
+  let ambientImportsPromise: Promise<void> | undefined;
+  let configHelpersPromise:
+    | Promise<{
+        isChannelConfigured: typeof import("./config/channel-configured.js").isChannelConfigured;
+        resolveEnvApiKey: typeof import("./agents/model-auth-env.js").resolveEnvApiKey;
+      }>
+    | undefined;
+  let modelSelectionPromise:
+    | Promise<{
+        normalizeModelRef: typeof import("./agents/model-selection.js").normalizeModelRef;
+      }>
+    | undefined;
+
+  function importAmbientModules() {
+    ambientImportsPromise ??= Promise.all([
+      import("./agents/cli-session.js"),
+      import("./commands/onboard-custom.js"),
+      import("./commands/opencode-go-model-default.js"),
+      import("./commands/opencode-zen-model-default.js"),
+    ]).then(() => undefined);
+    return ambientImportsPromise;
+  }
+
+  function importConfigHelpers() {
+    configHelpersPromise ??= Promise.all([
+      import("./config/channel-configured.js"),
+      import("./agents/model-auth-env.js"),
+    ]).then(([channelConfigured, modelAuthEnv]) => ({
+      isChannelConfigured: channelConfigured.isChannelConfigured,
+      resolveEnvApiKey: modelAuthEnv.resolveEnvApiKey,
+    }));
+    return configHelpersPromise;
+  }
+
+  function importModelSelection() {
+    modelSelectionPromise ??= import("./agents/model-selection.js").then((module) => ({
+      normalizeModelRef: module.normalizeModelRef,
+    }));
+    return modelSelectionPromise;
+  }
+
   it("does not load bundled provider plugins on ambient command imports", async () => {
-    await import("./agents/cli-session.js");
-    await import("./commands/onboard-custom.js");
-    await import("./commands/opencode-go-model-default.js");
-    await import("./commands/opencode-zen-model-default.js");
+    await importAmbientModules();
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
   it("does not load bundled plugins for config and env detection helpers", async () => {
-    const { isChannelConfigured } = await import("./config/channel-configured.js");
-    const { resolveEnvApiKey } = await import("./agents/model-auth-env.js");
+    const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
     expect(resolveEnvApiKey("anthropic-vertex", {})).toBeNull();
@@ -35,7 +71,7 @@ describe("plugin activation boundary", () => {
   });
 
   it("does not load provider plugins for static model id normalization", async () => {
-    const { normalizeModelRef } = await import("./agents/model-selection.js");
+    const { normalizeModelRef } = await importModelSelection();
 
     expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
       provider: "google",
