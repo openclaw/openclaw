@@ -1,7 +1,7 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
