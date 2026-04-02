@@ -493,6 +493,29 @@ describe("sendMessageMatrix mentions", () => {
       "m.mentions": { user_ids: ["@alice:example.org"] },
     });
   });
+
+  it("does not emit mentions from fallback filenames when there is no caption", async () => {
+    const { client, sendMessage } = makeClient();
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("media"),
+      fileName: "@room.png",
+      contentType: "image/png",
+      kind: "image",
+    });
+
+    await sendMessageMatrix("room:!room:example", "", {
+      client,
+      mediaUrl: "file:///tmp/room.png",
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "@room.png",
+      "m.mentions": {},
+    });
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).toBeUndefined();
+  });
 });
 
 describe("sendMessageMatrix threads", () => {

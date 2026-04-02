@@ -34,10 +34,10 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
 export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
   content: MatrixFormattedContent;
-  body: string;
+  markdown?: string | null;
 }): Promise<void> {
   const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
-    markdown: params.body ?? "",
+    markdown: params.markdown ?? "",
     client: params.client,
   });
   params.content["m.mentions"] = mentions;
