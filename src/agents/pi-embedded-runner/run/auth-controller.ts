@@ -316,6 +316,7 @@ export function createEmbeddedRunAuthController(params: {
       profileId: candidate,
       store: params.authStore,
       agentDir: params.agentDir,
+      lockedProfile: candidate != null && candidate === params.lockedProfileId,
     });
   };
 
