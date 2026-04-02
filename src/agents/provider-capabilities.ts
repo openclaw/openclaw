@@ -57,6 +57,8 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
     openAiPayloadNormalizationMode: "moonshot-thinking",
   },
   kimi: {
+    anthropicToolSchemaMode: "openai-functions",
+    anthropicToolChoiceMode: "openai-string-modes",
     openAiPayloadNormalizationMode: "moonshot-thinking",
   },
   opencode: {

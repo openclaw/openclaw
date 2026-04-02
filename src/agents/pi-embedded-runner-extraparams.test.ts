@@ -1090,7 +1090,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
+  it("rewrites tool schema for Kimi to the OpenAI function shape", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1127,16 +1127,22 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.tools).toEqual([
       {
-        name: "read",
-        description: "Read file",
-        input_schema: {
-          type: "object",
-          properties: { path: { type: "string" } },
-          required: ["path"],
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
         },
       },
     ]);
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    expect(payloads[0]?.tool_choice).toEqual({
+      type: "function",
+      function: { name: "read" },
+    });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
@@ -1285,6 +1291,63 @@ describe("applyExtraParamsToAgent", () => {
         workspaceDir: "/tmp/workspace-capabilities",
       }),
     );
+  });
+
+  it("normalizes kimi-coding anthropic tool payloads to OpenAI function shape", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "exec",
+            description: "Execute a shell command",
+            input_schema: {
+              type: "object",
+              properties: {
+                command: { type: "string" },
+              },
+              required: ["command"],
+            },
+          },
+        ],
+        tool_choice: { type: "any" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "kimi-coding",
+      id: "k2p5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "exec",
+            description: "Execute a shell command",
+            parameters: {
+              type: "object",
+              properties: {
+                command: { type: "string" },
+              },
+              required: ["command"],
+            },
+          },
+        },
+      ],
+      tool_choice: "auto",
+    });
   });
 
   it("sanitizes invalid Atproxy Gemini negative thinking budgets", () => {
