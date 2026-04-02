@@ -91,7 +91,7 @@
           "exportName": "ChannelConfigSchema",
           "kind": "type",
           "source": {
-            "line": 70,
+            "line": 71,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -100,7 +100,7 @@
           "exportName": "ChannelConfigUiHint",
           "kind": "type",
           "source": {
-            "line": 39,
+            "line": 40,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -181,7 +181,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 78,
+            "line": 81,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -478,7 +478,7 @@
           "exportName": "ReplyPayload",
           "kind": "type",
           "source": {
-            "line": 79,
+            "line": 85,
             "path": "src/auto-reply/types.ts"
           }
         },
@@ -2292,7 +2292,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 78,
+            "line": 81,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -3756,7 +3756,7 @@
           "exportName": "ChannelConfigUiHint",
           "kind": "type",
           "source": {
-            "line": 39,
+            "line": 40,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
@@ -3801,7 +3801,7 @@
           "exportName": "ChannelPlugin",
           "kind": "type",
           "source": {
-            "line": 78,
+            "line": 81,
             "path": "src/channels/plugins/types.plugin.ts"
           }
         },
