@@ -4,7 +4,7 @@ import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 
-function stripRelevantMemoriesTags(text: string): string {
+export function stripRelevantMemoriesScaffolding(text: string): string {
   if (!text || !MEMORY_TAG_QUICK_RE.test(text)) {
     return text;
   }
@@ -43,5 +43,5 @@ function stripRelevantMemoriesTags(text: string): string {
 
 export function stripAssistantInternalScaffolding(text: string): string {
   const withoutReasoning = stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
-  return stripRelevantMemoriesTags(withoutReasoning).trimStart();
+  return stripRelevantMemoriesScaffolding(withoutReasoning).trimStart();
 }

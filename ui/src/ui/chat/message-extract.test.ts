@@ -42,6 +42,26 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("strips user inbound metadata and relevant-memories scaffolding together", () => {
+    const message = {
+      role: "user",
+      content: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"123"}',
+        "```",
+        "",
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        "",
+        "Actual user message",
+      ].join("\n"),
+    };
+    expect(extractText(message)).toBe("Actual user message");
+    expect(extractTextCached(message)).toBe("Actual user message");
+  });
 });
 
 describe("extractThinkingCached", () => {

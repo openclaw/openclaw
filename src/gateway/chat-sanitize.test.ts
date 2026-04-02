@@ -71,6 +71,26 @@ describe("stripEnvelopeFromMessage", () => {
     expect(result.senderLabel).toBe("alice");
   });
 
+  test("removes relevant-memories scaffolding from sanitized user messages", () => {
+    const input = {
+      role: "user",
+      content: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"123"}',
+        "```",
+        "",
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        "",
+        "Actual user message",
+      ].join("\n"),
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Actual user message");
+  });
+
   test("strips metadata-like blocks even when not a prefix", () => {
     const input = {
       role: "user",

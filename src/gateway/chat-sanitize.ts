@@ -3,6 +3,7 @@ import {
   stripInboundMetadata,
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { stripRelevantMemoriesScaffolding } from "../shared/text/assistant-visible-text.js";
 
 export { stripEnvelope };
 
@@ -48,9 +49,12 @@ function stripEnvelopeFromContentWithRole(
       return item;
     }
     const inboundStripped = stripInboundMetadata(entry.text);
-    const stripped = stripUserEnvelope
+    const visibleText = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
+    const stripped = stripUserEnvelope
+      ? stripRelevantMemoriesScaffolding(visibleText).trimStart()
+      : visibleText;
     if (stripped === entry.text) {
       return item;
     }
@@ -81,9 +85,12 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
 
   if (typeof entry.content === "string") {
     const inboundStripped = stripInboundMetadata(entry.content);
-    const stripped = stripUserEnvelope
+    const visibleText = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
+    const stripped = stripUserEnvelope
+      ? stripRelevantMemoriesScaffolding(visibleText).trimStart()
+      : visibleText;
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -96,9 +103,12 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     }
   } else if (typeof entry.text === "string") {
     const inboundStripped = stripInboundMetadata(entry.text);
-    const stripped = stripUserEnvelope
+    const visibleText = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
+    const stripped = stripUserEnvelope
+      ? stripRelevantMemoriesScaffolding(visibleText).trimStart()
+      : visibleText;
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;

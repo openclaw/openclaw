@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { stripAssistantInternalScaffolding } from "./assistant-visible-text.js";
+import {
+  stripAssistantInternalScaffolding,
+  stripRelevantMemoriesScaffolding,
+} from "./assistant-visible-text.js";
 
 describe("stripAssistantInternalScaffolding", () => {
   function expectVisibleText(input: string, expected: string) {
@@ -98,5 +101,32 @@ describe("stripAssistantInternalScaffolding", () => {
       return;
     }
     expectVisibleText(input, expected);
+  });
+});
+
+describe("stripRelevantMemoriesScaffolding", () => {
+  it("strips relevant-memories blocks without touching surrounding visible text", () => {
+    const input = [
+      "Visible intro",
+      "<relevant-memories>",
+      "Internal memory note",
+      "</relevant-memories>",
+      "",
+      "Visible outro",
+    ].join("\n");
+    expect(stripRelevantMemoriesScaffolding(input)).toBe("Visible intro\n\n\nVisible outro");
+  });
+
+  it("preserves literal relevant-memories tags inside fenced code", () => {
+    const input = [
+      "```xml",
+      "<relevant-memories>",
+      "sample",
+      "</relevant-memories>",
+      "```",
+      "",
+      "Visible text",
+    ].join("\n");
+    expect(stripRelevantMemoriesScaffolding(input)).toBe(input);
   });
 });

@@ -145,6 +145,26 @@ describe("message-normalizer", () => {
 
       expect(result.senderLabel).toBe("Iris");
     });
+
+    it("strips user relevant-memories scaffolding after inbound metadata cleanup", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          '{"message_id":"123"}',
+          "```",
+          "",
+          "<relevant-memories>",
+          "Internal memory context",
+          "</relevant-memories>",
+          "",
+          "Actual user message",
+        ].join("\n"),
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Actual user message" }]);
+    });
   });
 
   describe("normalizeRoleForGrouping", () => {

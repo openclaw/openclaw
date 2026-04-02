@@ -8,6 +8,7 @@ import {
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
+import { stripRelevantMemoriesScaffolding } from "../../../../src/shared/text/assistant-visible-text.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
@@ -61,7 +62,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   if (role === "user" || role === "User") {
     content = content.map((item) => {
       if (item.type === "text" && typeof item.text === "string") {
-        return { ...item, text: stripInboundMetadata(item.text) };
+        return {
+          ...item,
+          text: stripRelevantMemoriesScaffolding(stripInboundMetadata(item.text)).trimStart(),
+        };
       }
       return item;
     });
