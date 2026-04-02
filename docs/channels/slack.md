@@ -529,6 +529,10 @@ opt into origin-chat delivery:
 Shared `approvals.exec` forwarding is separate. Use it only when approval prompts must also route
 to other chats or explicit out-of-band targets.
 
+When `approvals.exec.targets` forwards prompts to Slack, Slack still needs approver resolution via
+`channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`. Slack DM allowlists
+(`channels.slack.allowFrom` / `dm.allowFrom`) do not grant exec approval permissions.
+
 Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 
 ## Troubleshooting

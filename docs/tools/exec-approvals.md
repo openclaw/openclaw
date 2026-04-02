@@ -528,11 +528,38 @@ Shared behavior:
 - for Discord and Telegram, only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
+- `channels.slack.allowFrom` does not grant Slack exec approval permissions
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - when native `target` enables origin-chat delivery, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
+
+If you route `approvals.exec.targets` to Slack, also ensure Slack approvers resolve through
+`channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`. Routing alone only controls
+where prompts are delivered, not who can approve them.
+
+```json5
+{
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "targets",
+      targets: [{ channel: "slack", to: "U12345678" }],
+    },
+  },
+  commands: {
+    ownerAllowFrom: ["slack:U12345678"], // or set channels.slack.execApprovals.approvers
+  },
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
 
 Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
 want approval prompts to appear in the originating Telegram chat/topic as well. For Telegram forum
