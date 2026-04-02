@@ -112,6 +112,30 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("treats explicit empty-string write content as an empty-file write", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "SCRATCH.md";
+        await fs.writeFile(path.join(workspaceDir, testFile), "stale scratch", "utf8");
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { writeTool } = expectReadWriteEditTools(tools);
+
+          await writeTool.execute("ws-write-empty-string", {
+            path: testFile,
+            content: "",
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("");
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
   it("allows deletion edits with empty newText", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
