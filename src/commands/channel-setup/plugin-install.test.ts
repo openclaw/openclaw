@@ -119,6 +119,7 @@ beforeEach(() => {
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
     config: params.config,
     changes: [],
+    autoEnabledReasons: {},
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
@@ -378,6 +379,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         includeSetupOnlyChannelPlugins: true,
@@ -402,7 +405,11 @@ describe("ensureChannelSetupPluginInstalled", () => {
         },
       },
     } as OpenClawConfig;
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
 
     reloadChannelSetupPluginRegistry({
       cfg,
@@ -417,6 +424,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
       }),
     );
   });
@@ -436,6 +445,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/telegram-plugin"],
@@ -503,6 +514,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         onlyPluginIds: ["@openclaw/telegram-plugin"],
       }),
     );
@@ -523,6 +536,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/telegram-plugin"],
@@ -568,6 +583,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["custom-telegram-plugin"],
@@ -592,6 +609,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/msteams-plugin"],

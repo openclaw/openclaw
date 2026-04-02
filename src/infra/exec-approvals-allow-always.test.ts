@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -13,6 +14,7 @@ import {
   resolveAllowAlwaysPatterns,
   resolveSafeBins,
 } from "./exec-approvals.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 
 describe("resolveAllowAlwaysPatterns", () => {
   function makeExecutable(dir: string, name: string): string {
@@ -247,6 +249,51 @@ describe("resolveAllowAlwaysPatterns", () => {
       platform: process.platform,
     });
     expect(second.allowlistSatisfied).toBe(true);
+  });
+
+  it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
+    const awk = "C:\\temp\\awk.exe";
+    const resolution = makeMockCommandResolution({
+      execution: makeMockExecutableResolution({
+        rawExecutable: awk,
+        resolvedPath: awk,
+        executableName: "awk",
+      }),
+    });
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: [
+        {
+          raw: `${awk} -F , -f script.awk data.csv`,
+          argv: [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+          resolution,
+        },
+      ],
+      platform: "win32",
+      strictInlineEval: true,
+    });
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        pattern: awk,
+        argPattern: expect.any(String),
+      }),
+    ]);
+    expect(
+      matchAllowlist(
+        entries,
+        resolution.execution ?? null,
+        [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+        "win32",
+      ),
+    ).toEqual(expect.objectContaining({ pattern: awk, argPattern: expect.any(String) }));
+    expect(
+      matchAllowlist(
+        entries,
+        resolution.execution ?? null,
+        [awk, "-f", "other.awk", "secrets.csv"],
+        "win32",
+      ),
+    ).toBeNull();
   });
 
   it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {

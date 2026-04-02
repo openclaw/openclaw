@@ -12,8 +12,8 @@ Webhook helpers and integrations (Gmail Pub/Sub, webhook helpers).
 
 Related:
 
-- Webhooks: [Webhook](/automation/webhook)
-- Gmail Pub/Sub: [Gmail Pub/Sub](/automation/gmail-pubsub)
+- Webhooks: [Webhooks](/automation/cron-jobs#webhooks)
+- Gmail Pub/Sub: [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration)
 
 ## Gmail
 
@@ -22,4 +22,4 @@ openclaw webhooks gmail setup --account you@example.com
 openclaw webhooks gmail run
 ```
 
-See [Gmail Pub/Sub documentation](/automation/gmail-pubsub) for details.
+See [Gmail Pub/Sub documentation](/automation/cron-jobs#gmail-pubsub-integration) for details.
