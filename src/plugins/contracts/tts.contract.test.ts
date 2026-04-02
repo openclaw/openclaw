@@ -392,8 +392,9 @@ describe("tts", () => {
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input =
-        "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
-        "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
+        "Hello world\n" +
+        "[[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]]\n\n" +
+        "[[tts:text]]\n(laughs) Read the song once more.\n[[/tts:text]]";
       const result = parseTtsDirectives(input, policy);
       const elevenlabsOverrides = result.overrides.providerOverrides?.elevenlabs as
         | {
@@ -412,7 +413,7 @@ describe("tts", () => {
 
     it("accepts edge as a legacy microsoft provider override", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
-      const input = "Hello [[tts:provider=edge]] world";
+      const input = "Hello world\n[[tts:provider=edge]]";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
@@ -420,7 +421,7 @@ describe("tts", () => {
 
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
-      const input = "Hello [[tts:provider=edge voice=alloy]] world";
+      const input = "Hello world\n[[tts:provider=edge voice=alloy]]";
       const result = parseTtsDirectives(input, policy);
       const openaiOverrides = result.overrides.providerOverrides?.openai as
         | { voice?: string }
@@ -441,7 +442,7 @@ describe("tts", () => {
 
     it("accepts custom voices and models when openaiBaseUrl is a non-default endpoint", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
-      const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
+      const input = "Hello world\n[[tts:voice=kokoro-chinese model=kokoro-v1]]";
       const result = parseTtsDirectives(input, policy, {
         providerConfigs: {
           openai: { baseUrl: "http://localhost:8880/v1" },
@@ -458,7 +459,7 @@ describe("tts", () => {
 
     it("rejects unknown voices and models when openaiBaseUrl is the default OpenAI endpoint", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
-      const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
+      const input = "Hello world\n[[tts:voice=kokoro-chinese model=kokoro-v1]]";
       const result = parseTtsDirectives(input, policy, {
         providerConfigs: {
           openai: { baseUrl: "https://api.openai.com/v1" },
@@ -470,6 +471,80 @@ describe("tts", () => {
 
       expect(openaiOverrides?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
+    });
+
+    it("keeps inline literal directive examples as plain text", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input =
+        "This reply mentions [[tts:provider=edge]] and [[tts:text]]hello[[/tts:text]] as plain text examples.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+      expect(result.overrides.provider).toBeUndefined();
+      expect(result.ttsText).toBeUndefined();
+    });
+
+    it("parses standalone directives in CRLF text", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = [
+        "Hello world",
+        "[[tts:provider=edge voice=alloy]]",
+        "",
+        "[[tts:text]]",
+        "Read this with feeling.",
+        "[[/tts:text]]",
+      ].join("\r\n");
+      const result = parseTtsDirectives(input, policy);
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string }
+        | undefined;
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.overrides.provider).toBe("edge");
+      expect(openaiOverrides?.voice).toBe("alloy");
+      expect(result.ttsText).toBe("Read this with feeling.");
+      expect(result.cleanedText).toBe(["Hello world", ""].join("\r\n"));
+    });
+
+    it("uses only the first [[tts:text]] block when multiple blocks are present", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = [
+        "Intro",
+        "[[tts:text]]",
+        "first block text",
+        "[[/tts:text]]",
+        "",
+        "[[tts:text]]",
+        "second block text",
+        "[[/tts:text]]",
+      ].join("\n");
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.ttsText).toBe("first block text");
+      expect(result.cleanedText).toBe(["Intro", ""].join("\n"));
+      expect(result.hasDirective).toBe(true);
+    });
+
+    it("parses [[TTS:TEXT]] blocks case-insensitively", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = ["Intro", "[[TTS:TEXT]]", "uppercase block text", "[[/TTS:TEXT]]"].join("\n");
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.ttsText).toBe("uppercase block text");
+      expect(result.cleanedText).toBe("Intro");
+      expect(result.hasDirective).toBe(true);
+    });
+
+    it("preserves surrounding blank lines in cleanedText after directive removal", () => {
+      // Removing the directive line collapses one newline from the surrounding
+      // blank lines, resulting in three consecutive newlines (\n\n\n).
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "\n\n[[tts:provider=edge]]\n\nBody paragraph.\n\n";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.cleanedText).toBe("\n\n\nBody paragraph.\n\n");
+      expect(result.overrides.provider).toBe("edge");
     });
   });
 
@@ -1063,7 +1138,7 @@ describe("tts", () => {
       },
       {
         name: "tagged text is synthesized",
-        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+        payload: { text: "[[tts:text]]\nHello world\n[[/tts:text]]" },
         expectedFetchCalls: 1,
         expectSamePayload: false,
       },
