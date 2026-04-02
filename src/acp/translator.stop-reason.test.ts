@@ -240,21 +240,23 @@ describe("acp translator stop reason mapping", () => {
     );
   });
 
-  it("clears the disconnect deadline on reconnect when agent.wait reports the run still active", async () => {
+  it("rechecks accepted prompts at the disconnect deadline after reconnect timeout", async () => {
     vi.useFakeTimers();
     try {
       const sessionId = "session-1";
       const sessionKey = "agent:main:main";
+      let waitCount = 0;
       const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
           return {};
         }
         if (method === "agent.wait") {
+          waitCount += 1;
           expect(params).toEqual({
             runId: expect.any(String),
             timeoutMs: 0,
           });
-          return { status: "timeout" };
+          return waitCount === 1 ? { status: "timeout" } : { status: "ok" };
         }
         return {};
       }) as GatewayClient["request"];
@@ -283,8 +285,11 @@ describe("acp translator stop reason mapping", () => {
       agent.handleGatewayReconnect();
       await Promise.resolve();
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(settleSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
     } finally {
       vi.useRealTimers();
     }
@@ -296,11 +301,16 @@ describe("acp translator stop reason mapping", () => {
       const sessionId = "session-1";
       const sessionKey = "agent:main:main";
       let resolveAgentWait: ((value: { status: "timeout" }) => void) | undefined;
+      let agentWaitCount = 0;
       const request = vi.fn(async (method: string) => {
         if (method === "chat.send") {
           return {};
         }
         if (method === "agent.wait") {
+          agentWaitCount += 1;
+          if (agentWaitCount > 1) {
+            return { status: "timeout" };
+          }
           return await new Promise<{ status: "timeout" }>((resolve) => {
             resolveAgentWait = resolve;
           });
@@ -503,17 +513,24 @@ describe("acp translator stop reason mapping", () => {
   it("rejects only unrecovered prompts after reconnect reconciliation", async () => {
     vi.useFakeTimers();
     try {
-      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      let acceptedRunId: string | undefined;
+      let acceptedWaitCount = 0;
+      const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
           return params?.sessionKey === "agent:main:second"
             ? Promise.reject(new Error("gateway closed (1006): connection lost"))
             : {};
         }
         if (method === "agent.wait") {
-          return { status: "timeout" };
+          return params?.runId === acceptedRunId && acceptedRunId
+            ? acceptedWaitCount++ === 0
+              ? { status: "timeout" }
+              : { status: "ok" }
+            : { status: "timeout" };
         }
         return {};
-      }) as GatewayClient["request"];
+      });
+      const request = requestMock as GatewayClient["request"];
       const sessionStore = createInMemorySessionStore();
       sessionStore.createSession({
         sessionId: "session-1",
@@ -547,13 +564,17 @@ describe("acp translator stop reason mapping", () => {
       void preAckPrompt.catch(() => {});
 
       await Promise.resolve();
+      acceptedRunId = requestMock.mock.calls.find((call) => {
+        const [method, requestParams] = call;
+        return method === "chat.send" && requestParams?.sessionKey === "agent:main:first";
+      })?.[1]?.idempotencyKey as string | undefined;
 
       agent.handleGatewayDisconnect("1006: connection lost");
       agent.handleGatewayReconnect();
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(5_000);
 
-      expect(acceptedSettleSpy).not.toHaveBeenCalled();
+      await expect(acceptedPrompt).resolves.toEqual({ stopReason: "end_turn" });
       await expect(preAckPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
     } finally {
       vi.useRealTimers();

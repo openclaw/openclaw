@@ -462,10 +462,7 @@ export class AcpGatewayAgent implements Agent {
     this.clearDisconnectTimer();
     this.disconnectTimer = setTimeout(() => {
       this.disconnectTimer = null;
-      this.rejectPendingPrompts(
-        new Error(`Gateway disconnected: ${reason}`),
-        this.disconnectDeadlineSessionIds,
-      );
+      void this.expireDisconnectDeadline(new Error(`Gateway disconnected: ${reason}`));
     }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
     this.disconnectTimer.unref?.();
   }
@@ -1057,6 +1054,50 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
+  private async expireDisconnectDeadline(error: Error): Promise<void> {
+    const deadlineSessionIds = [...this.disconnectDeadlineSessionIds];
+    for (const sessionId of deadlineSessionIds) {
+      const pending = this.pendingPrompts.get(sessionId);
+      if (!pending) {
+        this.disconnectDeadlineSessionIds.delete(sessionId);
+        continue;
+      }
+      if (!pending.sendAccepted) {
+        this.rejectPendingPrompts(error, [sessionId]);
+        continue;
+      }
+
+      let result: AgentWaitResult | undefined;
+      try {
+        result = await this.gateway.request<AgentWaitResult>(
+          "agent.wait",
+          {
+            runId: pending.idempotencyKey,
+            timeoutMs: 0,
+          },
+          { timeoutMs: null },
+        );
+      } catch {
+        this.rejectPendingPrompts(error, [sessionId]);
+        continue;
+      }
+
+      const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+      if (!currentPending) {
+        continue;
+      }
+      if (result?.status === "ok") {
+        await this.finishPrompt(sessionId, currentPending, "end_turn");
+        continue;
+      }
+      if (result?.status === "error") {
+        void this.finishPrompt(sessionId, currentPending, "end_turn");
+        continue;
+      }
+      this.rejectPendingPrompts(error, [sessionId]);
+    }
+  }
+
   private async reconcilePendingPromptsOnReconnect(
     observedDisconnectGeneration: number,
   ): Promise<void> {
@@ -1102,7 +1143,7 @@ export class AcpGatewayAgent implements Agent {
         void this.finishPrompt(sessionId, pending, "end_turn");
         continue;
       }
-      if (result?.status === "timeout" && !pending.sendAccepted) {
+      if (result?.status === "timeout") {
         keepDisconnectTimer = true;
         nextDisconnectDeadlineSessionIds.add(sessionId);
         continue;
