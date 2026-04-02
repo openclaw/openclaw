@@ -29,12 +29,31 @@ describe("handshake auth helpers", () => {
       browserRateLimiter,
     });
 
+    // URL parsing strips the default HTTPS port, so :443 is normalized away.
     expect(resolved).toMatchObject({
       hasBrowserOriginHeader: true,
       enforceOriginCheckForAnyClient: true,
-      rateLimitClientIp: `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}https://app.example:443`,
+      rateLimitClientIp: `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}https://app.example`,
       authRateLimiter: browserRateLimiter,
     });
+  });
+
+  it("canonicalizes equivalent origins to the same rate-limit bucket", () => {
+    const rateLimiter = createRateLimiter();
+    const browserRateLimiter = createRateLimiter();
+    const withPort = resolveHandshakeBrowserSecurityContext({
+      requestOrigin: "https://app.example:443",
+      clientIp: "127.0.0.1",
+      rateLimiter,
+      browserRateLimiter,
+    });
+    const withoutPort = resolveHandshakeBrowserSecurityContext({
+      requestOrigin: "https://app.example",
+      clientIp: "127.0.0.1",
+      rateLimiter,
+      browserRateLimiter,
+    });
+    expect(withPort.rateLimitClientIp).toBe(withoutPort.rateLimitClientIp);
   });
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {

@@ -8,7 +8,15 @@ import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 function resolveBrowserOriginRateLimitKey(requestOrigin: string): string {
-  const normalizedOrigin = requestOrigin.trim().toLowerCase();
+  const trimmed = requestOrigin.trim();
+  let normalizedOrigin: string;
+  try {
+    // Use URL-parsed canonical origin so equivalent forms like
+    // "https://app.example:443" and "https://app.example" share one bucket.
+    normalizedOrigin = new URL(trimmed).origin.toLowerCase();
+  } catch {
+    normalizedOrigin = trimmed.toLowerCase();
+  }
   return `${AUTH_RATE_LIMIT_CLIENT_KEY_BROWSER_ORIGIN_PREFIX}${normalizedOrigin}`;
 }
 
