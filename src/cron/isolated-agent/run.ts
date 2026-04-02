@@ -335,7 +335,31 @@ export async function runCronIsolatedAgentTurn(params: {
       params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
   });
 
+  // Propagate cron timeoutSeconds to LLM idle timeout if not explicitly configured.
+  // This ensures that long-running cron jobs don't hit the default 60s LLM idle timeout
+  // when the user has configured a longer job timeout.
+  // See: https://github.com/openclaw/openclaw/issues/59403
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
+  const effectiveLlmIdleTimeoutSeconds =
+    params.cfg.agents?.defaults?.llm?.idleTimeoutSeconds ?? agentPayload?.timeoutSeconds;
+  if (
+    agentPayload?.timeoutSeconds &&
+    params.cfg.agents?.defaults?.llm?.idleTimeoutSeconds === undefined
+  ) {
+    cfgWithAgentDefaults = {
+      ...cfgWithAgentDefaults,
+      agents: {
+        ...cfgWithAgentDefaults.agents,
+        defaults: {
+          ...cfgWithAgentDefaults.agents?.defaults,
+          llm: {
+            ...cfgWithAgentDefaults.agents?.defaults?.llm,
+            idleTimeoutSeconds: agentPayload.timeoutSeconds,
+          },
+        },
+      },
+    };
+  }
   const { deliveryRequested, resolvedDelivery, toolPolicy } = await resolveCronDeliveryContext({
     cfg: cfgWithAgentDefaults,
     job: params.job,
