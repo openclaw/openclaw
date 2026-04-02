@@ -34,6 +34,10 @@ const noopLogger = {
 type Registered = {
   methods: Map<string, unknown>;
   tools: unknown[];
+  service?: {
+    start: () => Promise<void>;
+    stop: () => Promise<void>;
+  };
 };
 type RegisterVoiceCall = (api: Record<string, unknown>) => void | Promise<void>;
 type RegisterCliContext = {
@@ -57,6 +61,12 @@ function captureStdout() {
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
+  let service:
+    | {
+        start: () => Promise<void>;
+        stop: () => Promise<void>;
+      }
+    | undefined;
   void plugin.register({
     id: "voice-call",
     name: "Voice Call",
@@ -72,10 +82,12 @@ function setup(config: Record<string, unknown>): Registered {
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
-    registerService: () => {},
+    registerService: (registeredService: unknown) => {
+      service = registeredService as Registered["service"];
+    },
     resolvePath: (p: string) => p,
   } as unknown as Parameters<typeof plugin.register>[0]);
-  return { methods, tools };
+  return { methods, tools, service };
 }
 
 async function registerVoiceCallCli(program: Command) {
@@ -131,6 +143,18 @@ describe("voice-call plugin", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it("claims shared runtime shutdown so multi-context stop runs once", async () => {
+    const first = setup({ provider: "mock" });
+    const second = setup({ provider: "mock" });
+
+    await first.service?.start();
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+
+    await Promise.all([first.service?.stop(), second.service?.stop()]);
+
+    expect(runtimeStub.stop).toHaveBeenCalledTimes(1);
+  });
 
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });

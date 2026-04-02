@@ -199,7 +199,7 @@ export default definePluginEntry({
         throw err;
       }
 
-      return globalState[VOICE_RUNTIME_KEY];
+      return globalState[VOICE_RUNTIME_KEY]!;
     };
 
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
@@ -552,17 +552,16 @@ export default definePluginEntry({
         }
       },
       stop: async () => {
-        if (!globalState[VOICE_RUNTIME_PROMISE_KEY] && !globalState[VOICE_RUNTIME_KEY]) {
+        // Claim shared state before awaiting so only one plugin context performs teardown.
+        const capturedPromise = globalState[VOICE_RUNTIME_PROMISE_KEY];
+        const capturedRuntime = globalState[VOICE_RUNTIME_KEY];
+        if (!capturedPromise && !capturedRuntime) {
           return;
         }
-        try {
-          const rt =
-            globalState[VOICE_RUNTIME_KEY] ?? (await globalState[VOICE_RUNTIME_PROMISE_KEY]!);
-          await rt.stop();
-        } finally {
-          globalState[VOICE_RUNTIME_PROMISE_KEY] = null;
-          globalState[VOICE_RUNTIME_KEY] = null;
-        }
+        globalState[VOICE_RUNTIME_PROMISE_KEY] = null;
+        globalState[VOICE_RUNTIME_KEY] = null;
+        const rt = capturedRuntime ?? (await capturedPromise!);
+        await rt.stop();
       },
     });
   },
