@@ -256,10 +256,10 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
             if (!trimmed) {
               return false;
             }
-            // Synology Chat user IDs are numeric
-            return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
+            // Numeric user IDs, prefixed targets, or channel/group targets
+            return /^\d+$/.test(trimmed) || /^(synology[-_]?chat|channel|group):/i.test(trimmed);
           },
-          hint: "<userId>",
+          hint: "<userId> or channel:<name> or group:<name>",
         },
       },
       directory: createEmptyChannelDirectoryAdapter(),
