@@ -15,7 +15,7 @@ IRC ships as an extension plugin, but it is configured in the main config under 
 
 1. Enable IRC config in `~/.openclaw/openclaw.json`.
 2. Install docker, if not already installed.
-3. Install and configure the ergo IRCd using docker. Instructions are at https://github.com/ergochat/ergo/blob/stable/docs/MANUAL.md#docker
+3. Install and configure the ergo IRCd using docker, [instructions are available on the ergo github.](https://github.com/ergochat/ergo/blob/stable/docs/MANUAL.md#docker)
 4. Set at least:
 
 ```json5
