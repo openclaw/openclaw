@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 
-const sendMessageIMessageMock = vi.fn().mockImplementation(async (to: string, message: string) => ({
-  messageId: "imsg-1",
-  sentText: message,
-}));
+const sendMessageIMessageMock = vi.hoisted(() =>
+  vi.fn().mockImplementation(async (to: string, message: string) => ({
+    messageId: "imsg-1",
+    sentText: message,
+  })),
+);
 
 vi.mock("../send.js", () => ({
   sendMessageIMessage: (to: string, message: string, opts?: unknown) =>
@@ -160,6 +162,38 @@ describe("deliverReplies", () => {
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "second",
       messageId: "imsg-1",
+    });
+  });
+
+  it("caches media placeholder sentText for file-only messages", async () => {
+    const remember = vi.fn();
+    // Mock returns empty string for caption, but sentText will be the media placeholder
+    sendMessageIMessageMock.mockResolvedValue({
+      messageId: "imsg-media",
+      sentText: "<media:pdf>",
+    });
+
+    await deliverReplies({
+      replies: [{ mediaUrls: ["https://example.com/doc.pdf"] }],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+      sentMessageCache: { remember },
+    });
+
+    // Should call send with empty caption (file-only)
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:40",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/doc.pdf" }),
+    );
+    // Should cache the media placeholder sentText returned by send
+    expect(remember).toHaveBeenCalledWith("acct-4:chat_id:40", {
+      text: "<media:pdf>",
+      messageId: "imsg-media",
     });
   });
 });

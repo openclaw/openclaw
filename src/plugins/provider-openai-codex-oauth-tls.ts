@@ -103,7 +103,7 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
-  const timeoutMs = options?.timeoutMs ?? 5000;
+  const timeoutMs = options?.timeoutMs ?? 60_000; // 60s default, respect configured timeout
   const fetchImpl = options?.fetchImpl ?? fetch;
   try {
     await fetchImpl(OPENAI_AUTH_PROBE_URL, {

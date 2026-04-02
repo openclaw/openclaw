@@ -97,7 +97,7 @@ export async function detectZaiEndpoint(params: {
     return null;
   }
 
-  const timeoutMs = params.timeoutMs ?? 5_000;
+   const timeoutMs = params.timeoutMs ?? 60_000; // 60s default, respect configured timeout when provided
   const probeCandidates = (() => {
     const general = [
       {
