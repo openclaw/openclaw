@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Android/assistant: keep queued App Actions prompts pending when auto-send enqueue is rejected, so transient chat-health drops do not silently lose the assistant request. Thanks @obviyus.
 - Zalo/webhook: scope replay-dedupe cache key to path and account using `JSON.stringify` so multi-account deployments do not silently drop events due to cross-account cache poisoning. (#59387) Thanks @pgondhi987.
 - Plugins/Google: separate OAuth CSRF state from PKCE code verifier during Gemini browser sign-in so state validation and token exchange use independent values. (#59116) Thanks @eleqtrizit.
+- Exec/Windows: reject malformed drive-less rooted executable paths like `:\Users\...` so approval and allowlist candidate resolution no longer treat them as cwd-relative commands. (#58040) Thanks @SnowSky1.
 
 ## 2026.4.2-beta.1
 
