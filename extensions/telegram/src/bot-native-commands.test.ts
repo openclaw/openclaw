@@ -13,6 +13,7 @@ import {
   createNativeCommandTestParams,
   createPrivateCommandContext,
   deliverReplies,
+  editMessageTelegram,
   listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
@@ -240,6 +241,96 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it("shows immediate progress feedback for /lossless doctor apply and edits it in place on success", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "lossless",
+        nativeNames: { default: "lossless" },
+        description: "Lossless Claw command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: { key: "lcm", requireAuth: false },
+      args: "doctor apply",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "Lossless Claw Doctor Apply\n\nresult: repaired 8 summary(s) in place",
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("lossless");
+    expect(handler).toBeTruthy();
+    await handler?.(
+      createPrivateCommandContext({
+        match: "doctor apply",
+      }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Running `/lossless doctor apply`"),
+      undefined,
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      100,
+      999,
+      expect.stringContaining("Lossless Claw Doctor Apply"),
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a normal reply when the progress result is not editable", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "lcm",
+        nativeNames: { default: "lcm" },
+        description: "Lossless Claw command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: { key: "lcm", requireAuth: false },
+      args: "doctor apply",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "rich output",
+      mediaUrl: "/tmp/render.png",
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("lcm");
+    expect(handler).toBeTruthy();
+    await handler?.(
+      createPrivateCommandContext({
+        match: "doctor apply",
+      }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Running `/lcm doctor apply`"),
+      undefined,
+    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ mediaUrl: "/tmp/render.png" })],
+      }),
+    );
   });
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
