@@ -381,6 +381,67 @@ describe("gateway server sessions", () => {
     expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual(["agent:work:main"]);
   });
 
+  it("sessions.list stays consistent after config.set round-trip", async () => {
+    const dir = await resetTempDir("config-roundtrip-sessions");
+    const prevSessionConfig = testState.sessionConfig;
+    const prevAgentsConfig = testState.agentsConfig;
+    testState.sessionConfig = {
+      store: path.join(dir, "{agentId}", "sessions.json"),
+    };
+    testState.agentsConfig = {
+      list: [{ id: "home", default: true }],
+    };
+    try {
+      const homeDir = path.join(dir, "home");
+      await fs.mkdir(homeDir, { recursive: true });
+      await writeSessionStore({
+        storePath: path.join(homeDir, "sessions.json"),
+        agentId: "home",
+        entries: {
+          main: {
+            sessionId: "sess-home-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const params = {
+        includeGlobal: false,
+        includeUnknown: false,
+        agentId: "home",
+      } as const;
+
+      const before = await rpcReq<{
+        sessions: Array<{ key: string }>;
+      }>(requireWs(), "sessions.list", params);
+      expect(before.ok).toBe(true);
+      const keysBefore = before.payload?.sessions.map((s) => s.key).toSorted() ?? [];
+
+      const current = await rpcReq<{
+        hash?: string;
+        config?: Record<string, unknown>;
+      }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+
+      const setRes = await rpcReq<{ ok?: boolean }>(requireWs(), "config.set", {
+        raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+        baseHash: current.payload?.hash,
+      });
+      expect(setRes.ok).toBe(true);
+
+      const after = await rpcReq<{
+        sessions: Array<{ key: string }>;
+      }>(requireWs(), "sessions.list", params);
+      expect(after.ok).toBe(true);
+      const keysAfter = after.payload?.sessions.map((s) => s.key).toSorted() ?? [];
+      expect(keysAfter).toEqual(keysBefore);
+    } finally {
+      testState.sessionConfig = prevSessionConfig;
+      testState.agentsConfig = prevAgentsConfig;
+    }
+  });
+
   it("resolves and patches main alias to default agent main key", async () => {
     const dir = await resetTempDir("main-alias");
     const storePath = path.join(dir, "sessions.json");
