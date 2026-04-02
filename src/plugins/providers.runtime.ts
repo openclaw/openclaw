@@ -4,7 +4,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
   resolveEnabledProviderPluginIds,
@@ -70,7 +70,7 @@ export function resolvePluginProviders(params: {
     env,
     onlyPluginIds: params.onlyPluginIds,
   });
-  const registry = loadOpenClawPlugins({
+  const registry = resolveRuntimePluginRegistry({
     config,
     activationSourceConfig: params.config,
     autoEnabledReasons: autoEnabled?.autoEnabledReasons,
@@ -82,6 +82,9 @@ export function resolvePluginProviders(params: {
     activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
+  if (!registry) {
+    return [];
+  }
 
   return registry.providers.map((entry) => ({
     ...entry.provider,
