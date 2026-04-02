@@ -33,9 +33,16 @@ function dateStamp(): string {
   return `${y}-${m}-${d}`;
 }
 
-function appendJsonl(filePath: string, record: unknown): void {
+export function appendJsonl(filePath: string, record: unknown): void {
+  // Create a copy without the 'seq' field for file output
+  const recordForFile =
+    typeof record === "object" && record !== null
+      ? Object.fromEntries(
+          Object.entries(record as Record<string, unknown>).filter(([key]) => key !== "seq"),
+        )
+      : record;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, JSON.stringify(record) + "\n", "utf8");
+  fs.appendFileSync(filePath, JSON.stringify(recordForFile) + "\n", "utf8");
 }
 
 function purgeOldFiles(dir: string, retainDays: number): void {
