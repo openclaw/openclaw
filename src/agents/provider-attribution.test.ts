@@ -4,6 +4,7 @@ import {
   resolveProviderAttributionHeaders,
   resolveProviderAttributionIdentity,
   resolveProviderAttributionPolicy,
+  resolveProviderEndpoint,
   resolveProviderRequestAttributionHeaders,
   resolveProviderRequestPolicy,
 } from "./provider-attribution.js";
@@ -273,6 +274,71 @@ describe("provider attribution", () => {
       knownProviderFamily: "github-copilot",
       attributionProvider: undefined,
       allowsHiddenAttribution: false,
+    });
+  });
+
+  it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://generativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "google-generative-ai",
+      hostname: "generativelanguage.googleapis.com",
+    });
+
+    expect(
+      resolveProviderEndpoint("https://europe-west4-aiplatform.googleapis.com/v1/projects/test"),
+    ).toMatchObject({
+      endpointClass: "google-vertex",
+      hostname: "europe-west4-aiplatform.googleapis.com",
+      googleVertexRegion: "europe-west4",
+    });
+
+    expect(resolveProviderEndpoint("https://aiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.googleapis.com",
+      googleVertexRegion: "global",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/google")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
+    });
+  });
+
+  it("does not classify malformed or embedded Google host strings as native endpoints", () => {
+    expect(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy",
+    });
+
+    expect(resolveProviderEndpoint("https://xgenerativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "xgenerativelanguage.googleapis.com",
+    });
+
+    expect(resolveProviderEndpoint("proxy/aiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy",
+    });
+
+    expect(resolveProviderEndpoint("https://xaiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "xaiplatform.googleapis.com",
+    });
+  });
+
+  it("does not trust schemeless or embedded trusted-provider substrings", () => {
+    expect(resolveProviderEndpoint("api.openai.com.attacker.example")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "api.openai.com.attacker.example",
+    });
+
+    expect(resolveProviderEndpoint("attacker.example/?target=api.openai.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "attacker.example",
+    });
+
+    expect(resolveProviderEndpoint("openrouter.ai.attacker.example")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "openrouter.ai.attacker.example",
     });
   });
 
