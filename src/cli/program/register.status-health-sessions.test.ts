@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   tasksShowCommand: vi.fn(),
   tasksNotifyCommand: vi.fn(),
   tasksCancelCommand: vi.fn(),
+  flowsListCommand: vi.fn(),
+  flowsShowCommand: vi.fn(),
+  flowsCancelCommand: vi.fn(),
   setVerbose: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -31,6 +34,9 @@ const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
 const tasksShowCommand = mocks.tasksShowCommand;
 const tasksNotifyCommand = mocks.tasksNotifyCommand;
 const tasksCancelCommand = mocks.tasksCancelCommand;
+const flowsListCommand = mocks.flowsListCommand;
+const flowsShowCommand = mocks.flowsShowCommand;
+const flowsCancelCommand = mocks.flowsCancelCommand;
 const setVerbose = mocks.setVerbose;
 const runtime = mocks.runtime;
 
@@ -57,6 +63,12 @@ vi.mock("../../commands/tasks.js", () => ({
   tasksShowCommand: mocks.tasksShowCommand,
   tasksNotifyCommand: mocks.tasksNotifyCommand,
   tasksCancelCommand: mocks.tasksCancelCommand,
+}));
+
+vi.mock("../../commands/flows.js", () => ({
+  flowsListCommand: mocks.flowsListCommand,
+  flowsShowCommand: mocks.flowsShowCommand,
+  flowsCancelCommand: mocks.flowsCancelCommand,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -87,6 +99,9 @@ describe("registerStatusHealthSessionsCommands", () => {
     tasksShowCommand.mockResolvedValue(undefined);
     tasksNotifyCommand.mockResolvedValue(undefined);
     tasksCancelCommand.mockResolvedValue(undefined);
+    flowsListCommand.mockResolvedValue(undefined);
+    flowsShowCommand.mockResolvedValue(undefined);
+    flowsCancelCommand.mockResolvedValue(undefined);
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -218,6 +233,34 @@ describe("registerStatusHealthSessionsCommands", () => {
         fixMissing: true,
         activeKey: "agent:main:main",
         json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs flows subcommands with forwarded options", async () => {
+    await runCli(["flows", "list", "--json", "--status", "blocked"]);
+    expect(flowsListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        status: "blocked",
+      }),
+      runtime,
+    );
+
+    await runCli(["flows", "show", "flow-123", "--json"]);
+    expect(flowsShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+        json: true,
+      }),
+      runtime,
+    );
+
+    await runCli(["flows", "cancel", "flow-123"]);
+    expect(flowsCancelCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
       }),
       runtime,
     );

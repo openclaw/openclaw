@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { getFlowById, syncFlowFromTask } from "./flow-runtime-internal.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -47,6 +48,7 @@ const tasks = new Map<string, TaskRecord>();
 const taskDeliveryStates = new Map<string, TaskDeliveryState>();
 const taskIdsByRunId = new Map<string, Set<string>>();
 const taskIdsByOwnerKey = new Map<string, Set<string>>();
+const taskIdsByParentFlowId = new Map<string, Set<string>>();
 const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
 const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
@@ -58,12 +60,39 @@ let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runt
 type TaskDeliveryOwner = {
   sessionKey?: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  flowId?: string;
 };
 
 function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind }) {
   const ownerKey = params.ownerKey.trim();
   if (!ownerKey && params.scopeKind !== "system") {
     throw new Error("Task ownerKey is required.");
+  }
+}
+
+function normalizeOwnerKey(ownerKey?: string): string | undefined {
+  const trimmed = ownerKey?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function assertParentFlowLinkAllowed(params: {
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
+  parentFlowId?: string;
+}) {
+  const flowId = params.parentFlowId?.trim();
+  if (!flowId) {
+    return;
+  }
+  if (params.scopeKind !== "session") {
+    throw new Error("Only session-scoped tasks can link to flows.");
+  }
+  const flow = getFlowById(flowId);
+  if (!flow) {
+    throw new Error(`Parent flow not found: ${flowId}`);
+  }
+  if (normalizeOwnerKey(flow.ownerKey) !== normalizeOwnerKey(params.ownerKey)) {
+    throw new Error("Task ownerKey must match parent flow ownerKey.");
   }
 }
 
@@ -338,6 +367,22 @@ function deleteOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">)
   deleteIndexedKey(taskIdsByOwnerKey, key, taskId);
 }
 
+function addParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+  const key = task.parentFlowId?.trim();
+  if (!key) {
+    return;
+  }
+  addIndexedKey(taskIdsByParentFlowId, key, taskId);
+}
+
+function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+  const key = task.parentFlowId?.trim();
+  if (!key) {
+    return;
+  }
+  deleteIndexedKey(taskIdsByParentFlowId, key, taskId);
+}
+
 function addRelatedSessionKeyIndex(
   taskId: string,
   task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
@@ -367,6 +412,13 @@ function rebuildOwnerKeyIndex() {
   taskIdsByOwnerKey.clear();
   for (const [taskId, task] of tasks.entries()) {
     addOwnerKeyIndex(taskId, task);
+  }
+}
+
+function rebuildParentFlowIdIndex() {
+  taskIdsByParentFlowId.clear();
+  for (const [taskId, task] of tasks.entries()) {
+    addParentFlowIdIndex(taskId, task);
   }
 }
 
@@ -473,6 +525,7 @@ function findExistingTaskForCreate(params: {
   ownerKey: string;
   scopeKind: TaskScopeKind;
   childSessionKey?: string;
+  parentFlowId?: string;
   runId?: string;
   label?: string;
   task: string;
@@ -485,7 +538,9 @@ function findExistingTaskForCreate(params: {
           task.scopeKind === params.scopeKind &&
           normalizeComparableText(task.ownerKey) === normalizeComparableText(params.ownerKey) &&
           normalizeComparableText(task.childSessionKey) ===
-            normalizeComparableText(params.childSessionKey),
+            normalizeComparableText(params.childSessionKey) &&
+          normalizeComparableText(task.parentFlowId) ===
+            normalizeComparableText(params.parentFlowId),
       )
     : [];
   const exact = runId
@@ -512,6 +567,7 @@ function mergeExistingTaskForCreate(
   params: {
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
+    parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
     label?: string;
@@ -533,6 +589,14 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
+  }
+  if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
+    assertParentFlowLinkAllowed({
+      ownerKey: existing.ownerKey,
+      scopeKind: existing.scopeKind,
+      parentFlowId: params.parentFlowId,
+    });
+    patch.parentFlowId = params.parentFlowId.trim();
   }
   if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
     patch.parentTaskId = params.parentTaskId.trim();
@@ -580,14 +644,47 @@ function resolveTaskStateChangeIdempotencyKey(params: {
   latestEvent: TaskEventRecord;
   owner: TaskDeliveryOwner;
 }): string {
+  if (params.owner.flowId) {
+    return `flow-event:${params.owner.flowId}:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
+  }
   return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
 }
 
 function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
+  const owner = resolveTaskDeliveryOwner(task);
+  if (owner.flowId) {
+    const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
+    return `flow-terminal:${owner.flowId}:${task.taskId}:${task.status}:${outcome}`;
+  }
   return taskTerminalDeliveryIdempotencyKey(task);
 }
 
+function getLinkedFlowForDelivery(task: TaskRecord) {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId || task.scopeKind !== "session") {
+    return undefined;
+  }
+  const flow = getFlowById(flowId);
+  if (!flow) {
+    return undefined;
+  }
+  if (normalizeOwnerKey(flow.ownerKey) !== normalizeOwnerKey(task.ownerKey)) {
+    return undefined;
+  }
+  return flow;
+}
+
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
+  const flow = getLinkedFlowForDelivery(task);
+  if (flow) {
+    return {
+      sessionKey: flow.ownerKey.trim(),
+      requesterOrigin: normalizeDeliveryContext(
+        flow.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+      ),
+      flowId: flow.flowId,
+    };
+  }
   if (task.scopeKind !== "session") {
     return {};
   }
@@ -615,6 +712,7 @@ function restoreTaskRegistryOnce() {
     }
     rebuildRunIdIndex();
     rebuildOwnerKeyIndex();
+    rebuildParentFlowIdIndex();
     rebuildRelatedSessionKeyIndex();
     emitTaskRegistryHookEvent(() => ({
       kind: "restored",
@@ -644,6 +742,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     normalizeSessionIndexKey(current.ownerKey) !== normalizeSessionIndexKey(next.ownerKey) ||
     normalizeSessionIndexKey(current.childSessionKey) !==
       normalizeSessionIndexKey(next.childSessionKey);
+  const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
@@ -654,7 +753,20 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     deleteRelatedSessionKeyIndex(taskId, current);
     addRelatedSessionKeyIndex(taskId, next);
   }
+  if (parentFlowIndexChanged) {
+    deleteParentFlowIdIndex(taskId, current);
+    addParentFlowIdIndex(taskId, next);
+  }
   persistTaskUpsert(next);
+  try {
+    syncFlowFromTask(next);
+  } catch (error) {
+    log.warn("Failed to sync parent flow from task update", {
+      taskId,
+      flowId: next.parentFlowId,
+      error,
+    });
+  }
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
@@ -1107,6 +1219,7 @@ export function createTaskRecord(params: {
   scopeKind?: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   childSessionKey?: string;
+  parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
   runId?: string;
@@ -1137,11 +1250,17 @@ export function createTaskRecord(params: {
     ownerKey,
     scopeKind,
   });
+  assertParentFlowLinkAllowed({
+    ownerKey,
+    scopeKind,
+    parentFlowId: params.parentFlowId,
+  });
   const existing = findExistingTaskForCreate({
     runtime: params.runtime,
     ownerKey,
     scopeKind,
     childSessionKey: params.childSessionKey,
+    parentFlowId: params.parentFlowId,
     runId: params.runId,
     label: params.label,
     task: params.task,
@@ -1173,6 +1292,7 @@ export function createTaskRecord(params: {
     ownerKey,
     scopeKind,
     childSessionKey: params.childSessionKey,
+    parentFlowId: params.parentFlowId?.trim() || undefined,
     parentTaskId: params.parentTaskId?.trim() || undefined,
     agentId: params.agentId?.trim() || undefined,
     runId: params.runId?.trim() || undefined,
@@ -1203,8 +1323,18 @@ export function createTaskRecord(params: {
   });
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
+  addParentFlowIdIndex(taskId, record);
   addRelatedSessionKeyIndex(taskId, record);
   persistTaskUpsert(record);
+  try {
+    syncFlowFromTask(record);
+  } catch (error) {
+    log.warn("Failed to sync parent flow from task create", {
+      taskId: record.taskId,
+      flowId: record.parentFlowId,
+      error,
+    });
+  }
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
@@ -1400,6 +1530,29 @@ export function updateTaskNotifyPolicyById(params: {
   });
 }
 
+export function linkTaskToFlowById(params: { taskId: string; flowId: string }): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const flowId = params.flowId.trim();
+  if (!flowId) {
+    return null;
+  }
+  const current = tasks.get(params.taskId);
+  if (!current) {
+    return null;
+  }
+  if (current.parentFlowId?.trim()) {
+    return cloneTaskRecord(current);
+  }
+  assertParentFlowLinkAllowed({
+    ownerKey: current.ownerKey,
+    scopeKind: current.scopeKind,
+    parentFlowId: flowId,
+  });
+  return updateTask(params.taskId, {
+    parentFlowId: flowId,
+  });
+}
+
 export async function cancelTaskById(params: {
   cfg: OpenClawConfig;
   taskId: string;
@@ -1567,6 +1720,11 @@ export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefi
   return task ? cloneTaskRecord(task) : undefined;
 }
 
+export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
+  const task = listTasksForFlowId(flowId)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
 export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeSessionIndexKey(ownerKey);
@@ -1574,6 +1732,15 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
     return [];
   }
   return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
+export function listTasksForFlowId(flowId: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = flowId.trim();
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByParentFlowId, key);
 }
 
 export function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
@@ -1607,6 +1774,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
     return false;
   }
   deleteOwnerKeyIndex(taskId, current);
+  deleteParentFlowIdIndex(taskId, current);
   deleteRelatedSessionKeyIndex(taskId, current);
   tasks.delete(taskId);
   taskDeliveryStates.delete(taskId);
@@ -1626,6 +1794,7 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
   taskIdsByOwnerKey.clear();
+  taskIdsByParentFlowId.clear();
   taskIdsByRelatedSessionKey.clear();
   tasksWithPendingDelivery.clear();
   restoreAttempted = false;
