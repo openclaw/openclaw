@@ -68,9 +68,9 @@ as toggleable services with 24 tools.
 - **npm:** `@tensorfold/openclaw-google-workspace`
 - **repo:** [github.com/tensorfold/openclaw-google-workspace](https://github.com/tensorfold/openclaw-google-workspace)
 
-````bash
-openclaw plugins install @tensorfold/openclaw-google-workspace
 ```bash
+openclaw plugins install @tensorfold/openclaw-google-workspace
+```
 
 ### Opik
 
@@ -82,7 +82,7 @@ cost, tokens, errors, and more.
 
 ```bash
 openclaw plugins install @opik/opik-openclaw
-````
+```
 
 ### QQbot
 
