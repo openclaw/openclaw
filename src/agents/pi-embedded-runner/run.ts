@@ -28,11 +28,10 @@ import {
 import {
   hasDifferentLiveSessionModelSelection,
   LiveSessionModelSwitchError,
-  resolveLiveSessionModelSelection,
-  shouldTrackPersistedLiveSessionModelSelection,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   type ResolvedProviderAuth,
@@ -80,6 +79,7 @@ import {
   resolveMaxRunRetryIterations,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
+  resolveRateLimitProfileRotationLimit,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -238,18 +238,6 @@ export async function runEmbeddedPiAgent(
         authProfileId: preferredProfileId,
         authProfileIdSource: params.authProfileIdSource,
       });
-      const resolvePersistedLiveSelection = () =>
-        resolveLiveSessionModelSelection({
-          cfg: params.config,
-          sessionKey: params.sessionKey,
-          agentId: workspaceResolution.agentId,
-          defaultProvider: provider,
-          defaultModel: modelId,
-        });
-      const shouldTrackPersistedLiveSelection = shouldTrackPersistedLiveSessionModelSelection(
-        resolveCurrentLiveSelection(),
-        resolvePersistedLiveSelection(),
-      );
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -318,9 +306,36 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
+      const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
+      const maybeEscalateRateLimitProfileFallback = (params: {
+        failoverProvider: string;
+        failoverModel: string;
+        logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+      }) => {
+        rateLimitProfileRotations += 1;
+        if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
+          return;
+        }
+        const status = resolveFailoverStatus("rate_limit");
+        log.warn(
+          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+        );
+        params.logFallbackDecision("fallback_model", { status });
+        throw new FailoverError(
+          "The AI service is temporarily rate-limited. Please try again in a moment.",
+          {
+            reason: "rate_limit",
+            provider: params.failoverProvider,
+            model: params.failoverModel,
+            profileId: lastProfileId,
+            status,
+          },
+        );
+      };
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -457,15 +472,6 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = shouldTrackPersistedLiveSelection
-            ? resolvePersistedLiveSelection()
-            : null;
-          if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
-            log.info(
-              `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(nextSelection);
-          }
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -513,7 +519,15 @@ export async function runEmbeddedPiAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
-            model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+            model: applyAuthHeaderOverride(
+              applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+              // When runtime auth exchange produced a different credential
+              // (runtimeAuthState is set), the exchanged token lives in
+              // authStorage and the SDK will pick it up automatically.
+              // Skip header injection to avoid leaking the pre-exchange key.
+              runtimeAuthState ? null : apiKeyInfo,
+              params.config,
+            ),
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,
@@ -614,23 +628,6 @@ export async function runEmbeddedPiAgent(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
-          const failedOrAbortedAttempt =
-            aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection =
-            failedOrAbortedAttempt && shouldTrackPersistedLiveSelection
-              ? resolvePersistedLiveSelection()
-              : null;
-          if (
-            failedOrAbortedAttempt &&
-            canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), persistedSelection)
-          ) {
-            log.info(
-              `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(persistedSelection);
-          }
-
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
@@ -1062,6 +1059,13 @@ export async function runEmbeddedPiAgent(
               fallbackConfigured,
               aborted,
             });
+            if (promptFailoverReason === "rate_limit") {
+              maybeEscalateRateLimitProfileFallback({
+                failoverProvider: provider,
+                failoverModel: modelId,
+                logFallbackDecision: logPromptFailoverDecision,
+              });
+            }
             if (
               promptFailoverFailure &&
               promptFailoverReason !== "timeout" &&
@@ -1223,6 +1227,19 @@ export async function runEmbeddedPiAgent(
                   },
                 );
               }
+            }
+
+            // For rate-limit errors, apply the same rotation cap so that
+            // per-model quota exhaustion (e.g. Anthropic Sonnet-only limits)
+            // escalates to cross-provider model fallback instead of spinning
+            // forever across profiles that share the same model quota.
+            // See: https://github.com/openclaw/openclaw/issues/58572
+            if (assistantFailoverReason === "rate_limit") {
+              maybeEscalateRateLimitProfileFallback({
+                failoverProvider: activeErrorContext.provider,
+                failoverModel: activeErrorContext.model,
+                logFallbackDecision: logAssistantFailoverDecision,
+              });
             }
 
             const rotated = await advanceAuthProfile();

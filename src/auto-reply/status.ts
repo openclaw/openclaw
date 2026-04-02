@@ -887,7 +887,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
+  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
   lines.push("");
 
   lines.push("Skills");
