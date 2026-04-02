@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
 class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+  private val tlsFingerprintProbe: suspend (String, Int) -> String? = ::probeGatewayTlsFingerprint,
 ) {
   data class GatewayConnectAuth(
     val token: String?,
@@ -189,6 +190,7 @@ class NodeRuntime(
   data class GatewayTrustPrompt(
     val endpoint: GatewayEndpoint,
     val fingerprintSha256: String,
+    val auth: GatewayConnectAuth,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -837,11 +839,12 @@ class NodeRuntime(
       // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
-        val fp = probeGatewayTlsFingerprint(endpoint.host, endpoint.port) ?: run {
+        val fp = tlsFingerprintProbe(endpoint.host, endpoint.port) ?: run {
           _statusText.value = "Failed: can't read TLS fingerprint"
           return@launch
         }
-        _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
+        _pendingGatewayTrust.value =
+          GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp, auth = auth)
       }
       return
     }
@@ -877,7 +880,7 @@ class NodeRuntime(
     val prompt = _pendingGatewayTrust.value ?: return
     _pendingGatewayTrust.value = null
     prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
-    connect(prompt.endpoint)
+    beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
   }
 
   fun declineGatewayTrustPrompt() {
