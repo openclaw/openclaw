@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderCapabilitiesWithPlugin as resolveProviderCapabilitiesWithPluginRuntime } from "../plugins/provider-runtime.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
@@ -36,17 +36,6 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
-const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
-  "anthropic-vertex": {
-    providerFamily: "anthropic",
-    dropThinkingBlockModelHints: ["claude"],
-  },
-  "amazon-bedrock": {
-    providerFamily: "anthropic",
-    dropThinkingBlockModelHints: ["claude"],
-  },
-};
-
 const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
   anthropic: {
     providerFamily: "anthropic",
@@ -65,6 +54,11 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
     ],
   },
   moonshot: {
+    openAiPayloadNormalizationMode: "moonshot-thinking",
+  },
+  kimi: {
+    anthropicToolSchemaMode: "openai-functions",
+    anthropicToolChoiceMode: "openai-string-modes",
     openAiPayloadNormalizationMode: "moonshot-thinking",
   },
   opencode: {
@@ -115,8 +109,8 @@ export function resolveProviderCapabilities(
     : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...CORE_PROVIDER_CAPABILITIES[normalized],
-    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
+    ...PLUGIN_CAPABILITIES_FALLBACKS[normalized],
+    ...pluginCapabilities,
   };
 }
 

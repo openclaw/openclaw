@@ -17,6 +17,10 @@ import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
 } from "../../../infra/plugin-install-path-warnings.js";
+import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
+import { removePluginFromConfig } from "../../../plugins/uninstall.js";
+import { isRecord } from "../../../utils.js";
+import type { DoctorConfigMutationResult } from "../shared/config-mutation-state.js";
 
 export function formatMatrixLegacyStatePreview(
   detection: Exclude<ReturnType<typeof detectLegacyMatrixState>, null | { warning: string }>,
@@ -63,9 +67,82 @@ export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Pro
     issue,
     pluginLabel: "Matrix",
     defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-    repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+    repoInstallCommand: resolveBundledPluginInstallCommandHint({
+      pluginId: "matrix",
+      workspaceDir: process.cwd(),
+    }),
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
+}
+
+function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  return isRecord(channels?.matrix);
+}
+
+function hasConfiguredMatrixPluginSurface(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    cfg.plugins?.installs?.matrix ||
+    cfg.plugins?.entries?.matrix ||
+    cfg.plugins?.allow?.includes("matrix") ||
+    cfg.plugins?.deny?.includes("matrix"),
+  );
+}
+
+function hasConfiguredMatrixEnv(env: NodeJS.ProcessEnv): boolean {
+  return Object.entries(env).some(
+    ([key, value]) => key.startsWith("MATRIX_") && typeof value === "string" && value.trim(),
+  );
+}
+
+function configMayNeedMatrixDoctorSequence(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  return (
+    hasConfiguredMatrixChannel(cfg) ||
+    hasConfiguredMatrixPluginSurface(cfg) ||
+    hasConfiguredMatrixEnv(env)
+  );
+}
+
+/**
+ * Produces a config mutation that removes stale Matrix plugin install/load-path
+ * references left behind by the old bundled-plugin layout.  When the install
+ * record points to a path that no longer exists on disk the config entry blocks
+ * validation, so removing it lets reinstall proceed cleanly.
+ */
+export async function cleanStaleMatrixPluginConfig(
+  cfg: OpenClawConfig,
+): Promise<DoctorConfigMutationResult> {
+  const issue = await detectPluginInstallPathIssue({
+    pluginId: "matrix",
+    install: cfg.plugins?.installs?.matrix,
+  });
+  if (!issue || issue.kind !== "missing-path") {
+    return { config: cfg, changes: [] };
+  }
+  const { config, actions } = removePluginFromConfig(cfg, "matrix");
+  const removed: string[] = [];
+  if (actions.install) {
+    removed.push("install record");
+  }
+  if (actions.loadPath) {
+    removed.push("load path");
+  }
+  if (actions.entry) {
+    removed.push("plugin entry");
+  }
+  if (actions.allowlist) {
+    removed.push("allowlist entry");
+  }
+  if (removed.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return {
+    config,
+    changes: [
+      `Removed stale Matrix plugin references (${removed.join(", ")}). ` +
+        `The previous install path no longer exists: ${issue.path}`,
+    ],
+  };
 }
 
 export async function applyMatrixDoctorRepair(params: {
@@ -151,6 +228,16 @@ export async function runMatrixDoctorSequence(params: {
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<{ changeNotes: string[]; warningNotes: string[] }> {
+  const warningNotes: string[] = [];
+  const changeNotes: string[] = [];
+  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(params.cfg);
+  if (matrixInstallWarnings.length > 0) {
+    warningNotes.push(matrixInstallWarnings.join("\n"));
+  }
+  if (!configMayNeedMatrixDoctorSequence(params.cfg, params.env)) {
+    return { changeNotes, warningNotes };
+  }
+
   const matrixLegacyState = detectLegacyMatrixState({
     cfg: params.cfg,
     env: params.env,
@@ -159,8 +246,6 @@ export async function runMatrixDoctorSequence(params: {
     cfg: params.cfg,
     env: params.env,
   });
-  const warningNotes: string[] = [];
-  const changeNotes: string[] = [];
 
   if (params.shouldRepair) {
     const matrixRepair = await applyMatrixDoctorRepair({
@@ -182,11 +267,6 @@ export async function runMatrixDoctorSequence(params: {
     (matrixLegacyCrypto.warnings.length > 0 || matrixLegacyCrypto.plans.length > 0)
   ) {
     warningNotes.push(...formatMatrixLegacyCryptoPreview(matrixLegacyCrypto));
-  }
-
-  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(params.cfg);
-  if (matrixInstallWarnings.length > 0) {
-    warningNotes.push(matrixInstallWarnings.join("\n"));
   }
 
   return { changeNotes, warningNotes };

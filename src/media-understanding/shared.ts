@@ -1,13 +1,61 @@
+import type {
+  ProviderRequestCapability,
+  ProviderRequestTransport,
+} from "../agents/provider-attribution.js";
+import {
+  normalizeBaseUrl,
+  resolveProviderRequestPolicyConfig,
+  type ResolvedProviderRequestConfig,
+} from "../agents/provider-request-config.js";
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 
-export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
-  const raw = baseUrl?.trim() || fallback;
-  return raw.replace(/\/+$/, "");
+export function resolveProviderHttpRequestConfig(params: {
+  baseUrl?: string;
+  defaultBaseUrl: string;
+  allowPrivateNetwork?: boolean;
+  headers?: HeadersInit;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  api?: string;
+  capability?: ProviderRequestCapability;
+  transport?: ProviderRequestTransport;
+}): {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  requestConfig: ResolvedProviderRequestConfig;
+} {
+  const requestConfig = resolveProviderRequestPolicyConfig({
+    provider: params.provider ?? "",
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: params.defaultBaseUrl,
+    capability: params.capability ?? "other",
+    transport: params.transport ?? "http",
+    callerHeaders: params.headers
+      ? Object.fromEntries(new Headers(params.headers).entries())
+      : undefined,
+    providerHeaders: params.defaultHeaders,
+    precedence: "caller-wins",
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    api: params.api,
+  });
+  const headers = new Headers(requestConfig.headers);
+  if (!requestConfig.baseUrl) {
+    throw new Error("Missing baseUrl: provide baseUrl or defaultBaseUrl");
+  }
+
+  return {
+    baseUrl: requestConfig.baseUrl,
+    allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+    headers,
+    requestConfig,
+  };
 }
 
 export async function fetchWithTimeoutGuarded(

@@ -5,7 +5,9 @@ import {
   getCallGatewayMock,
   getGatewayMethods,
   getSessionsSpawnTool,
+  resetSessionsSpawnHookRunnerOverride,
   setSessionsSpawnConfigOverride,
+  setSessionsSpawnHookRunnerOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
@@ -34,18 +36,6 @@ const hookRunnerMocks = vi.hoisted(() => ({
   }),
   runSubagentSpawned: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
-}));
-
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: vi.fn(() => ({
-    hasHooks: (hookName: string) =>
-      hookName === "subagent_spawning" ||
-      hookName === "subagent_spawned" ||
-      (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
-    runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
-    runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
-    runSubagentEnded: hookRunnerMocks.runSubagentEnded,
-  })),
 }));
 
 function expectSessionsDeleteWithoutAgentStart() {
@@ -136,10 +126,20 @@ function expectThreadBindFailureCleanup(
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    resetSessionsSpawnHookRunnerOverride();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
+    setSessionsSpawnHookRunnerOverride({
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_spawning" ||
+        hookName === "subagent_spawned" ||
+        (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
+      runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
+      runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
+      runSubagentEnded: hookRunnerMocks.runSubagentEnded,
+    });
     const callGatewayMock = getCallGatewayMock();
     callGatewayMock.mockClear();
     setSessionsSpawnConfigOverride({

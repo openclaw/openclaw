@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
 import {
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
 function createRateLimiter(): AuthRateLimiter {
@@ -68,7 +65,7 @@ describe("handshake auth helpers", () => {
     });
   });
 
-  it("allows silent local pairing only for not-paired and scope upgrades", () => {
+  it("allows silent local pairing for not-paired, scope-upgrade and role-upgrade", () => {
     expect(
       shouldAllowSilentLocalPairing({
         isLocalClient: true,
@@ -84,44 +81,37 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
+        reason: "role-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
         reason: "metadata-upgrade",
       }),
     ).toBe(false);
   });
 
-  it("skips backend self-pairing for local trusted backend clients", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-    } as ConnectParams;
-
+  it("rejects silent role-upgrade for remote clients", () => {
     expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: true,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: true,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: false,
-        authMethod: "device-token",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
+      shouldAllowSilentLocalPairing({
         isLocalClient: false,
         hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
+        isControlUi: false,
+        isWebchat: false,
+        reason: "role-upgrade",
       }),
     ).toBe(false);
   });

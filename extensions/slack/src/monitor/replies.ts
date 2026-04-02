@@ -9,20 +9,13 @@ import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { parseSlackBlocksInput } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
+import { SLACK_TEXT_LIMIT } from "../limits.js";
+import { resolveSlackReplyBlocks } from "../reply-blocks.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
-  const slackData = payload.channelData?.slack;
-  if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-    return undefined;
-  }
-  try {
-    return parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks);
-  } catch {
-    return undefined;
-  }
+  return resolveSlackReplyBlocks(payload);
 }
 
 export async function deliverReplies(params: {
@@ -188,7 +181,7 @@ export async function deliverSlackSlashReplies(params: {
   chunkMode?: ChunkMode;
 }) {
   const messages: string[] = [];
-  const chunkLimit = Math.min(params.textLimit, 4000);
+  const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
     const reply = resolveSendableOutboundReplyParts(payload);
     const text =

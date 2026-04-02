@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -12,11 +12,6 @@ const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvid
     resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
     resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
   }));
-
-const mockedModuleIds = [
-  "../plugins/web-search-providers.js",
-  "../plugins/web-search-providers.runtime.js",
-] as const;
 
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
@@ -111,8 +106,15 @@ function toConcretePathSegments(pathPattern: string): string[] {
   return out;
 }
 
+function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string): string {
+  return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey"
+    ? "FIRECRAWL_API_KEY"
+    : fallbackEnvId;
+}
+
 function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
   const config = {} as OpenClawConfig;
+  const resolvedEnvId = resolveCoverageEnvId(entry, envId);
   const refTargetPath =
     entry.secretShape === "sibling_ref" && entry.refPathPattern // pragma: allowlist secret
       ? entry.refPathPattern
@@ -120,7 +122,7 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   setPathCreateStrict(config, toConcretePathSegments(refTargetPath), {
     source: "env",
     provider: "default",
-    id: envId,
+    id: resolvedEnvId,
   });
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
@@ -178,26 +180,14 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }
-  if (entry.id === "tools.web.search.gemini.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
   if (entry.id === "plugins.entries.google.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
-  if (entry.id === "tools.web.search.grok.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
   if (entry.id === "plugins.entries.xai.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
-  if (entry.id === "tools.web.search.kimi.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
   if (entry.id === "plugins.entries.moonshot.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
-  if (entry.id === "tools.web.search.perplexity.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
   }
   if (entry.id === "plugins.entries.perplexity.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
@@ -258,23 +248,17 @@ describe("secrets runtime target coverage", () => {
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
   });
 
-  afterAll(() => {
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
-    vi.resetModules();
-  });
-
   it("handles every openclaw.json registry target when configured as active", async () => {
     const entries = listSecretTargetRegistryEntries().filter(
       (entry) => entry.configFile === "openclaw.json",
     );
     for (const [index, entry] of entries.entries()) {
       const envId = `OPENCLAW_SECRET_TARGET_${index}`;
+      const runtimeEnvId = resolveCoverageEnvId(entry, envId);
       const expectedValue = `resolved-${entry.id}`;
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: buildConfigForOpenClawTarget(entry, envId),
-        env: { [envId]: expectedValue },
+        env: { [runtimeEnvId]: expectedValue },
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       });

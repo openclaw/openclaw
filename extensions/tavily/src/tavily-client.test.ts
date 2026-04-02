@@ -1,18 +1,58 @@
-import { describe, expect, it } from "vitest";
-import { __testing } from "./tavily-client.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("tavily client helpers", () => {
-  it("appends endpoints to reverse-proxy base urls", () => {
-    expect(__testing.resolveEndpoint("https://proxy.example/api/tavily", "/search")).toBe(
-      "https://proxy.example/api/tavily/search",
+// Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
+const postTrustedWebToolsJson = vi.fn();
+
+vi.mock("openclaw/plugin-sdk/provider-web-search", () => ({
+  DEFAULT_CACHE_TTL_MINUTES: 5,
+  normalizeCacheKey: (k: string) => k,
+  postTrustedWebToolsJson,
+  readCache: () => undefined,
+  resolveCacheTtlMs: () => 300_000,
+  writeCache: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  wrapExternalContent: (v: string) => v,
+  wrapWebContent: (v: string) => v,
+}));
+
+vi.mock("./config.js", () => ({
+  DEFAULT_TAVILY_BASE_URL: "https://api.tavily.com",
+  resolveTavilyApiKey: () => "test-key",
+  resolveTavilyBaseUrl: () => "https://api.tavily.com",
+  resolveTavilySearchTimeoutSeconds: () => 30,
+  resolveTavilyExtractTimeoutSeconds: () => 60,
+}));
+
+describe("tavily client X-Client-Source header", () => {
+  let runTavilySearch: typeof import("./tavily-client.js").runTavilySearch;
+  let runTavilyExtract: typeof import("./tavily-client.js").runTavilyExtract;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    postTrustedWebToolsJson.mockReset();
+    postTrustedWebToolsJson.mockImplementation(
+      async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
+        parse(Response.json({ results: [] })),
     );
-    expect(__testing.resolveEndpoint("https://proxy.example/api/tavily/", "/extract")).toBe(
-      "https://proxy.example/api/tavily/extract",
-    );
+
+    ({ runTavilySearch, runTavilyExtract } = await import("./tavily-client.js"));
   });
 
-  it("falls back to the default host for invalid base urls", () => {
-    expect(__testing.resolveEndpoint("not a url", "/search")).toBe("https://api.tavily.com/search");
-    expect(__testing.resolveEndpoint("", "/extract")).toBe("https://api.tavily.com/extract");
+  it("runTavilySearch sends X-Client-Source: openclaw", async () => {
+    await runTavilySearch({ query: "test query" });
+
+    expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+    const params = postTrustedWebToolsJson.mock.calls[0][0];
+    expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
+  });
+
+  it("runTavilyExtract sends X-Client-Source: openclaw", async () => {
+    await runTavilyExtract({ urls: ["https://example.com"] });
+
+    expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+    const params = postTrustedWebToolsJson.mock.calls[0][0];
+    expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
   });
 });

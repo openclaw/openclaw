@@ -104,6 +104,35 @@ function requireEvent<T>(event: T | undefined, message: string): T {
   return event;
 }
 
+type TwilioApiRequest = (
+  endpoint: string,
+  params: Record<string, string | string[]>,
+  options?: { allowNotFound?: boolean },
+) => Promise<unknown>;
+
+function createApiRequestMock() {
+  return vi.fn<TwilioApiRequest>(async () => ({}));
+}
+
+function configureTelephonyTwiMlFallback(params: { providerCallId: string; streamSid?: string }) {
+  const provider = createProvider();
+  const apiRequest = createApiRequestMock();
+  (
+    provider as unknown as {
+      apiRequest: TwilioApiRequest;
+    }
+  ).apiRequest = apiRequest;
+  (
+    provider as unknown as {
+      callWebhookUrls: Map<string, string>;
+    }
+  ).callWebhookUrls.set(params.providerCallId, "https://example.ngrok.app/voice/twilio");
+  if (params.streamSid) {
+    provider.registerCallStream(params.providerCallId, params.streamSid);
+  }
+  return { provider, apiRequest };
+}
+
 describe("TwilioProvider", () => {
   it("uses regional base URL when region/edge are configured", () => {
     const provider = new TwilioProvider(
@@ -283,29 +312,10 @@ describe("TwilioProvider", () => {
   });
 
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {
-    const provider = createProvider();
-    const apiRequest = vi.fn<
-      (
-        endpoint: string,
-        params: Record<string, string | string[]>,
-        options?: { allowNotFound?: boolean },
-      ) => Promise<unknown>
-    >(async () => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (
-          endpoint: string,
-          params: Record<string, string | string[]>,
-          options?: { allowNotFound?: boolean },
-        ) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-    (
-      provider as unknown as {
-        callWebhookUrls: Map<string, string>;
-      }
-    ).callWebhookUrls.set("CA-stream", "https://example.ngrok.app/voice/twilio");
-    provider.registerCallStream("CA-stream", "MZ-stream");
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-stream",
+      streamSid: "MZ-stream",
+    });
 
     await expect(
       provider.playTts({
@@ -318,28 +328,9 @@ describe("TwilioProvider", () => {
   });
 
   it("falls back to TwiML when no active stream exists and telephony TTS is unavailable", async () => {
-    const provider = createProvider();
-    const apiRequest = vi.fn<
-      (
-        endpoint: string,
-        params: Record<string, string | string[]>,
-        options?: { allowNotFound?: boolean },
-      ) => Promise<unknown>
-    >(async () => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (
-          endpoint: string,
-          params: Record<string, string | string[]>,
-          options?: { allowNotFound?: boolean },
-        ) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-    (
-      provider as unknown as {
-        callWebhookUrls: Map<string, string>;
-      }
-    ).callWebhookUrls.set("CA-nostream", "https://example.ngrok.app/voice/twilio");
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-nostream",
+    });
 
     await expect(
       provider.playTts({

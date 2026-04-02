@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/providers/modelstudio",
+      "destination": "/providers/qwen_modelstudio"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
@@ -875,6 +879,10 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/automation/clawflow",
+      "destination": "/automation/taskflow"
     }
   ],
   "navigation": {
@@ -920,6 +928,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
+                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -950,6 +959,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-matrix",
                   "install/uninstall",
                   "install/development-channels"
                 ]
@@ -978,13 +988,13 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/qqbot",
                   "channels/signal",
-                  "channels/synology-chat",
                   "channels/slack",
+                  "channels/synology-chat",
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
-                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1027,7 +1037,16 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },
@@ -1063,6 +1082,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/voice-call",
                   {
                     "group": "Building Plugins",
                     "pages": [
@@ -1100,10 +1120,13 @@
               {
                 "group": "Automation",
                 "pages": [
+                  "automation/index",
                   "automation/hooks",
                   "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
+                  "automation/tasks",
+                  "automation/taskflow",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
@@ -1137,14 +1160,17 @@
                       "tools/grok-search",
                       "tools/kimi-search",
                       "tools/perplexity-search",
+                      "tools/searxng-search",
                       "tools/tavily"
                     ]
                   },
                   "tools/btw",
+                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/image-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
@@ -1180,35 +1206,35 @@
                 "pages": [
                   "providers/anthropic",
                   "providers/bedrock",
-                  "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
+                  "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
                   "providers/deepseek",
                   "providers/github-copilot",
+                  "providers/glm",
                   "providers/google",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
-                  "providers/glm",
                   "providers/minimax",
-                  "providers/modelstudio",
-                  "providers/moonshot",
                   "providers/mistral",
+                  "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
-                  "providers/opencode-go",
                   "providers/opencode",
+                  "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
+                  "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
                   "providers/synthetic",
                   "providers/together",
-                  "providers/vercel-ai-gateway",
                   "providers/venice",
+                  "providers/vercel-ai-gateway",
                   "providers/vllm",
                   "providers/volcengine",
                   "providers/xai",
@@ -1331,18 +1357,24 @@
                 ]
               },
               {
-                "group": "Nodes and devices",
+                "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
                   "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
+                  {
+                    "group": "Media capabilities",
+                    "pages": [
+                      "nodes/media-understanding",
+                      "nodes/images",
+                      "nodes/audio",
+                      "nodes/camera",
+                      "tools/tts"
+                    ]
+                  },
+                  {
+                    "group": "Node features",
+                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
+                  }
                 ]
               },
               {
@@ -1407,6 +1439,7 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
+                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"
@@ -1426,7 +1459,14 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs",
+                      "cli/mcp"
+                    ]
                   }
                 ]
               },
@@ -1745,7 +1785,6 @@
               {
                 "group": "扩展",
                 "pages": [
-                  "zh-CN/plugins/architecture",
                   "zh-CN/plugins/voice-call",
                   "zh-CN/plugins/zalouser",
                   "zh-CN/plugins/manifest",

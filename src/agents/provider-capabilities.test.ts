@@ -1,8 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
     case "anthropic":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "anthropic-vertex":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "amazon-bedrock":
       return {
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
@@ -32,6 +42,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
       };
     case "kimi":
       return {
+        openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       };
     default:
@@ -44,19 +55,38 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     resolveProviderCapabilitiesWithPluginMock(params),
 }));
 
-import {
-  isAnthropicProviderFamily,
-  isOpenAiProviderFamily,
-  requiresOpenAiCompatibleAnthropicToolPayload,
-  resolveProviderCapabilities,
-  resolveTranscriptToolCallIdMode,
-  shouldDropThinkingBlocksForModel,
-  shouldSanitizeGeminiThoughtSignaturesForModel,
-  supportsOpenAiCompatTurnValidation,
-  usesMoonshotThinkingPayloadCompat,
-} from "./provider-capabilities.js";
+let isAnthropicProviderFamily: typeof import("./provider-capabilities.js").isAnthropicProviderFamily;
+let isOpenAiProviderFamily: typeof import("./provider-capabilities.js").isOpenAiProviderFamily;
+let requiresOpenAiCompatibleAnthropicToolPayload: typeof import("./provider-capabilities.js").requiresOpenAiCompatibleAnthropicToolPayload;
+let resolveProviderCapabilities: typeof import("./provider-capabilities.js").resolveProviderCapabilities;
+let resolveTranscriptToolCallIdMode: typeof import("./provider-capabilities.js").resolveTranscriptToolCallIdMode;
+let shouldDropThinkingBlocksForModel: typeof import("./provider-capabilities.js").shouldDropThinkingBlocksForModel;
+let shouldSanitizeGeminiThoughtSignaturesForModel: typeof import("./provider-capabilities.js").shouldSanitizeGeminiThoughtSignaturesForModel;
+let supportsOpenAiCompatTurnValidation: typeof import("./provider-capabilities.js").supportsOpenAiCompatTurnValidation;
+let usesMoonshotThinkingPayloadCompat: typeof import("./provider-capabilities.js").usesMoonshotThinkingPayloadCompat;
+let providerCapabilityTesting: typeof import("./provider-capabilities.js").__testing;
 
 describe("resolveProviderCapabilities", () => {
+  beforeAll(async () => {
+    ({
+      isAnthropicProviderFamily,
+      isOpenAiProviderFamily,
+      requiresOpenAiCompatibleAnthropicToolPayload,
+      resolveProviderCapabilities,
+      resolveTranscriptToolCallIdMode,
+      shouldDropThinkingBlocksForModel,
+      shouldSanitizeGeminiThoughtSignaturesForModel,
+      supportsOpenAiCompatTurnValidation,
+      usesMoonshotThinkingPayloadCompat,
+      __testing: providerCapabilityTesting,
+    } = await import("./provider-capabilities.js"));
+  });
+
+  beforeEach(() => {
+    resolveProviderCapabilitiesWithPluginMock.mockClear();
+    providerCapabilityTesting.resetDepsForTests();
+  });
+
   it("returns provider-owned anthropic defaults for ordinary providers", () => {
     expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
@@ -99,12 +129,32 @@ describe("resolveProviderCapabilities", () => {
     });
   });
 
-  it("normalizes kimi aliases to the same capability set", () => {
-    expect(resolveProviderCapabilities("kimi")).toEqual(resolveProviderCapabilities("kimi-code"));
-    expect(resolveProviderCapabilities("kimi-code")).toEqual({
+  it("preserves built-in fallback capability hints when plugin overrides are partial", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => ({
+      providerFamily: "anthropic",
+    }));
+
+    expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
       openAiPayloadNormalizationMode: "default",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+  });
+
+  it("normalizes kimi aliases to the same capability set", () => {
+    expect(resolveProviderCapabilities("kimi")).toEqual(resolveProviderCapabilities("kimi-code"));
+    expect(resolveProviderCapabilities("kimi-code")).toEqual({
+      anthropicToolSchemaMode: "openai-functions",
+      anthropicToolChoiceMode: "openai-string-modes",
+      openAiPayloadNormalizationMode: "moonshot-thinking",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -125,7 +175,13 @@ describe("resolveProviderCapabilities", () => {
 
   it("routes moonshot payload compatibility through the capability registry", () => {
     expect(usesMoonshotThinkingPayloadCompat("moonshot")).toBe(true);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
     expect(usesMoonshotThinkingPayloadCompat("openai")).toBe(false);
+  });
+
+  it("keeps the normalized kimi fallback aligned when plugin capabilities are unavailable", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => undefined);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
   });
 
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {
@@ -150,9 +206,10 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
-  it("treats kimi aliases as native anthropic tool payload providers", () => {
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(false);
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
+  it("treats kimi aliases as OpenAI-style anthropic tool payload providers", () => {
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(true);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
 
@@ -189,6 +246,9 @@ describe("resolveProviderCapabilities", () => {
   it("forwards config and workspace context to plugin capability lookup", () => {
     const config = { plugins: { enabled: true } };
     const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+    const lookup = vi.fn(() => undefined);
+
+    providerCapabilityTesting.setResolveProviderCapabilitiesWithPluginForTest(lookup);
 
     resolveProviderCapabilities("anthropic", {
       config,
@@ -196,7 +256,7 @@ describe("resolveProviderCapabilities", () => {
       env,
     });
 
-    expect(resolveProviderCapabilitiesWithPluginMock).toHaveBeenLastCalledWith({
+    expect(lookup).toHaveBeenLastCalledWith({
       provider: "anthropic",
       config,
       workspaceDir: "/tmp/workspace",

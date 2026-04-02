@@ -1,11 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
 import type {
+  PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
+  WebFetchCredentialResolutionSource,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
+import { resolveBundledPluginWebFetchProviders } from "../plugins/web-fetch-providers.js";
+import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
@@ -21,17 +26,18 @@ import {
 import type {
   RuntimeWebDiagnostic,
   RuntimeWebDiagnosticCode,
-  RuntimeWebFetchFirecrawlMetadata,
+  RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
 } from "./runtime-web-tools.types.js";
 
 type WebSearchProvider = string;
+type WebFetchProvider = string;
 
 export type {
   RuntimeWebDiagnostic,
   RuntimeWebDiagnosticCode,
-  RuntimeWebFetchFirecrawlMetadata,
+  RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
 };
@@ -44,7 +50,7 @@ type FetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
 
 type SecretResolutionResult = {
   value?: string;
-  source: WebSearchCredentialResolutionSource;
+  source: WebSearchCredentialResolutionSource | WebFetchCredentialResolutionSource;
   secretRefConfigured: boolean;
   unresolvedRefReason?: string;
   fallbackEnvVar?: string;
@@ -59,6 +65,20 @@ function normalizeProvider(
   value: unknown,
   providers: ReturnType<typeof resolvePluginWebSearchProviders>,
 ): WebSearchProvider | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (providers.some((provider) => provider.id === normalized)) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeFetchProvider(
+  value: unknown,
+  providers: PluginWebFetchProviderEntry[],
+): WebFetchProvider | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -130,6 +150,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   value: unknown;
   path: string;
   envVars: string[];
+  restrictEnvRefsToEnvVars?: boolean;
 }): Promise<SecretResolutionResult> {
   const { ref } = resolveSecretInputRef({
     value: params.value,
@@ -167,35 +188,43 @@ async function resolveSecretInputWithEnvFallback(params: {
   let resolvedFromRef: string | undefined;
   let unresolvedRefReason: string | undefined;
 
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: params.sourceConfig,
-      env: params.context.env,
-      cache: params.context.cache,
-    });
-    const resolvedValue = resolved.get(secretRefKey(ref));
-    if (typeof resolvedValue !== "string") {
-      unresolvedRefReason = buildUnresolvedReason({
-        path: params.path,
-        kind: "non-string",
-        refLabel,
+  if (
+    params.restrictEnvRefsToEnvVars === true &&
+    ref.source === "env" &&
+    !params.envVars.includes(ref.id)
+  ) {
+    unresolvedRefReason = `${params.path} SecretRef env var "${ref.id}" is not allowed.`;
+  } else {
+    try {
+      const resolved = await resolveSecretRefValues([ref], {
+        config: params.sourceConfig,
+        env: params.context.env,
+        cache: params.context.cache,
       });
-    } else {
-      resolvedFromRef = normalizeSecretInput(resolvedValue);
-      if (!resolvedFromRef) {
+      const resolvedValue = resolved.get(secretRefKey(ref));
+      if (typeof resolvedValue !== "string") {
         unresolvedRefReason = buildUnresolvedReason({
           path: params.path,
-          kind: "empty",
+          kind: "non-string",
           refLabel,
         });
+      } else {
+        resolvedFromRef = normalizeSecretInput(resolvedValue);
+        if (!resolvedFromRef) {
+          unresolvedRefReason = buildUnresolvedReason({
+            path: params.path,
+            kind: "empty",
+            refLabel,
+          });
+        }
       }
+    } catch {
+      unresolvedRefReason = buildUnresolvedReason({
+        path: params.path,
+        kind: "unresolved",
+        refLabel,
+      });
     }
-  } catch {
-    unresolvedRefReason = buildUnresolvedReason({
-      path: params.path,
-      kind: "unresolved",
-      refLabel,
-    });
   }
 
   if (resolvedFromRef) {
@@ -247,26 +276,64 @@ function setResolvedWebSearchApiKey(params: {
   const search = ensureObject(web, "search");
   if (params.provider.setConfiguredCredentialValue) {
     params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    if (params.provider.id !== "brave") {
+      return;
+    }
   }
   params.provider.setCredentialValue(search, params.value);
-}
-
-function setResolvedFirecrawlApiKey(params: {
-  resolvedConfig: OpenClawConfig;
-  value: string;
-}): void {
-  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureObject(tools, "web");
-  const fetch = ensureObject(web, "fetch");
-  const firecrawl = ensureObject(fetch, "firecrawl");
-  firecrawl.apiKey = params.value;
 }
 
 function keyPathForProvider(provider: PluginWebSearchProviderEntry): string {
   return provider.credentialPath;
 }
 
+function readConfiguredProviderCredential(params: {
+  provider: PluginWebSearchProviderEntry;
+  config: OpenClawConfig;
+  search: Record<string, unknown> | undefined;
+}): unknown {
+  const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
+  return configuredValue ?? params.provider.getCredentialValue(params.search);
+}
+
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
+  if (provider.requiresCredential === false) {
+    return [];
+  }
+  return provider.inactiveSecretPaths?.length
+    ? provider.inactiveSecretPaths
+    : [provider.credentialPath];
+}
+
+function setResolvedWebFetchApiKey(params: {
+  resolvedConfig: OpenClawConfig;
+  provider: PluginWebFetchProviderEntry;
+  value: string;
+}): void {
+  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureObject(tools, "web");
+  const fetch = ensureObject(web, "fetch");
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
+  }
+  params.provider.setCredentialValue(fetch, params.value);
+}
+
+function keyPathForFetchProvider(provider: PluginWebFetchProviderEntry): string {
+  return provider.credentialPath;
+}
+
+function readConfiguredFetchProviderCredential(params: {
+  provider: PluginWebFetchProviderEntry;
+  config: OpenClawConfig;
+  fetch: Record<string, unknown> | undefined;
+}): unknown {
+  const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
+  return configuredValue ?? params.provider.getCredentialValue(params.fetch);
+}
+
+function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
   if (provider.requiresCredential === false) {
     return [];
   }
@@ -298,35 +365,48 @@ export async function resolveRuntimeWebTools(params: {
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
-  const providers = sortWebSearchProvidersForAutoDetect(
-    search
-      ? configuredBundledPluginId
-        ? resolveBundledPluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-            onlyPluginIds: [configuredBundledPluginId],
-          })
-        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-          ? resolveBundledPluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-          : resolvePluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-      : [],
-  );
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
     diagnostics: [],
   };
 
-  const searchEnabled = search?.enabled !== false;
+  const searchProviders = sortWebSearchProvidersForAutoDetect(
+    configuredBundledPluginId
+      ? resolveBundledPluginWebSearchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+          onlyPluginIds: [configuredBundledPluginId],
+        })
+      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
+        ? resolveBundledPluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+          })
+        : resolvePluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+          }),
+  );
+  const searchConfigured = Boolean(search);
+  const hasConfiguredSearchSurface =
+    searchConfigured ||
+    searchProviders.some((provider) => {
+      if (provider.requiresCredential === false) {
+        return false;
+      }
+      const value = readConfiguredProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        search,
+      });
+      return value !== undefined;
+    });
+  const searchEnabled = hasConfiguredSearchSurface && search?.enabled !== false;
+  const providers = hasConfiguredSearchSurface ? searchProviders : [];
   const configuredProvider = normalizeProvider(rawProvider, providers);
 
   if (rawProvider && !configuredProvider) {
@@ -349,7 +429,7 @@ export async function resolveRuntimeWebTools(params: {
     searchMetadata.providerSource = "configured";
   }
 
-  if (searchEnabled && search) {
+  if (searchEnabled) {
     const candidates = configuredProvider
       ? providers.filter((provider) => provider.id === configuredProvider)
       : providers;
@@ -375,9 +455,11 @@ export async function resolveRuntimeWebTools(params: {
         continue;
       }
       const path = keyPathForProvider(provider);
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
+      const value = readConfiguredProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        search,
+      });
       const resolution = await resolveSecretInputWithEnvFallback({
         sourceConfig: params.sourceConfig,
         context: params.context,
@@ -515,14 +597,16 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
+  if (searchEnabled && !configuredProvider && searchMetadata.selectedProvider) {
     for (const provider of providers) {
       if (provider.id === searchMetadata.selectedProvider) {
         continue;
       }
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
+      const value = readConfiguredProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        search,
+      });
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -536,9 +620,11 @@ export async function resolveRuntimeWebTools(params: {
     }
   } else if (search && !searchEnabled) {
     for (const provider of providers) {
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
+      const value = readConfiguredProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        search,
+      });
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -557,9 +643,11 @@ export async function resolveRuntimeWebTools(params: {
       if (provider.id === configuredProvider) {
         continue;
       }
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
+      const value = readConfiguredProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        search,
+      });
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -574,119 +662,285 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   const fetch = isRecord(web?.fetch) ? (web.fetch as FetchConfig) : undefined;
-  const firecrawl = isRecord(fetch?.firecrawl) ? fetch.firecrawl : undefined;
-  const fetchEnabled = fetch?.enabled !== false;
-  const firecrawlEnabled = firecrawl?.enabled !== false;
-  const firecrawlActive = Boolean(fetchEnabled && firecrawlEnabled);
-  const firecrawlPath = "tools.web.fetch.firecrawl.apiKey";
-  let firecrawlResolution: SecretResolutionResult = {
-    source: "missing",
-    secretRefConfigured: false,
-    fallbackUsedAfterRefFailure: false,
+  const rawFetchProvider =
+    typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+  const configuredBundledFetchPluginId = resolveBundledWebFetchPluginId(rawFetchProvider);
+  const fetchMetadata: RuntimeWebFetchMetadata = {
+    providerSource: "none",
+    diagnostics: [],
   };
-
-  const firecrawlDiagnostics: RuntimeWebDiagnostic[] = [];
-
-  if (firecrawlActive) {
-    firecrawlResolution = await resolveSecretInputWithEnvFallback({
-      sourceConfig: params.sourceConfig,
-      context: params.context,
-      defaults,
-      value: firecrawl?.apiKey,
-      path: firecrawlPath,
-      envVars: ["FIRECRAWL_API_KEY"],
-    });
-
-    if (firecrawlResolution.value) {
-      setResolvedFirecrawlApiKey({
-        resolvedConfig: params.resolvedConfig,
-        value: firecrawlResolution.value,
+  const fetchProviders = sortWebFetchProvidersForAutoDetect(
+    configuredBundledFetchPluginId
+      ? resolveBundledPluginWebFetchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+          onlyPluginIds: [configuredBundledFetchPluginId],
+        })
+      : resolveBundledPluginWebFetchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+        }),
+  );
+  const hasConfiguredFetchSurface =
+    Boolean(fetch) ||
+    fetchProviders.some((provider) => {
+      const value = readConfiguredFetchProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        fetch,
       });
-    }
+      return value !== undefined;
+    });
+  const fetchEnabled = hasConfiguredFetchSurface && fetch?.enabled !== false;
+  const configuredFetchProvider = normalizeFetchProvider(rawFetchProvider, fetchProviders);
 
-    if (firecrawlResolution.secretRefConfigured) {
-      if (firecrawlResolution.fallbackUsedAfterRefFailure) {
+  if (rawFetchProvider && !configuredFetchProvider) {
+    const diagnostic: RuntimeWebDiagnostic = {
+      code: "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
+      message: `tools.web.fetch.provider is "${rawFetchProvider}". Falling back to auto-detect precedence.`,
+      path: "tools.web.fetch.provider",
+    };
+    diagnostics.push(diagnostic);
+    fetchMetadata.diagnostics.push(diagnostic);
+    pushWarning(params.context, {
+      code: "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
+      path: "tools.web.fetch.provider",
+      message: diagnostic.message,
+    });
+  }
+
+  if (configuredFetchProvider) {
+    fetchMetadata.providerConfigured = configuredFetchProvider;
+    fetchMetadata.providerSource = "configured";
+  }
+
+  if (fetchEnabled) {
+    const candidates = configuredFetchProvider
+      ? fetchProviders.filter((provider) => provider.id === configuredFetchProvider)
+      : fetchProviders;
+    const unresolvedWithoutFallback: Array<{
+      provider: WebFetchProvider;
+      path: string;
+      reason: string;
+    }> = [];
+
+    let selectedProvider: WebFetchProvider | undefined;
+    let selectedResolution: SecretResolutionResult | undefined;
+
+    for (const provider of candidates) {
+      if (provider.requiresCredential === false) {
+        selectedProvider = provider.id;
+        selectedResolution = {
+          source: "missing",
+          secretRefConfigured: false,
+          fallbackUsedAfterRefFailure: false,
+        };
+        break;
+      }
+      const path = keyPathForFetchProvider(provider);
+      const value = readConfiguredFetchProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        fetch,
+      });
+      const resolution = await resolveSecretInputWithEnvFallback({
+        sourceConfig: params.sourceConfig,
+        context: params.context,
+        defaults,
+        value,
+        path,
+        envVars: provider.envVars,
+        restrictEnvRefsToEnvVars: true,
+      });
+
+      if (resolution.secretRefConfigured && resolution.fallbackUsedAfterRefFailure) {
         const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
+          code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
           message:
-            `${firecrawlPath} SecretRef could not be resolved; using ${firecrawlResolution.fallbackEnvVar ?? "env fallback"}. ` +
-            (firecrawlResolution.unresolvedRefReason ?? "").trim(),
-          path: firecrawlPath,
+            `${path} SecretRef could not be resolved; using ${resolution.fallbackEnvVar ?? "env fallback"}. ` +
+            (resolution.unresolvedRefReason ?? "").trim(),
+          path,
         };
         diagnostics.push(diagnostic);
-        firecrawlDiagnostics.push(diagnostic);
+        fetchMetadata.diagnostics.push(diagnostic);
         pushWarning(params.context, {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
-          path: firecrawlPath,
+          code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
+          path,
           message: diagnostic.message,
         });
       }
 
-      if (!firecrawlResolution.value && firecrawlResolution.unresolvedRefReason) {
+      if (resolution.secretRefConfigured && !resolution.value && resolution.unresolvedRefReason) {
+        unresolvedWithoutFallback.push({
+          provider: provider.id,
+          path,
+          reason: resolution.unresolvedRefReason,
+        });
+      }
+
+      if (configuredFetchProvider) {
+        selectedProvider = provider.id;
+        selectedResolution = resolution;
+        if (resolution.value) {
+          setResolvedWebFetchApiKey({
+            resolvedConfig: params.resolvedConfig,
+            provider,
+            value: resolution.value,
+          });
+        }
+        break;
+      }
+
+      if (resolution.value) {
+        selectedProvider = provider.id;
+        selectedResolution = resolution;
+        setResolvedWebFetchApiKey({
+          resolvedConfig: params.resolvedConfig,
+          provider,
+          value: resolution.value,
+        });
+        break;
+      }
+    }
+
+    const failUnresolvedFetchNoFallback = (unresolved: { path: string; reason: string }) => {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
+        message: unresolved.reason,
+        path: unresolved.path,
+      };
+      diagnostics.push(diagnostic);
+      fetchMetadata.diagnostics.push(diagnostic);
+      pushWarning(params.context, {
+        code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
+        path: unresolved.path,
+        message: unresolved.reason,
+      });
+      throw new Error(`[WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
+    };
+
+    if (configuredFetchProvider) {
+      const unresolved = unresolvedWithoutFallback[0];
+      if (unresolved) {
+        failUnresolvedFetchNoFallback(unresolved);
+      }
+    } else {
+      if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
+        failUnresolvedFetchNoFallback(unresolvedWithoutFallback[0]);
+      }
+
+      if (selectedProvider) {
+        const selectedProviderEntry = fetchProviders.find((entry) => entry.id === selectedProvider);
+        const selectedDetails =
+          selectedProviderEntry?.requiresCredential === false
+            ? `tools.web.fetch auto-detected keyless provider "${selectedProvider}" as the default fallback.`
+            : `tools.web.fetch auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-          message: firecrawlResolution.unresolvedRefReason,
-          path: firecrawlPath,
+          code: "WEB_FETCH_AUTODETECT_SELECTED",
+          message: selectedDetails,
+          path: "tools.web.fetch.provider",
         };
         diagnostics.push(diagnostic);
-        firecrawlDiagnostics.push(diagnostic);
-        pushWarning(params.context, {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-          path: firecrawlPath,
-          message: firecrawlResolution.unresolvedRefReason,
-        });
-        throw new Error(
-          `[WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK] ${firecrawlResolution.unresolvedRefReason}`,
+        fetchMetadata.diagnostics.push(diagnostic);
+      }
+    }
+
+    if (selectedProvider) {
+      fetchMetadata.selectedProvider = selectedProvider;
+      fetchMetadata.selectedProviderKeySource = selectedResolution?.source;
+      if (!configuredFetchProvider) {
+        fetchMetadata.providerSource = "auto-detect";
+      }
+      const provider = fetchProviders.find((entry) => entry.id === selectedProvider);
+      if (provider?.resolveRuntimeMetadata) {
+        Object.assign(
+          fetchMetadata,
+          await provider.resolveRuntimeMetadata({
+            config: params.sourceConfig,
+            fetchConfig: fetch,
+            runtimeMetadata: fetchMetadata,
+            resolvedCredential: selectedResolution
+              ? {
+                  value: selectedResolution.value,
+                  source: selectedResolution.source,
+                  fallbackEnvVar: selectedResolution.fallbackEnvVar,
+                }
+              : undefined,
+          }),
         );
       }
     }
-  } else {
-    if (hasConfiguredSecretRef(firecrawl?.apiKey, defaults)) {
-      pushInactiveSurfaceWarning({
-        context: params.context,
-        path: firecrawlPath,
-        details: !fetchEnabled
-          ? "tools.web.fetch is disabled."
-          : "tools.web.fetch.firecrawl.enabled is false.",
+  }
+
+  if (fetchEnabled && !configuredFetchProvider && fetchMetadata.selectedProvider) {
+    for (const provider of fetchProviders) {
+      if (provider.id === fetchMetadata.selectedProvider) {
+        continue;
+      }
+      const value = readConfiguredFetchProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        fetch,
       });
-      firecrawlResolution = {
-        source: "secretRef",
-        secretRefConfigured: true,
-        fallbackUsedAfterRefFailure: false,
-      };
-    } else {
-      const configuredInlineValue = normalizeSecretInput(firecrawl?.apiKey);
-      if (configuredInlineValue) {
-        firecrawlResolution = {
-          value: configuredInlineValue,
-          source: "config",
-          secretRefConfigured: false,
-          fallbackUsedAfterRefFailure: false,
-        };
-      } else {
-        const envFallback = readNonEmptyEnvValue(params.context.env, ["FIRECRAWL_API_KEY"]);
-        if (envFallback.value) {
-          firecrawlResolution = {
-            value: envFallback.value,
-            source: "env",
-            fallbackEnvVar: envFallback.envVar,
-            secretRefConfigured: false,
-            fallbackUsedAfterRefFailure: false,
-          };
-        }
+      if (!hasConfiguredSecretRef(value, defaults)) {
+        continue;
+      }
+      for (const path of inactivePathsForFetchProvider(provider)) {
+        pushInactiveSurfaceWarning({
+          context: params.context,
+          path,
+          details: `tools.web.fetch auto-detected provider is "${fetchMetadata.selectedProvider}".`,
+        });
+      }
+    }
+  } else if (fetch && !fetchEnabled) {
+    for (const provider of fetchProviders) {
+      const value = readConfiguredFetchProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        fetch,
+      });
+      if (!hasConfiguredSecretRef(value, defaults)) {
+        continue;
+      }
+      for (const path of inactivePathsForFetchProvider(provider)) {
+        pushInactiveSurfaceWarning({
+          context: params.context,
+          path,
+          details: "tools.web.fetch is disabled.",
+        });
+      }
+    }
+  }
+
+  if (fetchEnabled && fetch && configuredFetchProvider) {
+    for (const provider of fetchProviders) {
+      if (provider.id === configuredFetchProvider) {
+        continue;
+      }
+      const value = readConfiguredFetchProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        fetch,
+      });
+      if (!hasConfiguredSecretRef(value, defaults)) {
+        continue;
+      }
+      for (const path of inactivePathsForFetchProvider(provider)) {
+        pushInactiveSurfaceWarning({
+          context: params.context,
+          path,
+          details: `tools.web.fetch.provider is "${configuredFetchProvider}".`,
+        });
       }
     }
   }
 
   return {
     search: searchMetadata,
-    fetch: {
-      firecrawl: {
-        active: firecrawlActive,
-        apiKeySource: firecrawlResolution.source,
-        diagnostics: firecrawlDiagnostics,
-      },
-    },
+    fetch: fetchMetadata,
     diagnostics,
   };
 }
