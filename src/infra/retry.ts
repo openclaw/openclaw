@@ -31,7 +31,7 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 const RATE_LIMIT_RETRY_AFTER_RE =
-  /retry[- ]after(?:[- _]?(ms|milliseconds?|msecs?|s|seconds?|secs?))?[^\d]*(\d+(?:\.\d+)?)\s*(milliseconds?|msecs?|ms|seconds?|secs?|s)?/i;
+  /retry[- ]after(?:[- _]?(ms|milliseconds?|msecs?|mins?|minutes?|m|s|seconds?|secs?))?[^\d]*(\d+(?:\.\d+)?)\s*(milliseconds?|msecs?|ms|minutes?|mins?|seconds?|secs?|m|s)?/i;
 const RATE_LIMIT_MESSAGE_RE =
   /\b(?:429|too many requests|rate[_ -]?limit(?:ed)?|throttl(?:ed|ing)|resource exhausted)\b/i;
 
@@ -143,7 +143,9 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
   }
 
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  const retryAfterDateMatch = message.match(/retry[- ]after[^A-Za-z0-9]*([A-Z][a-z]{2},\s*\d{2}\s+[A-Z][a-z]{2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/i);
+  const retryAfterDateMatch = message.match(
+    /retry[- ]after[^A-Za-z0-9]*([A-Z][a-z]{2},\s*\d{2}\s+[A-Z][a-z]{2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/i,
+  );
   if (retryAfterDateMatch) {
     const parsed = parseRetryAfterHeaderValue(retryAfterDateMatch[1]);
     if (parsed !== undefined) {
@@ -155,11 +157,14 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
     const amount = Number(retryAfterMatch[2]);
     if (Number.isFinite(amount)) {
       const unit = (retryAfterMatch[3] ?? retryAfterMatch[1])?.toLowerCase();
-      if (!unit || unit.startsWith("s")) {
+      if (!unit || unit === "s" || unit.startsWith("sec")) {
         return Math.max(0, Math.round(amount * 1000));
       }
       if (unit === "ms" || unit.startsWith("msec") || unit.startsWith("millisecond")) {
         return Math.max(0, Math.round(amount));
+      }
+      if (unit === "m" || unit.startsWith("min")) {
+        return Math.max(0, Math.round(amount * 60_000));
       }
     }
   }

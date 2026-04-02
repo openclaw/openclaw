@@ -282,6 +282,24 @@ describe("retryAsync", () => {
     expect(delays[0]).toBe(1500);
   });
 
+  it("parses minute-based retry after hints in rate-limit style messages", async () => {
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 200_000,
+      error: new Error("rate limited, retry after 2 minutes"),
+    });
+    expect(delays[0]).toBe(120_000);
+  });
+
+  it("parses abbreviated minute retry after hints in rate-limit style messages", async () => {
+    const delays = await runRetryAfterCase({
+      minDelayMs: 0,
+      maxDelayMs: 200_000,
+      error: new Error("rate limited, retry after 2 min"),
+    });
+    expect(delays[0]).toBe(120_000);
+  });
+
   it("accepts string-valued retryAfter fields", async () => {
     const err = Object.assign(new Error("429 Too Many Requests"), {
       status: 429,
