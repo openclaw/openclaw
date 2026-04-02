@@ -7,6 +7,7 @@ import {
   evaluateShellAllowlist,
   hasDurableExecApproval,
   requiresExecApproval,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import {
@@ -415,6 +416,7 @@ export async function executeNodeHostCommand(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
         nodeId,
       });
     }
