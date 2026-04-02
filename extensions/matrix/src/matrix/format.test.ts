@@ -136,4 +136,24 @@ describe("markdownToMatrixHtml", () => {
     expect(result.html).not.toContain("matrix.to");
     expect(result.mentions).toEqual({});
   });
+
+  it("keeps backslashes inside tilde fenced code blocks", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "~~~\n\\@alice:example.org\n~~~",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("<pre><code>\\@alice:example.org\n</code></pre>");
+    expect(result.mentions).toEqual({});
+  });
+
+  it("keeps backslashes inside indented code blocks", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "    \\@alice:example.org",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("<pre><code>\\@alice:example.org\n</code></pre>");
+    expect(result.mentions).toEqual({});
+  });
 });

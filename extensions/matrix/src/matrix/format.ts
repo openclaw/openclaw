@@ -96,6 +96,18 @@ function restoreEscapedMentions(text: string): string {
   return text.replaceAll(ESCAPED_MENTION_SENTINEL, "@");
 }
 
+function restoreEscapedMentionsInCode(text: string): string {
+  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "\\@");
+}
+
+function restoreEscapedMentionsInBlockTokens(tokens: MarkdownToken[]): void {
+  for (const token of tokens) {
+    if ((token.type === "fence" || token.type === "code_block") && token.content) {
+      token.content = restoreEscapedMentionsInCode(token.content);
+    }
+  }
+}
+
 function isMentionStartBoundary(charBefore: string | undefined): boolean {
   return !charBefore || !/[A-Za-z0-9_]/.test(charBefore);
 }
@@ -276,6 +288,7 @@ async function resolveMarkdownMentionState(params: {
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
   const markdown = maskEscapedMentions(params.markdown ?? "");
   const tokens = md.parse(markdown, {});
+  restoreEscapedMentionsInBlockTokens(tokens);
   const selfUserId = await params.client.getUserId().catch(() => null);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
