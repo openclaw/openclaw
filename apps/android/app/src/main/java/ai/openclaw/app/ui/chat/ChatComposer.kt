@@ -60,6 +60,37 @@ import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileTextTertiary
 
+internal data class DraftApplication(
+  val input: String,
+  val lastAppliedDraft: String?,
+  val consumed: Boolean,
+)
+
+internal fun applyDraftText(
+  draftText: String?,
+  currentInput: String,
+  lastAppliedDraft: String?,
+): DraftApplication {
+  val draft =
+    draftText?.trim()?.ifEmpty { null } ?: return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = null,
+      consumed = false,
+    )
+  if (draft == lastAppliedDraft) {
+    return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = lastAppliedDraft,
+      consumed = false,
+    )
+  }
+  return DraftApplication(
+    input = draft,
+    lastAppliedDraft = draft,
+    consumed = true,
+  )
+}
+
 @Composable
 fun ChatComposer(
   draftText: String?,
@@ -80,11 +111,12 @@ fun ChatComposer(
   var showThinkingMenu by remember { mutableStateOf(false) }
 
   LaunchedEffect(draftText) {
-    val draft = draftText?.trim()?.ifEmpty { null } ?: return@LaunchedEffect
-    if (draft == lastAppliedDraft) return@LaunchedEffect
-    input = draft
-    lastAppliedDraft = draft
-    onDraftApplied()
+    val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
+    input = next.input
+    lastAppliedDraft = next.lastAppliedDraft
+    if (next.consumed) {
+      onDraftApplied()
+    }
   }
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
