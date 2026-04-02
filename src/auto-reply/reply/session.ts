@@ -186,6 +186,7 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  isHeartbeat?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
@@ -484,10 +485,12 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const updatedAt = Date.now();
   sessionEntry = {
     ...baseEntry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt,
+    lastUserMessageAt: params.isHeartbeat === true ? baseEntry?.lastUserMessageAt : updatedAt,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
@@ -602,6 +605,9 @@ export async function initSessionState(params: {
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
+    sessionEntry.lastAssistantMessageAt = undefined;
+    sessionEntry.lastCacheTouchAt = undefined;
+    sessionEntry.lastIdleCompactionForAssistantMessageAt = undefined;
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;

@@ -510,14 +510,15 @@ async function agentCommandInternal(
       : sessionEntry?.skillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+      const now = Date.now();
       const current = sessionEntry ?? {
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: now,
       };
       const next: SessionEntry = {
         ...current,
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: now,
         skillsSnapshot,
       };
       await persistSessionEntry({
@@ -531,9 +532,14 @@ async function agentCommandInternal(
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
-      const entry = sessionStore[sessionKey] ??
-        sessionEntry ?? { sessionId, updatedAt: Date.now() };
-      const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
+      const now = Date.now();
+      const entry = sessionStore[sessionKey] ?? sessionEntry ?? { sessionId, updatedAt: now };
+      const next: SessionEntry = {
+        ...entry,
+        sessionId,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
       }

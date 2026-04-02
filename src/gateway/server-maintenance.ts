@@ -11,6 +11,7 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { runSessionCacheMaintenanceSweep } from "./session-cache-maintenance.js";
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -76,6 +77,7 @@ export function startGatewayMaintenanceTimers(params: {
     .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup
+  let sessionCacheMaintenanceInFlight: Promise<void> | null = null;
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
@@ -150,6 +152,15 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
+    }
+
+    if (!sessionCacheMaintenanceInFlight) {
+      sessionCacheMaintenanceInFlight = runSessionCacheMaintenanceSweep().catch((err) => {
+        params.logHealth.error(`session cache maintenance failed: ${formatError(err)}`);
+      });
+      void sessionCacheMaintenanceInFlight.finally(() => {
+        sessionCacheMaintenanceInFlight = null;
+      });
     }
   }, 60_000);
 

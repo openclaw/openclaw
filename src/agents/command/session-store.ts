@@ -5,11 +5,13 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
+import { resolveCacheTtlMs } from "../pi-embedded-runner/cache-ttl.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
@@ -59,16 +61,28 @@ export async function updateSessionStoreAfterAgentRun(params: {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
+  const now = Date.now();
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
   };
   const next: SessionEntry = {
     ...entry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    lastAssistantMessageAt: now,
     contextTokens,
   };
+  const cacheTtlMs = resolveCacheTtlMs({
+    config: cfg,
+    provider: providerUsed,
+    modelId: modelUsed,
+    agentId: resolveAgentIdFromSessionKey(sessionKey),
+  });
+  if (cacheTtlMs != null) {
+    next.lastCacheTouchAt = next.updatedAt;
+    next.lastIdleCompactionForAssistantMessageAt = undefined;
+  }
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,

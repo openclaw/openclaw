@@ -8,7 +8,7 @@ import {
   getOrCreateSessionMcpRuntime,
 } from "../../agents/pi-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
@@ -2675,5 +2675,33 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("+15555550123");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
+  });
+
+  it("does not refresh lastUserMessageAt for heartbeat turns", async () => {
+    const storePath = await createStorePath("heartbeat-preserves-last-user-");
+    const sessionKey = "agent:main:discord:channel:heartbeat";
+    const initialUserAt = 1_234;
+    const updatedAt = Date.now();
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-heartbeat",
+        updatedAt,
+        lastUserMessageAt: initialUserAt,
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: {
+        Body: "heartbeat",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+      isHeartbeat: true,
+    });
+
+    const stored = loadSessionStore(storePath, { skipCache: true });
+    expect(stored[sessionKey]?.lastUserMessageAt).toBe(initialUserAt);
   });
 });
