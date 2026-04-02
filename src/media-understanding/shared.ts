@@ -1,9 +1,18 @@
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveOpenClawUserAgent } from "../version.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 const MAX_ERROR_CHARS = 300;
+
+function withOpenClawUserAgent(headers: Headers): Headers {
+  const next = new Headers(headers);
+  if (!next.has("User-Agent")) {
+    next.set("User-Agent", resolveOpenClawUserAgent());
+  }
+  return next;
+}
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
   const raw = baseUrl?.trim() || fallback;
@@ -44,7 +53,7 @@ export async function postTranscriptionRequest(params: {
     params.url,
     {
       method: "POST",
-      headers: params.headers,
+      headers: withOpenClawUserAgent(params.headers),
       body: params.body,
     },
     params.timeoutMs,
@@ -65,7 +74,7 @@ export async function postJsonRequest(params: {
     params.url,
     {
       method: "POST",
-      headers: params.headers,
+      headers: withOpenClawUserAgent(params.headers),
       body: JSON.stringify(params.body),
     },
     params.timeoutMs,
