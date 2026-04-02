@@ -1421,12 +1421,19 @@ export type WebFetchProviderPlugin = {
   signupUrl: string;
   docsUrl?: string;
   autoDetectOrder?: number;
+  /** Canonical plugin-owned config path for this provider's primary fetch credential. */
   credentialPath: string;
+  /**
+   * Legacy or inactive credential paths that should warn but not activate this provider.
+   * Include credentialPath here when overriding the list, because runtime classification
+   * treats inactiveSecretPaths as the full inactive surface for this provider.
+   */
   inactiveSecretPaths?: string[];
   getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  /** Apply the minimal config needed to select this provider without scattering plugin config writes in core. */
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
   resolveRuntimeMetadata?: (
     ctx: WebFetchRuntimeMetadataContext,

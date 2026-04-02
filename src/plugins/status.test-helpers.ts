@@ -39,6 +39,11 @@ export function createPluginRecord(
     source: overrides.source ?? `/tmp/${id}/index.ts`,
     origin: overrides.origin ?? "workspace",
     enabled: overrides.enabled ?? true,
+    explicitlyEnabled: overrides.explicitlyEnabled ?? overrides.enabled ?? true,
+    activated: overrides.activated ?? overrides.enabled ?? true,
+    activationSource:
+      overrides.activationSource ?? ((overrides.enabled ?? true) ? "explicit" : "disabled"),
+    activationReason: overrides.activationReason,
     status: overrides.status ?? "loaded",
     toolNames: [],
     hookNames: [],

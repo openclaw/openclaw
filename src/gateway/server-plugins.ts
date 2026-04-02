@@ -380,6 +380,8 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
 
 export function loadGatewayPlugins(params: {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
+  autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir: string;
   log: {
     info: (msg: string) => void;
@@ -392,10 +394,29 @@ export function loadGatewayPlugins(params: {
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
-  const resolvedConfig = applyPluginAutoEnable({
-    config: params.cfg,
-    env: process.env,
-  }).config;
+  const autoEnabled =
+    params.activationSourceConfig !== undefined
+      ? {
+          config: params.cfg,
+          changes: [],
+          autoEnabledReasons:
+            params.autoEnabledReasons ??
+            applyPluginAutoEnable({
+              config: params.activationSourceConfig,
+              env: process.env,
+            }).autoEnabledReasons,
+        }
+      : params.autoEnabledReasons !== undefined
+        ? {
+            config: params.cfg,
+            changes: [],
+            autoEnabledReasons: params.autoEnabledReasons,
+          }
+        : applyPluginAutoEnable({
+            config: params.cfg,
+            env: process.env,
+          });
+  const resolvedConfig = autoEnabled.config;
   const pluginIds =
     params.pluginIds ??
     resolveGatewayStartupPluginIds({
@@ -405,6 +426,8 @@ export function loadGatewayPlugins(params: {
     });
   const pluginRegistry = loadOpenClawPlugins({
     config: resolvedConfig,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: pluginIds,
     logger: {
