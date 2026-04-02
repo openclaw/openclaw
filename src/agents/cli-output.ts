@@ -754,6 +754,9 @@ export function createCliJsonlStreamingParser(params: {
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
+  let finalAnswerText: string | undefined;
+  let taskCompleteText: string | undefined;
+  let sawStructuredOutput = false;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
   // Classification is keyed on consumer presence so reclassified pre-tool text
@@ -802,6 +805,9 @@ export function createCliJsonlStreamingParser(params: {
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
+    if (sessionId || usage || parsed.type || parsed.item || parsed.payload) {
+      sawStructuredOutput = true;
+    }
     const geminiErrorText = isGeminiStreamJsonDialect(params)
       ? readGeminiCliStreamJsonError(parsed)
       : undefined;
@@ -831,10 +837,14 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
 
+    taskCompleteText = pickCliJsonlTaskCompleteText(parsed) ?? taskCompleteText;
+    finalAnswerText = pickCliJsonlFinalAnswerText(parsed) ?? finalAnswerText;
+
     const item = isRecord(parsed.item) ? parsed.item : null;
     if (item && typeof item.text === "string") {
       const type = normalizeLowercaseStringOrEmpty(item.type);
-      if (!type || type.includes("message")) {
+      const phase = pickCliJsonlPhase(item, parsed);
+      if ((!type || type.includes("message")) && phase !== "commentary") {
         texts.push(item.text);
       }
     }
@@ -966,13 +976,73 @@ export function createCliJsonlStreamingParser(params: {
       if (isGeminiStreamJsonDialect(params) && (assistantText.trim() || sessionId || usage)) {
         return { text: assistantText.trim(), sessionId, usage };
       }
+      const terminalText = taskCompleteText ?? finalAnswerText;
+      if (terminalText) {
+        return { text: terminalText, sessionId, usage };
+      }
       const text = texts.join("\n").trim();
-      return text ? { text, sessionId, usage } : null;
+      if (!text) {
+        return sawStructuredOutput ? { text: "", sessionId, usage } : null;
+      }
+      return { text, sessionId, usage };
     },
   };
 }
 
-/** Parses complete JSONL CLI output into the final assistant result and metadata. */
+function pickCliJsonlPhase(...records: Array<Record<string, unknown> | null>): string | undefined {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    const phase = typeof record.phase === "string" ? record.phase.trim().toLowerCase() : "";
+    if (phase) {
+      return phase;
+    }
+  }
+  return undefined;
+}
+
+function collectCliJsonlMessageText(record: Record<string, unknown>): string {
+  return (
+    collectCliText(record.message) ||
+    collectCliText(record.content) ||
+    (typeof record.text === "string" ? record.text : "")
+  );
+}
+
+function pickCliJsonlTaskCompleteText(parsed: Record<string, unknown>): string | undefined {
+  const payload = isRecord(parsed.payload) ? parsed.payload : null;
+  const item = isRecord(parsed.item) ? parsed.item : null;
+  for (const record of [payload, item, parsed]) {
+    if (!record) {
+      continue;
+    }
+    if (record.type !== "task_complete" || typeof record.last_agent_message !== "string") {
+      continue;
+    }
+    const text = record.last_agent_message.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function pickCliJsonlFinalAnswerText(parsed: Record<string, unknown>): string | undefined {
+  const payload = isRecord(parsed.payload) ? parsed.payload : null;
+  const item = isRecord(parsed.item) ? parsed.item : null;
+  for (const record of [payload, item, parsed]) {
+    if (!record || pickCliJsonlPhase(record) !== "final_answer") {
+      continue;
+    }
+    const text = collectCliJsonlMessageText(record).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
 /** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
 export function parseCliJsonl(
   raw: string,
@@ -985,6 +1055,9 @@ export function parseCliJsonl(
   }
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let finalAnswerText: string | undefined;
+  let taskCompleteText: string | undefined;
+  let sawStructuredOutput = false;
   const texts: string[] = [];
   let geminiText = "";
   let geminiErrorText: string | undefined;
@@ -999,6 +1072,9 @@ export function parseCliJsonl(
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
         usage = nextUsage ?? usage;
+      }
+      if (sessionId || usage || parsed.type || parsed.item || parsed.payload) {
+        sawStructuredOutput = true;
       }
 
       if (isGeminiStreamJsonDialect({ backend, providerId })) {
@@ -1037,10 +1113,14 @@ export function parseCliJsonl(
         return claudeResult;
       }
 
+      taskCompleteText = pickCliJsonlTaskCompleteText(parsed) ?? taskCompleteText;
+      finalAnswerText = pickCliJsonlFinalAnswerText(parsed) ?? finalAnswerText;
+
       const item = isRecord(parsed.item) ? parsed.item : null;
       if (item && typeof item.text === "string") {
         const type = normalizeLowercaseStringOrEmpty(item.type);
-        if (!type || type.includes("message")) {
+        const phase = pickCliJsonlPhase(item, parsed);
+        if ((!type || type.includes("message")) && phase !== "commentary") {
           texts.push(item.text);
         }
       }
@@ -1055,9 +1135,13 @@ export function parseCliJsonl(
   ) {
     return { text: geminiText.trim(), sessionId, usage };
   }
+  const terminalText = taskCompleteText ?? finalAnswerText;
+  if (terminalText) {
+    return { text: terminalText, sessionId, usage };
+  }
   const text = texts.join("\n").trim();
   if (!text) {
-    return null;
+    return sawStructuredOutput ? { text: "", sessionId, usage } : null;
   }
   return { text, sessionId, usage };
 }
