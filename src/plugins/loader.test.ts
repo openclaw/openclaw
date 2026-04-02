@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearInternalHooks, getRegisteredEventKeys } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
@@ -34,6 +35,7 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  listImportedRuntimePluginIds,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -1015,7 +1017,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "loads bundled channel plugins when channels.<id>.enabled=true even under restrictive plugins.allow",
+      name: "blocks bundled channel plugins when channels.<id>.enabled=true but plugins.allow excludes them",
       config: {
         channels: {
           telegram: {
@@ -1027,7 +1029,9 @@ describe("loadOpenClawPlugins", () => {
         },
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        expectTelegramLoaded(registry);
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("disabled");
+        expect(telegram?.error).toBe("not in allowlist");
       },
     },
     {
@@ -1062,6 +1066,109 @@ describe("loadOpenClawPlugins", () => {
       assert(registry);
     },
   );
+
+  it("marks auto-enabled bundled channels as activated but not explicitly enabled", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        enabled: true,
+      },
+    } satisfies PluginLoadConfig;
+    const autoEnabled = applyPluginAutoEnable({
+      config: rawConfig,
+      env: {},
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured",
+    });
+  });
+
+  it("preserves all auto-enable reasons in activation metadata", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        enabled: true,
+      },
+    } satisfies PluginLoadConfig;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        ...rawConfig,
+        plugins: {
+          enabled: true,
+          entries: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: {
+        telegram: ["telegram configured", "telegram selected for startup"],
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured; telegram selected for startup",
+    });
+  });
+
+  it("keeps explicit plugin enablement distinct from derived activation", () => {
+    const { bundledDir } = writeBundledPlugin({
+      id: "demo",
+    });
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies PluginLoadConfig;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config,
+      activationSourceConfig: config,
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "demo")).toMatchObject({
+      explicitlyEnabled: true,
+      activated: true,
+      activationSource: "explicit",
+      activationReason: "enabled in config",
+    });
+  });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
@@ -1142,6 +1249,145 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
 
         expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed-scoped-only"]);
         expect(fs.existsSync(skippedMarker)).toBe(false);
+      },
+    },
+    {
+      label: "can build a manifest-only snapshot without importing plugin modules",
+      run: () => {
+        useNoBundledPlugins();
+        const importedMarker = path.join(makeTempDir(), "manifest-only-imported.txt");
+        const plugin = writePlugin({
+          id: "manifest-only-plugin",
+          filename: "manifest-only-plugin.cjs",
+          body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "manifest-only-plugin", register() { throw new Error("manifest-only snapshot should not register"); } };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["manifest-only-plugin"],
+              entries: {
+                "manifest-only-plugin": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(fs.existsSync(importedMarker)).toBe(false);
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "manifest-only-plugin",
+              status: "loaded",
+            }),
+          ]),
+        );
+      },
+    },
+    {
+      label: "marks a selected memory slot as matched during manifest-only snapshots",
+      run: () => {
+        useNoBundledPlugins();
+        const memoryPlugin = writePlugin({
+          id: "memory-demo",
+          filename: "memory-demo.cjs",
+          body: `module.exports = {
+  id: "memory-demo",
+  kind: "memory",
+  register() {},
+};`,
+        });
+        fs.writeFileSync(
+          path.join(memoryPlugin.dir, "openclaw.plugin.json"),
+          JSON.stringify(
+            {
+              id: "memory-demo",
+              kind: "memory",
+              configSchema: EMPTY_PLUGIN_SCHEMA,
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [memoryPlugin.file] },
+              allow: ["memory-demo"],
+              slots: { memory: "memory-demo" },
+              entries: {
+                "memory-demo": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(
+          registry.diagnostics.some(
+            (entry) =>
+              entry.message === "memory slot plugin not found or not marked as memory: memory-demo",
+          ),
+        ).toBe(false);
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "memory-demo",
+              memorySlotSelected: true,
+            }),
+          ]),
+        );
+      },
+    },
+    {
+      label: "tracks plugins as imported when module evaluation throws after top-level execution",
+      run: () => {
+        useNoBundledPlugins();
+        const importMarker = "__openclaw_loader_import_throw_marker";
+        Reflect.deleteProperty(globalThis, importMarker);
+
+        const plugin = writePlugin({
+          id: "throws-after-import",
+          filename: "throws-after-import.cjs",
+          body: `globalThis.${importMarker} = (globalThis.${importMarker} ?? 0) + 1;
+throw new Error("boom after import");
+module.exports = { id: "throws-after-import", register() {} };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["throws-after-import"],
+            },
+          },
+        });
+
+        try {
+          expect(registry.plugins).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                id: "throws-after-import",
+                status: "error",
+              }),
+            ]),
+          );
+          expect(listImportedRuntimePluginIds()).toContain("throws-after-import");
+          expect(Number(Reflect.get(globalThis, importMarker) ?? 0)).toBeGreaterThan(0);
+        } finally {
+          Reflect.deleteProperty(globalThis, importMarker);
+        }
       },
     },
     {
@@ -4122,6 +4368,34 @@ describe("getCompatibleActivePluginRegistry", () => {
         runtimeOptions: undefined,
       }),
     ).toBeUndefined();
+  });
+
+  it("does not embed activation secrets in the loader cache key", () => {
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      activationSourceConfig: {
+        plugins: {
+          allow: ["telegram"],
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "secret-token",
+          },
+        },
+      },
+      autoEnabledReasons: {
+        telegram: ["telegram configured"],
+      },
+    });
+
+    expect(cacheKey).not.toContain("secret-token");
+    expect(cacheKey).not.toContain("botToken");
+    expect(cacheKey).not.toContain("telegram configured");
   });
 
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {

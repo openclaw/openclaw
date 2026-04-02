@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { resolveProviderHttpRequestConfig } from "./shared.js";
 
 describe("resolveProviderHttpRequestConfig", () => {
-  it("preserves explicit caller headers over default and attribution headers", () => {
+  it("preserves explicit caller headers but protects attribution headers", () => {
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.openai.com/v1/",
       defaultBaseUrl: "https://api.openai.com/v1",
       headers: {
         authorization: "Bearer override",
         "User-Agent": "custom-agent/1.0",
+        originator: "spoofed",
       },
       defaultHeaders: {
         authorization: "Bearer default-token",
@@ -24,7 +25,7 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.allowPrivateNetwork).toBe(true);
     expect(resolved.headers.get("authorization")).toBe("Bearer override");
     expect(resolved.headers.get("x-default")).toBe("1");
-    expect(resolved.headers.get("user-agent")).toBe("custom-agent/1.0");
+    expect(resolved.headers.get("user-agent")).toMatch(/^openclaw\//);
     expect(resolved.headers.get("originator")).toBe("openclaw");
     expect(resolved.headers.get("version")).toBeTruthy();
   });
@@ -62,5 +63,48 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(resolved.allowPrivateNetwork).toBe(false);
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
+  });
+
+  it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {
+    const resolved = resolveProviderHttpRequestConfig({
+      baseUrl: "https://api.deepgram.com/v1",
+      defaultBaseUrl: "https://api.deepgram.com/v1",
+      defaultHeaders: {
+        authorization: "Token test-key",
+      },
+      request: {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+          tls: {
+            ca: "proxy-ca",
+          },
+        },
+        tls: {
+          cert: "client-cert",
+          key: "client-key",
+        },
+      },
+      provider: "deepgram",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+
+    expect(resolved.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://proxy.internal:8443",
+      proxyTls: {
+        ca: "proxy-ca",
+      },
+    });
+  });
+
+  it("fails fast when no base URL can be resolved", () => {
+    expect(() =>
+      resolveProviderHttpRequestConfig({
+        baseUrl: "   ",
+        defaultBaseUrl: "   ",
+      }),
+    ).toThrow("Missing baseUrl");
   });
 });

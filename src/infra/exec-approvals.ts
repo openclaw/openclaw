@@ -168,9 +168,9 @@ export type ExecApprovalsResolved = {
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
-const DEFAULT_SECURITY: ExecSecurity = "deny";
-const DEFAULT_ASK: ExecAsk = "on-miss";
-export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "deny";
+const DEFAULT_SECURITY: ExecSecurity = "full";
+const DEFAULT_ASK: ExecAsk = "off";
+export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
@@ -299,10 +299,17 @@ function stripAllowlistCommandText(
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
+  const security = toStringOrUndefined(policy?.security)?.trim();
+  const ask = toStringOrUndefined(policy?.ask)?.trim();
+  const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
   return {
-    security: normalizeExecSecurity(toStringOrUndefined(policy?.security)) ?? undefined,
-    ask: normalizeExecAsk(toStringOrUndefined(policy?.ask)) ?? undefined,
-    askFallback: normalizeExecSecurity(toStringOrUndefined(policy?.askFallback)) ?? undefined,
+    security:
+      security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
+    ask: ask === "off" || ask === "on-miss" || ask === "always" ? ask : undefined,
+    askFallback:
+      askFallback === "deny" || askFallback === "allowlist" || askFallback === "full"
+        ? askFallback
+        : undefined,
     autoAllowSkills: policy?.autoAllowSkills,
   };
 }
@@ -509,7 +516,9 @@ function resolveAgentSecurityField(params: {
   field: "security" | "askFallback";
   defaults: ExecApprovalsDefaults;
   agent: ExecApprovalsAgent;
+  rawAgent: ExecApprovalsAgent;
   wildcard: ExecApprovalsAgent;
+  rawWildcard: ExecApprovalsAgent;
   agentKey: string;
   fallback: ExecSecurity;
 }): ResolvedExecPolicyField<ExecSecurity> {
@@ -518,21 +527,21 @@ function resolveAgentSecurityField(params: {
     defaults: params.defaults,
     fallback: params.fallback,
   });
-  const agentValue = params.agent[params.field];
-  if (agentValue != null) {
-    if (isExecSecurity(agentValue)) {
+  const rawAgentValue = params.rawAgent[params.field];
+  if (rawAgentValue != null) {
+    if (isExecSecurity(params.agent[params.field])) {
       return {
-        value: agentValue,
+        value: params.agent[params.field] as ExecSecurity,
         source: `agents.${params.agentKey}.${params.field}`,
       };
     }
     return fallbackField;
   }
-  const wildcardValue = params.wildcard[params.field];
-  if (wildcardValue != null) {
-    if (isExecSecurity(wildcardValue)) {
+  const rawWildcardValue = params.rawWildcard[params.field];
+  if (rawWildcardValue != null) {
+    if (isExecSecurity(params.wildcard[params.field])) {
       return {
-        value: wildcardValue,
+        value: params.wildcard[params.field] as ExecSecurity,
         source: `agents.*.${params.field}`,
       };
     }
@@ -544,7 +553,9 @@ function resolveAgentSecurityField(params: {
 function resolveAgentAskField(params: {
   defaults: ExecApprovalsDefaults;
   agent: ExecApprovalsAgent;
+  rawAgent: ExecApprovalsAgent;
   wildcard: ExecApprovalsAgent;
+  rawWildcard: ExecApprovalsAgent;
   agentKey: string;
   fallback: ExecAsk;
 }): ResolvedExecPolicyField<ExecAsk> {
@@ -552,7 +563,7 @@ function resolveAgentAskField(params: {
     defaults: params.defaults,
     fallback: params.fallback,
   });
-  if (params.agent.ask != null) {
+  if (params.rawAgent.ask != null) {
     if (isExecAsk(params.agent.ask)) {
       return {
         value: params.agent.ask,
@@ -561,7 +572,7 @@ function resolveAgentAskField(params: {
     }
     return fallbackField;
   }
-  if (params.wildcard.ask != null) {
+  if (params.rawWildcard.ask != null) {
     if (isExecAsk(params.wildcard.ask)) {
       return {
         value: params.wildcard.ask,
@@ -603,11 +614,14 @@ export function resolveExecApprovalsFromFile(params: {
   socketPath?: string;
   token?: string;
 }): ExecApprovalsResolved {
+  const rawFile = params.file;
   const file = normalizeExecApprovals(params.file);
   const defaults = file.defaults ?? {};
   const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
+  const rawAgent = rawFile.agents?.[agentKey] ?? {};
+  const rawWildcard = rawFile.agents?.["*"] ?? {};
   const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
   const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
@@ -625,14 +639,18 @@ export function resolveExecApprovalsFromFile(params: {
     field: "security",
     defaults,
     agent,
+    rawAgent,
     wildcard,
+    rawWildcard,
     agentKey,
     fallback: resolvedDefaults.security,
   });
   const resolvedAgentAsk = resolveAgentAskField({
     defaults,
     agent,
+    rawAgent,
     wildcard,
+    rawWildcard,
     agentKey,
     fallback: resolvedDefaults.ask,
   });
@@ -640,7 +658,9 @@ export function resolveExecApprovalsFromFile(params: {
     field: "askFallback",
     defaults,
     agent,
+    rawAgent,
     wildcard,
+    rawWildcard,
     agentKey,
     fallback: resolvedDefaults.askFallback,
   });
@@ -878,7 +898,7 @@ export async function requestExecApprovalViaSocket(params: {
 
   return await requestJsonlSocket({
     socketPath,
-    payload,
+    requestLine: payload,
     timeoutMs,
     accept: (value) => {
       const msg = value as { type?: string; decision?: ExecApprovalDecision };

@@ -807,6 +807,10 @@
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
+    "./plugin-sdk/provider-web-fetch": {
+      "types": "./dist/plugin-sdk/provider-web-fetch.d.ts",
+      "default": "./dist/plugin-sdk/provider-web-fetch.js"
+    },
     "./plugin-sdk/provider-web-search": {
       "types": "./dist/plugin-sdk/provider-web-search.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search.js"
@@ -1108,6 +1112,7 @@
     "lint:tmp:no-random-messaging": "node scripts/check-no-random-messaging-tmp.mjs",
     "lint:tmp:no-raw-channel-fetch": "node scripts/check-no-raw-channel-fetch.mjs",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
+    "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
     "lint:web-search-provider-boundaries": "node scripts/check-web-search-provider-boundaries.mjs",
     "lint:webhook:no-low-level-body-read": "node scripts/check-webhook-auth-body-order.mjs",
     "mac:open": "open dist/OpenClaw.app",
@@ -1268,7 +1273,7 @@
     "@types/node": "^25.5.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260331.1",
+    "@typescript/native-preview": "7.0.0-dev.20260401.1",
     "@vitest/coverage-v8": "^4.1.2",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",

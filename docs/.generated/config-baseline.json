@@ -50547,6 +50547,79 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.firecrawl.config.webFetch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Firecrawl Fetch API Key",
+      "help": "Firecrawl API key for web fetch fallback (fallback: FIRECRAWL_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "Firecrawl Fetch Base URL",
+      "help": "Firecrawl Fetch base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.maxAgeMs",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.onlyMainContent",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.firecrawl.config.webSearch",
       "kind": "plugin",
       "type": "object",
@@ -60121,6 +60194,101 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.xai.config.xSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.cacheTtlMinutes",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "storage"
+      ],
+      "label": "X Search Cache TTL",
+      "help": "Cache TTL in minutes for x_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable X Search",
+      "help": "Enable the x_search tool for searching X posts with xAI.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.inlineCitations",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline markdown citations from xAI in x_search responses when available.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.maxTurns",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal tool turns xAI may use per x_search request.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "X Search Model",
+      "help": "xAI model override for x_search.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "X Search Timeout",
+      "help": "Timeout in seconds for x_search requests.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.xai.enabled",
       "kind": "plugin",
       "type": "boolean",
@@ -66751,8 +66919,6 @@
         "security",
         "tools"
       ],
-      "label": "Firecrawl API Key",
-      "help": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -66796,8 +66962,6 @@
         "tools",
         "url-secret"
       ],
-      "label": "Firecrawl Base URL",
-      "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
       "hasChildren": false
     },
     {
@@ -66807,11 +66971,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable Firecrawl Fallback",
-      "help": "Enable Firecrawl fallback for web_fetch (if configured).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66821,12 +66981,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Firecrawl Cache Max Age (ms)",
-      "help": "Firecrawl maxAge (ms) for cached results when supported by the API.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66836,11 +66991,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Firecrawl Main Content Only",
-      "help": "When true, Firecrawl returns only the main content (default: true).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66850,12 +67001,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Firecrawl Timeout (sec)",
-      "help": "Timeout in seconds for Firecrawl requests.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66917,6 +67063,20 @@
       ],
       "label": "Web Fetch Max Download Size (bytes)",
       "help": "Max download size before truncation.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.provider",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Web Fetch Provider",
+      "help": "Web fetch fallback provider id.",
       "hasChildren": false
     },
     {
