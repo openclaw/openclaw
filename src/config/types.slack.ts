@@ -52,8 +52,8 @@ export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
 export type SlackLegacyStreamMode = "replace" | "status_final" | "append";
 export type SlackExecApprovalTarget = "dm" | "channel" | "both";
 export type SlackExecApprovalConfig = {
-  /** Enable Slack exec approvals for this account. Default: false. */
-  enabled?: boolean;
+  /** Enable mode for Slack exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
   /** Slack user IDs allowed to approve exec requests. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
