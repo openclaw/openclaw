@@ -7,6 +7,7 @@ import { createExecTool } from "./bash-tools.exec.js";
 const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
+const describeWin = isWin ? describe : describe.skip;
 
 describeNonWin("exec script preflight", () => {
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
@@ -67,51 +68,6 @@ describeNonWin("exec script preflight", () => {
       await expect(
         tool.execute("call-quoted", {
           command: 'node "bad.js"',
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("preserves windows-style python path separators during script extraction", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const winPath = ".\\bad.py";
-      await fs.writeFile(path.join(tmp, winPath), "payload = $DM_JSON", "utf-8");
-
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      await expect(
-        tool.execute("call-windows-python-path", {
-          command: "python .\\bad.py",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("preserves windows-style node path separators during script extraction", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const winPath = ".\\bad.js";
-      await fs.writeFile(path.join(tmp, winPath), "const value = $DM_JSON;", "utf-8");
-
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      await expect(
-        tool.execute("call-windows-node-path", {
-          command: "node .\\bad.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("preserves windows-style drive paths during python script extraction", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const winDrivePath = "C:\\tmp\\bad.py";
-      await fs.writeFile(path.join(tmp, winDrivePath), "payload = $DM_JSON", "utf-8");
-
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      await expect(
-        tool.execute("call-windows-python-drive-path", {
-          command: "python C:\\tmp\\bad.py",
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
@@ -315,6 +271,52 @@ describeNonWin("exec script preflight", () => {
       const text = result.content.find((block) => block.type === "text")?.text ?? "";
       expect(text).toContain("bad.py");
       expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+});
+
+describeWin("exec script preflight on windows path syntax", () => {
+  it("preserves windows-style python relative path separators during script extraction", async () => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-win-python-relative", {
+          command: "python .\\bad.py",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("preserves windows-style node relative path separators during script extraction", async () => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-win-node-relative", {
+          command: "node .\\bad.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("preserves windows-style python absolute drive paths during script extraction", async () => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
+      const absPath = path.join(tmp, "bad.py");
+      await fs.writeFile(absPath, "payload = $DM_JSON", "utf-8");
+      const winAbsPath = absPath.replaceAll("/", "\\");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-win-python-absolute", {
+          command: `python "${winAbsPath}"`,
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
     });
   });
 });
