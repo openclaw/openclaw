@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Zalo/webhook: scope replay-dedupe cache key to path and account using `JSON.stringify` so multi-account deployments do not silently drop events due to cross-account cache poisoning. (#59387) Thanks @pgondhi987.
 - Plugins/Google: separate OAuth CSRF state from PKCE code verifier during Gemini browser sign-in so state validation and token exchange use independent values. (#59116) Thanks @eleqtrizit.
 - Exec/Windows: reject malformed drive-less rooted executable paths like `:\Users\...` so approval and allowlist candidate resolution no longer treat them as cwd-relative commands. (#58040) Thanks @SnowSky1.
+- Exec/preflight: fail closed on complex interpreter invocations that would otherwise skip script-content validation, and correctly inspect quoted script paths before host execution. Thanks @pgondhi987.
 
 ## 2026.4.2-beta.1
 
