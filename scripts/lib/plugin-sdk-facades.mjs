@@ -162,6 +162,9 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "discord-thread-bindings",
     source: pluginSource("discord", "runtime-api.js"),
     loadPolicy: "activated",
+    directExports: {
+      unbindThreadBindingsBySessionKey: "./discord-maintenance.js",
+    },
     exports: [
       "autoBindSpawnedDiscordSubagent",
       "createThreadBindingManager",

@@ -2,6 +2,7 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["discord-thread-bindings"];
 type FacadeModule = FacadeEntry["module"];
+export { unbindThreadBindingsBySessionKey } from "./discord-maintenance.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
@@ -61,12 +62,6 @@ export const setThreadBindingMaxAgeBySessionKey: FacadeModule["setThreadBindingM
     loadFacadeModule()["setThreadBindingMaxAgeBySessionKey"](
       ...args,
     )) as FacadeModule["setThreadBindingMaxAgeBySessionKey"];
-export const unbindThreadBindingsBySessionKey: FacadeModule["unbindThreadBindingsBySessionKey"] = ((
-  ...args
-) =>
-  loadFacadeModule()["unbindThreadBindingsBySessionKey"](
-    ...args,
-  )) as FacadeModule["unbindThreadBindingsBySessionKey"];
 export type ThreadBindingManager = FacadeEntry["types"]["ThreadBindingManager"];
 export type ThreadBindingRecord = FacadeEntry["types"]["ThreadBindingRecord"];
 export type ThreadBindingTargetKind = FacadeEntry["types"]["ThreadBindingTargetKind"];
