@@ -463,8 +463,8 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(summary.askFallback).toEqual({
-      effective: "deny",
-      source: "OpenClaw default (deny)",
+      effective: "full",
+      source: "OpenClaw default (full)",
     });
   });
 

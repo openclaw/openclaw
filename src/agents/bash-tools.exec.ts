@@ -596,16 +596,14 @@ export function createExecTool(
 
       const approvalDefaults = loadExecApprovals().defaults;
       const configuredSecurity =
-        defaults?.security ??
-        approvalDefaults?.security ??
-        (host === "sandbox" ? "deny" : "allowlist");
+        defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
-      const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "on-miss";
+      const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";

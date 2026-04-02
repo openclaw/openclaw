@@ -75,8 +75,8 @@ function execAskRank(value: ExecAsk): number {
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const approvals = loadExecApprovals();
-  const defaultRequestedSecuritySource = "OpenClaw default (allowlist)";
-  const defaultRequestedAskSource = "OpenClaw default (on-miss)";
+  const defaultRequestedSecuritySource = "OpenClaw default (full)";
+  const defaultRequestedAskSource = "OpenClaw default (off)";
 
   const maybeWarn = (params: {
     scopeLabel: string;
