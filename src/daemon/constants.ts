@@ -41,7 +41,7 @@ export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[
 }
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {
-  const suffix = resolveGatewayProfileSuffix(profile ?? process.env.OPENCLAW_PROFILE);
+  const suffix = resolveGatewayProfileSuffix(profile);
   if (!suffix) {
     return GATEWAY_SYSTEMD_SERVICE_NAME;
   }

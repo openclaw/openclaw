@@ -40,9 +40,14 @@ describe("resolveGatewayLaunchAgentLabel", () => {
     expect(result).toBe("ai.openclaw.gateway");
   });
 
-  it("returns profile-specific label when profile is set", () => {
+  it("returns profile-specific label when profile arg is set", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
     expect(result).toBe("ai.openclaw.dev");
+  });
+
+  it("reads profile from OPENCLAW_PROFILE env when no arg is given", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    expect(resolveGatewayLaunchAgentLabel()).toBe("ai.openclaw.work");
   });
 });
 
@@ -54,9 +59,14 @@ describe("resolveGatewaySystemdServiceName", () => {
     expect(result).toBe("openclaw-gateway");
   });
 
-  it("returns profile-specific service name when profile is set", () => {
+  it("returns profile-specific service name when profile arg is set", () => {
     const result = resolveGatewaySystemdServiceName("dev");
     expect(result).toBe("openclaw-gateway-dev");
+  });
+
+  it("reads profile from OPENCLAW_PROFILE env when no arg is given", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    expect(resolveGatewaySystemdServiceName()).toBe("openclaw-gateway-work");
   });
 });
 
@@ -68,9 +78,14 @@ describe("resolveGatewayWindowsTaskName", () => {
     expect(result).toBe("OpenClaw Gateway");
   });
 
-  it("returns profile-specific task name when profile is set", () => {
+  it("returns profile-specific task name when profile arg is set", () => {
     const result = resolveGatewayWindowsTaskName("dev");
     expect(result).toBe("OpenClaw Gateway (dev)");
+  });
+
+  it("reads profile from OPENCLAW_PROFILE env when no arg is given", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    expect(resolveGatewayWindowsTaskName()).toBe("OpenClaw Gateway (work)");
   });
 });
 
@@ -91,6 +106,11 @@ describe("resolveGatewayProfileSuffix", () => {
 
   it("trims whitespace from profiles", () => {
     expect(resolveGatewayProfileSuffix("  staging  ")).toBe("-staging");
+  });
+
+  it("reads profile from OPENCLAW_PROFILE env when no arg is given", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    expect(resolveGatewayProfileSuffix()).toBe("-work");
   });
 });
 
