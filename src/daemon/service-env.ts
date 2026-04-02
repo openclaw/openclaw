@@ -107,7 +107,8 @@ function addCommonEnvConfiguredBinDirs(
 
 /**
  * Add Nix Home Manager bin directories.
- * Works across all Unix platforms (macOS, Linux, BSD, etc.).
+ * Supports darwin and linux platforms (matches the platforms handled
+ * by resolveDarwinUserBinDirs / resolveLinuxUserBinDirs).
  *
  * Nix profiles can be in multiple locations:
  * - ~/.nix-profile/bin (default single-user profile)

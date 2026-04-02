@@ -170,7 +170,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     // Windows returns empty array (uses existing PATH)
     expect(result).toEqual([]);
   });
+});
 
+describe("getMinimalServicePathParts - Nix Home Manager", () => {
   it("includes default Nix Home Manager profile on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
@@ -230,6 +232,19 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/.nix-profile/bin");
     // Should include all profiles from NIX_PROFILES env var
     expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
+
+  it("handles single Nix profile from NIX_PROFILES on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
   });
 });
 
