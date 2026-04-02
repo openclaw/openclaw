@@ -134,6 +134,24 @@ describe("detectCommandObfuscation", () => {
     });
   });
 
+  describe("inline interpreter encoded execution", () => {
+    it("detects inline python executing a base64-decoded payload", () => {
+      const result = detectCommandObfuscation(
+        `python3 -c "import base64; exec(base64.b64decode('cHJpbnQoJ3B3bmVkJyk='))"`,
+      );
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("does NOT flag benign inline python that only parses JSON fields containing system in a key name", () => {
+      const result = detectCommandObfuscation(
+        `ssh neptune 'curl -s http://localhost:8123/api/ 2>/dev/null | head -5; echo "---"; curl -s http://localhost:8123/api/config 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(\\"Version:\\",d.get(\\"version\\")); print(\\"Location:\\",d.get(\\"location_name\\")); print(\\"Unit:\\",d.get(\\"unit_system\\",{}).get(\\"temperature\\")); print(\\"TZ:\\",d.get(\\"time_zone\\")); print(\\"Components:\\",len(d.get(\\"components\\",[])))" 2>/dev/null || echo "API not accessible without auth"'`,
+      );
+      expect(result.detected).toBe(false);
+      expect(result.matchedPatterns).not.toContain("python-exec-encoded");
+    });
+  });
+
   describe("alternative execution forms", () => {
     it("detects command substitution decode in shell -c", () => {
       const result = detectCommandObfuscation('sh -c "$(base64 -d <<< \\"ZWNobyBoaQ==\\")"');
