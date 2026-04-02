@@ -6,7 +6,7 @@ import {
   ResolvingThemes,
 } from "@pierre/diffs";
 import AjvPkg from "ajv";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -17,7 +17,12 @@ import {
 } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
-import { getServedViewerAsset, VIEWER_LOADER_PATH, VIEWER_RUNTIME_PATH } from "./viewer-assets.js";
+import {
+  getServedViewerAsset,
+  resolveViewerRuntimeFileUrl,
+  VIEWER_LOADER_PATH,
+  VIEWER_RUNTIME_PATH,
+} from "./viewer-assets.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const FULL_DEFAULTS = {
@@ -540,6 +545,47 @@ describe("renderDiffDocument", () => {
 });
 
 describe("viewer assets", () => {
+  it("prefers the built plugin asset layout when present", async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path === "/repo/dist/extensions/diffs/assets/viewer-runtime.js") {
+        return { mtimeMs: 1 };
+      }
+      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
+      throw error;
+    });
+
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/dist/extensions/diffs/index.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/dist/extensions/diffs/assets/viewer-runtime.js",
+    });
+    expect(stat).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the source asset layout when the built artifact is absent", async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path === "/repo/extensions/diffs/assets/viewer-runtime.js") {
+        return { mtimeMs: 1 };
+      }
+      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
+      throw error;
+    });
+
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/extensions/diffs/src/viewer-assets.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/extensions/diffs/assets/viewer-runtime.js",
+    });
+    expect(stat).toHaveBeenNthCalledWith(1, "/repo/extensions/diffs/src/assets/viewer-runtime.js");
+    expect(stat).toHaveBeenNthCalledWith(2, "/repo/extensions/diffs/assets/viewer-runtime.js");
+  });
+
   it("serves a stable loader that points at the current runtime bundle", async () => {
     const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
 

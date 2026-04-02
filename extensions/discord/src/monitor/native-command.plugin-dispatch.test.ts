@@ -599,6 +599,7 @@ describe("Discord native plugin command dispatch", () => {
         channel: "discord",
         from: "discord:channel:thread-123",
         to: "slash:owner",
+        sessionKey: "agent:main:discord:channel:thread-123",
         messageThreadId: "thread-123",
         threadParentId: "parent-456",
       }),

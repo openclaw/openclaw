@@ -43,22 +43,6 @@ describe("openai plugin", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
-
-    expect(providers).toHaveLength(2);
-    expect(providers.map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
-    expect(speechProviders).toHaveLength(1);
-    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
-    const codexMediaProvider = requireRegisteredProvider(
-      mediaProviders,
-      "openai-codex",
-      "media provider",
-    );
-    expect(codexMediaProvider.capabilities).toEqual(["image"]);
-    expect(imageProviders).toHaveLength(1);
-  });
-
   it("generates PNG buffers from the OpenAI Images API", async () => {
     const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "sk-test",

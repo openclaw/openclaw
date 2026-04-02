@@ -10,6 +10,7 @@ import { setContextPruningRuntime } from "../pi-hooks/context-pruning/runtime.js
 import { computeEffectiveSettings } from "../pi-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 function resolveContextWindowTokens(params: {
@@ -46,11 +47,17 @@ function buildContextPruningFactory(params: {
   if (!settings) {
     return undefined;
   }
+  const transcriptPolicy = resolveTranscriptPolicy({
+    modelApi: params.model?.api,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
 
   setContextPruningRuntime(params.sessionManager, {
     settings,
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
+    dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks,
     lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
   });
 

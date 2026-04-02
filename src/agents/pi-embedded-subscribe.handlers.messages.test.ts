@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
+  handleMessageUpdate,
   hasAssistantVisibleReply,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 describe("resolveSilentReplyFallbackText", () => {
   it("replaces NO_REPLY with latest messaging tool text when available", () => {
@@ -69,11 +72,13 @@ describe("buildAssistantStreamData", () => {
       buildAssistantStreamData({
         text: "hello",
         delta: "he",
+        replace: true,
         mediaUrl: "https://example.com/a.png",
       }),
     ).toEqual({
       text: "hello",
       delta: "he",
+      replace: true,
       mediaUrls: ["https://example.com/a.png"],
     });
   });
@@ -131,5 +136,50 @@ describe("consumePendingToolMediaReply", () => {
     });
     expect(state.pendingToolMediaUrls).toEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
+  });
+});
+
+describe("handleMessageUpdate", () => {
+  it("contains synchronous text_end flush failures", async () => {
+    const debug = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        streamReasoning: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        partialBlockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistantCleaned: undefined,
+        emittedAssistantUpdate: false,
+        shouldEmitPartialReplies: false,
+        blockReplyBreak: "text_end",
+      },
+      log: { debug },
+      noteLastAssistant: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      consumePartialReplyDirectives: vi.fn(() => null),
+      flushBlockReplyBuffer: vi.fn(() => {
+        throw new Error("boom");
+      }),
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_end" },
+    } as never);
+
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
+    });
   });
 });

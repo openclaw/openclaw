@@ -10,6 +10,13 @@ if [[ "${mode}" != "--publish" ]]; then
   exit 2
 fi
 
+if [[ -n "${publish_target}" && -f "${publish_target}" ]]; then
+  case "${publish_target}" in
+    /*|./*|../*) ;;
+    *) publish_target="./${publish_target}" ;;
+  esac
+fi
+
 package_version="$(node -p "require('./package.json').version")"
 current_beta_version="$(npm view openclaw dist-tags.beta 2>/dev/null || true)"
 mapfile -t publish_plan < <(
@@ -68,6 +75,20 @@ if [[ -n "${mirror_dist_tags_csv}" && -z "${mirror_auth_token}" ]]; then
   exit 1
 fi
 
+if [[ -n "${mirror_dist_tags_csv}" ]]; then
+  mirror_userconfig="$(mktemp)"
+  trap 'rm -f "${mirror_userconfig}"' EXIT
+  chmod 0600 "${mirror_userconfig}"
+  printf '%s\n' "//registry.npmjs.org/:_authToken=${mirror_auth_token}" > "${mirror_userconfig}"
+
+  echo "Validating npm auth for dist-tag mirroring"
+  if ! NPM_CONFIG_USERCONFIG="${mirror_userconfig}" npm whoami >/dev/null; then
+    echo "npm dist-tag auth is invalid; refusing publish before latest/beta diverge." >&2
+    echo "Rotate or replace NODE_AUTH_TOKEN/NPM_TOKEN, then rerun the release workflow." >&2
+    exit 1
+  fi
+fi
+
 printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'
@@ -75,11 +96,6 @@ printf '\n'
 "${publish_cmd[@]}"
 
 if [[ -n "${mirror_dist_tags_csv}" ]]; then
-  mirror_userconfig="$(mktemp)"
-  trap 'rm -f "${mirror_userconfig}"' EXIT
-  chmod 0600 "${mirror_userconfig}"
-  printf '%s\n' "//registry.npmjs.org/:_authToken=${mirror_auth_token}" > "${mirror_userconfig}"
-
   IFS=',' read -r -a mirror_dist_tags <<< "${mirror_dist_tags_csv}"
   for dist_tag in "${mirror_dist_tags[@]}"; do
     [[ -n "${dist_tag}" ]] || continue

@@ -384,7 +384,9 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   const auditBefore = getInspectableTaskAuditSummary();
-  const maintenance = opts.apply ? runTaskRegistryMaintenance() : previewTaskRegistryMaintenance();
+  const maintenance = opts.apply
+    ? await runTaskRegistryMaintenance()
+    : previewTaskRegistryMaintenance();
   const summary = getInspectableTaskRegistrySummary();
   const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
 
