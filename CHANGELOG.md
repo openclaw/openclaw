@@ -17,12 +17,8 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google: separate OAuth CSRF state from PKCE code verifier during Gemini browser sign-in so state validation and token exchange use independent values. (#59116) Thanks @eleqtrizit.
 - Exec/Windows: reject malformed drive-less rooted executable paths like `:\Users\...` so approval and allowlist candidate resolution no longer treat them as cwd-relative commands. (#58040) Thanks @SnowSky1.
 - Exec/preflight: fail closed on complex interpreter invocations that would otherwise skip script-content validation, and correctly inspect quoted script paths before host execution. Thanks @pgondhi987.
-<<<<<<< HEAD
 - Exec/Windows: include Windows-compatible env override keys like `ProgramFiles(x86)` in system-run approval binding so changed approved values are rejected instead of silently passing unbound. (#59182) Thanks @pgondhi987.
-||||||| parent of 1daac0c7c9 (docs: note windows exec landing (#59466) (thanks @lawrence3699))
-=======
 - Exec/Windows: hide transient console windows for `runExec` and `runCommandWithTimeout` child-process launches, matching other Windows exec paths and stopping visible shell flashes during tool runs. (#59466) Thanks @lawrence3699.
->>>>>>> 1daac0c7c9 (docs: note windows exec landing (#59466) (thanks @lawrence3699))
 
 ## 2026.4.2-beta.1
 
