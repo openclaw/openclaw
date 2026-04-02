@@ -15,7 +15,11 @@ const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
+const listImportedBundledPluginFacadeIdsMock = vi.fn();
+const listImportedRuntimePluginIdsMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
+let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
+let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
@@ -45,6 +49,15 @@ vi.mock("./bundled-compat.js", () => ({
     withBundledPluginAllowlistCompatMock(...args),
   withBundledPluginEnablementCompat: (...args: unknown[]) =>
     withBundledPluginEnablementCompatMock(...args),
+}));
+
+vi.mock("../plugin-sdk/facade-runtime.js", () => ({
+  listImportedBundledPluginFacadeIds: (...args: unknown[]) =>
+    listImportedBundledPluginFacadeIdsMock(...args),
+}));
+
+vi.mock("./runtime.js", () => ({
+  listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -92,6 +105,7 @@ function expectPluginLoaderCall(params: {
   autoEnabledReasons?: Record<string, string[]>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  loadModules?: boolean;
 }) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -104,6 +118,7 @@ function expectPluginLoaderCall(params: {
         : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
+      ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
     }),
   );
 }
@@ -232,8 +247,10 @@ describe("buildPluginStatusReport", () => {
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
+      buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
+      buildPluginSnapshotReport,
       buildPluginStatusReport,
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
@@ -247,6 +264,8 @@ describe("buildPluginStatusReport", () => {
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
     withBundledPluginEnablementCompatMock.mockReset();
+    listImportedBundledPluginFacadeIdsMock.mockReset();
+    listImportedRuntimePluginIdsMock.mockReset();
     loadConfigMock.mockReturnValue({});
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
@@ -260,13 +279,15 @@ describe("buildPluginStatusReport", () => {
     withBundledPluginEnablementCompatMock.mockImplementation(
       (params: { config: unknown }) => params.config,
     );
+    listImportedBundledPluginFacadeIdsMock.mockReturnValue([]);
+    listImportedRuntimePluginIdsMock.mockReturnValue([]);
     setPluginLoadResult({ plugins: [] });
   });
 
   it("forwards an explicit env to plugin loading", () => {
     const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
 
-    buildPluginStatusReport({
+    buildPluginSnapshotReport({
       config: {},
       workspaceDir: "/workspace",
       env,
@@ -276,7 +297,20 @@ describe("buildPluginStatusReport", () => {
       config: {},
       workspaceDir: "/workspace",
       env,
+      loadModules: false,
     });
+  });
+
+  it("uses a non-activating snapshot load for snapshot reports", () => {
+    buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        cache: false,
+        loadModules: false,
+      }),
+    );
   });
 
   it("loads plugin status from the auto-enabled config snapshot", () => {
@@ -294,7 +328,7 @@ describe("buildPluginStatusReport", () => {
       },
     });
 
-    buildPluginStatusReport({ config: rawConfig });
+    buildPluginSnapshotReport({ config: rawConfig });
 
     expectAutoEnabledStatusLoad({
       rawConfig,
@@ -303,6 +337,7 @@ describe("buildPluginStatusReport", () => {
         demo: ["demo configured"],
       },
     });
+    expectPluginLoaderCall({ loadModules: false });
   });
 
   it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
@@ -345,6 +380,7 @@ describe("buildPluginStatusReport", () => {
       allowedModels: ["openai/gpt-5.4"],
       hasAllowedModelsConfig: true,
     });
+    expectPluginLoaderCall({ loadModules: true });
   });
 
   it("preserves raw config activation context when compatibility notices build their own report", () => {
@@ -386,6 +422,7 @@ describe("buildPluginStatusReport", () => {
         demo: ["demo configured"],
       },
     });
+    expectPluginLoaderCall({ loadModules: true });
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -395,7 +432,7 @@ describe("buildPluginStatusReport", () => {
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
     withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
-    buildPluginStatusReport({ config });
+    buildPluginSnapshotReport({ config });
 
     expectBundledCompatChainApplied({
       config,
@@ -425,6 +462,63 @@ describe("buildPluginStatusReport", () => {
     });
 
     expect(report.plugins[0]?.version).toBe("2026.3.23");
+  });
+
+  it("marks plugins as imported when runtime or facade state has loaded them", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({ id: "runtime-loaded" }),
+        createPluginRecord({ id: "facade-loaded" }),
+        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
+        createPluginRecord({ id: "cold-plugin" }),
+      ],
+    });
+    listImportedRuntimePluginIdsMock.mockReturnValue(["runtime-loaded", "bundle-loaded"]);
+    listImportedBundledPluginFacadeIdsMock.mockReturnValue(["facade-loaded"]);
+
+    const report = buildPluginSnapshotReport({ config: {} });
+
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "runtime-loaded", imported: true }),
+        expect.objectContaining({ id: "facade-loaded", imported: true }),
+        expect.objectContaining({ id: "bundle-loaded", imported: false }),
+        expect.objectContaining({ id: "cold-plugin", imported: false }),
+      ]),
+    );
+  });
+
+  it("marks snapshot-loaded plugin modules as imported during full report loads", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({ id: "runtime-loaded" }),
+        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
+      ],
+    });
+
+    const report = buildPluginDiagnosticsReport({ config: {} });
+
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "runtime-loaded", imported: true }),
+        expect.objectContaining({ id: "bundle-loaded", imported: false }),
+      ]),
+    );
+  });
+
+  it("marks errored plugin modules as imported when full diagnostics already evaluated them", () => {
+    setPluginLoadResult({
+      plugins: [createPluginRecord({ id: "broken-plugin", status: "error" })],
+    });
+    listImportedRuntimePluginIdsMock.mockReturnValue(["broken-plugin"]);
+
+    const report = buildPluginDiagnosticsReport({ config: {} });
+
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "broken-plugin", status: "error", imported: true }),
+      ]),
+    );
   });
 
   it("builds an inspect report with capability shape and policy", () => {

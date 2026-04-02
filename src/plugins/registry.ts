@@ -200,6 +200,7 @@ export type PluginRecord = {
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
+  imported?: boolean;
   activationSource?: PluginActivationSource;
   activationReason?: string;
   status: "loaded" | "disabled" | "error";
