@@ -146,67 +146,103 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
   return provider ? `${entry.id} · ${provider}` : entry.id;
 }
 
-function hasCatalogNameCollision(entry: ModelCatalogEntry, catalog: ModelCatalogEntry[]): boolean {
-  const name = entry.name.trim();
-  if (!name) {
-    return false;
-  }
+function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
+  return buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase();
+}
 
-  const normalizedName = name.toLowerCase();
-  const entryValue = buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase();
-  for (const candidate of catalog) {
-    if (candidate.name.trim().toLowerCase() !== normalizedName) {
+function createNameProviderKey(name: string, provider?: string | null): string {
+  return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
+}
+
+export type ChatModelDisplayLookup = ReadonlyMap<string, string>;
+
+export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
+  const nameToValues = new Map<string, Set<string>>();
+  const nameProviderToValues = new Map<string, Set<string>>();
+
+  for (const entry of catalog) {
+    const name = entry.name.trim();
+    if (!name) {
       continue;
     }
-    const candidateValue = buildQualifiedChatModelValue(candidate.id, candidate.provider)
-      .trim()
-      .toLowerCase();
-    if (candidateValue !== entryValue) {
-      return true;
+
+    const qualifiedKey = createQualifiedCatalogKey(entry);
+    const normalizedName = name.toLowerCase();
+    const providerKey = createNameProviderKey(name, entry.provider);
+
+    const nameValues = nameToValues.get(normalizedName) ?? new Set<string>();
+    nameValues.add(qualifiedKey);
+    nameToValues.set(normalizedName, nameValues);
+
+    const nameProviderValues = nameProviderToValues.get(providerKey) ?? new Set<string>();
+    nameProviderValues.add(qualifiedKey);
+    nameProviderToValues.set(providerKey, nameProviderValues);
+  }
+
+  const displayLookup = new Map<string, string>();
+  for (const entry of catalog) {
+    const qualifiedKey = createQualifiedCatalogKey(entry);
+    const name = entry.name.trim();
+    if (!name) {
+      displayLookup.set(qualifiedKey, formatRawCatalogLabel(entry));
+      continue;
     }
+
+    const normalizedName = name.toLowerCase();
+    if ((nameToValues.get(normalizedName)?.size ?? 0) <= 1) {
+      displayLookup.set(qualifiedKey, name);
+      continue;
+    }
+
+    const provider = entry.provider?.trim();
+    if ((nameProviderToValues.get(createNameProviderKey(name, provider))?.size ?? 0) <= 1) {
+      displayLookup.set(qualifiedKey, provider ? `${name} · ${provider}` : `${name} · ${entry.id}`);
+      continue;
+    }
+
+    displayLookup.set(qualifiedKey, `${name} · ${formatRawCatalogLabel(entry)}`);
   }
-  return false;
+
+  return displayLookup;
 }
 
-function formatCatalogEntryDisplay(entry: ModelCatalogEntry, catalog: ModelCatalogEntry[]): string {
-  const name = entry.name.trim();
-  if (!name) {
-    return formatRawCatalogLabel(entry);
-  }
-
-  if (!hasCatalogNameCollision(entry, catalog)) {
-    return name;
-  }
-
-  const provider = entry.provider?.trim();
-  return provider ? `${name} · ${provider}` : `${name} · ${entry.id}`;
+export function formatCatalogEntryDisplay(
+  entry: ModelCatalogEntry,
+  displayLookup: ChatModelDisplayLookup,
+): string {
+  return displayLookup.get(createQualifiedCatalogKey(entry)) ?? formatRawCatalogLabel(entry);
 }
 
-export function formatCatalogChatModelDisplay(value: string, catalog: ModelCatalogEntry[]): string {
+export function formatCatalogChatModelDisplayFromLookup(
+  value: string,
+  displayLookup: ChatModelDisplayLookup,
+): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
   }
 
-  const normalized = trimmed.toLowerCase();
-  for (const entry of catalog) {
-    const candidate = buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase();
-    if (candidate !== normalized) {
-      continue;
-    }
-    return formatCatalogEntryDisplay(entry, catalog);
-  }
+  return displayLookup.get(trimmed.toLowerCase()) ?? formatChatModelDisplay(trimmed);
+}
 
-  return formatChatModelDisplay(trimmed);
+export function formatCatalogChatModelDisplay(value: string, catalog: ModelCatalogEntry[]): string {
+  return formatCatalogChatModelDisplayFromLookup(value, buildCatalogDisplayLookup(catalog));
 }
 
 export function buildChatModelOption(
   entry: ModelCatalogEntry,
   catalog: ModelCatalogEntry[] = [entry],
 ): { value: string; label: string } {
+  return buildChatModelOptionFromLookup(entry, buildCatalogDisplayLookup(catalog));
+}
+
+export function buildChatModelOptionFromLookup(
+  entry: ModelCatalogEntry,
+  displayLookup: ChatModelDisplayLookup,
+): { value: string; label: string } {
   const provider = entry.provider?.trim();
   return {
     value: buildQualifiedChatModelValue(entry.id, provider),
-    label: formatCatalogEntryDisplay(entry, catalog),
+    label: formatCatalogEntryDisplay(entry, displayLookup),
   };
 }

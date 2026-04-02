@@ -68,6 +68,34 @@ describe("chat-model-ref helpers", () => {
     ).toBe("Claude Sonnet · openrouter");
   });
 
+  it("falls back to the raw catalog label when name and provider still collide", () => {
+    const duplicateNameAndProviderCatalog = createModelCatalog(
+      {
+        id: "claude-3-7-sonnet",
+        name: "Claude Sonnet",
+        provider: "anthropic",
+      },
+      {
+        id: "claude-3-7-sonnet-thinking",
+        name: "Claude Sonnet",
+        provider: "anthropic",
+      },
+    );
+
+    expect(
+      buildChatModelOption(duplicateNameAndProviderCatalog[0], duplicateNameAndProviderCatalog),
+    ).toEqual({
+      value: "anthropic/claude-3-7-sonnet",
+      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
+    });
+    expect(
+      formatCatalogChatModelDisplay(
+        "anthropic/claude-3-7-sonnet-thinking",
+        duplicateNameAndProviderCatalog,
+      ),
+    ).toBe("Claude Sonnet · claude-3-7-sonnet-thinking · anthropic");
+  });
+
   it("normalizes raw overrides when the catalog match is unique", () => {
     expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
       "openai/gpt-5-mini",

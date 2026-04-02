@@ -118,4 +118,43 @@ describe("chat-model-select-state", () => {
       label: "Claude Sonnet · openrouter",
     });
   });
+
+  it("falls back to id and provider when duplicate names share the same provider", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "claude-3-7-sonnet",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+        },
+        {
+          id: "claude-3-7-sonnet-thinking",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "claude-3-7-sonnet",
+        modelProvider: "anthropic",
+        defaultsModel: "claude-3-7-sonnet-thinking",
+        defaultsProvider: "anthropic",
+      }),
+    };
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
+    expect(resolved.defaultLabel).toBe(
+      "Default (Claude Sonnet · claude-3-7-sonnet-thinking · anthropic)",
+    );
+    expect(resolved.options).toContainEqual({
+      value: "anthropic/claude-3-7-sonnet",
+      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
+    });
+    expect(resolved.options).toContainEqual({
+      value: "anthropic/claude-3-7-sonnet-thinking",
+      label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
+    });
+  });
 });
