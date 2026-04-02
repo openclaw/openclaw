@@ -37,6 +37,38 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   durationMs?: number;
 };
 
+export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
+  type: "model.call";
+  sessionKey?: string;
+  sessionId?: string;
+  flowId?: string;
+  callIndex: number;
+  provider?: string;
+  model?: string;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  durationMs: number;
+  status: "ok" | "error";
+  errorMessage?: string;
+};
+
+export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
+  type: "tool.call";
+  sessionKey?: string;
+  sessionId?: string;
+  flowId?: string;
+  toolName: string;
+  toolCallId?: string;
+  durationMs: number;
+  isError: boolean;
+  errorMessage?: string;
+};
+
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
   type: "webhook.received";
   channel: string;
@@ -149,6 +181,8 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
+  | DiagnosticModelCallEvent
+  | DiagnosticToolCallEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent

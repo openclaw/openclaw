@@ -153,6 +153,8 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  // Record start of this LLM API call for per-call timing (model.call trace).
+  ctx.noteLlmCallStart();
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -351,7 +353,10 @@ export function handleMessageEnd(
 
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  const rawUsage = (assistantMessage as { usage?: unknown }).usage;
+  ctx.recordAssistantUsage(rawUsage);
+  // Emit per-call trace event (model.call) — only if onLlmCallComplete is set.
+  ctx.noteLlmCallEnd(rawUsage);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }

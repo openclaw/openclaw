@@ -201,6 +201,19 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type DiagnosticsCallTraceConfig = {
+  /** Enable call/tool trace logging. Default: false. */
+  enabled?: boolean;
+  /** Log one record per LLM API call (tokens, cost, duration). Default: true when enabled. */
+  logLlmCalls?: boolean;
+  /** Log one record per internal tool call (duration, tool name, error status). Default: false. */
+  logToolCalls?: boolean;
+  /** Directory for JSONL trace files. Default: .openclaw/call-traces */
+  dir?: string;
+  /** Retain trace files for N days. Default: 30. */
+  retainDays?: number;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -209,6 +222,7 @@ export type DiagnosticsConfig = {
   stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
+  callTrace?: DiagnosticsCallTraceConfig;
 };
 
 export type WebReconnectConfig = {
