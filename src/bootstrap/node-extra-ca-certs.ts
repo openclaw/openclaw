@@ -32,6 +32,22 @@ export function resolveLinuxSystemCaBundle(
   return undefined;
 }
 
+/**
+ * Version manager path markers, aligned with src/daemon/service-audit.ts.
+ * Version-manager-installed Node does not inherit system CA certificates,
+ * so we need to detect this to auto-inject NODE_EXTRA_CA_CERTS.
+ */
+const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
+  "/.nvm/",
+  "/.fnm/",
+  "/.volta/",
+  "/.asdf/",
+  "/.n/",
+  "/.nodenv/",
+  "/.nodebrew/",
+  "/nvs/",
+];
+
 export function isNodeVersionManagerRuntime(
   env: EnvMap = process.env as EnvMap,
   execPath: string = process.execPath,
@@ -39,7 +55,7 @@ export function isNodeVersionManagerRuntime(
   if (env.NVM_DIR?.trim()) {
     return true;
   }
-  return execPath.includes("/.nvm/");
+  return VERSION_MANAGER_PATH_MARKERS.some((marker) => execPath.includes(marker));
 }
 
 export function resolveAutoNodeExtraCaCerts(
