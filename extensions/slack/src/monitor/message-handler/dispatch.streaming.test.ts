@@ -127,3 +127,18 @@ describe("slack draft stream initialization", () => {
     ).toBe(true);
   });
 });
+
+// Smoke-test that isSlackStreamingEnabled returns the expected value for the
+// configuration that triggers nativeStreaming (the path fixed by issue #59687).
+describe("slack native streaming reasoning leak guard (issue #59687)", () => {
+  it("confirms streaming is enabled for partial+nativeStreaming=true (the affected path)", () => {
+    // The deliverWithStreaming path is only exercised when isSlackStreamingEnabled
+    // returns true. The reasoning guard (payload.isReasoning early return) lives
+    // inside that path, so we verify the enabling condition here.
+    expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: true })).toBe(true);
+  });
+
+  it("streaming is off when nativeStreaming is false (reasoning leak cannot occur)", () => {
+    expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: false })).toBe(false);
+  });
+});

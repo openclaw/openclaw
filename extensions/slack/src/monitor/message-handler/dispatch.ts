@@ -373,6 +373,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
+    // Filter out reasoning/thinking blocks before streaming.
+    // Extended-thinking models (e.g. Claude with thinking enabled) emit
+    // intermediate reasoning payloads that must never reach the channel.
+    // Fix for https://github.com/openclaw/openclaw/issues/59687
+    if (payload.isReasoning) {
+      return;
+    }
     const reply = resolveSendableOutboundReplyParts(payload);
     if (streamFailed || reply.hasMedia || readSlackReplyBlocks(payload)?.length || !reply.hasText) {
       await deliverNormally(payload, streamSession?.threadTs);

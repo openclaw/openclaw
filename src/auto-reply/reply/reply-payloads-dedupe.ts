@@ -106,13 +106,16 @@ function targetsMatchForSuppression(params: {
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  if (params.provider !== "telegram") {
-    return params.targetKey === params.originTarget;
-  }
-
-  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
-  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
+  // Use provider-agnostic comparison via parseExplicitTargetForChannel so that
+  // all channels (Slack, Telegram, iMessage, …) get the same thread-aware dedup.
+  // Fix for https://github.com/openclaw/openclaw/issues/59687 — previously only
+  // Telegram received the thread-aware path; all other providers fell back to a
+  // naïve string equality check that skipped thread context entirely.
+  const origin = parseExplicitTargetForChannel(params.provider, params.originTarget);
+  const target = parseExplicitTargetForChannel(params.provider, params.targetKey);
   if (!origin || !target) {
+    // No plugin-level parsing available for this provider — fall back to plain
+    // string comparison so we don't accidentally over-suppress.
     return params.targetKey === params.originTarget;
   }
   const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);

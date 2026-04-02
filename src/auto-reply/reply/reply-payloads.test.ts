@@ -169,4 +169,45 @@ describe("shouldSuppressMessagingToolReplies", () => {
       }),
     ).toBe(true);
   });
+
+  // Slack dedup — fix for https://github.com/openclaw/openclaw/issues/59687
+  it("suppresses Slack DM replies when the tool target matches the origin user", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "user:U12345",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "user:U12345" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress Slack DM replies when the tool target is a different user", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "user:U12345",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "user:U99999" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses Slack channel replies when the tool target matches the origin channel", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "channel:C12345",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel:C12345" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress Slack replies when providerless target does not match origin route", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "user:U12345",
+        messagingToolSentTargets: [{ tool: "message", provider: "", to: "user:U99999" }],
+      }),
+    ).toBe(false);
+  });
 });
