@@ -4,6 +4,21 @@ import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
+export const ENTERPRISE_COPILOT_API_BASE_URL = "https://api.enterprise.githubcopilot.com";
+
+export const COPILOT_EDITOR_HEADERS: Record<string, string> = {
+  "User-Agent": "OpenClaw/1.0",
+  "Copilot-Integration-Id": "openclaw",
+  "Editor-Version": "OpenClaw/1.0",
+  "Editor-Plugin-Version": "openclaw/1.0",
+};
+
+/** Returns true for GitHub Personal Access Tokens (classic `ghp_*` or fine-grained `github_pat_*`). */
+export function isGitHubPAT(token: string): boolean {
+  const t = token.trim();
+  return t.startsWith("github_pat_") || t.startsWith("ghp_");
+}
+
 export type CachedCopilotToken = {
   token: string;
   /** milliseconds since epoch */
@@ -93,6 +108,18 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
+
+  // PATs cannot use the Copilot token exchange endpoint — send them directly
+  // to the enterprise API with editor-identification headers.
+  if (isGitHubPAT(params.githubToken)) {
+    return {
+      token: params.githubToken,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      source: "pat:direct",
+      baseUrl: ENTERPRISE_COPILOT_API_BASE_URL,
+    };
+  }
+
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
