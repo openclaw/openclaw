@@ -1,14 +1,14 @@
 import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { FlowRecord, FlowStatus } from "../tasks/flow-registry.types.js";
-import {
-  getFlowById,
-  listFlowRecords,
-  resolveFlowForLookupToken,
-} from "../tasks/flow-runtime-internal.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
+import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
+import {
+  getTaskFlowById,
+  listTaskFlowRecords,
+  resolveTaskFlowForLookupToken,
+} from "../tasks/task-flow-runtime-internal.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
@@ -35,7 +35,7 @@ function shortToken(value: string | undefined, maxChars = ID_PAD): string {
   return truncate(trimmed, maxChars);
 }
 
-function formatFlowStatusCell(status: FlowStatus, rich: boolean) {
+function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
   const padded = status.padEnd(STATUS_PAD);
   if (!rich) {
     return padded;
@@ -55,7 +55,7 @@ function formatFlowStatusCell(status: FlowStatus, rich: boolean) {
   return theme.muted(padded);
 }
 
-function formatFlowRows(flows: FlowRecord[], rich: boolean) {
+function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   const header = [
     "TaskFlow".padEnd(ID_PAD),
     "Mode".padEnd(MODE_PAD),
@@ -84,7 +84,7 @@ function formatFlowRows(flows: FlowRecord[], rich: boolean) {
   return lines;
 }
 
-function formatFlowListSummary(flows: FlowRecord[]) {
+function formatFlowListSummary(flows: TaskFlowRecord[]) {
   const active = flows.filter(
     (flow) => flow.status === "queued" || flow.status === "running",
   ).length;
@@ -93,7 +93,7 @@ function formatFlowListSummary(flows: FlowRecord[]) {
   return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
 }
 
-function summarizeWait(flow: FlowRecord): string {
+function summarizeWait(flow: TaskFlowRecord): string {
   if (flow.waitJson == null) {
     return "n/a";
   }
@@ -115,7 +115,7 @@ export async function flowsListCommand(
   runtime: RuntimeEnv,
 ) {
   const statusFilter = opts.status?.trim();
-  const flows = listFlowRecords().filter((flow) => {
+  const flows = listTaskFlowRecords().filter((flow) => {
     if (statusFilter && flow.status !== statusFilter) {
       return false;
     }
@@ -160,7 +160,7 @@ export async function flowsShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
 ) {
-  const flow = resolveFlowForLookupToken(opts.lookup);
+  const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
     runtime.error(`TaskFlow not found: ${opts.lookup}`);
     runtime.exit(1);
@@ -222,7 +222,7 @@ export async function flowsShowCommand(
 }
 
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
-  const flow = resolveFlowForLookupToken(opts.lookup);
+  const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
     runtime.error(`Flow not found: ${opts.lookup}`);
     runtime.exit(1);
@@ -242,6 +242,6 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const updated = getFlowById(flow.flowId) ?? result.flow ?? flow;
+  const updated = getTaskFlowById(flow.flowId) ?? result.flow ?? flow;
   runtime.log(`Cancelled ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
 }
