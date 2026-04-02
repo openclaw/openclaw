@@ -35,6 +35,14 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   };
   costUsd?: number;
   durationMs?: number;
+  flowId?: string;
+  agentId?: string;
+  triggerKind?: string;
+  triggerChannel?: string;
+  triggerMessageId?: string;
+  triggerSenderName?: string;
+  thinkLevel?: string;
+  status?: string;
 };
 
 export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {

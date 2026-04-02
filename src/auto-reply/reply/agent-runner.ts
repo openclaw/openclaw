@@ -401,6 +401,7 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    const flowId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -636,6 +637,14 @@ export async function runReplyAgent(params: {
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,
+        flowId,
+        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        triggerKind: followupRun.run.inputProvenance?.kind ?? "user",
+        triggerChannel: followupRun.originatingChannel ?? replyToChannel,
+        triggerMessageId: followupRun.messageId,
+        triggerSenderName: followupRun.run.senderName,
+        thinkLevel: followupRun.run.thinkLevel,
+        status: "ok",
       });
     }
 
