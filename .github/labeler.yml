@@ -306,10 +306,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tavily/**"
-"extensions: tinyfish":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/tinyfish/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:
