@@ -1,4 +1,3 @@
-import process from "node:process";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
@@ -44,19 +43,13 @@ describe("buildProgram", () => {
 
   it("wires context/help/preaction/command registration with shared context", () => {
     const argv = ["node", "openclaw", "status"];
-    const originalArgv = process.argv;
-    process.argv = argv;
-    try {
-      const program = buildProgram();
-      const ctx = createProgramContextMock.mock.results[0]?.value as ProgramContext;
+    const program = buildProgram(argv);
+    const ctx = createProgramContextMock.mock.results[0]?.value as ProgramContext;
 
-      expect(program).toBeInstanceOf(Command);
-      expect(setProgramContextMock).toHaveBeenCalledWith(program, ctx);
-      expect(configureProgramHelpMock).toHaveBeenCalledWith(program, ctx);
-      expect(registerPreActionHooksMock).toHaveBeenCalledWith(program, ctx.programVersion);
-      expect(registerProgramCommandsMock).toHaveBeenCalledWith(program, ctx, argv);
-    } finally {
-      process.argv = originalArgv;
-    }
+    expect(program).toBeInstanceOf(Command);
+    expect(setProgramContextMock).toHaveBeenCalledWith(program, ctx);
+    expect(configureProgramHelpMock).toHaveBeenCalledWith(program, ctx);
+    expect(registerPreActionHooksMock).toHaveBeenCalledWith(program, ctx.programVersion);
+    expect(registerProgramCommandsMock).toHaveBeenCalledWith(program, ctx, argv);
   });
 });

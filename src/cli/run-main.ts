@@ -171,8 +171,10 @@ export async function runCli(argv: string[] = process.argv) {
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
 
+    const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+
     const { buildProgram } = await import("./program.js");
-    const program = buildProgram();
+    const program = buildProgram(parseArgv);
     const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
@@ -183,8 +185,6 @@ export async function runCli(argv: string[] = process.argv) {
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
       process.exit(1);
     });
-
-    const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
     const primary = getPrimaryCommand(parseArgv);
