@@ -473,7 +473,7 @@ function createDefaultProviderPlugins() {
       flagName: "--gmicloud-api-key",
       envVar: "GMI_CLOUD_API_KEY",
       promptMessage: "Enter GMI Cloud API key",
-      defaultModel: "gmicloud/deepseek-ai/DeepSeek-V3-0324",
+      defaultModel: "gmicloud/anthropic/claude-opus-4.6",
     }),
     createApiKeyProvider({
       providerId: "synthetic",

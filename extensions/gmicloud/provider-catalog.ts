@@ -1,7 +1,7 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const GMICLOUD_BASE_URL = "https://api.gmi-serving.com/v1";
-export const GMICLOUD_DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V3-0324";
+export const GMICLOUD_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
 const GMICLOUD_DEFAULT_MAX_TOKENS = 8192;
 
 export function buildGmicloudProvider(): ModelProviderConfig {

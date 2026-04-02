@@ -572,7 +572,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
         optionKey: "gmicloudApiKey",
         flagName: "--gmicloud-api-key",
         envVar: "GMI_CLOUD_API_KEY",
-        defaultModel: "gmicloud/deepseek-ai/DeepSeek-V3-0324",
+        defaultModel: "gmicloud/anthropic/claude-opus-4.6",
       }),
     ],
     [
@@ -668,7 +668,12 @@ let clearPluginManifestRegistryCache: typeof import("../plugins/manifest-registr
 
 type ProviderAuthConfigSnapshot = {
   auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
-  agents?: { defaults?: { model?: { primary?: string } } };
+  agents?: {
+    defaults?: {
+      model?: { primary?: string };
+      models?: Record<string, unknown>;
+    };
+  };
   models?: {
     providers?: Record<
       string,
@@ -1412,7 +1417,11 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["gmicloud:default"]?.provider).toBe("gmicloud");
       expect(cfg.auth?.profiles?.["gmicloud:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("gmicloud/deepseek-ai/DeepSeek-V3-0324");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("gmicloud/anthropic/claude-opus-4.6");
+      expect(cfg.agents?.defaults?.models?.["gmicloud/anthropic/claude-opus-4.6"]).toBeDefined();
+      expect(
+        cfg.agents?.defaults?.models?.["gmicloud/deepseek-ai/DeepSeek-V3-0324"],
+      ).toBeUndefined();
       await expectApiKeyProfile({
         profileId: "gmicloud:default",
         provider: "gmicloud",

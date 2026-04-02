@@ -27,7 +27,7 @@ openclaw onboard --auth-choice gmicloud-api-key
 {
   agents: {
     defaults: {
-      model: { primary: "gmicloud/deepseek-ai/DeepSeek-V3-0324" },
+      model: { primary: "gmicloud/anthropic/claude-opus-4.6" },
     },
   },
 }
