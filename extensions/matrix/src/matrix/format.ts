@@ -269,7 +269,6 @@ export function markdownToMatrixHtml(markdown: string): string {
 async function resolveMarkdownMentionState(params: {
   markdown: string;
   client: MatrixClient;
-  roomId: string;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
   const markdown = maskEscapedMentions(params.markdown ?? "");
   const tokens = md.parse(markdown, {});
@@ -308,7 +307,6 @@ async function resolveMarkdownMentionState(params: {
 export async function resolveMatrixMentionsInMarkdown(params: {
   markdown: string;
   client: MatrixClient;
-  roomId: string;
 }): Promise<MatrixMentions> {
   const state = await resolveMarkdownMentionState(params);
   return state.mentions;
@@ -317,7 +315,6 @@ export async function resolveMatrixMentionsInMarkdown(params: {
 export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   markdown: string;
   client: MatrixClient;
-  roomId: string;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
   const state = await resolveMarkdownMentionState(params);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();

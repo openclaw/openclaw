@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
+import * as sendModule from "../send.js";
 import { editMatrixMessage, readMatrixMessages } from "./messages.js";
 
 function installMatrixActionTestRuntime(): void {
@@ -89,6 +90,26 @@ function createMessagesClient(params: {
 }
 
 describe("matrix message actions", () => {
+  it("forwards timeoutMs to the shared Matrix edit helper", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+        timeoutMs: 12_345,
+      });
+
+      expect(result).toEqual({ eventId: "evt-edit" });
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
+        cfg: undefined,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: 12_345,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
   it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
     installMatrixActionTestRuntime();
     const sendMessage = vi.fn().mockResolvedValue("evt-edit");

@@ -54,7 +54,6 @@ describe("markdownToMatrixHtml", () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice:example.org",
       client: createMentionClient(),
-      roomId: "!room:example.org",
     });
 
     expect(result.html).toContain('href="https://matrix.to/#/@alice:example.org"');
@@ -67,7 +66,6 @@ describe("markdownToMatrixHtml", () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice",
       client: createMentionClient(),
-      roomId: "!room:example.org",
     });
 
     expect(result.html).not.toContain("matrix.to");
@@ -78,7 +76,6 @@ describe("markdownToMatrixHtml", () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "\\@alice:example.org",
       client: createMentionClient(),
-      roomId: "!room:example.org",
     });
 
     expect(result.html).toContain("@alice:example.org");
@@ -90,7 +87,6 @@ describe("markdownToMatrixHtml", () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "\\@room",
       client: createMentionClient(),
-      roomId: "!room:example.org",
     });
 
     expect(result.html).toContain("@room");
@@ -101,7 +97,6 @@ describe("markdownToMatrixHtml", () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "`\\@alice:example.org`",
       client: createMentionClient(),
-      roomId: "!room:example.org",
     });
 
     expect(result.html).toContain("<code>\\@alice:example.org</code>");
@@ -112,7 +107,6 @@ describe("markdownToMatrixHtml", () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "`@alice:example.org`",
       client: createMentionClient(),
-      roomId: "!room:example.org",
     });
 
     expect(result.html).toContain("<code>@alice:example.org</code>");

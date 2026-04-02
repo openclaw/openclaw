@@ -33,14 +33,12 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
 
 export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
-  roomId: string;
   content: MatrixFormattedContent;
   body: string;
 }): Promise<void> {
   const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
     markdown: params.body ?? "",
     client: params.client,
-    roomId: params.roomId,
   });
   params.content["m.mentions"] = mentions;
   if (!html) {
@@ -54,13 +52,11 @@ export async function enrichMatrixFormattedContent(params: {
 
 export async function resolveMatrixMentionsForBody(params: {
   client: MatrixClient;
-  roomId: string;
   body: string;
 }): Promise<MatrixMentions> {
   return await resolveMatrixMentionsInMarkdown({
     markdown: params.body ?? "",
     client: params.client,
-    roomId: params.roomId,
   });
 }
 

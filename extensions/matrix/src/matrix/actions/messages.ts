@@ -48,6 +48,7 @@ export async function editMatrixMessage(
     cfg: opts.cfg,
     accountId: opts.accountId ?? undefined,
     client: opts.client,
+    timeoutMs: opts.timeoutMs,
   });
   return { eventId: eventId || null };
 }
