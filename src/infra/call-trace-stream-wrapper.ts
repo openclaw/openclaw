@@ -43,6 +43,8 @@ type EmitParams = {
   callIndex: number;
   provider?: string;
   modelId?: string;
+  requestText?: string;
+  replyText?: string;
 };
 
 function emitCallEvent(
@@ -63,6 +65,8 @@ function emitCallEvent(
     durationMs: Date.now() - callStartedAt,
     status: errorMessage ? "error" : "ok",
     ...(errorMessage ? { errorMessage } : {}),
+    requestText: params.requestText,
+    replyText: params.replyText,
   });
 }
 
@@ -73,11 +77,42 @@ async function* wrapIterable(
 ): AsyncGenerator {
   let usage: ReturnType<typeof extractUsage> | undefined;
   let errorMessage: string | undefined;
+  let replyText: string | undefined;
   try {
     for await (const evt of iterable) {
-      const e = evt as { type?: string; message?: { usage?: unknown } };
+      const e = evt as { type?: string; message?: { usage?: unknown; content?: unknown } };
       if (e.type === "message_end" && e.message?.usage) {
         usage = extractUsage(e.message.usage);
+
+        // Extract replyText from the message content
+        if (e.message.content) {
+          if (typeof e.message.content === "string") {
+            replyText = e.message.content
+              .replace(/[\r\n\t]+/g, " ")
+              .trim()
+              .slice(0, 240);
+          } else if (Array.isArray(e.message.content)) {
+            // Handle array of TextContent | ImageContent
+            const textContents = e.message.content
+              .filter(
+                (item: unknown) =>
+                  typeof item === "object" &&
+                  item !== null &&
+                  "type" in item &&
+                  (item as { type?: string }).type === "text" &&
+                  "text" in item &&
+                  typeof (item as { text?: string }).text === "string",
+              )
+              .map((item: unknown) => (item as { text: string }).text);
+            if (textContents.length > 0) {
+              replyText = textContents
+                .join(" ")
+                .replace(/[\r\n\t]+/g, " ")
+                .trim()
+                .slice(0, 240);
+            }
+          }
+        }
       }
       yield evt;
     }
@@ -85,7 +120,12 @@ async function* wrapIterable(
     errorMessage = err instanceof Error ? err.message : String(err);
     throw err;
   } finally {
-    emitCallEvent(params, callStartedAt, usage, errorMessage);
+    // Update params with replyText before emitting
+    const finalParams = {
+      ...params,
+      replyText,
+    };
+    emitCallEvent(finalParams, callStartedAt, usage, errorMessage);
   }
 }
 
@@ -116,6 +156,48 @@ export function wrapStreamFnCallTrace(
   return (model, context, options) => {
     const callIndex = params.callIndexRef.value++;
     const callStartedAt = Date.now();
+
+    // Extract requestText from the last user message
+    let requestText: string | undefined;
+    if (context?.messages?.length) {
+      const userMessages = context.messages.filter(
+        (msg: unknown) =>
+          typeof msg === "object" &&
+          msg !== null &&
+          "role" in msg &&
+          (msg as { role?: string }).role === "user",
+      );
+      if (userMessages.length > 0) {
+        const lastUserMessage = userMessages[userMessages.length - 1];
+        if (typeof lastUserMessage.content === "string") {
+          requestText = lastUserMessage.content
+            .replace(/[\r\n\t]+/g, " ")
+            .trim()
+            .slice(0, 240);
+        } else if (Array.isArray(lastUserMessage.content)) {
+          // Handle array of TextContent | ImageContent
+          const textContents = lastUserMessage.content
+            .filter(
+              (item: unknown) =>
+                typeof item === "object" &&
+                item !== null &&
+                "type" in item &&
+                (item as { type?: string }).type === "text" &&
+                "text" in item &&
+                typeof (item as { text?: string }).text === "string",
+            )
+            .map((item: unknown) => (item as { text: string }).text);
+          if (textContents.length > 0) {
+            requestText = textContents
+              .join(" ")
+              .replace(/[\r\n\t]+/g, " ")
+              .trim()
+              .slice(0, 240);
+          }
+        }
+      }
+    }
+
     const emitParams: EmitParams = {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -123,6 +205,7 @@ export function wrapStreamFnCallTrace(
       callIndex,
       provider: params.provider,
       modelId: params.modelId,
+      requestText,
     };
 
     const maybeStream = baseFn(model, context, options);
