@@ -330,7 +330,7 @@ describe("runtime snapshot staleness detection", () => {
         {
           ...opsDiskStore,
           usageStats: {
-            "anthropic:ops": { lastUsedAtMs: Date.now() },
+            "anthropic:ops": { lastUsed: Date.now() },
           },
         },
         opsAgentDir,
@@ -418,10 +418,10 @@ describe("runtime snapshot staleness detection", () => {
       const beforeSave = ensureAuthProfileStore();
       expect(getApiKey(beforeSave, "openai:default")).toBe("sk-original");
 
-      const updatedStore = createAuthStore({
+      const updatedStore: AuthProfileStore = createAuthStore({
         "openai:default": { type: "api_key", provider: "openai", key: "sk-updated" },
-      }) as AuthProfileStore & { usageStats: Record<string, { lastUsedAtMs: number }> };
-      updatedStore.usageStats = { "openai:default": { lastUsedAtMs: Date.now() } };
+      });
+      updatedStore.usageStats = { "openai:default": { lastUsed: Date.now() } };
       saveAuthProfileStore(updatedStore);
 
       const afterSave = ensureAuthProfileStore();
