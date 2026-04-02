@@ -68,7 +68,7 @@ describe("whatsapp error policy", () => {
     it("combines account and chat ids", () => {
       expect(
         buildWhatsAppErrorScopeKey({ accountId: "default", chatId: "+14801234567" }),
-      ).toBe("default:+14801234567");
+      ).toBe("default\x00+14801234567");
     });
   });
 

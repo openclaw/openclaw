@@ -405,6 +405,19 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
+  // Resolve WhatsApp account config once for error policy checks in both deliver and onError callbacks.
+  const whatsAppAccountForErrorPolicy = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+  });
+  const errorPolicyResolved = resolveWhatsAppErrorPolicy({
+    accountConfig: whatsAppAccountForErrorPolicy,
+  });
+  const errorScopeKey = buildWhatsAppErrorScopeKey({
+    accountId: params.msg.accountId,
+    chatId: conversationId ?? params.msg.from,
+  });
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
@@ -427,25 +440,15 @@ export async function processMessage(params: {
         }
         // Suppress error payloads based on errorPolicy config.
         if (payload.isError === true) {
-          const whatsAppAccount = resolveWhatsAppAccount({
-            cfg: params.cfg,
-            accountId: params.msg.accountId,
-          });
-          const errorPolicy = resolveWhatsAppErrorPolicy({
-            accountConfig: whatsAppAccount,
-          });
-          if (isSilentErrorPolicy(errorPolicy.policy)) {
+          if (isSilentErrorPolicy(errorPolicyResolved.policy)) {
             logVerbose("Suppressed error reply (errorPolicy: silent)");
             return;
           }
           if (
-            errorPolicy.policy === "once" &&
+            errorPolicyResolved.policy === "once" &&
             shouldSuppressWhatsAppError({
-              scopeKey: buildWhatsAppErrorScopeKey({
-                accountId: params.route.accountId,
-                chatId: conversationId ?? params.msg.from,
-              }),
-              cooldownMs: errorPolicy.cooldownMs,
+              scopeKey: errorScopeKey,
+              cooldownMs: errorPolicyResolved.cooldownMs,
               errorMessage: payload.text,
             })
           ) {
@@ -483,29 +486,8 @@ export async function processMessage(params: {
         }
       },
       onError: (err, info) => {
-        const whatsAppAccount = resolveWhatsAppAccount({
-          cfg: params.cfg,
-          accountId: params.msg.accountId,
-        });
-        const errorPolicy = resolveWhatsAppErrorPolicy({
-          accountConfig: whatsAppAccount,
-        });
-        if (isSilentErrorPolicy(errorPolicy.policy)) {
-          return;
-        }
-        if (
-          errorPolicy.policy === "once" &&
-          shouldSuppressWhatsAppError({
-            scopeKey: buildWhatsAppErrorScopeKey({
-              accountId: params.route.accountId,
-              chatId: conversationId ?? params.msg.from,
-            }),
-            cooldownMs: errorPolicy.cooldownMs,
-            errorMessage: String(err),
-          })
-        ) {
-          return;
-        }
+        // Always log delivery failures regardless of errorPolicy — suppressing logs
+        // would hide real send outages and make operational debugging much harder.
         const label =
           info.kind === "tool"
             ? "tool update"

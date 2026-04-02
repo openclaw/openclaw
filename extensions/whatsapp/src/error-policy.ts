@@ -27,7 +27,7 @@ export function resolveWhatsAppErrorPolicy(params: { accountConfig?: WhatsAppAcc
 }
 
 export function buildWhatsAppErrorScopeKey(params: { accountId: string; chatId: string }): string {
-  return `${params.accountId}:${params.chatId}`;
+  return `${params.accountId}\x00${params.chatId}`;
 }
 
 export function shouldSuppressWhatsAppError(params: {
