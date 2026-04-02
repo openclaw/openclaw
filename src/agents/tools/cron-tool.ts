@@ -307,8 +307,9 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
-          // Coerce non-object job values (null, string) to undefined so flat-params
-          // recovery triggers instead of failing schema validation (#56996).
+          // Coerce non-null non-object job values (e.g. a bare string) to undefined so
+          // flat-params recovery triggers instead of failing schema validation (#56996).
+          // Note: null is handled implicitly below by `!params.job` being truthy.
           if (params.job != null && typeof params.job !== "object") {
             params.job = undefined;
           }
@@ -378,6 +379,9 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                   expr: synthetic.cron.trim(),
                   ...(typeof synthetic.tz === "string" && synthetic.tz.trim()
                     ? { tz: synthetic.tz.trim() }
+                    : {}),
+                  ...(typeof synthetic.staggerMs === "number"
+                    ? { staggerMs: synthetic.staggerMs }
                     : {}),
                 };
               } else if (synthetic.at !== undefined) {
@@ -575,6 +579,9 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                   expr: synthetic.cron.trim(),
                   ...(typeof synthetic.tz === "string" && synthetic.tz.trim()
                     ? { tz: synthetic.tz.trim() }
+                    : {}),
+                  ...(typeof synthetic.staggerMs === "number"
+                    ? { staggerMs: synthetic.staggerMs }
                     : {}),
                 };
               } else if (synthetic.at !== undefined) {

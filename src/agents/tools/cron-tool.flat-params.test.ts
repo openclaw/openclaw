@@ -94,7 +94,7 @@ describe("cron tool flat-params", () => {
     expect(params.at).toBeUndefined();
   });
 
-  it("coerces null job to undefined and triggers flat-params recovery", async () => {
+  it("handles null job via flat-params recovery", async () => {
     const tool = createCronTool({}, { callGatewayTool: callGatewayToolMock });
     await tool.execute("call-null-job", {
       action: "add",
@@ -128,6 +128,30 @@ describe("cron tool flat-params", () => {
       Record<string, unknown>,
     ];
     expect(params.schedule).toEqual({ kind: "every", everyMs: 120_000 });
+  });
+
+  it("propagates staggerMs into cron shorthand schedule", async () => {
+    const tool = createCronTool({}, { callGatewayTool: callGatewayToolMock });
+    await tool.execute("call-flat-cron-stagger", {
+      action: "add",
+      name: "staggered",
+      cron: "0 0 * * *",
+      staggerMs: 5000,
+      message: "ping",
+    });
+
+    const [_method, _opts, params] = callGatewayToolMock.mock.calls[0] as [
+      string,
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(params.schedule).toEqual({
+      kind: "cron",
+      expr: "0 0 * * *",
+      staggerMs: 5000,
+    });
+    expect(params.staggerMs).toBeUndefined();
+    expect(params.cron).toBeUndefined();
   });
 
   it("adds schedule shorthand keys for update flat-params recovery", async () => {
