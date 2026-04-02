@@ -337,12 +337,26 @@ export async function resolveApiKeyForProvider(params: {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const mode = store.profiles[profileId]?.type;
-    return {
+    const result: ResolvedProviderAuth = {
       apiKey: resolved.apiKey,
       profileId,
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
     };
+    // When the resolved key is the synthetic ollama-local marker, fall through
+    // to env/config resolution so real cloud credentials take precedence.
+    // The auth controller iterates profile candidates and passes each as an
+    // explicit profileId, so we cannot assume explicit === user-chosen.
+    if (
+      shouldDeferSyntheticOllamaProfileAuth({
+        provider,
+        resolvedApiKey: resolved.apiKey,
+      })
+    ) {
+      return resolveApiKeyForProvider({ ...params, profileId: undefined }) //
+        .catch(() => result);
+    }
+    return result;
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
