@@ -43,7 +43,7 @@ is available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Available models
 
-| Model ID               | Name             | Type    | Context |
+| Model ID                | Name             | Type    | Context |
 | ----------------------- | ---------------- | ------- | ------- |
 | `yandexgpt/latest`      | YandexGPT Pro    | General | 32K     |
 | `yandexgpt/rc`          | YandexGPT Pro RC | General | 32K     |

@@ -1066,10 +1066,6 @@
       "types": "./dist/plugin-sdk/xai.d.ts",
       "default": "./dist/plugin-sdk/xai.js"
     },
-    "./plugin-sdk/yandex": {
-      "types": "./dist/plugin-sdk/yandex.d.ts",
-      "default": "./dist/plugin-sdk/yandex.js"
-    },
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"
@@ -1093,6 +1089,34 @@
     "./plugin-sdk/voice-call": {
       "types": "./dist/plugin-sdk/voice-call.d.ts",
       "default": "./dist/plugin-sdk/voice-call.js"
+    },
+    "./plugin-sdk/volcengine": {
+      "types": "./dist/plugin-sdk/volcengine.d.ts",
+      "default": "./dist/plugin-sdk/volcengine.js"
+    },
+    "./plugin-sdk/whatsapp-auth-presence": {
+      "types": "./dist/plugin-sdk/whatsapp-auth-presence.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-auth-presence.js"
+    },
+    "./plugin-sdk/whatsapp-core": {
+      "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-core.js"
+    },
+    "./plugin-sdk/whatsapp-shared": {
+      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-shared.js"
+    },
+    "./plugin-sdk/whatsapp-surface": {
+      "types": "./dist/plugin-sdk/whatsapp-surface.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-surface.js"
+    },
+    "./plugin-sdk/whatsapp-targets": {
+      "types": "./dist/plugin-sdk/whatsapp-targets.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-targets.js"
+    },
+    "./plugin-sdk/yandex": {
+      "types": "./dist/plugin-sdk/yandex.d.ts",
+      "default": "./dist/plugin-sdk/yandex.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
