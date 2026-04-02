@@ -177,8 +177,8 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         },
         timeoutMs: 60_000,
         fetchFn: fetch,
-        // Keep env-proxy routing intact for Google image generation behind proxies.
-        pinDns: false,
+        // Keep env-proxy routing intact without disabling DNS pinning elsewhere.
+        pinDns: dispatcherPolicy?.mode === "env-proxy" ? false : undefined,
         allowPrivateNetwork,
         dispatcherPolicy,
       });
