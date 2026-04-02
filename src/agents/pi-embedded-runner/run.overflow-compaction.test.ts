@@ -81,6 +81,28 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("uses configured thinking defaults for embedded runs when thinkLevel is omitted", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-thinking-default",
+      config: {
+        agents: {
+          defaults: {
+            thinkingDefault: "minimal",
+          },
+        },
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkLevel: "minimal",
+      }),
+    );
+  });
+
   it("blocks undersized models before dispatching a provider attempt", async () => {
     mockedResolveContextWindowInfo.mockReturnValue({
       tokens: 800,
