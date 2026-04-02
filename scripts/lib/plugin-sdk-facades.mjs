@@ -1213,6 +1213,21 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
 ];
 
+const GUARDED_PLUGIN_SDK_FACADE_SUBPATHS = new Set([
+  "browser",
+  "browser-runtime",
+  "discord-runtime-surface",
+  "discord-thread-bindings",
+  "image-generation-runtime",
+  "line-runtime",
+  "line-surface",
+  "matrix-runtime-surface",
+  "media-understanding-runtime",
+  "memory-core-engine-runtime",
+  "slack-runtime-surface",
+  "speech-runtime",
+]);
+
 export const GENERATED_PLUGIN_SDK_FACADES_BY_SUBPATH = Object.fromEntries(
   GENERATED_PLUGIN_SDK_FACADES.map((entry) => [entry.subpath, entry]),
 );
@@ -1515,25 +1530,41 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
     }
   }
   if (valueExports.length) {
-    const runtimeImports = ["loadBundledPluginPublicSurfaceModuleSync"];
+    const runtimeImports = new Set();
     if (needsLazyArrayHelper) {
-      runtimeImports.unshift("createLazyFacadeArrayValue");
+      runtimeImports.add("createLazyFacadeArrayValue");
     }
     if (needsLazyObjectHelper) {
-      runtimeImports.unshift("createLazyFacadeObjectValue");
+      runtimeImports.add("createLazyFacadeObjectValue");
     }
-    lines.push(`import { ${runtimeImports.join(", ")} } from "./facade-runtime.js";`);
+    for (const sourcePath of listFacadeEntrySourcePaths(entry)) {
+      const { artifactBasename } = normalizeFacadeSourceParts(sourcePath);
+      runtimeImports.add(
+        artifactBasename === "runtime-api.js" &&
+          GUARDED_PLUGIN_SDK_FACADE_SUBPATHS.has(entry.subpath)
+          ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
+          : "loadBundledPluginPublicSurfaceModuleSync",
+      );
+    }
+    lines.push(
+      `import { ${[...runtimeImports].toSorted((left, right) => left.localeCompare(right)).join(", ")} } from "./facade-runtime.js";`,
+    );
     for (const [sourceIndex, sourcePath] of listFacadeEntrySourcePaths(entry).entries()) {
       if (!valueExportsBySource.has(sourcePath)) {
         continue;
       }
       const { dirName: sourceDirName, artifactBasename: sourceArtifactBasename } =
         normalizeFacadeSourceParts(sourcePath);
+      const loaderName =
+        sourceArtifactBasename === "runtime-api.js" &&
+        GUARDED_PLUGIN_SDK_FACADE_SUBPATHS.has(entry.subpath)
+          ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
+          : "loadBundledPluginPublicSurfaceModuleSync";
       const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
       const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
       lines.push("");
       lines.push(`function loadFacadeModule${loaderSuffix}(): ${moduleTypeName} {`);
-      lines.push(`  return loadBundledPluginPublicSurfaceModuleSync<${moduleTypeName}>({`);
+      lines.push(`  return ${loaderName}<${moduleTypeName}>({`);
       lines.push(`    dirName: ${JSON.stringify(sourceDirName)},`);
       lines.push(`    artifactBasename: ${JSON.stringify(sourceArtifactBasename)},`);
       lines.push("  });");
