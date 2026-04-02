@@ -14,6 +14,7 @@ export const unitTestIncludePatterns = [
   "ui/src/ui/views/usage-render-details.test.ts",
   "ui/src/ui/controllers/agents.test.ts",
   "ui/src/ui/controllers/chat.test.ts",
+  "ui/src/ui/app-render.helpers*.test.ts",
 ];
 
 export const boundaryTestFiles = [

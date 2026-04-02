@@ -1622,17 +1622,7 @@ export function renderApp(state: AppViewState) {
               agentsList: state.agentsList,
               currentAgentId: resolvedAgentId ?? "main",
               onAgentChange: (agentId: string) => {
-                state.sessionKey = buildAgentMainSessionKey({ agentId });
-                state.chatMessages = [];
-                state.chatStream = null;
-                state.chatRunId = null;
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: state.sessionKey,
-                  lastActiveSessionKey: state.sessionKey,
-                });
-                void loadChatHistory(state);
-                void state.loadAssistantIdentity();
+                switchChatSession(state, buildAgentMainSessionKey({ agentId }));
               },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
