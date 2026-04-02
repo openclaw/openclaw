@@ -478,7 +478,7 @@
           "exportName": "ReplyPayload",
           "kind": "type",
           "source": {
-            "line": 79,
+            "line": 85,
             "path": "src/auto-reply/types.ts"
           }
         },
