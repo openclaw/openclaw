@@ -21,6 +21,7 @@ type GeminiProviderConfig = {
   apiKey?: string;
   baseUrl: string;
   modelId: string;
+  voiceId?: string;
   timeoutMs?: number;
 };
 
@@ -113,6 +114,9 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.modelId) == null
           ? {}
           : { modelId: trimToUndefined(talkProviderConfig.modelId) }),
+        ...(trimToUndefined(talkProviderConfig.voiceId) == null
+          ? {}
+          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
         ...(asNumber(talkProviderConfig.timeoutMs) == null
           ? {}
           : { timeoutMs: asNumber(talkProviderConfig.timeoutMs) }),
@@ -138,7 +142,8 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
 
       const modelId =
         trimToUndefined(req.providerOverrides?.modelId) ?? config.modelId;
-      const voiceId = trimToUndefined(req.providerOverrides?.voiceId);
+      const voiceId =
+        trimToUndefined(req.providerOverrides?.voiceId) ?? config.voiceId;
       const url = `${config.baseUrl}/${modelId}:generateContent`;
 
       const text = req.text.slice(0, 4096);
