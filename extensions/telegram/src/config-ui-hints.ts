@@ -83,11 +83,11 @@ export const telegramChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Telegram Exec Approvals",
-    help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+    help: "Telegram-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for the selected bot account.",
   },
   "execApprovals.enabled": {
     label: "Telegram Exec Approvals Enabled",
-    help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+    help: 'Controls Telegram native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
   },
   "execApprovals.approvers": {
     label: "Telegram Exec Approval Approvers",

@@ -16,6 +16,7 @@ import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { slackNativeApprovalAdapter } from "../approval-native.js";
 import {
   getSlackExecApprovalApprovers,
+  isSlackExecApprovalClientEnabled,
   normalizeSlackApproverId,
   shouldHandleSlackExecApprovalRequest,
 } from "../exec-approvals.js";
@@ -239,13 +240,10 @@ export class SlackExecApprovalHandler {
       gatewayUrl: opts.gatewayUrl,
       nativeAdapter: slackNativeApprovalAdapter.native,
       isConfigured: () =>
-        Boolean(
-          opts.config.enabled &&
-          getSlackExecApprovalApprovers({
-            cfg: opts.cfg,
-            accountId: opts.accountId,
-          }).length > 0,
-        ),
+        isSlackExecApprovalClientEnabled({
+          cfg: opts.cfg,
+          accountId: opts.accountId,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
       buildPendingContent: ({ request }) => ({
         text: buildSlackPendingApprovalText(request),

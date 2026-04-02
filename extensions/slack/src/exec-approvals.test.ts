@@ -29,32 +29,36 @@ function buildConfig(
 }
 
 describe("slack exec approvals", () => {
-  it("requires enablement and explicit or owner approvers", () => {
+  it("auto-enables when owner approvers resolve and disables only when forced off", () => {
     expect(isSlackExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
-    expect(isSlackExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isSlackExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }, { allowFrom: ["U123"] }),
+        cfg: buildConfig({ enabled: true }),
       }),
     ).toBe(false);
     expect(
       isSlackExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true, approvers: ["U123"] }),
+        cfg: buildConfig({ approvers: ["U123"] }),
       }),
     ).toBe(true);
     expect(
       isSlackExecApprovalClientEnabled({
         cfg: {
-          ...buildConfig({ enabled: true }),
+          ...buildConfig(),
           commands: { ownerAllowFrom: ["slack:U123OWNER"] },
         } as OpenClawConfig,
       }),
     ).toBe(true);
+    expect(
+      isSlackExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: false, approvers: ["U123"] }),
+      }),
+    ).toBe(false);
   });
 
   it("prefers explicit approvers when configured", () => {
     const cfg = buildConfig(
-      { enabled: true, approvers: ["U456"] },
+      { approvers: ["U456"] },
       { allowFrom: ["U123"], defaultTo: "user:U789" },
     );
 

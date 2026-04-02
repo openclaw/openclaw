@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createChannelExecApprovalProfile,
+  isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
 import type { OpenClawConfig } from "./config-runtime.js";
@@ -74,6 +75,37 @@ describe("createChannelExecApprovalProfile", () => {
     resolveApprovers: () => ["owner"],
     isTargetRecipient: ({ senderId }) => senderId === "target",
     matchesRequestAccount: ({ accountId }) => accountId !== "other",
+  });
+
+  it("treats unset enabled as auto and false as disabled", () => {
+    expect(
+      isChannelExecApprovalClientEnabledFromConfig({
+        approverCount: 1,
+      }),
+    ).toBe(true);
+    expect(
+      isChannelExecApprovalClientEnabledFromConfig({
+        enabled: "auto",
+        approverCount: 1,
+      }),
+    ).toBe(true);
+    expect(
+      isChannelExecApprovalClientEnabledFromConfig({
+        enabled: true,
+        approverCount: 1,
+      }),
+    ).toBe(true);
+    expect(
+      isChannelExecApprovalClientEnabledFromConfig({
+        enabled: false,
+        approverCount: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isChannelExecApprovalClientEnabledFromConfig({
+        approverCount: 0,
+      }),
+    ).toBe(false);
   });
 
   it("reuses shared client, auth, and request-filter logic", () => {
