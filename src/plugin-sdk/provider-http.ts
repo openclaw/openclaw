@@ -8,5 +8,6 @@ export {
   normalizeBaseUrl,
   postJsonRequest,
   postTranscriptionRequest,
+  resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "../media-understanding/shared.js";
