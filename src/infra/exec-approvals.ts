@@ -898,7 +898,7 @@ export async function requestExecApprovalViaSocket(params: {
 
   return await requestJsonlSocket({
     socketPath,
-    payload,
+    requestLine: payload,
     timeoutMs,
     accept: (value) => {
       const msg = value as { type?: string; decision?: ExecApprovalDecision };

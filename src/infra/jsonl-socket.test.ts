@@ -40,7 +40,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
         await expect(
           requestJsonlSocket({
             socketPath,
-            payload: '{"hello":"world"}',
+            requestLine: '{"hello":"world"}',
             timeoutMs: 500,
             accept: (msg) => {
               const value = msg as { type?: string; value?: number };
@@ -77,7 +77,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
         await expect(
           requestJsonlSocket({
             socketPath,
-            payload: '{"hello":"world"}',
+            requestLine: '{"hello":"world"}',
             timeoutMs: 500,
             accept: (msg) => {
               const value = msg as { type?: string; value?: number };
@@ -107,7 +107,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
         await expect(
           requestJsonlSocket({
             socketPath,
-            payload: "{}",
+            requestLine: "{}",
             timeoutMs: 50,
             accept: () => undefined,
           }),
@@ -119,7 +119,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       await expect(
         requestJsonlSocket({
           socketPath,
-          payload: "{}",
+          requestLine: "{}",
           timeoutMs: 50,
           accept: () => undefined,
         }),
