@@ -171,10 +171,23 @@ const matrixExecOnlyNativeApprovalAdapter = matrixBaseNativeApprovalAdapter && {
 };
 
 export const matrixApprovalCapability = createChannelApprovalCapability({
-  authorizeActorAction: (params) =>
-    params.approvalKind === "plugin"
-      ? matrixApprovalAuth.authorizeActorAction(params)
-      : (matrixNativeApprovalCapability.authorizeActorAction?.(params) ?? { authorized: true }),
+  authorizeActorAction: (params) => {
+    if (params.approvalKind === "plugin") {
+      if (
+        getMatrixApprovalAuthApprovers({
+          cfg: params.cfg as CoreConfig,
+          accountId: params.accountId,
+        }).length === 0
+      ) {
+        return {
+          authorized: false,
+          reason: "❌ Matrix plugin approvals are not enabled for this bot account.",
+        } as const;
+      }
+      return matrixApprovalAuth.authorizeActorAction(params);
+    }
+    return matrixNativeApprovalCapability.authorizeActorAction?.(params) ?? { authorized: true };
+  },
   getActionAvailabilityState: (params) => {
     if (
       getMatrixApprovalAuthApprovers({

@@ -195,6 +195,30 @@ describe("matrix native approval adapter", () => {
     ).toEqual({ authorized: true });
   });
 
+  it("requires Matrix DM approvers before enabling plugin approval auth", () => {
+    const cfg = buildConfig({
+      dm: { allowFrom: [] },
+      execApprovals: {
+        enabled: true,
+        approvers: ["@exec:example.org"],
+        target: "both",
+      },
+    });
+
+    expect(
+      matrixApprovalCapability.authorizeActorAction?.({
+        cfg,
+        accountId: "default",
+        senderId: "@exec:example.org",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({
+      authorized: false,
+      reason: "❌ Matrix plugin approvals are not enabled for this bot account.",
+    });
+  });
+
   it("disables matrix-native plugin approval delivery", () => {
     const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
