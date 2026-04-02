@@ -48,6 +48,15 @@ describe("parseBooleanValue", () => {
     ).toBe(false);
   });
 
+  it("handles non-string entries in custom truthy/falsy lists gracefully", () => {
+    expect(
+      parseBooleanValue("true", {
+        // @ts-expect-error - testing runtime robustness for untyped inputs
+        truthy: [1, "TRUE", null],
+      }),
+    ).toBe(true);
+  });
+
   it("returns undefined for unsupported values", () => {
     expect(parseBooleanValue("")).toBeUndefined();
     expect(parseBooleanValue("maybe")).toBeUndefined();
