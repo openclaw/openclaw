@@ -200,7 +200,7 @@ describe("noteWorkspaceStatus", () => {
       const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
       expect(recoveryCalls).toHaveLength(1);
       expect(String(recoveryCalls[0]?.[0])).toContain("flow-123");
-      expect(String(recoveryCalls[0]?.[0])).toContain("openclaw flows show <flow-id>");
+      expect(String(recoveryCalls[0]?.[0])).toContain("openclaw tasks flow show <flow-id>");
     } finally {
       noteSpy.mockRestore();
     }
