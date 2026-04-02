@@ -1635,6 +1635,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         // without opting into the wider full-registration surface.
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
         registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+        // Available outside registrationMode === "full" like registerCli/registerChannel.
+        // In non-full modes registry.tools will be empty, so calls throw "Tool not found".
+        executeTool: async (toolName, toolParams) => {
+          const entry = registry.tools.find((e) => e.names.includes(toolName));
+          if (!entry) {
+            throw new Error(`Tool not found: ${toolName}`);
+          }
+          // Minimal context: agent/session fields aren't available in plugin scope.
+          // Tools requiring session context should use the normal agent execution path.
+          const resolved = entry.factory({ config: params.config });
+          const tools = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+          const tool = tools.find((t) => t.name === toolName);
+          if (!tool) {
+            throw new Error(`Tool factory did not produce tool: ${toolName}`);
+          }
+          const toolCallId = `plugin-${record.id}-${Date.now()}`;
+          return tool.execute(toolCallId, toolParams);
+        },
       },
     });
   };

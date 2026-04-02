@@ -2160,6 +2160,11 @@ export type OpenClawPluginApi = {
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
+  /**
+   * Execute a registered tool by name.
+   * Resolves the tool from the plugin tool registry and invokes its execute method.
+   */
+  executeTool: (toolName: string, params: unknown) => Promise<unknown>;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
