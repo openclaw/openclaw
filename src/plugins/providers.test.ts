@@ -200,7 +200,7 @@ describe("resolvePluginProviders", () => {
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(
       (params): PluginAutoEnableResult => ({
-        config: params.config,
+        config: params.config ?? ({} as OpenClawConfig),
         changes: [],
         autoEnabledReasons: {},
       }),

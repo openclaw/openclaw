@@ -68,6 +68,7 @@ describe("web fetch runtime", () => {
   });
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     resolveBundledPluginWebFetchProvidersMock.mockReset();
     resolveRuntimeWebFetchProvidersMock.mockReset();
     resolveBundledPluginWebFetchProvidersMock.mockReturnValue([]);
@@ -78,7 +79,7 @@ describe("web fetch runtime", () => {
     clearSecretsRuntimeSnapshot();
   });
 
-  it("does not auto-detect providers from env SecretRefs without runtime metadata", () => {
+  it("does not auto-detect providers from plugin-owned env SecretRefs without runtime metadata", () => {
     const provider = createProvider({
       pluginId: "firecrawl",
       id: "firecrawl",
@@ -111,6 +112,8 @@ describe("web fetch runtime", () => {
         },
       },
     };
+
+    vi.stubEnv("FIRECRAWL_API_KEY", "");
 
     expect(resolveWebFetchDefinition({ config })).toBeNull();
   });

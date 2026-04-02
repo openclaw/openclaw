@@ -1,5 +1,6 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
+import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -13,23 +14,110 @@ import {
 
 type RequestApi = Api | ModelDefinitionConfig["api"];
 
-export type ResolvedProviderRequestAuthConfig = {
-  mode: "provider-default" | "authorization-bearer";
-  injectAuthorizationHeader: boolean;
+export type ProviderRequestAuthOverride =
+  | {
+      mode: "provider-default";
+    }
+  | {
+      mode: "authorization-bearer";
+      token: string;
+    }
+  | {
+      mode: "header";
+      headerName: string;
+      value: string;
+      prefix?: string;
+    };
+
+export type ProviderRequestTlsOverride = {
+  ca?: string;
+  cert?: string;
+  key?: string;
+  passphrase?: string;
+  serverName?: string;
+  insecureSkipVerify?: boolean;
 };
 
-export type ResolvedProviderRequestProxyConfig = {
-  configured: false;
+export type ProviderRequestProxyOverride =
+  | {
+      mode: "env-proxy";
+      tls?: ProviderRequestTlsOverride;
+    }
+  | {
+      mode: "explicit-proxy";
+      url: string;
+      tls?: ProviderRequestTlsOverride;
+    };
+
+export type ProviderRequestTransportOverrides = {
+  headers?: Record<string, string>;
+  auth?: ProviderRequestAuthOverride;
+  proxy?: ProviderRequestProxyOverride;
+  tls?: ProviderRequestTlsOverride;
 };
 
-export type ResolvedProviderRequestTlsConfig = {
-  configured: false;
+export type ResolvedProviderRequestAuthConfig =
+  | {
+      configured: false;
+      mode: "provider-default" | "authorization-bearer";
+      injectAuthorizationHeader: boolean;
+    }
+  | {
+      configured: true;
+      mode: "authorization-bearer";
+      headerName: "Authorization";
+      value: string;
+      injectAuthorizationHeader: true;
+    }
+  | {
+      configured: true;
+      mode: "header";
+      headerName: string;
+      value: string;
+      prefix?: string;
+      injectAuthorizationHeader: false;
+    };
+
+export type ResolvedProviderRequestProxyConfig =
+  | {
+      configured: false;
+    }
+  | {
+      configured: true;
+      mode: "env-proxy";
+      tls: ResolvedProviderRequestTlsConfig;
+    }
+  | {
+      configured: true;
+      mode: "explicit-proxy";
+      proxyUrl: string;
+      tls: ResolvedProviderRequestTlsConfig;
+    };
+
+export type ResolvedProviderRequestTlsConfig =
+  | {
+      configured: false;
+    }
+  | {
+      configured: true;
+      ca?: string;
+      cert?: string;
+      key?: string;
+      passphrase?: string;
+      serverName?: string;
+      rejectUnauthorized?: boolean;
+    };
+
+export type ResolvedProviderRequestExtraHeadersConfig = {
+  configured: boolean;
+  headers?: Record<string, string>;
 };
 
 export type ResolvedProviderRequestConfig = {
   api?: RequestApi;
   baseUrl?: string;
   headers?: Record<string, string>;
+  extraHeaders: ResolvedProviderRequestExtraHeadersConfig;
   auth: ResolvedProviderRequestAuthConfig;
   proxy: ResolvedProviderRequestProxyConfig;
   tls: ResolvedProviderRequestTlsConfig;
@@ -44,6 +132,10 @@ export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig 
 };
 
 const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const FORBIDDEN_INSECURE_TLS_MESSAGE =
+  "Provider transport overrides do not allow insecureSkipVerify";
+const FORBIDDEN_RUNTIME_TRANSPORT_OVERRIDE_MESSAGE =
+  "Runtime auth request overrides do not allow proxy or TLS transport settings";
 
 type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
@@ -63,6 +155,7 @@ type ResolveProviderRequestPolicyConfigParams = {
   } | null;
   modelId?: string | null;
   allowPrivateNetwork?: boolean;
+  request?: ProviderRequestTransportOverrides;
 };
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;
@@ -109,6 +202,201 @@ export function mergeProviderRequestHeaders(
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function resolveTlsOverride(
+  tls: ProviderRequestTlsOverride | undefined,
+): ResolvedProviderRequestTlsConfig {
+  if (!tls) {
+    return { configured: false };
+  }
+  if (tls.insecureSkipVerify === true) {
+    throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
+  }
+  const ca = tls.ca?.trim();
+  const cert = tls.cert?.trim();
+  const key = tls.key?.trim();
+  const passphrase = tls.passphrase?.trim();
+  const serverName = tls.serverName?.trim();
+  const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
+  if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
+    return { configured: false };
+  }
+  return {
+    configured: true,
+    ...(ca ? { ca } : {}),
+    ...(cert ? { cert } : {}),
+    ...(key ? { key } : {}),
+    ...(passphrase ? { passphrase } : {}),
+    ...(serverName ? { serverName } : {}),
+    ...(rejectUnauthorized !== undefined ? { rejectUnauthorized } : {}),
+  };
+}
+
+function resolveAuthOverride(params: {
+  authHeader?: boolean;
+  request?: ProviderRequestTransportOverrides;
+}): ResolvedProviderRequestAuthConfig {
+  const auth = params.request?.auth;
+  if (auth?.mode === "authorization-bearer") {
+    const value = auth.token.trim();
+    if (value) {
+      return {
+        configured: true,
+        mode: "authorization-bearer",
+        headerName: "Authorization",
+        value,
+        injectAuthorizationHeader: true,
+      };
+    }
+  }
+  if (auth?.mode === "header") {
+    const headerName = auth.headerName.trim();
+    const value = auth.value.trim();
+    const prefix = auth.prefix?.trim();
+    if (headerName && value) {
+      return {
+        configured: true,
+        mode: "header",
+        headerName,
+        value,
+        ...(prefix ? { prefix } : {}),
+        injectAuthorizationHeader: false,
+      };
+    }
+  }
+  return {
+    configured: false,
+    mode: params.authHeader ? "authorization-bearer" : "provider-default",
+    injectAuthorizationHeader: params.authHeader === true,
+  };
+}
+
+export function sanitizeRuntimeProviderRequestOverrides(
+  request: ProviderRequestTransportOverrides | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  if (!request) {
+    return undefined;
+  }
+  if (request.proxy || request.tls) {
+    throw new Error(FORBIDDEN_RUNTIME_TRANSPORT_OVERRIDE_MESSAGE);
+  }
+  const headers = request.headers;
+  const auth = request.auth;
+  if (!headers && !auth) {
+    return undefined;
+  }
+  return {
+    ...(headers ? { headers } : {}),
+    ...(auth ? { auth } : {}),
+  };
+}
+
+function resolveProxyOverride(
+  request: ProviderRequestTransportOverrides | undefined,
+): ResolvedProviderRequestProxyConfig {
+  const proxy = request?.proxy;
+  if (!proxy) {
+    return { configured: false };
+  }
+  const tls = resolveTlsOverride(proxy.tls);
+  if (proxy.mode === "env-proxy") {
+    return {
+      configured: true,
+      mode: "env-proxy",
+      tls,
+    };
+  }
+  const proxyUrl = proxy.url.trim();
+  if (!proxyUrl) {
+    return { configured: false };
+  }
+  return {
+    configured: true,
+    mode: "explicit-proxy",
+    proxyUrl,
+    tls,
+  };
+}
+
+function applyResolvedAuthHeader(
+  headers: Record<string, string> | undefined,
+  auth: ResolvedProviderRequestAuthConfig,
+): Record<string, string> | undefined {
+  if (!auth.configured) {
+    return headers;
+  }
+  const next = mergeProviderRequestHeaders(headers) ?? Object.create(null);
+  const keysToDelete = new Set([auth.headerName.toLowerCase()]);
+  if (auth.mode === "header") {
+    keysToDelete.add("authorization");
+  }
+  for (const key of Object.keys(next)) {
+    if (keysToDelete.has(key.toLowerCase())) {
+      delete next[key];
+    }
+  }
+  next[auth.headerName] =
+    auth.mode === "authorization-bearer"
+      ? `Bearer ${auth.value}`
+      : `${auth.prefix ?? ""}${auth.value}`;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function toTlsConnectOptions(
+  tls: ResolvedProviderRequestTlsConfig,
+): Record<string, unknown> | undefined {
+  if (!tls.configured) {
+    return undefined;
+  }
+  const next: Record<string, unknown> = {};
+  if (tls.ca) {
+    next.ca = tls.ca;
+  }
+  if (tls.cert) {
+    next.cert = tls.cert;
+  }
+  if (tls.key) {
+    next.key = tls.key;
+  }
+  if (tls.passphrase) {
+    next.passphrase = tls.passphrase;
+  }
+  if (tls.serverName) {
+    next.servername = tls.serverName;
+  }
+  if (tls.rejectUnauthorized !== undefined) {
+    next.rejectUnauthorized = tls.rejectUnauthorized;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+export function buildProviderRequestDispatcherPolicy(
+  request: Pick<ResolvedProviderRequestConfig, "proxy" | "tls">,
+): PinnedDispatcherPolicy | undefined {
+  const targetTls = toTlsConnectOptions(request.tls);
+  if (!request.proxy.configured) {
+    return targetTls ? { mode: "direct", connect: targetTls } : undefined;
+  }
+  const proxiedTls = toTlsConnectOptions(request.proxy.tls);
+  if (request.proxy.mode === "env-proxy") {
+    return {
+      mode: "env-proxy",
+      ...(targetTls ? { connect: { ...targetTls } } : {}),
+      ...(proxiedTls ? { proxyTls: { ...proxiedTls } } : {}),
+    };
+  }
+  return {
+    mode: "explicit-proxy",
+    proxyUrl: request.proxy.proxyUrl,
+    ...(proxiedTls ? { proxyTls: proxiedTls } : {}),
+  };
+}
+
+export function buildProviderRequestTlsClientOptions(
+  request: Pick<ResolvedProviderRequestConfig, "tls">,
+): Record<string, unknown> | undefined {
+  return toTlsConnectOptions(request.tls);
+}
+
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
 ): ResolvedProviderRequestPolicyConfig {
@@ -128,10 +416,18 @@ export function resolveProviderRequestPolicyConfig(
     compat: params.compat,
     modelId: params.modelId,
   });
-  const defaultHeaders = mergeProviderRequestHeaders(
-    params.discoveredHeaders,
-    params.providerHeaders,
-    params.modelHeaders,
+  const auth = resolveAuthOverride({
+    authHeader: params.authHeader,
+    request: params.request,
+  });
+  const extraHeaders = applyResolvedAuthHeader(
+    mergeProviderRequestHeaders(
+      params.discoveredHeaders,
+      params.providerHeaders,
+      params.modelHeaders,
+      params.request?.headers,
+    ),
+    auth,
   );
   const protectedAttributionKeys = new Set(
     Object.keys(policy.attributionHeaders ?? {}).map((key) => key.toLowerCase()),
@@ -143,7 +439,7 @@ export function resolveProviderRequestPolicyConfig(
         ),
       )
     : undefined;
-  const mergedDefaults = mergeProviderRequestHeaders(defaultHeaders, policy.attributionHeaders);
+  const mergedDefaults = mergeProviderRequestHeaders(extraHeaders, policy.attributionHeaders);
   const headers =
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
@@ -153,12 +449,13 @@ export function resolveProviderRequestPolicyConfig(
     api: params.api,
     baseUrl,
     headers,
-    auth: {
-      mode: params.authHeader ? "authorization-bearer" : "provider-default",
-      injectAuthorizationHeader: params.authHeader === true,
+    extraHeaders: {
+      configured: Boolean(extraHeaders),
+      headers: extraHeaders,
     },
-    proxy: { configured: false },
-    tls: { configured: false },
+    auth,
+    proxy: resolveProxyOverride(params.request),
+    tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
     allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
@@ -175,6 +472,7 @@ export function resolveProviderRequestConfig(params: {
   providerHeaders?: Record<string, string>;
   modelHeaders?: Record<string, string>;
   authHeader?: boolean;
+  request?: ProviderRequestTransportOverrides;
 }): ResolvedProviderRequestConfig {
   const resolved = resolveProviderRequestPolicyConfig(params);
   return {
@@ -183,11 +481,8 @@ export function resolveProviderRequestConfig(params: {
     // Model resolution intentionally excludes attribution headers. Those are
     // applied later at transport/request time so native-host gating stays tied
     // to the final resolved route instead of the catalog/config merge step.
-    headers: mergeProviderRequestHeaders(
-      params.discoveredHeaders,
-      params.providerHeaders,
-      params.modelHeaders,
-    ),
+    headers: resolved.extraHeaders.headers,
+    extraHeaders: resolved.extraHeaders,
     auth: resolved.auth,
     proxy: resolved.proxy,
     tls: resolved.tls,
@@ -204,6 +499,7 @@ export function resolveProviderRequestHeaders(params: {
   callerHeaders?: Record<string, string>;
   defaultHeaders?: Record<string, string>;
   precedence?: ProviderRequestHeaderPrecedence;
+  request?: ProviderRequestTransportOverrides;
 }): Record<string, string> | undefined {
   return resolveProviderRequestPolicyConfig({
     provider: params.provider,
@@ -214,5 +510,6 @@ export function resolveProviderRequestHeaders(params: {
     callerHeaders: params.callerHeaders,
     providerHeaders: params.defaultHeaders,
     precedence: params.precedence,
+    request: params.request,
   }).headers;
 }
