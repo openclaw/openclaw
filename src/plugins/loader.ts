@@ -1379,8 +1379,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      // Track the plugin as imported once module evaluation begins. Top-level
+      // code may have already executed even if evaluation later throws.
       recordImportedPluginId(record.id);
+      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,

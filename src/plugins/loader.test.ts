@@ -35,6 +35,7 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  listImportedRuntimePluginIds,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -1345,6 +1346,48 @@ module.exports = { id: "manifest-only-plugin", register() { throw new Error("man
             }),
           ]),
         );
+      },
+    },
+    {
+      label: "tracks plugins as imported when module evaluation throws after top-level execution",
+      run: () => {
+        useNoBundledPlugins();
+        const importMarker = "__openclaw_loader_import_throw_marker";
+        Reflect.deleteProperty(globalThis, importMarker);
+
+        const plugin = writePlugin({
+          id: "throws-after-import",
+          filename: "throws-after-import.cjs",
+          body: `globalThis.${importMarker} = (globalThis.${importMarker} ?? 0) + 1;
+throw new Error("boom after import");
+module.exports = { id: "throws-after-import", register() {} };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["throws-after-import"],
+            },
+          },
+        });
+
+        try {
+          expect(registry.plugins).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                id: "throws-after-import",
+                status: "error",
+              }),
+            ]),
+          );
+          expect(listImportedRuntimePluginIds()).toContain("throws-after-import");
+          expect(Number(Reflect.get(globalThis, importMarker) ?? 0)).toBeGreaterThan(0);
+        } finally {
+          Reflect.deleteProperty(globalThis, importMarker);
+        }
       },
     },
     {
