@@ -195,6 +195,14 @@ export type TelegramAccountConfig = {
    * - "extensive": agent can react liberally when appropriate
    */
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
+  /**
+   * When true, incoming user reactions trigger a full agent turn instead of
+   * only queuing a system context event. The agent receives a synthetic
+   * inbound message describing the reaction and can respond normally.
+   * Requires reactionNotifications to be "own" or "all" (not "off").
+   * Default: false.
+   */
+  reactionTrigger?: boolean;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */

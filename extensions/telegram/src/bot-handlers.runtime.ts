@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { requestHeartbeatNow } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
@@ -884,6 +885,19 @@ export const registerTelegramHandlers = ({
           contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
         });
         logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+
+      // When reactionTrigger is enabled, wake the agent so the reaction
+      // system events are processed as a standalone turn instead of
+      // waiting for the next inbound message.
+      const reactionTrigger = telegramCfg.reactionTrigger === true;
+      if (reactionTrigger && addedReactions.length > 0) {
+        requestHeartbeatNow({
+          reason: "telegram-reaction",
+          sessionKey,
+          coalesceMs: 500,
+        });
+        logVerbose(`telegram: reaction trigger woke agent for session ${sessionKey}`);
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));

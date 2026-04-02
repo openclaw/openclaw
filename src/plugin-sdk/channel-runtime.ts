@@ -26,3 +26,4 @@ export {
   keepHttpServerTaskAlive,
   waitUntilAbort,
 } from "./channel-lifecycle.core.js";
+export { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
