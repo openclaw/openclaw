@@ -1,1 +1,1 @@
-export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/matrix";
+export { loadOutboundMediaFromUrl } from "../runtime-api.js";

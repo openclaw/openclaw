@@ -8,6 +8,7 @@ export {
   formatZonedTimestamp,
   getChatChannelMeta,
   jsonResult,
+  loadOutboundMediaFromUrl,
   normalizeAccountId,
   normalizeOptionalAccountId,
   readNumberParam,
