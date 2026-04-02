@@ -4,11 +4,11 @@ type FacadeEntry = PluginSdkFacadeTypeMap["discord-runtime-surface"];
 type FacadeModule = FacadeEntry["module"];
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "discord",
     artifactBasename: "runtime-api.js",
   });

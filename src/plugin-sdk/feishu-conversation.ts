@@ -3,8 +3,8 @@ import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type
 type FacadeEntry = PluginSdkFacadeTypeMap["feishu-conversation"];
 type FacadeModule = FacadeEntry["module"];
 import {
-  createLazyFacadeObjectValue,
   createLazyFacadeArrayValue,
+  createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 

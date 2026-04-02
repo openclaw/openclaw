@@ -2,10 +2,10 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["matrix-runtime-surface"];
 type FacadeModule = FacadeEntry["module"];
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "matrix",
     artifactBasename: "runtime-api.js",
   });

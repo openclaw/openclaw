@@ -3,8 +3,8 @@ import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type
 type FacadeEntry = PluginSdkFacadeTypeMap["modelstudio"];
 type FacadeModule = FacadeEntry["module"];
 import {
-  createLazyFacadeObjectValue,
   createLazyFacadeArrayValue,
+  createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
