@@ -1,11 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import {
-  loadSessionStore,
-  resolveAllAgentSessionStoreTargets,
-  resolveStorePath,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { updateSessionStore } from "../../config/sessions/store.runtime.js";
+import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
