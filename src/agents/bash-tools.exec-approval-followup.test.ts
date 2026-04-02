@@ -36,6 +36,13 @@ describe("exec approval followup", () => {
     expect(prompt).not.toContain("already approved has completed");
   });
 
+  it("tells the agent to continue the task before replying when the command succeeds", () => {
+    const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
+
+    expect(prompt).toContain("continue from this result before replying to the user");
+    expect(prompt).toContain("Continue the task if needed, then reply to the user");
+  });
+
   it("keeps followups internal when no external route is available", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-1",
@@ -79,7 +86,7 @@ describe("exec approval followup", () => {
       accountId: "default",
       threadId: "789",
     },
-  ])("uses direct external delivery for $channel followups", async (target) => {
+  ])("uses agent continuation for $channel followups when a session exists", async (target) => {
     await sendExecApprovalFollowup({
       approvalId: `req-${target.channel}`,
       sessionKey: target.sessionKey,
@@ -90,17 +97,42 @@ describe("exec approval followup", () => {
       resultText: "slack exec approval smoke",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "agent",
+      expect.any(Object),
       expect.objectContaining({
+        sessionKey: target.sessionKey,
+        deliver: true,
+        bestEffortDeliver: true,
         channel: target.channel,
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        content: "slack exec approval smoke",
-        mirror: expect.objectContaining({
-          sessionKey: target.sessionKey,
-          idempotencyKey: `exec-approval-followup:req-${target.channel}`,
-        }),
+        idempotencyKey: `exec-approval-followup:req-${target.channel}`,
+      }),
+      { expectFinal: true },
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to direct external delivery only when no session exists", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-no-session",
+      turnSourceChannel: "discord",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+      resultText: "discord exec approval smoke",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "123",
+        accountId: "default",
+        threadId: "456",
+        content: "discord exec approval smoke",
+        idempotencyKey: "exec-approval-followup:req-no-session",
       }),
     );
     expect(callGatewayTool).not.toHaveBeenCalled();
