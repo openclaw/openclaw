@@ -24,6 +24,10 @@ vi.mock("./runtime-entry.js", () => ({
 import plugin from "./index.js";
 import { createVoiceCallRuntime } from "./runtime-entry.js";
 
+const VOICE_RUNTIME_KEY = Symbol.for("openclaw.voice.runtime");
+const VOICE_RUNTIME_PROMISE_KEY = Symbol.for("openclaw.voice.runtimePromise");
+const VOICE_RUNTIME_STOP_PROMISE_KEY = Symbol.for("openclaw.voice.runtimeStopPromise");
+
 const noopLogger = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -140,9 +144,16 @@ describe("voice-call plugin", () => {
       },
       stop: vi.fn(async () => {}),
     };
+    vi.mocked(createVoiceCallRuntime).mockReset();
+    vi.mocked(createVoiceCallRuntime).mockImplementation(async () => runtimeStub);
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (globalThis as Record<PropertyKey, unknown>)[VOICE_RUNTIME_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[VOICE_RUNTIME_PROMISE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[VOICE_RUNTIME_STOP_PROMISE_KEY];
+  });
 
   it("claims shared runtime shutdown so multi-context stop runs once", async () => {
     const first = setup({ provider: "mock" });
@@ -154,6 +165,49 @@ describe("voice-call plugin", () => {
     await Promise.all([first.service?.stop(), second.service?.stop()]);
 
     expect(runtimeStub.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not republish a runtime that stop already claimed", async () => {
+    let resolveFirstRuntime: ((runtime: typeof runtimeStub) => void) | undefined;
+    const firstRuntimePromise = new Promise<typeof runtimeStub>((resolve) => {
+      resolveFirstRuntime = resolve;
+    });
+    const firstRuntime = {
+      ...runtimeStub,
+      stop: vi.fn(async () => {}),
+    };
+    const secondRuntime = {
+      ...runtimeStub,
+      manager: {
+        ...runtimeStub.manager,
+        initiateCall: vi.fn(async () => ({ callId: "call-2", success: true })),
+      },
+      stop: vi.fn(async () => {}),
+    };
+    vi.mocked(createVoiceCallRuntime)
+      .mockImplementationOnce(async () => firstRuntimePromise)
+      .mockImplementationOnce(async () => secondRuntime);
+
+    const { methods, service } = setup({ provider: "mock" });
+    const startPromise = service!.start();
+    const stopPromise = service!.stop();
+
+    resolveFirstRuntime!(firstRuntime);
+    await Promise.all([startPromise, stopPromise]);
+
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { message: "Hi" }, respond });
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
+    expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
+    expect(firstRuntime.manager.initiateCall).not.toHaveBeenCalled();
+    expect(secondRuntime.manager.initiateCall).toHaveBeenCalledTimes(1);
   });
 
   it("initiates a call via voicecall.initiate", async () => {
