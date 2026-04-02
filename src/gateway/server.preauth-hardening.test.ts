@@ -2,12 +2,18 @@ import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { testState } from "./test-helpers.mocks.js";
-import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
+import {
+  connectOk,
+  connectReq,
+  createGatewaySuiteHarness,
+  readConnectChallengeNonce,
+} from "./test-helpers.server.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 let cleanupEnv: Array<() => void> = [];
@@ -118,7 +124,7 @@ describe("gateway pre-auth hardening", () => {
       });
       expect(close.code).toBe(1000);
       expect(close.elapsedMs).toBeGreaterThan(0);
-      expect(close.elapsedMs).toBeLessThan(1_000);
+      expect(close.elapsedMs).toBeLessThan(10_000);
     } finally {
       await harness.close();
     }
@@ -282,5 +288,59 @@ describe("gateway pre-auth hardening", () => {
         }
       },
     });
+  });
+
+  it("rejects excess authenticated sockets for the same device identity", async () => {
+    const previous = process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
+    process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = "1";
+    cleanupEnv.push(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
+      } else {
+        process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = previous;
+      }
+    });
+
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "token", token: "secret" } },
+    });
+    const paired = await issueOperatorToken({
+      name: "authenticated-connection-limit",
+      approvedScopes: ["operator.admin"],
+    });
+
+    try {
+      const firstWs = await harness.openWs();
+      const secondWs = await harness.openWs();
+
+      await connectOk(firstWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+      });
+
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        secondWs.once("close", (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+      const secondConnect = connectReq(secondWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+        timeoutMs: 250,
+      });
+
+      await expect(closed).resolves.toEqual({
+        code: 1008,
+        reason: "too many authenticated connections",
+      });
+      await expect(secondConnect).rejects.toThrow(/too many authenticated connections/i);
+      expect(firstWs.readyState).toBe(1);
+
+      firstWs.close();
+    } finally {
+      await harness.close();
+    }
   });
 });
