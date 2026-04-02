@@ -21,6 +21,7 @@ export {
   resolveTimeoutSeconds,
   writeCache,
 } from "../agents/tools/web-shared.js";
+export { resolvePluginWebFetchConfig } from "../config/legacy-web-fetch.js";
 export { enablePluginInConfig } from "../plugins/enable.js";
 export { wrapExternalContent, wrapWebContent } from "../security/external-content.js";
 export type {

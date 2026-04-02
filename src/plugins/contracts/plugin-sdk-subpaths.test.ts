@@ -297,6 +297,8 @@ describe("plugin-sdk subpath exports", () => {
       "HUGGINGFACE_MODEL_CATALOG",
       "isHuggingfacePolicyLocked",
     ]);
+    expectSourceMentions("provider-web-fetch", ["resolvePluginWebFetchConfig"]);
+    expectSourceMentions("provider-web-search", ["resolveProviderWebSearchPluginConfig"]);
     expectSourceMentions("conversation-runtime", [
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
