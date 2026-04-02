@@ -268,16 +268,10 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
 
-    val remoteAddress: String =
-      if (endpoint.host.contains(":")) {
-        "[${endpoint.host}]:${endpoint.port}"
-      } else {
-        "${endpoint.host}:${endpoint.port}"
-      }
+    val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect() {
-      val scheme = if (tls != null) "wss" else "ws"
-      val url = "$scheme://${endpoint.host}:${endpoint.port}"
+      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
@@ -781,7 +775,7 @@ class GatewaySession(
 
   private fun buildCanvasUrl(host: String, scheme: String, port: Int, suffix: String): String {
     val loweredScheme = scheme.lowercase()
-    val formattedHost = if (host.contains(":")) "[${host}]" else host
+    val formattedHost = formatGatewayAuthorityHost(host)
     val portSuffix = if ((loweredScheme == "https" && port == 443) || (loweredScheme == "http" && port == 80)) "" else ":$port"
     return "$loweredScheme://$formattedHost$portSuffix$suffix"
   }
@@ -887,6 +881,19 @@ class GatewaySession(
     }
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
+}
+
+internal fun buildGatewayWebSocketUrl(host: String, port: Int, useTls: Boolean): String {
+  val scheme = if (useTls) "wss" else "ws"
+  return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+internal fun formatGatewayAuthority(host: String, port: Int): String {
+  return "${formatGatewayAuthorityHost(host)}:$port"
+}
+
+private fun formatGatewayAuthorityHost(host: String): String {
+  return if (host.contains(":")) "[${host}]" else host
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
