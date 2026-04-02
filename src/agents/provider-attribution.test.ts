@@ -384,6 +384,12 @@ describe("provider attribution", () => {
     });
   });
 
+  it("ignores non-http schemes when normalizing native comparable base URLs", () => {
+    expect(resolveProviderEndpoint("javascript:alert(1)")).toMatchObject({
+      endpointClass: "invalid",
+    });
+  });
+
   it("requires the dedicated OpenAI audio transcription API for audio attribution", () => {
     expect(
       resolveProviderRequestPolicy({

@@ -157,6 +157,9 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
       : `https://${trimmed}`;
   try {
     const url = new URL(parsedValue);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
     url.hash = "";
     url.search = "";
     return url.toString().replace(/\/+$/, "").toLowerCase();
@@ -523,6 +526,8 @@ export function resolveProviderRequestCapabilities(
       provider === "anthropic" &&
       api === "anthropic-messages" &&
       (endpointClass === "default" || endpointClass === "anthropic-public"),
+    // This is intentionally the gate for emitting `store: false` on Responses
+    // transports, not just a statement about vendor support in the abstract.
     supportsResponsesStoreField:
       input.compat?.supportsStore !== false && api !== undefined && OPENAI_RESPONSES_APIS.has(api),
     allowsResponsesStore:
