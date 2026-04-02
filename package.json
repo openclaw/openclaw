@@ -91,6 +91,10 @@
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
     },
+    "./plugin-sdk/approval-auth-runtime": {
+      "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-auth-runtime.js"
+    },
     "./plugin-sdk/approval-runtime": {
       "types": "./dist/plugin-sdk/approval-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-runtime.js"
