@@ -152,15 +152,24 @@ export async function startGatewaySidecars(params: {
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
   if (!skipChannels) {
-    try {
-      await prewarmConfiguredPrimaryModel({
-        cfg: params.cfg,
-        log: params.log,
-      });
-      await params.startChannels();
-    } catch (err) {
-      params.logChannels.error(`channel startup failed: ${String(err)}`);
-    }
+    // Fire channel startup without blocking the rest of the sidecar
+    // initialisation.  Channel plugins (especially WhatsApp/baileys) pull in
+    // large dependency trees whose dynamic imports can block the Node.js event
+    // loop for tens of seconds on constrained hosts (e.g. Android/proot).
+    // By not awaiting here the gateway can start serving WebSocket and HTTP
+    // requests (dashboard UI, health checks) while channels connect in the
+    // background.
+    void (async () => {
+      try {
+        await prewarmConfiguredPrimaryModel({
+          cfg: params.cfg,
+          log: params.log,
+        });
+        await params.startChannels();
+      } catch (err) {
+        params.logChannels.error(`channel startup failed: ${String(err)}`);
+      }
+    })();
   } else {
     params.logChannels.info(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
