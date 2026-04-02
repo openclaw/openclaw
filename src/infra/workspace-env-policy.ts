@@ -13,7 +13,7 @@ const BLOCKED_WORKSPACE_OPENCLAW_ENV_KEYS = new Set([
 ]);
 
 export function isBlockedWorkspaceOpenClawEnvVar(rawKey: string): boolean {
-  const key = normalizeEnvVarKey(rawKey);
+  const key = normalizeEnvVarKey(rawKey, { portable: true });
   if (!key) {
     return false;
   }
