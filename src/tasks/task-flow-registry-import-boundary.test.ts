@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
-const ALLOWED_IMPORTERS = new Set(["tasks/flow-owner-access.ts", "tasks/flow-runtime-internal.ts"]);
+const ALLOWED_IMPORTERS = new Set([
+  "tasks/task-flow-owner-access.ts",
+  "tasks/task-flow-runtime-internal.ts",
+]);
 
 async function listSourceFiles(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
@@ -24,13 +27,13 @@ async function listSourceFiles(root: string): Promise<string[]> {
   return files;
 }
 
-describe("flow registry import boundary", () => {
-  it("keeps direct flow-registry imports behind approved flow access seams", async () => {
+describe("task flow registry import boundary", () => {
+  it("keeps direct task-flow-registry imports behind approved task-flow access seams", async () => {
     const importers: string[] = [];
     for (const file of await listSourceFiles(SRC_ROOT)) {
       const relative = path.relative(SRC_ROOT, file).replaceAll(path.sep, "/");
       const source = await fs.readFile(file, "utf8");
-      if (source.includes("flow-registry.js")) {
+      if (source.includes("task-flow-registry.js")) {
         importers.push(relative);
       }
     }

@@ -2,20 +2,23 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
-import { resolveFlowRegistryDir, resolveFlowRegistrySqlitePath } from "./flow-registry.paths.js";
-import type { FlowRegistryStoreSnapshot } from "./flow-registry.store.js";
-import type { FlowRecord, FlowSyncMode, JsonValue } from "./flow-registry.types.js";
+import {
+  resolveTaskFlowRegistryDir,
+  resolveTaskFlowRegistrySqlitePath,
+} from "./task-flow-registry.paths.js";
+import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
 
 type FlowRegistryRow = {
   flow_id: string;
-  sync_mode: FlowSyncMode | null;
+  sync_mode: TaskFlowSyncMode | null;
   shape?: string | null;
   owner_key: string;
   requester_origin_json: string | null;
   controller_id: string | null;
   revision: number | bigint | null;
-  status: FlowRecord["status"];
-  notify_policy: FlowRecord["notifyPolicy"];
+  status: TaskFlowRecord["status"];
+  notify_policy: TaskFlowRecord["notifyPolicy"];
   goal: string;
   current_step: string | null;
   blocked_task_id: string | null;
@@ -68,14 +71,14 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
   }
 }
 
-function rowToSyncMode(row: FlowRegistryRow): FlowSyncMode {
+function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
   if (row.sync_mode === "task_mirrored" || row.sync_mode === "managed") {
     return row.sync_mode;
   }
   return row.shape === "single_task" ? "task_mirrored" : "managed";
 }
 
-function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
+function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
   const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
@@ -103,7 +106,7 @@ function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
   };
 }
 
-function bindFlowRecord(record: FlowRecord) {
+function bindFlowRecord(record: TaskFlowRecord) {
   return {
     flow_id: record.flowId,
     sync_mode: record.syncMode,
@@ -313,7 +316,7 @@ function ensureSchema(db: DatabaseSync) {
 }
 
 function ensureFlowRegistryPermissions(pathname: string) {
-  const dir = resolveFlowRegistryDir(process.env);
+  const dir = resolveTaskFlowRegistryDir(process.env);
   mkdirSync(dir, { recursive: true, mode: FLOW_REGISTRY_DIR_MODE });
   chmodSync(dir, FLOW_REGISTRY_DIR_MODE);
   for (const suffix of FLOW_REGISTRY_SIDECAR_SUFFIXES) {
@@ -326,7 +329,7 @@ function ensureFlowRegistryPermissions(pathname: string) {
 }
 
 function openFlowRegistryDatabase(): FlowRegistryDatabase {
-  const pathname = resolveFlowRegistrySqlitePath(process.env);
+  const pathname = resolveTaskFlowRegistrySqlitePath(process.env);
   if (cachedDatabase && cachedDatabase.path === pathname) {
     return cachedDatabase;
   }
@@ -363,7 +366,7 @@ function withWriteTransaction(write: (statements: FlowRegistryStatements) => voi
   }
 }
 
-export function loadFlowRegistryStateFromSqlite(): FlowRegistryStoreSnapshot {
+export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnapshot {
   const { statements } = openFlowRegistryDatabase();
   const rows = statements.selectAll.all() as FlowRegistryRow[];
   return {
@@ -371,7 +374,7 @@ export function loadFlowRegistryStateFromSqlite(): FlowRegistryStoreSnapshot {
   };
 }
 
-export function saveFlowRegistryStateToSqlite(snapshot: FlowRegistryStoreSnapshot) {
+export function saveTaskFlowRegistryStateToSqlite(snapshot: TaskFlowRegistryStoreSnapshot) {
   withWriteTransaction((statements) => {
     statements.clearRows.run();
     for (const flow of snapshot.flows.values()) {
@@ -380,19 +383,19 @@ export function saveFlowRegistryStateToSqlite(snapshot: FlowRegistryStoreSnapsho
   });
 }
 
-export function upsertFlowRegistryRecordToSqlite(flow: FlowRecord) {
+export function upsertTaskFlowRegistryRecordToSqlite(flow: TaskFlowRecord) {
   const store = openFlowRegistryDatabase();
   store.statements.upsertRow.run(bindFlowRecord(flow));
   ensureFlowRegistryPermissions(store.path);
 }
 
-export function deleteFlowRegistryRecordFromSqlite(flowId: string) {
+export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
   const store = openFlowRegistryDatabase();
   store.statements.deleteRow.run(flowId);
   ensureFlowRegistryPermissions(store.path);
 }
 
-export function closeFlowRegistrySqliteStore() {
+export function closeTaskFlowRegistrySqliteStore() {
   if (!cachedDatabase) {
     return;
   }
