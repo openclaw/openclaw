@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
@@ -366,6 +367,81 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await tasksCancelCommand(
+          {
+            lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const flowsCmd = program
+    .command("flows")
+    .description("Inspect durable background flow state")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json),
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  flowsCmd.enablePositionalOptions();
+
+  flowsCmd
+    .command("list")
+    .description("List tracked background flows")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean; status?: string } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  flowsCmd
+    .command("show")
+    .description("Show one background flow by flow id or owner key")
+    .argument("<lookup>", "Flow id or owner key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  flowsCmd
+    .command("cancel")
+    .description("Cancel a running background flow")
+    .argument("<lookup>", "Flow id or owner key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsCancelCommand(
           {
             lookup,
           },

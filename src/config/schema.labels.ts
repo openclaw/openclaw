@@ -245,17 +245,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
   "tools.web.fetch.maxResponseBytes": "Web Fetch Max Download Size (bytes)",
+  "tools.web.fetch.provider": "Web Fetch Provider",
   "tools.web.fetch.timeoutSeconds": "Web Fetch Timeout (sec)",
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
-  "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl Fallback",
-  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key", // pragma: allowlist secret
-  "tools.web.fetch.firecrawl.baseUrl": "Firecrawl Base URL",
-  "tools.web.fetch.firecrawl.onlyMainContent": "Firecrawl Main Content Only",
-  "tools.web.fetch.firecrawl.maxAgeMs": "Firecrawl Cache Max Age (ms)",
-  "tools.web.fetch.firecrawl.timeoutSeconds": "Firecrawl Timeout (sec)",
   "tools.web.x_search.enabled": "Enable X Search Tool",
   "tools.web.x_search.apiKey": "xAI API Key", // pragma: allowlist secret
   "tools.web.x_search.model": "X Search Model",
