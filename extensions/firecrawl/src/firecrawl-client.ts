@@ -7,6 +7,7 @@ import {
   readCache,
   resolveCacheTtlMs,
   truncateText,
+  withTrustedWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
@@ -377,23 +378,42 @@ export async function runFirecrawlScrape(
     return { ...cached.value, cached: true };
   }
 
-  const payload = await postTrustedWebToolsJson(
+  const payload = await withTrustedWebToolsEndpoint(
     {
       url: resolveEndpoint(baseUrl, "/v2/scrape"),
       timeoutSeconds,
-      apiKey,
-      errorLabel: "Firecrawl",
-      body: {
-        url: params.url,
-        formats: ["markdown"],
-        onlyMainContent,
-        timeout: timeoutSeconds * 1000,
-        maxAge: maxAgeMs,
-        proxy,
-        storeInCache,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: params.url,
+          formats: ["markdown"],
+          onlyMainContent,
+          timeout: timeoutSeconds * 1000,
+          maxAge: maxAgeMs,
+          proxy,
+          storeInCache,
+        }),
       },
     },
-    async (response) => (await response.json()) as Record<string, unknown>,
+    async ({ response }) => {
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (!response.ok || payload.success === false) {
+        const detail =
+          typeof payload.error === "string"
+            ? payload.error
+            : typeof payload.message === "string"
+              ? payload.message
+              : response.statusText;
+        throw new Error(
+          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
+        );
+      }
+      return payload;
+    },
   );
   const result = parseFirecrawlScrapePayload({
     payload,

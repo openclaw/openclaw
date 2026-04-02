@@ -50547,6 +50547,79 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.firecrawl.config.webFetch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Firecrawl Fetch API Key",
+      "help": "Firecrawl API key for web fetch fallback (fallback: FIRECRAWL_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "Firecrawl Fetch Base URL",
+      "help": "Firecrawl Fetch base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.maxAgeMs",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.onlyMainContent",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.firecrawl.config.webSearch",
       "kind": "plugin",
       "type": "object",

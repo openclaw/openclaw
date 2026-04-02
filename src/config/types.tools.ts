@@ -525,6 +525,8 @@ export type ToolsConfig = {
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /** Web fetch fallback provider id. */
+      provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */

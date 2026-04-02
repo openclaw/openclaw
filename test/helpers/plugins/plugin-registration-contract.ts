@@ -10,6 +10,7 @@ import { loadPluginManifestRegistry } from "../../../src/plugins/manifest-regist
 type PluginRegistrationContractParams = {
   pluginId: string;
   providerIds?: string[];
+  webFetchProviderIds?: string[];
   webSearchProviderIds?: string[];
   speechProviderIds?: string[];
   mediaUnderstandingProviderIds?: string[];
@@ -100,6 +101,14 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       it("keeps bundled web search ownership explicit", () => {
         expect(findRegistration(params.pluginId).webSearchProviderIds).toEqual(
           params.webSearchProviderIds,
+        );
+      });
+    }
+
+    if (params.webFetchProviderIds) {
+      it("keeps bundled web fetch ownership explicit", () => {
+        expect(findRegistration(params.pluginId).webFetchProviderIds).toEqual(
+          params.webFetchProviderIds,
         );
       });
     }

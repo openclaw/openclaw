@@ -148,6 +148,14 @@ function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): b
   return isRecord(pluginConfig.webSearch);
 }
 
+function hasPluginOwnedWebFetchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  if (!isRecord(pluginConfig)) {
+    return false;
+  }
+  return isRecord(pluginConfig.webFetch);
+}
+
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
   if (pluginId === "xai") {
     const pluginConfig = cfg.plugins?.entries?.xai?.config;
@@ -173,6 +181,35 @@ function resolveProviderPluginsWithOwnedWebSearch(
     }
   }
   return pluginIds;
+}
+
+function resolveProviderPluginsWithOwnedWebFetch(
+  registry: PluginManifestRegistry,
+): ReadonlySet<string> {
+  const pluginIds = new Set(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+      (entry) => entry.providerIds.length > 0 && entry.webFetchProviderIds.length > 0,
+    ).map((entry) => entry.pluginId),
+  );
+  for (const plugin of registry.plugins) {
+    if (plugin.providers.length > 0 && (plugin.contracts?.webFetchProviders?.length ?? 0) > 0) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return pluginIds;
+}
+
+function resolvePluginIdForConfiguredWebFetchProvider(
+  registry: PluginManifestRegistry,
+  providerId: string | undefined,
+): string | undefined {
+  const normalized = typeof providerId === "string" ? providerId.trim().toLowerCase() : "";
+  if (!normalized) {
+    return undefined;
+  }
+  return registry.plugins.find((plugin) =>
+    (plugin.contracts?.webFetchProviders ?? []).some((entry) => entry === normalized),
+  )?.id;
 }
 
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
@@ -429,11 +466,28 @@ function resolveConfiguredPlugins(
       });
     }
   }
+  const webFetchProvider =
+    typeof cfg.tools?.web?.fetch?.provider === "string" ? cfg.tools.web.fetch.provider : undefined;
+  const webFetchPluginId = resolvePluginIdForConfiguredWebFetchProvider(registry, webFetchProvider);
+  if (webFetchPluginId) {
+    changes.push({
+      pluginId: webFetchPluginId,
+      reason: `${String(webFetchProvider).trim().toLowerCase()} web fetch provider selected`,
+    });
+  }
   for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
     if (hasPluginOwnedWebSearchConfig(cfg, pluginId)) {
       changes.push({
         pluginId,
         reason: `${pluginId} web search configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebFetch(registry)) {
+    if (hasPluginOwnedWebFetchConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} web fetch configured`,
       });
     }
   }

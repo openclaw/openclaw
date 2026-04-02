@@ -803,6 +803,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "plugins.entries.firecrawl.config.webFetch.apiKey",
+    targetType: "plugins.entries.firecrawl.config.webFetch.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "plugins.entries.firecrawl.config.webFetch.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "plugins.entries.tavily.config.webSearch.apiKey",
     targetType: "plugins.entries.tavily.config.webSearch.apiKey",
     configFile: "openclaw.json",

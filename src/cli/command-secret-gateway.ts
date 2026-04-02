@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
 import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
@@ -59,17 +60,19 @@ const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
   "tools.web.search",
   "plugins.entries.",
   "tools.web.fetch.firecrawl",
+  "plugins.entries.firecrawl.config.webFetch",
   "tools.web.x_search",
 ] as const;
 const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
   "tools.web.search.",
   "plugins.entries.",
   "tools.web.fetch.firecrawl.",
+  "plugins.entries.firecrawl.config.webFetch.",
   "tools.web.x_search.",
 ] as const;
 
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
-  const match = /^plugins\.entries\.([^.]+)\.config\.webSearch\.apiKey$/.exec(path);
+  const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
   return match?.[1];
 }
 
@@ -126,6 +129,20 @@ function classifyRuntimeWebTargetPathState(params: {
 
   const pluginId = pluginIdFromRuntimeWebPath(params.path);
   if (pluginId) {
+    if (params.path.endsWith(".config.webFetch.apiKey")) {
+      const fetch = params.config.tools?.web?.fetch;
+      if (fetch?.enabled === false) {
+        return "inactive";
+      }
+      const configuredProvider =
+        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      if (!configuredProvider) {
+        return "active";
+      }
+      return resolveBundledWebFetchPluginId(configuredProvider) === pluginId
+        ? "active"
+        : "inactive";
+    }
     const search = params.config.tools?.web?.search;
     if (search?.enabled === false) {
       return "inactive";
@@ -186,6 +203,18 @@ function describeInactiveRuntimeWebTargetPath(params: {
 
   const pluginId = pluginIdFromRuntimeWebPath(params.path);
   if (pluginId) {
+    if (params.path.endsWith(".config.webFetch.apiKey")) {
+      const fetch = params.config.tools?.web?.fetch;
+      if (fetch?.enabled === false) {
+        return "tools.web.fetch is disabled.";
+      }
+      const configuredProvider =
+        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      if (configuredProvider) {
+        return `tools.web.fetch.provider is "${configuredProvider}".`;
+      }
+      return undefined;
+    }
     const search = params.config.tools?.web?.search;
     if (search?.enabled === false) {
       return "tools.web.search is disabled.";
@@ -368,6 +397,7 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
     path === "tools.web.fetch.firecrawl.apiKey" ||
+    path === "plugins.entries.firecrawl.config.webFetch.apiKey" ||
     path === "tools.web.x_search.apiKey" ||
     /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
   );
