@@ -710,6 +710,6 @@ export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
   resetTaskFlowRegistryRuntimeForTests();
   if (opts?.persist !== false) {
     persistFlowRegistry();
-    getTaskFlowRegistryStore().close?.();
   }
+  getTaskFlowRegistryStore().close?.();
 }
