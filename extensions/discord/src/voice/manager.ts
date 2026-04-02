@@ -645,13 +645,13 @@ export class DiscordVoiceManager {
       .trim();
 
     if (!replyText) {
-      logVoiceVerbose(
-        `reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      logger.warn(
+        `discord voice: reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return;
     }
-    logVoiceVerbose(
-      `reply ok (${replyText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
+    logger.warn(
+      `discord voice: reply ok (${replyText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
     const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
@@ -664,8 +664,8 @@ export class DiscordVoiceManager {
     });
     const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     if (!speakText) {
-      logVoiceVerbose(
-        `tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      logger.warn(
+        `discord voice: tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return;
     }
@@ -682,7 +682,7 @@ export class DiscordVoiceManager {
             await new Promise((r) => setTimeout(r, 2000));
           }
           const pcmStream = await streamKyutaiTtsRaw48k(speakText);
-          logVoiceVerbose(`discord voice: kyutai streaming started (attempt ${attempt + 1})`);
+          logger.warn(`discord voice: kyutai streaming started (attempt ${attempt + 1})`);
           this.enqueuePlayback(entry, async () => {
             const voiceSdk = loadDiscordVoiceSdk();
             const resource = voiceSdk.createAudioResource(pcmStream, {
@@ -695,7 +695,7 @@ export class DiscordVoiceManager {
             await voiceSdk
               .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
               .catch(() => undefined);
-            logVoiceVerbose(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+            logger.warn(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
           });
           return;
         } catch (err) {
