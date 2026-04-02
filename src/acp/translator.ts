@@ -59,6 +59,7 @@ const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
+const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 
 type PendingPrompt = {
   sessionId: string;
@@ -398,6 +399,7 @@ export class AcpGatewayAgent implements Agent {
   private sessionStore: AcpSessionStore;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private disconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(
     connection: AgentSideConnection,
@@ -426,11 +428,21 @@ export class AcpGatewayAgent implements Agent {
   }
 
   handleGatewayReconnect(): void {
+    this.clearDisconnectTimer();
     this.log("gateway reconnected");
   }
 
   handleGatewayDisconnect(reason: string): void {
     this.log(`gateway disconnected: ${reason}`);
+    if (this.pendingPrompts.size === 0) {
+      return;
+    }
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      this.rejectPendingPrompts(new Error(`Gateway disconnected: ${reason}`));
+    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
+    this.disconnectTimer.unref?.();
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
@@ -693,6 +705,9 @@ export class AcpGatewayAgent implements Agent {
       void sendWithProvenanceFallback().catch((err) => {
         this.pendingPrompts.delete(params.sessionId);
         this.sessionStore.clearActiveRun(params.sessionId);
+        if (this.pendingPrompts.size === 0) {
+          this.clearDisconnectTimer();
+        }
         reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
@@ -724,6 +739,9 @@ export class AcpGatewayAgent implements Agent {
 
     if (pending) {
       this.pendingPrompts.delete(params.sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
       pending.resolve({ stopReason: "cancelled" });
     }
   }
@@ -949,6 +967,9 @@ export class AcpGatewayAgent implements Agent {
   ): Promise<void> {
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
     const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
     try {
       await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
@@ -971,6 +992,22 @@ export class AcpGatewayAgent implements Agent {
       return pending;
     }
     return undefined;
+  }
+
+  private clearDisconnectTimer(): void {
+    if (!this.disconnectTimer) {
+      return;
+    }
+    clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+  }
+
+  private rejectPendingPrompts(error: Error): void {
+    for (const pending of this.pendingPrompts.values()) {
+      pending.reject(error);
+      this.sessionStore.clearActiveRun(pending.sessionId);
+    }
+    this.pendingPrompts.clear();
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {

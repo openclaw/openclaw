@@ -134,4 +134,19 @@ describe("acp translator stop reason mapping", () => {
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
+
+  it("rejects in-flight prompts when the gateway does not reconnect before the grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const { agent, promptPromise } = await createPendingPromptHarness();
+      void promptPromise.catch(() => {});
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
