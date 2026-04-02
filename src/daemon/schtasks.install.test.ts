@@ -6,16 +6,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
 
 const schtasksCalls: string[][] = [];
+const schtasksResponses: { code: number; stdout: string; stderr: string }[] = [];
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);
-    return { code: 0, stdout: "", stderr: "" };
+    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
   },
 }));
 
 beforeEach(() => {
   schtasksCalls.length = 0;
+  schtasksResponses.length = 0;
 });
 
 describe("installScheduledTask", () => {
@@ -97,8 +99,6 @@ describe("installScheduledTask", () => {
       expect(parsed?.environment).not.toHaveProperty("OC_EMPTY");
 
       expect(schtasksCalls[0]).toEqual(["/Query"]);
-      // When the task already exists (mock returns code 0), activateScheduledTask
-      // uses /Change to preserve user-configured settings instead of /Create /F.
       expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
       expect(schtasksCalls[2]?.[0]).toBe("/Change");
       expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
@@ -134,6 +134,50 @@ describe("installScheduledTask", () => {
           environment: {},
         }),
       ).rejects.toThrow(/Task description cannot contain CR or LF/);
+    });
+  });
+
+  it("uses /Create when the task does not exist yet", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "ERROR: The system cannot find the file specified." },
+      );
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        environment: {},
+      });
+
+      expect(schtasksCalls[0]).toEqual(["/Query"]);
+      expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[2]?.[0]).toBe("/Create");
+      expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("falls back to /Create when /Change fails on an existing task", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        environment: {},
+      });
+
+      expect(schtasksCalls[0]).toEqual(["/Query"]);
+      expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[2]?.[0]).toBe("/Change");
+      expect(schtasksCalls[3]?.[0]).toBe("/Create");
+      expect(schtasksCalls[4]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
 
