@@ -122,6 +122,7 @@ export async function postJsonRequest(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  pinDns?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }) {
   return fetchWithTimeoutGuarded(
@@ -133,9 +134,10 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
+    params.allowPrivateNetwork || params.dispatcherPolicy || params.pinDns !== undefined
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
         }
       : undefined,

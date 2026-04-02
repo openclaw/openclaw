@@ -177,6 +177,8 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         },
         timeoutMs: 60_000,
         fetchFn: fetch,
+        // Keep env-proxy routing intact for Google image generation behind proxies.
+        pinDns: false,
         allowPrivateNetwork,
         dispatcherPolicy,
       });
