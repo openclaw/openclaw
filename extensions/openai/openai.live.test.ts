@@ -274,6 +274,42 @@ describeLive("openai plugin live", () => {
     }
   }, 60_000);
 
+  it("edits a reference image through the registered image provider", async () => {
+    const { imageProviders } = registerOpenAIPlugin();
+    const imageProvider = requireRegisteredProvider(imageProviders, "openai");
+
+    const cfg = createLiveConfig();
+    const agentDir = await createTempAgentDir();
+
+    try {
+      const edited = await imageProvider.generateImage({
+        provider: "openai",
+        model: LIVE_IMAGE_MODEL,
+        prompt:
+          "Edit this image: remove the orange square in the center and keep the background clean and light blue.",
+        cfg,
+        agentDir,
+        authStore: EMPTY_AUTH_STORE,
+        timeoutMs: 45_000,
+        size: "1024x1024",
+        inputImages: [
+          {
+            buffer: createReferencePng(),
+            mimeType: "image/png",
+            fileName: "reference.png",
+          },
+        ],
+      });
+
+      expect(edited.model).toBe(LIVE_IMAGE_MODEL);
+      expect(edited.images.length).toBeGreaterThan(0);
+      expect(edited.images[0]?.mimeType).toBe("image/png");
+      expect(edited.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = registerOpenAIPlugin();
     const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");

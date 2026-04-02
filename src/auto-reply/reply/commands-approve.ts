@@ -30,6 +30,9 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+const APPROVE_USAGE_TEXT =
+  "Usage: /approve <id> <decision> (see the pending approval message for available decisions)";
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
@@ -41,11 +44,11 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   }
   const rest = trimmed.slice(commandMatch[0].length).trim();
   if (!rest) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
   const first = tokens[0].toLowerCase();
@@ -65,7 +68,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
       id: tokens[0],
     };
   }
-  return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+  return { ok: false, error: APPROVE_USAGE_TEXT };
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {

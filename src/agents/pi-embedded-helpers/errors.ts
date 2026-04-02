@@ -14,6 +14,8 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -955,7 +957,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(raw);
+  const stripped = stripInternalRuntimeContext(stripFinalTagsFromText(raw));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
@@ -970,6 +972,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
+    const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
+    if (execDeniedMessage) {
+      return execDeniedMessage;
+    }
+
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +

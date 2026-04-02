@@ -224,11 +224,11 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ## How tasks relate to other systems
 
-### Tasks and older flow references
+### Tasks and TaskFlow
 
-Some older OpenClaw release notes and docs referred to task management as `ClawFlow` and documented an `openclaw flows` command surface.
+[TaskFlow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw flows` to inspect the orchestrating flow.
 
-In the current codebase, the supported operator surface is `openclaw tasks`. See [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes that map those older references to the current task commands.
+See [TaskFlow](/automation/taskflow) and [CLI: flows](/cli/flows) for details.
 
 ### Tasks and cron
 
@@ -253,9 +253,9 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 ## Related
 
 - [Automation Overview](/automation) — all automation mechanisms at a glance
-- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
+- [TaskFlow](/automation/taskflow) — flow orchestration above tasks
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: flows](/cli/flows) — compatibility note for the mistaken command name
+- [CLI: flows](/cli/flows) — CLI reference for `openclaw flows`
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference

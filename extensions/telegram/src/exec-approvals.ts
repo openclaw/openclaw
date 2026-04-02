@@ -1,5 +1,6 @@
 import {
   createChannelExecApprovalProfile,
+  isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
   resolveApprovalRequestAccountId,
   resolveApprovalApprovers,
@@ -137,4 +138,14 @@ export function shouldSuppressLocalTelegramExecApprovalPrompt(params: {
   payload: ReplyPayload;
 }): boolean {
   return telegramExecApprovalProfile.shouldSuppressLocalPrompt(params);
+}
+
+export function isTelegramExecApprovalHandlerConfigured(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  return isChannelExecApprovalClientEnabledFromConfig({
+    enabled: resolveTelegramExecApprovalConfig(params)?.enabled,
+    approverCount: getTelegramExecApprovalApprovers(params).length,
+  });
 }

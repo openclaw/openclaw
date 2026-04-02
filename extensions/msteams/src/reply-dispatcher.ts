@@ -231,7 +231,7 @@ export function createMSTeamsReplyDispatcher(params: {
       })
       .then(() => {
         return streamController.finalize().catch((err) => {
-          params.log.debug?.("stream finalize failed", { error: String(err) });
+          params.log.debug?.("stream finalize failed", { error: formatUnknownError(err) });
         });
       })
       .finally(() => {

@@ -4,7 +4,11 @@ import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js"
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn<(args: { config: unknown; env?: NodeJS.ProcessEnv }) => PluginAutoEnableResult>(
-    ({ config }) => ({ config: config as never, changes: [] as string[] }),
+    ({ config }) => ({
+      config: config as never,
+      changes: [] as string[],
+      autoEnabledReasons: {},
+    }),
   ),
 );
 
@@ -22,9 +26,11 @@ import { listManifestInstalledChannelIds } from "./discovery.js";
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {
     loadPluginManifestRegistry.mockReset();
-    applyPluginAutoEnable
-      .mockReset()
-      .mockImplementation(({ config }) => ({ config: config as never, changes: [] as string[] }));
+    applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({
+      config: config as never,
+      changes: [] as string[],
+      autoEnabledReasons: {},
+    }));
   });
 
   it("uses the auto-enabled config snapshot for manifest discovery", () => {
@@ -36,6 +42,9 @@ describe("listManifestInstalledChannelIds", () => {
     applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
       changes: ["slack"] as string[],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
     });
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "slack", channels: ["slack"] }],

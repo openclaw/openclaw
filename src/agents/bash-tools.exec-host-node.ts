@@ -7,6 +7,7 @@ import {
   evaluateShellAllowlist,
   hasDurableExecApproval,
   requiresExecApproval,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import {
@@ -34,7 +35,7 @@ import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
 export type ExecuteNodeHostCommandParams = {
   command: string;
-  workdir: string;
+  workdir: string | undefined;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   requestedNode?: string;
@@ -107,7 +108,7 @@ export async function executeNodeHostCommand(
       params: {
         command: argv,
         rawCommand: params.command,
-        cwd: params.workdir,
+        ...(params.workdir != null ? { cwd: params.workdir } : {}),
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       },
@@ -167,7 +168,7 @@ export async function executeNodeHostCommand(
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
           agentId: params.agentId,
-          overrides: { security: "allowlist" },
+          overrides: { security: "full" },
         });
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         const allowlistEval = evaluateShellAllowlist({
@@ -311,7 +312,7 @@ export async function executeNodeHostCommand(
     } else {
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
         approvalId,
-        sessionKey: params.notifySessionKey,
+        sessionKey: params.notifySessionKey ?? params.sessionKey,
         turnSourceChannel: params.turnSourceChannel,
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
@@ -415,6 +416,7 @@ export async function executeNodeHostCommand(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
         nodeId,
       });
     }

@@ -183,7 +183,9 @@ done:
 ```
 
 - `streaming: "off"` is the default. OpenClaw waits for the final reply and sends it once.
-- `streaming: "partial"` creates one editable preview message instead of sending multiple partial messages.
+- `streaming: "partial"` creates one editable preview message for the current assistant block instead of sending multiple partial messages.
+- `blockStreaming: true` enables separate Matrix progress messages. With `streaming: "partial"`, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
+- When `streaming: "partial"` and `blockStreaming` is off, Matrix only edits the live draft and sends the completed reply once that block or turn finishes.
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
@@ -752,6 +754,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
+- `blockStreaming`: `true` enables separate progress messages; when unset, Matrix keeps `streaming: "off"` as final-only delivery.
 - `threadReplies`: `off`, `inbound`, or `always`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `startupVerification`: automatic self-verification request mode on startup (`if-unverified`, `off`).

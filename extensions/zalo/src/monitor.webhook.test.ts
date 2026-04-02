@@ -187,7 +187,7 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("deduplicates webhook replay by event_name + message_id", async () => {
+  it("deduplicates webhook replay for the same event origin", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
     const payload = createTextUpdate({
@@ -215,7 +215,6 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
-
   it("keeps replay dedupe isolated per authenticated target", async () => {
     const sinkA = vi.fn();
     const sinkB = vi.fn();
@@ -255,6 +254,246 @@ describe("handleZaloWebhookRequest", () => {
           method: "POST",
           headers: {
             "x-bot-api-secret-token": "secret-b",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
+  it("does not collide replay dedupe across different chats", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-chat-scope", statusSink: sink });
+    const firstPayload = createTextUpdate({
+      messageId: "msg-replay-chat-1",
+      userId: "123",
+      userName: "",
+      chatId: "chat-a",
+      text: "hello from a",
+    });
+    const secondPayload = createTextUpdate({
+      messageId: "msg-replay-chat-1",
+      userId: "123",
+      userName: "",
+      chatId: "chat-b",
+      text: "hello from b",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-chat-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(firstPayload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-chat-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(secondPayload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not collide replay dedupe across different senders in the same chat", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-sender-scope", statusSink: sink });
+    const firstPayload = createTextUpdate({
+      messageId: "msg-replay-sender-1",
+      userId: "user-a",
+      userName: "",
+      chatId: "chat-shared",
+      text: "hello from user a",
+    });
+    const secondPayload = createTextUpdate({
+      messageId: "msg-replay-sender-1",
+      userId: "user-b",
+      userName: "",
+      chatId: "chat-shared",
+      text: "hello from user b",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-sender-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(firstPayload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-sender-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(secondPayload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not throw when replay metadata is partially missing", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
+    const payload = {
+      event_name: "message.text.received",
+      message: {
+        message_id: "msg-replay-partial-1",
+        date: Math.floor(Date.now() / 1000),
+        text: "hello",
+      },
+    };
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-replay-partial`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("keeps replay dedupe isolated when path/account values collide under colon-joined keys", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    // Old key format `${path}:${accountId}:${event_name}:${messageId}` would collide for these two targets.
+    const unregisterA = registerTarget({
+      path: "/hook-replay-collision:a",
+      secret: "secret-a",
+      statusSink: sinkA,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "team",
+      },
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-collision",
+      secret: "secret-b",
+      statusSink: sinkB,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "a:team",
+      },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-collision-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-collision:a`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-a",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-collision`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-b",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
+  it("keeps replay dedupe isolated across different webhook paths", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const sharedSecret = "secret";
+    const unregisterA = registerTarget({
+      path: "/hook-replay-scope-a",
+      secret: sharedSecret,
+      statusSink: sinkA,
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-scope-b",
+      secret: sharedSecret,
+      statusSink: sinkB,
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-cross-path-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-scope-a`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": sharedSecret,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-scope-b`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": sharedSecret,
             "content-type": "application/json",
           },
           body: JSON.stringify(payload),
