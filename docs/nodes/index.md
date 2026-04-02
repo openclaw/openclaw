@@ -157,6 +157,8 @@ Or per session:
 Once set, any `exec` call with `host=node` runs on the node host (subject to the
 node allowlist/approvals).
 
+`host=auto` will not silently hop to the node just because a tool call requests it. If you want node exec, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+
 Related:
 
 - [Node host CLI](/cli/node)

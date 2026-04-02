@@ -85,6 +85,12 @@ openclaw config set tools.exec.security full
 openclaw config set tools.exec.ask off
 ```
 
+Why `tools.exec.host=gateway` in this example:
+
+- `host=auto` still means "sandbox when available, otherwise gateway".
+- YOLO is about approvals, not routing.
+- If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
+
 This matches the current host-default YOLO behavior. Tighten it if you want approvals.
 
 ## Allowlist helpers
