@@ -106,11 +106,25 @@ export async function checkPathGuardStrict(
 
       if (hasGlobMagic) {
         // Absolute glob entries match the canonicalized real path.
-        // Do NOT canonicalize the entry itself (it may contain glob segments).
-        return minimatch(normalizedRealPath, normalizedEntryPattern, {
-          dot: true,
-          magicalBraces: true,
-        });
+        // Canonicalize the non-glob prefix so symlink-alias patterns still match canonical targets.
+        // Example: /workspace/link/**/*.txt should still match when link -> /mnt/data.
+        const firstMagic = normalizedEntryPattern.search(/[*?[]/);
+        const prefix = firstMagic >= 0 ? normalizedEntryPattern.slice(0, firstMagic) : normalizedEntryPattern;
+        const rest = firstMagic >= 0 ? normalizedEntryPattern.slice(firstMagic) : "";
+        try {
+          const canonicalPrefix = toPosixPath(await resolveRealPathStrict(prefix));
+          const rewrittenPattern = `${canonicalPrefix}${rest}`;
+          return minimatch(normalizedRealPath, rewrittenPattern, {
+            dot: true,
+            magicalBraces: true,
+          });
+        } catch {
+          // Fallback: if prefix cannot be canonicalized (non-existent), match against the raw pattern.
+          return minimatch(normalizedRealPath, normalizedEntryPattern, {
+            dot: true,
+            magicalBraces: true,
+          });
+        }
       }
 
       const canonicalEntry = await resolveRealPathStrict(entry);
