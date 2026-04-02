@@ -1,6 +1,90 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import mermaid from "mermaid";
 import { truncateText } from "./format.ts";
+
+// Initialize mermaid
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "default",
+  securityLevel: "strict",
+});
+
+// Extend Window interface for mermaid copy handler
+declare global {
+  interface Window {
+    __copyMermaid?: (btn: HTMLElement) => void;
+  }
+}
+
+// Global mermaid copy handler (uses event delegation via click on .mermaid-copy)
+window.__copyMermaid = (btn: HTMLElement) => {
+  const code = btn.dataset.code ?? "";
+  navigator.clipboard.writeText(code).then(
+    () => {
+      // Show feedback
+      const icon = btn.querySelector(".copy-icon");
+      if (icon) {
+        const original = icon.textContent;
+        icon.textContent = "✅";
+        setTimeout(() => (icon.textContent = original), 1500);
+      }
+    },
+    (err) => {
+      console.error("[mermaid-copy] copy failed:", err);
+    },
+  );
+};
+
+// Global mermaid handlers - use event delegation (browser only)
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  document.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
+
+    // Handle copy button click
+    const copyBtn = target.closest(".mermaid-copy");
+    if (copyBtn) {
+      window.__copyMermaid?.(copyBtn as HTMLButtonElement);
+      return;
+    }
+
+    // Handle fullscreen click
+    const container = target.closest(".mermaid-container");
+    if (!container) {
+      return;
+    }
+    const svg = container.querySelector("svg");
+    if (!svg) {
+      return;
+    }
+
+    // Create fullscreen container
+    let fullscreenContainer = document.querySelector(".mermaid-fullscreen") as HTMLDivElement;
+    if (!fullscreenContainer) {
+      fullscreenContainer = document.createElement("div");
+      fullscreenContainer.className = "mermaid-fullscreen";
+      fullscreenContainer.addEventListener("click", () => {
+        fullscreenContainer.classList.remove("active");
+      });
+      document.body.appendChild(fullscreenContainer);
+    }
+
+    // Clone and append SVG
+    fullscreenContainer.innerHTML = "";
+    const clonedSvg = svg.cloneNode(true) as SVGElement;
+    clonedSvg.style.background = "white";
+    clonedSvg.style.borderRadius = "8px";
+    fullscreenContainer.appendChild(clonedSvg);
+
+    // Add hint text without re-serializing SVG
+    const hint = document.createElement("span");
+    hint.className = "mermaid-fullscreen-hint";
+    hint.textContent = "点击任意位置关闭";
+    fullscreenContainer.appendChild(hint);
+
+    fullscreenContainer.classList.add("active");
+  });
+}
 
 const allowedTags = [
   "a",
@@ -63,7 +147,6 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
-const TRAILING_CJK_TAIL_RE = /([\u4E00-\u9FFF\u3000-\u303F\uFF01-\uFF5E\s]+)$/;
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -100,20 +183,6 @@ function installHooks() {
     if (!href) {
       return;
     }
-
-    // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
-    try {
-      const url = new URL(href, window.location.href);
-      if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
-        node.removeAttribute("href");
-        return;
-      }
-    } catch {
-      // Relative URLs are fine; malformed absolute URLs with dangerous schemes
-      // will fail to parse and keep their href — but DOMPurify already strips
-      // javascript: by default. This is defense-in-depth.
-    }
-
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
     if (href.toLowerCase().includes("tail")) {
@@ -121,50 +190,6 @@ function installHooks() {
     }
   });
 }
-
-// Extension to prevent auto-linking algorithms from swallowing adjacent CJK characters.
-const cjkAutoLinkExtension = {
-  name: "url",
-  level: "inline",
-  // Indicate where an auto-link might start
-  start(src: string) {
-    const match = src.match(/https?:\/\//i);
-    return match ? match.index! : -1;
-  },
-  tokenizer(src: string) {
-    // GFM standard regex for auto-links
-    const rule = /^https?:\/\/[^\s<]+[^<.,:;"')\]\s]/i;
-    const match = rule.exec(src);
-    if (match) {
-      let urlText = match[0];
-
-      // Stop before any CJK character or typical punctuation following CJK
-      // This stops link boundaries from bleeding into mixed-language paragraphs.
-      const cjkMatch = urlText.match(TRAILING_CJK_TAIL_RE);
-      if (cjkMatch) {
-        urlText = urlText.substring(0, urlText.length - cjkMatch[1].length);
-      }
-
-      return {
-        type: "link",
-        raw: urlText,
-        text: urlText,
-        href: urlText,
-        tokens: [
-          {
-            type: "text",
-            raw: urlText,
-            text: urlText,
-          },
-        ],
-      };
-    }
-  },
-};
-
-marked.use({
-  extensions: [cjkAutoLinkExtension as unknown as import("marked").TokenizerAndRendererExtension],
-});
 
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
@@ -243,6 +268,32 @@ htmlEscapeRenderer.code = ({
   lang?: string;
   escaped?: boolean;
 }) => {
+  // Handle mermaid code blocks
+  if (lang === "mermaid") {
+    const trimmed = text.trim();
+    const escapedCode = escapeHtml(trimmed);
+    // Create enhanced container with source code and copy button
+    const copyBtn = `<button type="button" class="mermaid-copy" data-code="${escapedCode}" aria-label="Copy mermaid code">
+      <span class="copy-icon">📋</span>
+    </button>`;
+    const header = `<div class="mermaid-header">
+      <span class="mermaid-label">mermaid</span>
+      ${copyBtn}
+    </div>`;
+    const sourceCode = `<pre class="mermaid-source"><code>${escapedCode}</code></pre>`;
+    // Container with mermaid graph placeholder and source code
+    return `<div class="mermaid-wrapper">
+      ${header}
+      <div class="mermaid-container">
+        <div class="mermaid">${escapedCode}</div>
+      </div>
+      <details class="mermaid-source-details">
+        <summary>显示源码</summary>
+        ${sourceCode}
+      </details>
+    </div>`;
+  }
+
   const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
   const safeText = escaped ? text : escapeHtml(text);
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
@@ -282,4 +333,34 @@ function escapeHtml(value: string): string {
 
 function renderEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+// Render mermaid diagrams in a given container element
+export async function renderMermaidInContainer(container: HTMLElement): Promise<void> {
+  const mermaidElements = container.querySelectorAll(".mermaid");
+  if (mermaidElements.length === 0) {
+    return;
+  }
+
+  for (const element of mermaidElements) {
+    // Skip elements that have already been rendered (contain SVG)
+    if (element.querySelector("svg")) {
+      continue;
+    }
+
+    const graphDefinition = element.textContent?.trim() || "";
+    if (!graphDefinition) {
+      continue;
+    }
+
+    try {
+      // Use a unique temp id for mermaid.render to avoid DOM conflicts
+      const tempId = `mermaid-render-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const { svg } = await mermaid.render(tempId, graphDefinition);
+      element.innerHTML = svg;
+    } catch (err) {
+      console.error("[mermaid] render failed:", err);
+      element.innerHTML = `<span class="mermaid-error">Mermaid 渲染失败: ${escapeHtml(String(err))}</span>`;
+    }
+  }
 }

@@ -1,10 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type {
-  CompactionStatus as CompactionIndicatorStatus,
-  FallbackStatus as FallbackIndicatorStatus,
-} from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
@@ -38,6 +34,22 @@ import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
+
+export type CompactionIndicatorStatus = {
+  active: boolean;
+  startedAt: number | null;
+  completedAt: number | null;
+};
+
+export type FallbackIndicatorStatus = {
+  phase?: "active" | "cleared";
+  selected: string;
+  active: string;
+  previous?: string;
+  reason?: string;
+  attempts: string[];
+  occurredAt: number;
+};
 
 export type ChatProps = {
   sessionKey: string;
@@ -181,7 +193,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   if (!status) {
     return nothing;
   }
-  if (status.phase === "active") {
+  if (status.active) {
     return html`
       <div
         class="compaction-indicator compaction-indicator--active"
@@ -192,18 +204,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
       </div>
     `;
   }
-  if (status.phase === "retrying") {
-    return html`
-      <div
-        class="compaction-indicator compaction-indicator--active"
-        role="status"
-        aria-live="polite"
-      >
-        ${icons.loader} Retrying after compaction...
-      </div>
-    `;
-  }
-  if (status.phase === "complete" && status.completedAt) {
+  if (status.completedAt) {
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
@@ -258,46 +259,11 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
  * Compact notice when context usage reaches 85%+.
  * Progressively shifts from amber (85%) to red (90%+).
  */
-/** Parse a 6-digit CSS hex color string to [r, g, b] integer components. */
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-let cachedThemeNoticeColors: {
-  warnHex: string;
-  dangerHex: string;
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnHex,
-    dangerHex,
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
-}
-
 function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  if (session?.totalTokensFresh === false) {
-    return nothing;
-  }
-  const used = session?.totalTokens ?? 0;
+  const used = session?.inputTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
@@ -307,15 +273,12 @@ function renderContextNotice(
     return nothing;
   }
   const pct = Math.min(Math.round(ratio * 100), 100);
-  // Read theme semantic tokens so color tracks the active theme (Dash, dark, light …)
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
-  // Blend from --warn at 85% usage to --danger at 95%+ usage
+  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
   const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * t);
-  const g = Math.round(wg + (dg - wg) * t);
-  const b = Math.round(wb + (db - wb) * t);
+  // RGB: amber(217,119,6) → red(220,38,38)
+  const r = Math.round(217 + (220 - 217) * t);
+  const g = Math.round(119 + (38 - 119) * t);
+  const b = Math.round(6 + (38 - 6) * t);
   const color = `rgb(${r}, ${g}, ${b})`;
   const bgOpacity = 0.08 + 0.08 * t;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
@@ -323,8 +286,6 @@ function renderContextNotice(
     <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
       <svg
         class="context-notice__icon"
-        width="24"
-        height="24"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -641,17 +602,15 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
       <div class="agent-chat__welcome-glow"></div>
-      ${
-        avatar
-          ? html`<img
+      ${avatar
+        ? html`<img
             src=${avatar}
             alt=${name}
             style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
           />`
-          : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
+        : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
             <img src=${logoUrl} alt="OpenClaw" />
-          </div>`
-      }
+          </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
         <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
@@ -687,7 +646,6 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
       <input
         type="text"
         placeholder="Search messages..."
-        aria-label="Search messages"
         .value=${vs.searchQuery}
         @input=${(e: Event) => {
           vs.searchQuery = (e.target as HTMLInputElement).value;
@@ -695,8 +653,7 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
         }}
       />
       <button
-        class="btn btn--ghost"
-        aria-label="Close search"
+        class="btn-ghost"
         @click=${() => {
           vs.searchOpen = false;
           vs.searchQuery = "";
@@ -738,13 +695,10 @@ function renderPinnedSection(
         }}
       >
         ${icons.bookmark} ${entries.length} pinned
-        <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
-          >${icons.chevronDown}</span
-        >
+        ${vs.pinnedExpanded ? icons.chevronDown : icons.chevronRight}
       </button>
-      ${
-        vs.pinnedExpanded
-          ? html`
+      ${vs.pinnedExpanded
+        ? html`
             <div class="agent-chat__pinned-list">
               ${entries.map(
                 ({ index, text, role }) => html`
@@ -756,7 +710,7 @@ function renderPinnedSection(
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
                     >
                     <button
-                      class="btn btn--ghost"
+                      class="btn-ghost"
                       @click=${() => {
                         pinned.unpin(index);
                         requestUpdate();
@@ -770,8 +724,7 @@ function renderPinnedSection(
               )}
             </div>
           `
-          : nothing
-      }
+        : nothing}
     </div>
   `;
 }
@@ -787,7 +740,7 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu" role="listbox" aria-label="Command arguments">
+      <div class="slash-menu">
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
             /${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}
@@ -796,19 +749,15 @@ function renderSlashMenu(
             (arg, i) => html`
               <div
                 class="slash-menu-item ${i === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
-                role="option"
-                aria-selected=${i === vs.slashMenuIndex}
                 @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
                 @mouseenter=${() => {
                   vs.slashMenuIndex = i;
                   requestUpdate();
                 }}
               >
-                ${
-                  vs.slashMenuCommand?.icon
-                    ? html`<span class="slash-menu-icon">${icons[vs.slashMenuCommand.icon]}</span>`
-                    : nothing
-                }
+                ${vs.slashMenuCommand?.icon
+                  ? html`<span class="slash-menu-icon">${icons[vs.slashMenuCommand.icon]}</span>`
+                  : nothing}
                 <span class="slash-menu-name">${arg}</span>
                 <span class="slash-menu-desc">/${vs.slashMenuCommand?.name} ${arg}</span>
               </div>
@@ -850,11 +799,9 @@ function renderSlashMenu(
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
-              class="slash-menu-item ${
-                globalIdx === vs.slashMenuIndex ? "slash-menu-item--active" : ""
-              }"
-              role="option"
-              aria-selected=${globalIdx === vs.slashMenuIndex}
+              class="slash-menu-item ${globalIdx === vs.slashMenuIndex
+                ? "slash-menu-item--active"
+                : ""}"
               @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
               @mouseenter=${() => {
                 vs.slashMenuIndex = globalIdx;
@@ -865,15 +812,11 @@ function renderSlashMenu(
               <span class="slash-menu-name">/${cmd.name}</span>
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
               <span class="slash-menu-desc">${cmd.description}</span>
-              ${
-                cmd.argOptions?.length
-                  ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
-                  : cmd.executeLocal && !cmd.args
-                    ? html`
-                        <span class="slash-menu-badge">instant</span>
-                      `
-                    : nothing
-              }
+              ${cmd.argOptions?.length
+                ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
+                : cmd.executeLocal && !cmd.args
+                  ? html` <span class="slash-menu-badge">instant</span> `
+                  : nothing}
             </div>
           `,
         )}
@@ -882,7 +825,7 @@ function renderSlashMenu(
   }
 
   return html`
-    <div class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div class="slash-menu">
       ${sections}
       <div class="slash-menu-footer">
         <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
@@ -941,6 +884,8 @@ export function renderChat(props: ChatProps) {
     );
   };
 
+  // Mermaid copy is now handled globally via inline onclick in markdown.ts
+
   const chatItems = buildChatItems(props);
   const isEmpty = chatItems.length === 0 && !props.loading;
 
@@ -953,46 +898,49 @@ export function renderChat(props: ChatProps) {
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
-        ${
-          props.loading
-            ? html`
-                <div class="chat-loading-skeleton" aria-label="Loading chat">
-                  <div class="chat-line assistant">
-                    <div class="chat-msg">
-                      <div class="chat-bubble">
-                        <div class="skeleton skeleton-line skeleton-line--long" style="margin-bottom: 8px"></div>
-                        <div class="skeleton skeleton-line skeleton-line--medium" style="margin-bottom: 8px"></div>
-                        <div class="skeleton skeleton-line skeleton-line--short"></div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="chat-line user" style="margin-top: 12px">
-                    <div class="chat-msg">
-                      <div class="chat-bubble">
-                        <div class="skeleton skeleton-line skeleton-line--medium"></div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="chat-line assistant" style="margin-top: 12px">
-                    <div class="chat-msg">
-                      <div class="chat-bubble">
-                        <div class="skeleton skeleton-line skeleton-line--long" style="margin-bottom: 8px"></div>
-                        <div class="skeleton skeleton-line skeleton-line--short"></div>
-                      </div>
+        ${props.loading
+          ? html`
+              <div class="chat-loading-skeleton" aria-label="Loading chat">
+                <div class="chat-line assistant">
+                  <div class="chat-msg">
+                    <div class="chat-bubble">
+                      <div
+                        class="skeleton skeleton-line skeleton-line--long"
+                        style="margin-bottom: 8px"
+                      ></div>
+                      <div
+                        class="skeleton skeleton-line skeleton-line--medium"
+                        style="margin-bottom: 8px"
+                      ></div>
+                      <div class="skeleton skeleton-line skeleton-line--short"></div>
                     </div>
                   </div>
                 </div>
-              `
-            : nothing
-        }
+                <div class="chat-line user" style="margin-top: 12px">
+                  <div class="chat-msg">
+                    <div class="chat-bubble">
+                      <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="chat-line assistant" style="margin-top: 12px">
+                  <div class="chat-msg">
+                    <div class="chat-bubble">
+                      <div
+                        class="skeleton skeleton-line skeleton-line--long"
+                        style="margin-bottom: 8px"
+                      ></div>
+                      <div class="skeleton skeleton-line skeleton-line--short"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `
+          : nothing}
         ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
-        ${
-          isEmpty && vs.searchOpen
-            ? html`
-                <div class="agent-chat__empty">No matching messages</div>
-              `
-            : nothing
-        }
+        ${isEmpty && vs.searchOpen
+          ? html` <div class="agent-chat__empty">No matching messages</div> `
+          : nothing}
         ${repeat(
           chatItems,
           (item) => item.key,
@@ -1170,9 +1118,8 @@ export function renderChat(props: ChatProps) {
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
-      ${
-        props.focusMode
-          ? html`
+      ${props.focusMode
+        ? html`
             <button
               class="chat-focus-exit"
               type="button"
@@ -1183,8 +1130,7 @@ export function renderChat(props: ChatProps) {
               ${icons.x}
             </button>
           `
-          : nothing
-      }
+        : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
@@ -1195,9 +1141,8 @@ export function renderChat(props: ChatProps) {
           ${thread}
         </div>
 
-        ${
-          sidebarOpen
-            ? html`
+        ${sidebarOpen
+          ? html`
               <resizable-divider
                 .splitRatio=${splitRatio}
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
@@ -1216,13 +1161,11 @@ export function renderChat(props: ChatProps) {
                 })}
               </div>
             `
-            : nothing
-        }
+          : nothing}
       </div>
 
-      ${
-        props.queue.length
-          ? html`
+      ${props.queue.length
+        ? html`
             <div class="chat-queue" role="status" aria-live="polite">
               <div class="chat-queue__title">Queued (${props.queue.length})</div>
               <div class="chat-queue__list">
@@ -1230,10 +1173,8 @@ export function renderChat(props: ChatProps) {
                   (item) => html`
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
-                        ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
-                        }
+                        ${item.text ||
+                        (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
                       </div>
                       <button
                         class="btn chat-queue__remove"
@@ -1249,20 +1190,17 @@ export function renderChat(props: ChatProps) {
               </div>
             </div>
           `
-          : nothing
-      }
+        : nothing}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
-      ${
-        props.showNewMessages
-          ? html`
+      ${props.showNewMessages
+        ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
               ${icons.arrowDown} New messages
             </button>
           `
-          : nothing
-      }
+        : nothing}
 
       <!-- Input bar -->
       <div class="agent-chat__input">
@@ -1276,11 +1214,9 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        ${
-          vs.sttRecording && vs.sttInterimText
-            ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
-            : nothing
-        }
+        ${vs.sttRecording && vs.sttInterimText
+          ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
+          : nothing}
 
         <textarea
           ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
@@ -1302,19 +1238,17 @@ export function renderChat(props: ChatProps) {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
               title="Attach file"
-              aria-label="Attach file"
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
             </button>
 
-            ${
-              isSttSupported()
-                ? html`
+            ${isSttSupported()
+              ? html`
                   <button
-                    class="agent-chat__input-btn ${
-                      vs.sttRecording ? "agent-chat__input-btn--recording" : ""
-                    }"
+                    class="agent-chat__input-btn ${vs.sttRecording
+                      ? "agent-chat__input-btn--recording"
+                      : ""}"
                     @click=${() => {
                       if (vs.sttRecording) {
                         stopStt();
@@ -1361,50 +1295,44 @@ export function renderChat(props: ChatProps) {
                     ${vs.sttRecording ? icons.micOff : icons.mic}
                   </button>
                 `
-                : nothing
-            }
+              : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
           <div class="agent-chat__toolbar-right">
             ${nothing /* search hidden for now */}
-            ${
-              canAbort
-                ? nothing
-                : html`
+            ${canAbort
+              ? nothing
+              : html`
                   <button
-                    class="btn btn--ghost"
+                    class="btn-ghost"
                     @click=${props.onNewSession}
                     title="New session"
                     aria-label="New session"
                   >
                     ${icons.plus}
                   </button>
-                `
-            }
+                `}
             <button
-              class="btn btn--ghost"
+              class="btn-ghost"
               @click=${() => exportMarkdown(props)}
               title="Export"
-              aria-label="Export chat"
               ?disabled=${props.messages.length === 0}
             >
               ${icons.download}
             </button>
 
-            ${
-              canAbort && (isBusy || props.sending)
-                ? html`
+            ${canAbort && (isBusy || props.sending)
+              ? html`
                   <button
                     class="chat-send-btn chat-send-btn--stop"
                     @click=${props.onAbort}
                     title="Stop"
-                    aria-label="Stop generating"
                   >
                     ${icons.stop}
                   </button>
                 `
-                : html`
+              : html`
                   <button
                     class="chat-send-btn"
                     @click=${() => {
@@ -1415,12 +1343,10 @@ export function renderChat(props: ChatProps) {
                     }}
                     ?disabled=${!props.connected || props.sending}
                     title=${isBusy ? "Queue" : "Send"}
-                    aria-label=${isBusy ? "Queue message" : "Send message"}
                   >
                     ${icons.send}
                   </button>
-                `
-            }
+                `}
           </div>
         </div>
       </div>
