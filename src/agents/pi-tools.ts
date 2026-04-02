@@ -46,6 +46,10 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import {
+  type ResolvedTextRepetitionGuardConfig,
+  resolveConfig as resolveTextRepetitionDefaults,
+} from "./text-repetition-guard.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -206,6 +210,20 @@ export function resolveToolLoopDetectionConfig(params: {
       ...agent.detectors,
     },
   };
+}
+
+export function resolveTextRepetitionGuardConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): ResolvedTextRepetitionGuardConfig {
+  const global = params.cfg?.tools?.textRepetitionGuard;
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.textRepetitionGuard
+      : undefined;
+
+  const merged = agent && global ? { ...global, ...agent } : (agent ?? global);
+  return resolveTextRepetitionDefaults(merged);
 }
 
 export const __testing = {

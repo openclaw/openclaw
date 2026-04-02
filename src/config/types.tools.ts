@@ -166,6 +166,27 @@ export type ToolLoopDetectionConfig = {
   detectors?: ToolLoopDetectionDetectorConfig;
 };
 
+export type TextRepetitionGuardConfig = {
+  /** Enable text repetition detection during streaming (default: true). */
+  enabled?: boolean;
+  /** Only analyse the last `windowSize` characters of the buffer. */
+  windowSize?: number;
+  /** N-gram length (characters) for frequency analysis. */
+  ngramSize?: number;
+  /** An n-gram appearing this many times triggers detection. */
+  maxNgramRepetitions?: number;
+  /** Consecutive identical non-empty lines triggering detection. */
+  maxIdenticalLines?: number;
+  /** Minimum pattern length for suffix-cycle detection. */
+  minCyclePatternLength?: number;
+  /** Maximum pattern length for suffix-cycle detection. */
+  maxCyclePatternLength?: number;
+  /** How many consecutive suffix repeats trigger detection. */
+  minCycleRepeats?: number;
+  /** How many characters of new content between repetition checks (default: 200). */
+  checkIntervalChars?: number;
+};
+
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
@@ -310,6 +331,8 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Runtime text repetition guard for detecting stuck text generation loops. */
+  textRepetitionGuard?: TextRepetitionGuardConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -604,6 +627,8 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Runtime text repetition guard for detecting stuck text generation loops. */
+  textRepetitionGuard?: TextRepetitionGuardConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
