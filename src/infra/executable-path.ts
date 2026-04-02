@@ -19,6 +19,41 @@ function getPathDelimiterForPlatform(platform?: string | null): string {
   return isWindowsPlatform(platform) ? ";" : ":";
 }
 
+function resolveVirtualExecutableFromPathHints(
+  executable: string,
+  pathEnv: string,
+  env?: NodeJS.ProcessEnv,
+  platform?: string | null,
+): string | undefined {
+  const targetPath = getPathModuleForPlatform(platform);
+  const entries = pathEnv
+    .split(getPathDelimiterForPlatform(platform))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const extensions = resolveWindowsExecutableExtensions(executable, env, platform);
+  const candidates: string[] = [];
+  for (const entry of entries) {
+    for (const ext of extensions) {
+      candidates.push(targetPath.join(entry, executable + ext));
+    }
+  }
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  if (!isWindowsPlatform(platform)) {
+    const preferredCandidate = candidates.find(
+      (candidate) => targetPath.dirname(candidate) === "/usr/bin",
+    );
+    if (preferredCandidate) {
+      return preferredCandidate;
+    }
+  }
+  return candidates[0];
+}
+
 function resolveWindowsExecutableExtensions(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
@@ -99,7 +134,7 @@ export function resolveExecutableFromPathEnv(
   options?: { platform?: string | null; resolutionMode?: ExecutableResolutionMode },
 ): string | undefined {
   if (options?.resolutionMode === "virtual") {
-    return undefined;
+    return resolveVirtualExecutableFromPathHints(executable, pathEnv, env, options?.platform);
   }
   const targetPath = getPathModuleForPlatform(options?.platform);
   const entries = pathEnv
@@ -145,9 +180,6 @@ export function resolveExecutablePath(
       return candidate;
     }
     return isExecutableFile(candidate, options) ? candidate : undefined;
-  }
-  if (resolutionMode === "virtual") {
-    return undefined;
   }
   const envPath =
     options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";

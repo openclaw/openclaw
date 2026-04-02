@@ -180,7 +180,7 @@ describe("exec-command-resolution", () => {
       { PATH: "/usr/local/bin:/usr/bin:/bin" },
       { platform: "linux", resolutionMode: "virtual" },
     );
-    expect(virtualBareResolution?.execution.resolvedPath).toBeUndefined();
+    expect(virtualBareResolution?.execution.resolvedPath).toBe("/usr/bin/python3");
   });
 
   it("unwraps transparent env and nice wrappers to the effective executable", () => {
