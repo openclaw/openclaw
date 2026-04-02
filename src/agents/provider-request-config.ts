@@ -43,6 +43,8 @@ export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig 
   capabilities: ProviderRequestCapabilities;
 };
 
+const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
   api?: RequestApi;
@@ -89,10 +91,13 @@ export function mergeProviderRequestHeaders(
       continue;
     }
     if (!merged) {
-      merged = {};
+      merged = Object.create(null) as Record<string, string>;
     }
     for (const [key, value] of Object.entries(headers)) {
       const normalizedKey = key.toLowerCase();
+      if (FORBIDDEN_HEADER_KEYS.has(normalizedKey)) {
+        continue;
+      }
       const previousKey = headerNamesByLowerKey.get(normalizedKey);
       if (previousKey && previousKey !== key) {
         delete merged[previousKey];
@@ -128,11 +133,21 @@ export function resolveProviderRequestPolicyConfig(
     params.providerHeaders,
     params.modelHeaders,
   );
+  const protectedAttributionKeys = new Set(
+    Object.keys(policy.attributionHeaders ?? {}).map((key) => key.toLowerCase()),
+  );
+  const unprotectedCallerHeaders = params.callerHeaders
+    ? Object.fromEntries(
+        Object.entries(params.callerHeaders).filter(
+          ([key]) => !protectedAttributionKeys.has(key.toLowerCase()),
+        ),
+      )
+    : undefined;
   const mergedDefaults = mergeProviderRequestHeaders(defaultHeaders, policy.attributionHeaders);
   const headers =
     params.precedence === "caller-wins"
-      ? mergeProviderRequestHeaders(mergedDefaults, params.callerHeaders)
-      : mergeProviderRequestHeaders(params.callerHeaders, mergedDefaults);
+      ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
+      : mergeProviderRequestHeaders(unprotectedCallerHeaders, mergedDefaults);
 
   return {
     api: params.api,

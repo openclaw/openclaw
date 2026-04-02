@@ -46,9 +46,12 @@ export function resolveProviderHttpRequestConfig(params: {
     api: params.api,
   });
   const headers = new Headers(requestConfig.headers);
+  if (!requestConfig.baseUrl) {
+    throw new Error("Missing baseUrl: provide baseUrl or defaultBaseUrl");
+  }
 
   return {
-    baseUrl: requestConfig.baseUrl!,
+    baseUrl: requestConfig.baseUrl,
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     requestConfig,

@@ -104,7 +104,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved).toEqual({
-      "HTTP-Referer": "https://example.com",
+      "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
       "X-OpenRouter-Categories": "cli-agent",
       "X-Custom": "1",
@@ -127,7 +127,26 @@ describe("provider request config", () => {
     expect(
       Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
     ).toHaveLength(1);
-    expect(resolved?.["user-agent"]).toBe("custom-agent/1.0");
+    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
+  });
+
+  it("drops forbidden header keys while merging", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "custom-openai",
+      callerHeaders: {
+        __proto__: "polluted",
+        constructor: "polluted",
+        "X-Custom": "1",
+      } as Record<string, string>,
+      defaultHeaders: {
+        prototype: "polluted",
+      } as Record<string, string>,
+    });
+
+    expect(resolved).toEqual({
+      "X-Custom": "1",
+    });
+    expect(Object.getPrototypeOf(resolved ?? {})).toBeNull();
   });
 
   it("unifies policy, capabilities, headers, base URL, and private-network posture", () => {
