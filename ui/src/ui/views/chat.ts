@@ -628,6 +628,16 @@ const WELCOME_SUGGESTIONS = [
   "Check system health",
 ];
 
+function handleAvatarImageError(event: Event, basePath?: string) {
+  const img = event.currentTarget as HTMLImageElement | null;
+  if (!img || img.dataset.fallbackApplied === "1") {
+    return;
+  }
+  img.dataset.fallbackApplied = "1";
+  img.src = agentLogoUrl(basePath ?? "");
+  img.alt = "OpenClaw";
+}
+
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
   const avatar = resolveAgentAvatarUrl({
@@ -647,10 +657,11 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
             src=${avatar}
             alt=${name}
             style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
+            @error=${(event: Event) => handleAvatarImageError(event, props.basePath)}
           />`
           : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
-            <img src=${logoUrl} alt="OpenClaw" />
-          </div>`
+              <img src=${logoUrl} alt="OpenClaw" />
+            </div>`
       }
       <h2>${name}</h2>
       <div class="agent-chat__badges">

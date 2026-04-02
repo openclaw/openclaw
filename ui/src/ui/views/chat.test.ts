@@ -411,6 +411,26 @@ describe("chat view", () => {
     expect(welcomeImage?.getAttribute("src")).toBe("/avatar/main");
   });
 
+  it("falls back to the bundled logo when the welcome avatar fails to load", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Open",
+          assistantAvatar: "https://clawhub.com/images/openclaw-logo.png",
+        }),
+      ),
+      container,
+    );
+
+    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    expect(welcomeImage).not.toBeNull();
+    welcomeImage?.dispatchEvent(new Event("error"));
+
+    expect(welcomeImage?.getAttribute("src")).toBe("/favicon.svg");
+    expect(welcomeImage?.getAttribute("alt")).toBe("OpenClaw");
+  });
+
   it("falls back to the bundled logo in the welcome state when the assistant avatar is not a URL", () => {
     const container = document.createElement("div");
     render(
@@ -430,7 +450,7 @@ describe("chat view", () => {
     );
     expect(welcomeImage).toBeNull();
     expect(logoImage).not.toBeNull();
-    expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
+    expect(logoImage?.getAttribute("src")).toBe("/favicon.svg");
   });
 
   it("keeps the welcome logo fallback under the mounted base path", () => {
@@ -480,6 +500,34 @@ describe("chat view", () => {
     );
     expect(groupedLogo).not.toBeNull();
     expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
+  it("falls back to the bundled logo when a grouped assistant avatar fails to load", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Open",
+          assistantAvatar: "https://clawhub.com/images/openclaw-logo.png",
+          messages: [
+            {
+              role: "assistant",
+              content: "hello",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-group.assistant .chat-avatar");
+    expect(avatar).not.toBeNull();
+    avatar?.dispatchEvent(new Event("error"));
+
+    expect(avatar?.getAttribute("src")).toBe("/favicon.svg");
+    expect(avatar?.getAttribute("alt")).toBe("OpenClaw");
+    expect(avatar?.classList.contains("chat-avatar--logo")).toBe(true);
   });
 
   it("keeps the persisted overview locale selected before i18n hydration finishes", async () => {

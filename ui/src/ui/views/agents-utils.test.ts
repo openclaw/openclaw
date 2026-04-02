@@ -108,8 +108,8 @@ describe("agentLogoUrl", () => {
     expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
   });
 
-  it("uses a route-relative fallback before basePath bootstrap finishes", () => {
-    expect(agentLogoUrl("")).toBe("favicon.svg");
+  it("uses a root-absolute fallback before basePath bootstrap finishes", () => {
+    expect(agentLogoUrl("")).toBe("/favicon.svg");
   });
 });
 
